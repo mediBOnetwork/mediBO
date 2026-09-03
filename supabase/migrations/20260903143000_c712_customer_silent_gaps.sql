@@ -1229,3 +1229,156 @@ begin
 end $x$;
 $body$)
 on conflict (name) do update set body = excluded.body;
+
+-- ═══════════════════════ 13 · per-channel switches (spec item 4) ═══════════
+
+insert into public.ui_copy (key, value) values
+  ('notif.ch_whatsapp',          to_jsonb('WhatsApp'::text)),
+  ('notif.ch_push',              to_jsonb('Push'::text)),
+  ('notif.ch_email',             to_jsonb('Email'::text)),
+  ('notif.ch_blocked',           to_jsonb('the message switch is off'::text)),
+  ('notif.ch_wa_needs_template', to_jsonb('needs an approved template'::text)),
+  ('notif.ch_push_needs_body',   to_jsonb('no push wording yet'::text)),
+  ('notif.ch_email_needs_body',  to_jsonb('no email wording yet'::text)),
+  ('notif.channels_note',        to_jsonb('Each message can travel on three channels. Push is free and instant, WhatsApp is the paid fallback, email is the last resort.'::text))
+on conflict (key) do nothing;
+
+CREATE OR REPLACE FUNCTION public.notification_matrix()
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v jsonb; v_aud jsonb;
+begin
+  if get_my_role() not in ('admin','super_admin') then return jsonb_build_object('error','not_authorized'); end if;
+  v_aud := public.wa_audience_types();
+
+  select coalesce(jsonb_agg(x order by (x->>'audience_sort')::int, (x->>'sort')::int), '[]'::jsonb) into v
+  from (
+    select jsonb_build_object(
+      'audience', n.audience,
+      'audience_label', coalesce((select a->>'label' from jsonb_array_elements(v_aud) a where a->>'value' = n.audience), initcap(n.audience)),
+      'audience_sort', coalesce((select (a->>'sort')::int from jsonb_array_elements(v_aud) a where a->>'value' = n.audience), 99),
+      'action_key', n.action_key,
+      'label', n.label,
+      'enabled', n.enabled,
+      'sort', n.sort,
+      -- Emit the id of the template this row actually describes. A route may
+      -- resolve its template by NAME (auto_template_name) when r.template_id is
+      -- null, and in that case r.template_id stays null even though a real
+      -- template drives status/label/can_preview. Emitting r.template_id there
+      -- handed the app can_preview=true with a null id — the eye showed but the
+      -- preview RPC was called with an empty uuid and silently failed. t.id is
+      -- the template the rest of this row is about, so preview and edit both get
+      -- the same template they are shown.
+      'template_id', t.id,
+      'template_name', coalesce(r.template_name, r.auto_template_name),
+      'auto_manage', coalesce(r.auto_manage,false),
+      'template_status', t.status,
+      'template_label', case
+        when r.event_key is null then 'Not linked to a message yet'
+        when t.id is null then 'No template yet — tap edit and one will be written for you'
+        when t.status = 'APPROVED' and r.enabled then 'Sends the approved template "' || t.name || '"'
+        when t.status = 'APPROVED' then 'Template approved, route is off'
+        when t.status = 'PENDING' then 'New wording is with Meta for review'
+        when t.status = 'REJECTED' then 'Meta rejected it — tap edit, fix it, and it resubmits itself'
+        else 'Draft being prepared' end,
+      'template_tone', case
+        when t.id is null then 'muted'
+        when t.status = 'APPROVED' and r.enabled then 'good'
+        when t.status = 'REJECTED' then 'bad'
+        when t.status in ('PENDING','DRAFT') then 'warn' else 'muted' end,
+      'can_edit', r.event_key is not null,
+      'can_preview', t.id is not null,
+      'can_generate', r.event_key is not null and t.id is null,
+      'edit_label', case when t.id is null then 'Create the message' else 'Edit the message' end,
+      'has_pending_change', t.status = 'PENDING' and exists (
+        select 1 from wa_template_versions vv where vv.template_id = t.id),
+      -- CHANGE #712 · the channels this message can travel on, each with its
+      -- own switch. Until now the card had ONE toggle per row while the route
+      -- already carried three independent flags (enabled / push_enabled /
+      -- email_enabled), so an admin could not say "push yes, WhatsApp no" —
+      -- and the paid channel is the one you most want to turn off first.
+      -- The row's own `enabled` stays the master: off means nothing goes out
+      -- on any channel, which is why each channel prints `blocked_label` when
+      -- that is the reason it is dark.
+      'channels', case when r.event_key is null then '[]'::jsonb else jsonb_build_array(
+        jsonb_build_object(
+          'key','whatsapp',
+          'label', public.uic('notif.ch_whatsapp','WhatsApp'),
+          'enabled', coalesce(r.enabled,false),
+          'blocked', not coalesce(n.enabled,false),
+          'blocked_label', public.uic('notif.ch_blocked','the message switch is off'),
+          'hint', case when t.status is distinct from 'APPROVED'
+                       then public.uic('notif.ch_wa_needs_template','needs an approved template')
+                       else '' end),
+        jsonb_build_object(
+          'key','push',
+          'label', public.uic('notif.ch_push','Push'),
+          'enabled', coalesce(r.push_enabled,false),
+          'blocked', not coalesce(n.enabled,false),
+          'blocked_label', public.uic('notif.ch_blocked','the message switch is off'),
+          'hint', case when coalesce(btrim(r.push_body),'') = ''
+                       then public.uic('notif.ch_push_needs_body','no push wording yet')
+                       else '' end),
+        jsonb_build_object(
+          'key','email',
+          'label', public.uic('notif.ch_email','Email'),
+          'enabled', coalesce(r.email_enabled,false),
+          'blocked', not coalesce(n.enabled,false),
+          'blocked_label', public.uic('notif.ch_blocked','the message switch is off'),
+          'hint', case when coalesce(btrim(r.email_body),'') = ''
+                       then public.uic('notif.ch_email_needs_body','no email wording yet')
+                       else '' end)) end
+    ) as x
+    from notification_settings n
+    left join wa_event_routes r on r.event_key = n.action_key and r.audience = n.audience
+    left join wa_templates t on t.id = r.template_id
+       or (r.template_id is null and t.name = r.auto_template_name)
+  ) q;
+
+  return jsonb_build_object(
+    'audiences', v_aud,
+    'rows', v,
+    'note', 'Every message mediBO sends is listed here. The switch decides whether it goes out; the template decides the wording and whether it can reach someone outside the 24-hour window.',
+    'allowlist_note', 'Numbers in the test list always receive these, even when a switch is off.',
+    'channels_note', public.uic('notif.channels_note',
+      'Each message can travel on three channels. Push is free and instant, WhatsApp is the paid fallback, email is the last resort.'));
+end $function$
+
+;
+
+-- The writer. One RPC, one channel, admin only — the same guard the rest of
+-- the Notifications card writes through.
+create or replace function public.notification_channel_set(
+  p_audience text, p_action_key text, p_channel text, p_on boolean)
+returns jsonb language plpgsql security definer set search_path to 'public' as $fn$
+begin
+  if public.get_my_role() not in ('admin','super_admin') then
+    return jsonb_build_object('ok', false, 'error','not_authorized',
+      'message', public.uic('notif.ch_denied','You do not have permission to change this.'));
+  end if;
+  if not exists (select 1 from public.wa_event_routes
+                  where event_key = p_action_key and audience = p_audience) then
+    return jsonb_build_object('ok', false, 'error','no_route',
+      'message', public.uic('notif.ch_no_route','That message is not linked to an event yet.'));
+  end if;
+
+  update public.wa_event_routes
+     set enabled       = case when p_channel = 'whatsapp' then coalesce(p_on,false) else enabled end,
+         push_enabled  = case when p_channel = 'push'     then coalesce(p_on,false) else push_enabled end,
+         email_enabled = case when p_channel = 'email'    then coalesce(p_on,false) else email_enabled end,
+         updated_at    = now()
+   where event_key = p_action_key and audience = p_audience;
+
+  if not found or p_channel not in ('whatsapp','push','email') then
+    return jsonb_build_object('ok', false, 'error','unknown_channel',
+      'message', public.uic('notif.ch_unknown','That channel does not exist.'));
+  end if;
+
+  return jsonb_build_object('ok', true, 'audience', p_audience,
+    'action_key', p_action_key, 'channel', p_channel, 'enabled', coalesce(p_on,false));
+end $fn$;
+
+grant execute on function public.notification_channel_set(text, text, text, boolean) to authenticated;

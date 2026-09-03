@@ -339,10 +339,16 @@ class _PartnerIssueRaiseSheetState extends State<PartnerIssueRaiseSheet> {
   @override
   Widget build(BuildContext context) {
     final d = _d;
-    if (_loading) return const SizedBox(height: 240, child: PartnerSkeleton(rows: 3));
+    // The sheet's own loading height, built from the spacing scale rather
+    // than a hand-picked pixel count (DESIGN.md — no bare numerics).
+    final sheetMinHeight = Ds.space.x48 * 5;
+    if (_loading) {
+      return SizedBox(
+          height: sheetMinHeight, child: const PartnerSkeleton(rows: 3));
+    }
     if (d == null || d['ok'] != true) {
       return SizedBox(
-        height: 240,
+        height: sheetMinHeight,
         child: PartnerNotice(text: ticketStr(d ?? const {}, 'message')),
       );
     }

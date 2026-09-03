@@ -109,6 +109,8 @@ final Map<String, dynamic> _list = {
         id: 'ccc',
         ref: 'PT-00099',
         subject: 'App shows the wrong pack count',
+        status: 'Resolved',
+        statusTone: 'success',
         category: 'App problem',
         priority: 'Low'),
   ],
@@ -240,7 +242,10 @@ Map<String, dynamic> _detail({
       'closed_line': '',
     };
 
-Widget _host(Widget child) => MaterialApp(home: child);
+// A Material ancestor, because a ChoiceChip and a TextField both assert on
+// one and the two sheets are pumped on their own here (in the app they arrive
+// inside showModalBottomSheet, which supplies it).
+Widget _host(Widget child) => MaterialApp(home: Scaffold(body: child));
 
 void main() {
   setUpAll(() => RenderLog.flushEnabled = false);
@@ -297,14 +302,16 @@ void main() {
           ..._list,
           'rows': const [],
         };
-    await tester.pumpWidget(_host(const PartnerIssuesScreen()));
+    await tester.pumpWidget(_host(const PartnerIssuesScreen(key: Key('empty'))));
     await tester.pumpAndSettle();
     expect(find.text('No partner is waiting on the office right now.'),
         findsOneWidget);
 
     PartnerTicketApi.rpcFn = (fn, params) async =>
         {'ok': false, 'message': 'Only a mediBO partner or the office can use this.'};
-    await tester.pumpWidget(_host(const PartnerIssuesScreen()));
+    // A DIFFERENT key, so the screen is rebuilt from scratch rather than the
+    // element being reused with the first payload already in its State.
+    await tester.pumpWidget(_host(const PartnerIssuesScreen(key: Key('refused'))));
     await tester.pumpAndSettle();
     expect(find.text('Only a mediBO partner or the office can use this.'),
         findsOneWidget);
@@ -348,6 +355,9 @@ void main() {
     // the priority followed the category's own default, not a Dart guess
     expect(sent?['p_priority'], 'low');
     expect(find.text('Give it a one-line subject.'), findsOneWidget);
+    // The refusal toast owns a real 4 s Timer; let it expire in the test.
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pumpAndSettle();
   });
 
   testWidgets('6 · a system line is centred and never attributed to the reader',
@@ -372,12 +382,14 @@ void main() {
   testWidgets('7 · the linked object is a payload flag, not an inference',
       (tester) async {
     PartnerTicketApi.rpcFn = (fn, params) async => _detail(linked: false);
-    await tester.pumpWidget(_host(const PartnerIssueScreen(ticketId: 'aaa')));
+    await tester.pumpWidget(
+        _host(const PartnerIssueScreen(key: Key('nolink'), ticketId: 'aaa')));
     await tester.pumpAndSettle();
     expect(find.text('Order CPO260726NIT123O1 · Open'), findsNothing);
 
     PartnerTicketApi.rpcFn = (fn, params) async => _detail();
-    await tester.pumpWidget(_host(const PartnerIssueScreen(ticketId: 'aaa')));
+    await tester.pumpWidget(
+        _host(const PartnerIssueScreen(key: Key('linked'), ticketId: 'aaa')));
     await tester.pumpAndSettle();
     expect(find.text('Order CPO260726NIT123O1 · Open'), findsOneWidget);
   });
@@ -420,6 +432,8 @@ void main() {
 
     expect(sent?['p_outcome_code'], 'no_fault');
     expect(find.text('Pick an outcome before closing.'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pumpAndSettle();
   });
 
   testWidgets('10 · a closed issue offers no composer and no close action',

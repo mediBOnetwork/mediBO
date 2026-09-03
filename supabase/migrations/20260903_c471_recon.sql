@@ -925,11 +925,13 @@ begin
                    when v_find > 0 then 'drift' else 'green' end;
 
   v_summary := case v_status
-    when 'green' then public._cf('recon.green_summary',
+    when 'green' then public._cf('recon.green_summary'
+                        || case when v_ran = 1 then '_one' else '' end,
                         jsonb_build_object('checks', v_ran::text))
     when 'error' then public._cf('recon.error_summary',
                         jsonb_build_object('error', coalesce(v_detail,'')))
-    else public._cf('recon.drift_summary',
+    else public._cf('recon.drift_summary'
+           || case when v_find = 1 then '_one' else '' end,
            jsonb_build_object('findings', v_find::text, 'checks', v_ran::text,
                               'drift', public.inr_money(round(v_paisa::numeric/100, 2)))) end;
 
@@ -1241,8 +1243,7 @@ begin
                'sources_label',  public._cf('recon.sources_caption',
                                    jsonb_build_object('a', ck.source_a_label,
                                                       'b', ck.source_b_label)),
-               'count_label',    public._cf('recon.findings_caption',
-                                   jsonb_build_object('n', count(f.id)::text)),
+               'count_label',    public._recon_count_label('findings', count(f.id)),
                'tone',           case when count(f.id) = 0 then 'good' else 'bad' end,
                'findings', coalesce(jsonb_agg(jsonb_build_object(
                    'id',             f.id,
@@ -1575,3 +1576,55 @@ begin
                             'notify', v_res,
                             'alerted', r.status <> 'green');
 end $$;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 13. "1 findings" IS A BUG, AND IT IS THE BACKEND'S BUG
+-- ─────────────────────────────────────────────────────────────────────────────
+-- The caption templates carried a hard "s". Pluralising in Dart is forbidden
+-- (see cart_unavailable_test.dart, which holds exactly that line), so the
+-- singular is a second copy key and the choice is made here.
+insert into public.ui_copy (key, value)
+select k, to_jsonb(v) from (values
+  ('recon.checks_caption_one',   '{n} check'),
+  ('recon.findings_caption_one', '{n} finding'),
+  ('recon.drift_summary_one',    '{findings} finding across {checks} checks — {drift} of drift.'),
+  ('recon.green_summary_one',    'All money surfaces agree — {checks} check, nothing drifted.')
+) t(k, v)
+on conflict (key) do nothing;
+
+create or replace function public._recon_count_label(p_kind text, p_n bigint)
+returns text
+language sql
+stable
+set search_path to 'public'
+as $$
+  select public._cf('recon.' || p_kind || '_caption' || case when p_n = 1 then '_one' else '' end,
+                    jsonb_build_object('n', p_n::text));
+$$;
+
+create or replace function public._recon_run_card(r public.recon_runs)
+returns jsonb
+language sql
+stable
+set search_path to 'public'
+as $$
+  select jsonb_build_object(
+    'run_id',        r.id,
+    'status',        r.status,
+    'status_label',  case r.status when 'green' then public._c('recon.status_green')
+                                   when 'drift' then public._c('recon.status_drift')
+                                   when 'error' then public._c('recon.status_error')
+                                   else public._c('recon.status_running') end,
+    'status_tone',   case r.status when 'green' then 'good'
+                                   when 'drift' then 'bad'
+                                   when 'error' then 'bad' else 'warn' end,
+    'summary_label', r.summary_label,
+    'detail_label',  r.detail_label,
+    'window_label',  public._cf('recon.window_label',
+                       jsonb_build_object('from', to_char(r.window_from,'DD Mon'),
+                                          'to',   to_char(r.window_to - 1,'DD Mon'))),
+    'checks_label',  public._recon_count_label('checks',   r.checks_run),
+    'findings_label',public._recon_count_label('findings', r.findings),
+    'ran_label',     to_char(r.started_at at time zone 'Asia/Kolkata', 'DD Mon, HH12:MI AM'),
+    'trigger',       r.trigger);
+$$;

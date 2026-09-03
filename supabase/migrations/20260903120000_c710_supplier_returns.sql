@@ -2265,3 +2265,58 @@ revoke all on function public._c710_credit_book(uuid) from public, anon;
 grant execute on function public._c710_credit_book(uuid) to authenticated, service_role;
 revoke all on function public.partner_return_carry_apply(uuid) from public, anon;
 grant execute on function public.partner_return_carry_apply(uuid) to authenticated, service_role;
+
+-- ── 17. One money call per candidate, not four ──────────────────────────────
+-- The first cut called _c710_line_money() three times and _c710_returnable_qty()
+-- twice for EVERY candidate row, and each of those runs a window query over
+-- pnl_line_v. On a 1 GB instance that is the scalar-helper-scan anti-pattern:
+-- resolve it once per row in a LATERAL and read the result four times.
+create or replace function public._c710_candidates(p_supplier_order_id uuid, p_return_id uuid default null)
+returns jsonb language plpgsql stable security definer set search_path to 'public' as $fn$
+declare so public.supplier_orders%rowtype; v_day date; v_rows jsonb;
+begin
+  select * into so from public.supplier_orders where id = p_supplier_order_id;
+  if not found then return '[]'::jsonb; end if;
+  v_day := coalesce(so.order_date, (so.created_at at time zone 'Asia/Kolkata')::date);
+
+  select coalesce(jsonb_agg(x order by ord), '[]'::jsonb) into v_rows
+  from (
+    select row_number() over (order by oi.product_name, oi.id) ord,
+           jsonb_build_object(
+             'order_item_id', oi.id,
+             'order_id', oi.order_id,
+             'product_id', oi.product_id,
+             'product_name', coalesce(oi.product_name,''),
+             'batch_no', coalesce(oi.batch_no,''),
+             'expiry', coalesce(oi.expiry,''),
+             'order_label', coalesce(o.order_code,''),
+             'received_label', trim_scale(coalesce(oi.received_qty,0))::text,
+             'max_qty', q.max_qty,
+             'max_qty_label', public._c710_fmt('sup_return.max_qty_label','Up to {qty}',
+                                jsonb_build_object('qty', trim_scale(q.max_qty)::text)),
+             'money', m.money,
+             'rate_label', case when coalesce((m.money->>'has_rate')::boolean, false)
+                                then public.inr_money((m.money->>'rate')::numeric)
+                                else public.uic('sup_return.rate_pending',
+                                       'Rate pending — bill not imported') end,
+             'in_return', (mine.qty is not null)) x
+      from public.order_items oi
+      join public.orders o on o.id = oi.order_id
+      left join lateral (select i.qty from public.supplier_return_item i
+                          where i.return_id = p_return_id and i.order_item_id = oi.id) mine on true
+      cross join lateral (select public._c710_returnable_qty(oi.id)
+                                 + coalesce(mine.qty, 0) as max_qty) q
+      cross join lateral (select public._c710_line_money(oi.id, 1) as money) m
+     where oi.assigned_supplier = so.supplier_name
+       and coalesce(oi.order_date, (o.created_at at time zone 'Asia/Kolkata')::date) = v_day
+       and coalesce(oi.fulfillment_state,'') <> 'cancelled'
+       and coalesce(oi.unfulfillable, false) = false
+       and (coalesce(oi.received_qty,0) > 0
+            or exists (select 1 from public.bill_line_allocations a where a.order_item_id = oi.id))
+       and (q.max_qty > 0 or mine.qty is not null)
+  ) s;
+  return v_rows;
+end $fn$;
+
+revoke all on function public._c710_candidates(uuid, uuid) from public, anon;
+grant execute on function public._c710_candidates(uuid, uuid) to authenticated, service_role;

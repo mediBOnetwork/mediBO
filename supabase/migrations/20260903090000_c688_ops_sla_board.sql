@@ -678,6 +678,8 @@ declare
   v_zone smallint := nullif(p->>'zone_id', '')::smallint;
   v_who  text     := coalesce((select lower(btrim(u.email)) from auth.users u where u.id = auth.uid()), public._actor());
   v_n    int      := 0;
+  v_skip int      := 0;
+  v_min  int;
   r      jsonb;
 begin
   if coalesce(public.get_my_role(), 'none') <> 'super_admin' then
@@ -689,9 +691,17 @@ begin
     if coalesce(r->>'stage_key', '') = '' then continue; end if;
     if not exists (select 1 from sla_stage s where s.stage_key = r->>'stage_key') then continue; end if;
 
+    -- A nonsense minute count is IGNORED, not clamped. Clamping -5 to 1 would
+    -- quietly turn the whole zone red on a typo; skipping it leaves the SLA
+    -- that was already there and the panel simply shows the old number back.
+    v_min := nullif(btrim(coalesce(r->>'sla_minutes', '')), '')::int;
+    if v_min is null or v_min < 1 or v_min > 100000 then
+      v_skip := v_skip + 1;
+      continue;
+    end if;
+
     insert into sla_config (zone_id, stage_key, sla_minutes, amber_pct, updated_at, updated_by)
-    values (v_zone, r->>'stage_key',
-            greatest(least(coalesce((r->>'sla_minutes')::int, 60), 100000), 1),
+    values (v_zone, r->>'stage_key', v_min,
             greatest(least(coalesce((r->>'amber_pct')::int, 70), 100), 1),
             now(), v_who)
     on conflict (coalesce(zone_id, (-1)::smallint), stage_key) do update
@@ -703,7 +713,7 @@ begin
     v_n := v_n + 1;
   end loop;
 
-  return jsonb_build_object('ok', true, 'saved', v_n,
+  return jsonb_build_object('ok', true, 'saved', v_n, 'skipped', v_skip,
     'message', public.uic('ops_board.sla_saved', 'SLA saved'));
 end $$;
 

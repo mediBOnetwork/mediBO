@@ -769,7 +769,6 @@ class _TabButton extends StatelessWidget {
       onTap: onTap,
       child: Container(
         constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
-        alignment: Alignment.center,
         padding: EdgeInsets.symmetric(
             horizontal: Ds.space.x16, vertical: Ds.space.x12),
         decoration: BoxDecoration(
@@ -831,7 +830,6 @@ class _FilterChipButton extends StatelessWidget {
       borderRadius: Ds.r.rChip,
       child: Container(
         constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
-        alignment: Alignment.center,
         padding: EdgeInsets.symmetric(
             horizontal: Ds.space.x12, vertical: Ds.space.x8),
         decoration: BoxDecoration(
@@ -871,7 +869,6 @@ class _ActionButton extends StatelessWidget {
       borderRadius: Ds.r.rButton,
       child: Container(
         constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
-        alignment: Alignment.center,
         padding: EdgeInsets.symmetric(
             horizontal: Ds.space.x16, vertical: Ds.space.x8),
         decoration: BoxDecoration(

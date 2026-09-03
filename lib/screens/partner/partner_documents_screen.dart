@@ -24,9 +24,11 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../design_tokens.dart';
+import '../../services/ui_copy.dart';
 import '../../utils/download_bytes.dart';
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
+import 'partner_home_screen.dart' show PartnerFeaturePage;
 import 'partner_ui.dart';
 
 /// Test seam. Null in production -> the real RPC.
@@ -785,4 +787,21 @@ class _KycRow extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The routed page. `partner_documents` is a route_key like any other; the
+/// shell opens this and the Scaffold's title is the label the ACCESS MATRIX
+/// gave the feature, so renaming "My documents" is a registry edit rather than
+/// a deploy. The screen inside brings no Scaffold of its own, exactly like
+/// every other partner destination.
+class PartnerDocumentsPage extends StatelessWidget {
+  const PartnerDocumentsPage({super.key, this.partnerId});
+
+  final int? partnerId;
+
+  @override
+  Widget build(BuildContext context) => PartnerFeaturePage(
+        title: c('partner_kyc.heading'),
+        child: PartnerDocumentsScreen(partnerId: partnerId),
+      );
 }

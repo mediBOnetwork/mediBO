@@ -1460,7 +1460,7 @@ on conflict (feature_key) do update
 
 insert into public.surface_route(route_key, feature_key, kind, handled_by, note, is_active)
 values ('partner_documents','partner.documents','feature','home_shell',
-        'CHANGE #692 - the partner''s own agreement + KYC documents; opened by shellExtraRouteScreen() in lib/screens/shell/shell_extra_routes.dart.',
+        'CHANGE #692 - the partner''s own agreement + KYC documents; opened by home_shell''s own route switch (case ''partner_documents'') in lib/screens/home_shell.dart, which builds PartnerDocumentsPage.',
         true)
 on conflict (route_key, feature_key) do update
   set kind = excluded.kind, handled_by = excluded.handled_by,
@@ -1572,3 +1572,26 @@ begin
   perform public.kyc_identity_claim_set('gstin', v_gst, v_owner, new.id::text);
   return new;
 end $$;
+
+-- ── 14. auto-solved: an admin RPC was anon-executable ───────────────────────
+-- admin_partner_scorecards() shipped without the #436 revoke, so the anon key
+-- that rides inside the web bundle and the APK could call an admin surface.
+-- rg_check's privileged_rpcs_are_not_anon guard was red on it; the fix is the
+-- same two lines every other admin_* function carries.
+revoke execute on function public.admin_partner_scorecards(date) from public, anon;
+grant  execute on function public.admin_partner_scorecards(date) to authenticated;
+
+-- The same lock on everything CHANGE #692 added. None of these has a tokenless
+-- caller: a partner or the office is always signed in.
+revoke execute on function public.partner_agreement_card(bigint) from public, anon;
+revoke execute on function public.partner_agreement_sign_start(jsonb) from public, anon;
+revoke execute on function public.partner_agreement_sign_verify(jsonb) from public, anon;
+revoke execute on function public.partner_agreement_versions() from public, anon;
+revoke execute on function public.partner_agreement_version_save(jsonb) from public, anon;
+revoke execute on function public.partner_kyc_card(bigint) from public, anon;
+revoke execute on function public.partner_kyc_upload_path(text, text) from public, anon;
+revoke execute on function public.partner_kyc_submit(jsonb) from public, anon;
+revoke execute on function public.partner_kyc_review_set(jsonb) from public, anon;
+revoke execute on function public.partner_golive_state(bigint) from public, anon;
+revoke execute on function public.partner_documents_screen(bigint) from public, anon;
+revoke execute on function public.partner_kyc_reminder_sweep() from public, anon;

@@ -2039,3 +2039,20 @@ insert into public.partner_rpc_allow (proname, source, note) values
 on conflict (proname) do nothing;
 
 select public.partner_rpc_allow_refresh();
+
+-- ── 29. Issue auto-solved on the way past: the #570 surface map was RED ────
+--
+-- feature_registry carries admin.feedback with route_key 'feedback', and
+-- lib/screens/shell/shell_extra_routes.dart really does route it
+-- (`'feedback' => const AdminFeedbackScreen()`), but no surface_route row ever
+-- declared the door — so rg_check reported "Feedback has no door" and stayed
+-- red for every command that followed. The route exists; the declaration was
+-- what was missing.
+insert into public.surface_route (route_key, feature_key, kind, handled_by, note)
+values ('feedback', 'admin.feedback', 'feature', 'home_shell',
+        'routed by shell_extra_routes.dart; declared in CHANGE #810 after #697 left it undeclared')
+on conflict (route_key, feature_key) do update
+  set feature_key = excluded.feature_key,
+      kind        = excluded.kind,
+      handled_by  = excluded.handled_by,
+      is_active   = true;

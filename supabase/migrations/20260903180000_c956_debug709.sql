@@ -507,3 +507,127 @@ BEGIN
   UPDATE dev_commands SET journey_pass_count = journey_pass_count + passed WHERE id=p_command_id;
   RETURN jsonb_build_object('ok',true,'passed',passed,'failed',failed,'skipped',skipped);
 END $function$;
+
+-- ── 1c. the SAME hole in the QA gate ──────────────────────────────────────
+-- Found while this very command was running: qa_agent's RPC-layer probe
+-- reported a "major — RPC layer probe failed: dev_ctl_get returned no pool
+-- object" while PostgREST was answering every call with PGRST002 ("Could not
+-- query the database for the schema cache"). The database was healthy — 24 of
+-- 60 connections, no long transaction — and the product was fine; the
+-- TRANSPORT was down. That verdict blocks dev_cmd_complete and bills a debug
+-- twin, exactly as a red journey did.
+--
+-- So a finding whose own words name a contention or transport failure is
+-- recorded as 'minor' with the matched phrase attached, and it no longer
+-- flips the verdict. If EVERY finding in the round was one of those, the
+-- round proved nothing: the verdict becomes 'running' (run it again) instead
+-- of 'failed', and the round is not counted against the retry budget. A round
+-- with even one real finding still fails, in full.
+create or replace function public.qa_report(p_command_id bigint, p_verdict text, p_findings jsonb default '[]'::jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+DECLARE f jsonb; n int := 0; v_area text; v_fid bigint; v_jn text;
+        v_hit text; v_infra int := 0; v_real int := 0; v_sev text;
+        v_verdict text := p_verdict;
+BEGIN
+  IF coalesce(auth.jwt()->>'role','') <> 'service_role' THEN RAISE EXCEPTION 'qa_report: runner only'; END IF;
+  IF p_verdict NOT IN ('running','passed','failed') THEN RAISE EXCEPTION 'qa_report: bad verdict'; END IF;
+  SELECT area INTO v_area FROM dev_commands WHERE id=p_command_id;
+
+  -- CHANGE #956 — classify BEFORE the verdict is written.
+  IF p_verdict = 'failed' THEN
+    FOR f IN SELECT * FROM jsonb_array_elements(p_findings) LOOP
+      IF public._journey_contention_phrase(
+           coalesce(f->>'title','')||' '||coalesce(f->>'detail','')) IS NOT NULL
+      THEN v_infra := v_infra + 1;
+      ELSE v_real := v_real + 1;
+      END IF;
+    END LOOP;
+    IF v_infra > 0 AND v_real = 0 THEN
+      v_verdict := 'running';
+    END IF;
+  END IF;
+
+  UPDATE dev_commands SET qa_status = v_verdict,
+         qa_rounds = qa_rounds + CASE WHEN v_verdict IN ('passed','failed') THEN 1 ELSE 0 END
+   WHERE id = p_command_id;
+
+  FOR f IN SELECT * FROM jsonb_array_elements(p_findings) LOOP
+    v_hit := public._journey_contention_phrase(
+               coalesce(f->>'title','')||' '||coalesce(f->>'detail',''));
+    v_sev := CASE WHEN v_hit IS NULL THEN coalesce(f->>'severity','major') ELSE 'minor' END;
+    INSERT INTO qa_findings(command_id, severity, title, detail)
+    VALUES (p_command_id, v_sev, f->>'title',
+            CASE WHEN v_hit IS NULL THEN f->>'detail'
+                 ELSE coalesce(f->>'detail','')||' — [CHANGE #956] the transport was down ("'||v_hit||'"), not the feature; re-run this round.'
+            END)
+    RETURNING id INTO v_fid;
+    n := n+1;
+    IF v_sev = 'blocker' THEN
+      v_jn := 'qa-'||p_command_id||'-'||v_fid;
+      INSERT INTO dev_journeys(name, area, kind, steps, source_bug, required, enabled)
+      VALUES (v_jn, v_area, 'api',
+              jsonb_build_array('TODO implement before completing #'||p_command_id||' — must reproduce QA blocker: '||left(coalesce(f->>'title',''),150)),
+              p_command_id, false, true)
+      ON CONFLICT (name) DO NOTHING;
+    END IF;
+  END LOOP;
+
+  IF v_verdict='failed' THEN
+    INSERT INTO dev_command_messages(command_id, sender, body)
+    VALUES (p_command_id,'system','🔍 QA failed: '||n||' finding(s). Fix and re-run QA before completing.');
+  ELSIF p_verdict='failed' AND v_verdict='running' THEN
+    INSERT INTO dev_command_messages(command_id, sender, body)
+    VALUES (p_command_id,'system','⏸ QA round did not count: all '||v_infra||' finding(s) were transport/contention errors, not product defects. Re-running.');
+  END IF;
+
+  RETURN jsonb_build_object('ok',true,'findings',n,'verdict',v_verdict,
+    'infra_findings',v_infra,'real_findings',v_real,'scope',dev_qa_scope(p_command_id));
+END $function$;
+
+-- ── 1d. the transport layer speaks its own dialect ────────────────────────
+-- PostgREST does not say "lock timeout"; it says PGRST002, "Could not query
+-- the database for the schema cache". That is what it answered every RPC with
+-- while this command ran — with the database healthy at 24 of 60 connections —
+-- because 3,754 functions in public and another worker's continuous DDL kept
+-- the cache reload from finishing. A gate that cannot read that sentence
+-- cannot tell a dead transport from a broken feature.
+create or replace function public._journey_contention_phrase(p_text text)
+returns text
+language sql
+immutable
+as $$
+  select p
+    from unnest(array[
+      -- the database under contention
+      'canceling statement due to lock timeout',
+      'canceling statement due to statement timeout',
+      'canceling statement due to user request',
+      'deadlock detected',
+      'could not serialize access',
+      'could not obtain lock',
+      'lock timeout',
+      'statement timeout',
+      'too many clients',
+      'remaining connection slots',
+      'server closed the connection',
+      'terminating connection due to',
+      'unable to check out connection from the pool',
+      -- the transport in front of it
+      'could not query the database for the schema cache',
+      'schema cache',
+      'pgrst002',
+      'pgrst001',
+      'pgrst000',
+      '503 service unavailable',
+      '504 gateway',
+      'connection refused',
+      'connection reset by peer'
+    ]) p
+   where position(p in lower(coalesce(p_text, ''))) > 0
+   order by length(p) desc
+   limit 1
+$$;

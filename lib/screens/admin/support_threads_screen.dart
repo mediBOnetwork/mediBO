@@ -78,6 +78,29 @@ class _SupportThreadsScreenState extends State<SupportThreadsScreen>
   @override
   Widget build(BuildContext context) {
     final inbox = _inbox;
+    // This screen is PUSHED as a bare route by shellExtraRouteScreen(), so it
+    // owns its own Scaffold — the same as PartnerTasksScreen next to it. A
+    // TabBar with no Material ancestor throws, which is exactly how the first
+    // deploy of this change rendered an empty page.
+    return Scaffold(
+      backgroundColor: Ds.c.bg,
+      appBar: AppBar(
+        title: Text(threadStr(inbox ?? const {}, 'title')),
+        bottom: (inbox == null || inbox['ok'] != true)
+            ? null
+            : TabBar(
+                controller: _tabs,
+                tabs: [
+                  Tab(text: threadStr(inbox, 'title')),
+                  Tab(text: threadStr(_tasks ?? const {}, 'title')),
+                ],
+              ),
+      ),
+      body: _body(inbox),
+    );
+  }
+
+  Widget _body(Map<String, dynamic>? inbox) {
     if (_loading) return const PartnerSkeleton(rows: 6);
     if (inbox == null || inbox['ok'] != true) {
       return PartnerNotice(
@@ -88,13 +111,6 @@ class _SupportThreadsScreenState extends State<SupportThreadsScreen>
     }
     return Column(
       children: [
-        TabBar(
-          controller: _tabs,
-          tabs: [
-            Tab(text: threadStr(inbox, 'title')),
-            Tab(text: threadStr(_tasks ?? const {}, 'title')),
-          ],
-        ),
         Expanded(
           child: TabBarView(
             controller: _tabs,

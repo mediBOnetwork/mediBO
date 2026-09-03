@@ -38,6 +38,7 @@ import 'screens/home_shell.dart';
 import 'screens/public/inquiry_form_screen.dart';
 import 'screens/public/stock_update_form_screen.dart'; // C639: /stock-update/<token>
 import 'screens/public/order_feedback_form_screen.dart'; // C697: /feedback/<token>
+import 'screens/public/substitute_ask_screen.dart'; // C698: /substitute-ask/<token>
 import 'screens/public/supplier_signup_screen.dart'; // C465 row 63: /supplier-signup
 import 'screens/public/storefront_screen.dart'; // CMD #417: /shop/<token>
 import 'screens/public/substitute_token_screen.dart'; // #366: /substitute/<token>
@@ -651,6 +652,22 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // CMD #366 row 176 — the substitute link a no-app customer
               // gets over WhatsApp. Same shape as the stock-update link: the
               // token in the URL is the authorisation.
+              // CHANGE #698 — /substitute-ask/<token>: the offer a customer
+              // gets over WhatsApp when a line could not be sourced. PUBLIC and
+              // anonymous, exactly like /stock-update/<token>: the token in the
+              // URL is the authorisation, and the page it opens carries
+              // availability only — product, company, strength, pack, and never
+              // a price. Declared ABOVE /substitute/ so the longer prefix wins.
+              if (name.startsWith('/substitute-ask/')) {
+                final token =
+                    name.substring('/substitute-ask/'.length).split('?').first;
+                if (token.isNotEmpty) {
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => SubstituteAskScreen(token: token),
+                  );
+                }
+              }
               if (name.startsWith('/substitute/')) {
                 final token =
                     name.substring('/substitute/'.length).split('?').first;

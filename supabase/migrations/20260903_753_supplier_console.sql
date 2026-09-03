@@ -848,3 +848,245 @@ begin
 
   return jsonb_build_object('ok', true, 'product_id', p_product_id, 'state', btrim(p_state));
 end $$;
+
+-- ── 14. Orders tab ─────────────────────────────────────────────────────────
+insert into public.ui_copy (key, value) values
+  ('admin_sup2.o_title',   to_jsonb('Purchase orders'::text)),
+  ('admin_sup2.o_empty',   to_jsonb('No purchase order for this supplier yet.'::text)),
+  ('admin_sup2.o_all',     to_jsonb('All'::text)),
+  ('admin_sup2.o_open',    to_jsonb('Open'::text)),
+  ('admin_sup2.o_packed',  to_jsonb('Packed'::text)),
+  ('admin_sup2.o_settled', to_jsonb('Settled'::text)),
+  ('admin_sup2.o_cancelled', to_jsonb('Cancelled'::text)),
+  ('admin_sup2.o_orders',  to_jsonb('Orders'::text)),
+  ('admin_sup2.o_value',   to_jsonb('Total value'::text)),
+  ('admin_sup2.o_items_one',  to_jsonb('1 item'::text)),
+  ('admin_sup2.o_items_many', to_jsonb('{n} items'::text)),
+  ('admin_sup2.o_more',    to_jsonb('Load more'::text))
+on conflict (key) do nothing;
+
+create or replace function public.admin_supplier_tab_orders(
+  p_supplier_id uuid, p_status text default 'all',
+  p_limit integer default 50, p_offset integer default 0)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._sup753_gate();
+  sp supplier_profiles%rowtype;
+  v_f text := lower(coalesce(nullif(btrim(coalesce(p_status,'')),''),'all'));
+  v_lim int := least(greatest(coalesce(p_limit,50),1),200);
+  v_off int := greatest(coalesce(p_offset,0),0);
+  v_copy jsonb; v_items jsonb; v_total int; v_amt numeric;
+  v_c_all int; v_c_open int; v_c_packed int; v_c_settled int; v_c_cancelled int;
+begin
+  if v_role = 'none' then return public._sup753_deny(false); end if;
+  sp := public._sup753_row(p_supplier_id);
+  if sp.id is null then return public._sup753_deny(false); end if;
+
+  v_copy := jsonb_build_object('one', public._c('admin_sup2.o_items_one'),
+                               'many', public._c('admin_sup2.o_items_many'));
+
+  select count(*),
+         count(*) filter (where so.settled_at is null and not coalesce(so.packed,false)
+                            and lower(coalesce(so.status,'')) <> 'cancelled'),
+         count(*) filter (where coalesce(so.packed,false)),
+         count(*) filter (where so.settled_at is not null),
+         count(*) filter (where lower(coalesce(so.status,'')) = 'cancelled')
+    into v_c_all, v_c_open, v_c_packed, v_c_settled, v_c_cancelled
+    from supplier_orders so where so.supplier_id = sp.id;
+
+  with f as (
+    select so.* from supplier_orders so
+     where so.supplier_id = sp.id
+       and (v_f = 'all'
+            or (v_f = 'open'      and so.settled_at is null and not coalesce(so.packed,false)
+                                  and lower(coalesce(so.status,'')) <> 'cancelled')
+            or (v_f = 'packed'    and coalesce(so.packed,false))
+            or (v_f = 'settled'   and so.settled_at is not null)
+            or (v_f = 'cancelled' and lower(coalesce(so.status,'')) = 'cancelled'))
+  ),
+  page as (select * from f order by created_at desc limit v_lim offset v_off)
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', p.id,
+           'title', coalesce(nullif(p.order_code,''), '#'||coalesce(p.order_no,0)::text),
+           'subtitle', public.count_label(v_copy,'one','many',coalesce(jsonb_array_length(p.items),0)),
+           'meta', public.ist_fmt(coalesce(p.created_at, p.order_date::timestamptz),'day_mon_year'),
+           'trailing', public.inr_money(coalesce(p.total_amount,0)),
+           'chip', public.status_chip('supplier_status', p.status),
+           'link', jsonb_build_object('route','supplier_order','arg', p.id::text))
+         order by p.created_at desc), '[]'::jsonb)
+    into v_items from page p;
+
+  select count(*), coalesce(sum(coalesce(so.total_amount,0)),0)
+    into v_total, v_amt
+    from supplier_orders so
+   where so.supplier_id = sp.id
+     and (v_f = 'all'
+          or (v_f = 'open'      and so.settled_at is null and not coalesce(so.packed,false)
+                                and lower(coalesce(so.status,'')) <> 'cancelled')
+          or (v_f = 'packed'    and coalesce(so.packed,false))
+          or (v_f = 'settled'   and so.settled_at is not null)
+          or (v_f = 'cancelled' and lower(coalesce(so.status,'')) = 'cancelled'));
+
+  return jsonb_build_object('ok', true, 'filter', v_f,
+    'offset', v_off, 'limit', v_lim,
+    'has_more', (v_off + v_lim < v_total),
+    'more_label', public._c('admin_sup2.o_more'),
+    'blocks', jsonb_build_array(
+    jsonb_build_object('kind','tiles','tiles', jsonb_build_array(
+      jsonb_build_object('label',public._c('admin_sup2.o_orders'),'value',v_total::text,'tone','neutral'),
+      jsonb_build_object('label',public._c('admin_sup2.o_value'), 'value',public.inr_money(v_amt),'tone','info'))),
+    jsonb_build_object('kind','chips','key','status','chips', jsonb_build_array(
+      jsonb_build_object('key','all',      'label',public._c('admin_sup2.o_all'),      'count',v_c_all,      'active',v_f='all'),
+      jsonb_build_object('key','open',     'label',public._c('admin_sup2.o_open'),     'count',v_c_open,     'active',v_f='open'),
+      jsonb_build_object('key','packed',   'label',public._c('admin_sup2.o_packed'),   'count',v_c_packed,   'active',v_f='packed'),
+      jsonb_build_object('key','settled',  'label',public._c('admin_sup2.o_settled'),  'count',v_c_settled,  'active',v_f='settled'),
+      jsonb_build_object('key','cancelled','label',public._c('admin_sup2.o_cancelled'),'count',v_c_cancelled,'active',v_f='cancelled'))),
+    jsonb_build_object('kind','list','title',public._c('admin_sup2.o_title'),
+      'empty', public._c('admin_sup2.o_empty'), 'items', v_items)));
+end $$;
+
+-- ── 15. Payments tab ───────────────────────────────────────────────────────
+insert into public.ui_copy (key, value) values
+  ('admin_sup2.y_billed',    to_jsonb('Billed'::text)),
+  ('admin_sup2.y_paid',      to_jsonb('Paid'::text)),
+  ('admin_sup2.y_pending',   to_jsonb('Pending'::text)),
+  ('admin_sup2.y_debits',    to_jsonb('Debit notes'::text)),
+  ('admin_sup2.y_bills',     to_jsonb('Bills'::text)),
+  ('admin_sup2.y_bills_empty', to_jsonb('No bill received from this supplier yet.'::text)),
+  ('admin_sup2.y_pay_title', to_jsonb('Payments made'::text)),
+  ('admin_sup2.y_pay_empty', to_jsonb('No payment recorded yet.'::text)),
+  ('admin_sup2.y_debit_title', to_jsonb('Debit notes & credit adjustments'::text)),
+  ('admin_sup2.y_debit_empty', to_jsonb('No debit note against this supplier.'::text)),
+  ('admin_sup2.y_export',    to_jsonb('Export statement (CSV)'::text)),
+  ('admin_sup2.y_unbilled',  to_jsonb('No bill file'::text))
+on conflict (key) do nothing;
+
+create or replace function public.admin_supplier_tab_payments(p_supplier_id uuid)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._sup753_gate();
+  sp supplier_profiles%rowtype;
+  v_billed numeric; v_paid numeric; v_pending numeric; v_debit numeric;
+  v_bills jsonb; v_pays jsonb; v_debits jsonb;
+begin
+  if v_role = 'none' then return public._sup753_deny(false); end if;
+  sp := public._sup753_row(p_supplier_id);
+  if sp.id is null then return public._sup753_deny(false); end if;
+
+  select coalesce(sum(coalesce(so.total_amount,0)),0) into v_billed
+    from supplier_orders so
+   where so.supplier_id = sp.id and lower(coalesce(so.status,'')) <> 'cancelled';
+
+  select coalesce(sum(coalesce(pm.amount,0)),0) into v_paid
+    from supplier_payments pm
+    join supplier_orders so on so.id = pm.supplier_order_id
+   where so.supplier_id = sp.id;
+
+  select coalesce(sum(greatest(coalesce(so.total_amount,0) - coalesce(p.amt,0),0)),0)
+    into v_pending
+    from supplier_orders so
+    left join (select supplier_order_id, sum(coalesce(amount,0)) amt
+                 from supplier_payments group by 1) p on p.supplier_order_id = so.id
+   where so.supplier_id = sp.id and so.settled_at is null
+     and lower(coalesce(so.status,'')) <> 'cancelled';
+
+  select coalesce(sum(coalesce(d.adj_amount,0)),0) into v_debit
+    from supplier_disputes d
+   where lower(btrim(coalesce(d.assigned_supplier,''))) = lower(btrim(sp.supplier_name));
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', b.id,
+           'title', coalesce(nullif(b.file_name,''), public._c('admin_sup2.y_unbilled')),
+           'subtitle', coalesce(public.ist_fmt(b.received_at,'day_mon_year'),''),
+           'chip', public.status_chip('bill_status', coalesce(b.status,'')))
+         order by b.received_at desc), '[]'::jsonb)
+    into v_bills
+    from pending_bills b
+   where lower(btrim(coalesce(b.supplier_name,''))) = lower(btrim(sp.supplier_name));
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', pm.id,
+           'title', public.inr_money(coalesce(pm.amount,0)),
+           'subtitle', array_to_string(array_remove(array[
+               nullif(btrim(coalesce(pm.mode,'')),''),
+               nullif(btrim(coalesce(pm.utr,'')),'')], null), '  ·  '),
+           'meta', coalesce(public.ist_fmt(pm.created_at,'day_mon_year'),''),
+           'trailing', coalesce(so.order_code,''))
+         order by pm.created_at desc), '[]'::jsonb)
+    into v_pays
+    from supplier_payments pm
+    join supplier_orders so on so.id = pm.supplier_order_id
+   where so.supplier_id = sp.id;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', d.id,
+           'title', coalesce(nullif(d.product_name,''), d.dispute_code, '—'),
+           'subtitle', coalesce(nullif(d.kind,''),''),
+           'meta', coalesce(public.ist_fmt(d.created_at,'day_mon_year'),''),
+           'trailing', public.inr_money(coalesce(d.adj_amount,0)),
+           'trailing_tone', 'danger',
+           'chip', public.status_chip('dispute_status', coalesce(d.status,'')))
+         order by d.created_at desc), '[]'::jsonb)
+    into v_debits
+    from supplier_disputes d
+   where lower(btrim(coalesce(d.assigned_supplier,''))) = lower(btrim(sp.supplier_name));
+
+  return jsonb_build_object('ok', true, 'blocks', jsonb_build_array(
+    jsonb_build_object('kind','tiles','tiles', jsonb_build_array(
+      jsonb_build_object('label',public._c('admin_sup2.y_billed'), 'value',public.inr_money(v_billed), 'tone','neutral'),
+      jsonb_build_object('label',public._c('admin_sup2.y_paid'),   'value',public.inr_money(v_paid),   'tone','success'),
+      jsonb_build_object('label',public._c('admin_sup2.y_pending'),'value',public.inr_money(v_pending),
+                         'tone', case when v_pending > 0 then 'warning' else 'neutral' end),
+      jsonb_build_object('label',public._c('admin_sup2.y_debits'), 'value',public.inr_money(v_debit),
+                         'tone', case when v_debit > 0 then 'danger' else 'neutral' end))),
+    jsonb_build_object('kind','buttons','buttons', jsonb_build_array(
+      jsonb_build_object('key','export','label',public._c('admin_sup2.y_export'),'tone','brand',
+        'export', true, 'rpc','admin_supplier_statement_csv',
+        'args', jsonb_build_object('p_supplier_id', sp.id)))),
+    jsonb_build_object('kind','list','title',public._c('admin_sup2.y_bills'),
+      'empty', public._c('admin_sup2.y_bills_empty'), 'items', v_bills),
+    jsonb_build_object('kind','list','title',public._c('admin_sup2.y_pay_title'),
+      'empty', public._c('admin_sup2.y_pay_empty'), 'items', v_pays),
+    jsonb_build_object('kind','list','title',public._c('admin_sup2.y_debit_title'),
+      'empty', public._c('admin_sup2.y_debit_empty'), 'items', v_debits)));
+end $$;
+
+-- The statement export. The CSV is BUILT in the backend; Flutter only saves
+-- the bytes it is handed.
+create or replace function public.admin_supplier_statement_csv(p_supplier_id uuid)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._sup753_gate();
+  sp supplier_profiles%rowtype; v_csv text;
+begin
+  if v_role = 'none' then return public._sup753_deny(false); end if;
+  sp := public._sup753_row(p_supplier_id);
+  if sp.id is null then return public._sup753_deny(false); end if;
+
+  select 'Date,Order,Status,Billed (INR),Paid (INR),Balance (INR)' || E'\n' ||
+         coalesce(string_agg(
+           to_char(coalesce(so.order_date, (so.created_at at time zone 'Asia/Kolkata')::date),'DD/MM/YYYY')
+           ||','|| coalesce(replace(so.order_code,',',' '),'')
+           ||','|| coalesce(replace(so.status,',',' '),'')
+           ||','|| to_char(coalesce(so.total_amount,0),'FM9999999990.00')
+           ||','|| to_char(coalesce(p.amt,0),'FM9999999990.00')
+           ||','|| to_char(greatest(coalesce(so.total_amount,0)-coalesce(p.amt,0),0),'FM9999999990.00'),
+           E'\n' order by so.created_at), '')
+    into v_csv
+    from supplier_orders so
+    left join (select supplier_order_id, sum(coalesce(amount,0)) amt
+                 from supplier_payments group by 1) p on p.supplier_order_id = so.id
+   where so.supplier_id = sp.id;
+
+  return jsonb_build_object('ok', true,
+    'file_name', 'statement-'||regexp_replace(lower(coalesce(sp.supplier_name,'supplier')),'[^a-z0-9]+','-','g')
+                 ||'-'||to_char((now() at time zone 'Asia/Kolkata')::date,'YYYY-MM-DD')||'.csv',
+    'mime', 'text/csv',
+    'content', coalesce(v_csv,''));
+end $$;

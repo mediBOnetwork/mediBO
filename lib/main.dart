@@ -1037,17 +1037,19 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                   builder: (_) => const AdminPartnerScorecardsScreen(),
                 );
               }
-              // The partner's own card, at its own URL for the same reason.
-              // partner_scorecard() clamps a non-operator caller to their own
-              // partner id, so this URL can never show somebody else's month.
-              if (name.split('?').first == '/partner/scorecard') {
-                // ?partner=<id> is honoured only for an operator —
-                // partner_scorecard() clamps every other caller back to
-                // my_partner_id(), so this can never show one partner another
-                // partner's month. It exists so the post-deploy verifier can
-                // photograph the card at all: Flutter canvas cannot be clicked
-                // headlessly and the card is otherwise only reachable by
-                // signing in AS a partner.
+              // The partner's own card, at its own URL. It lives under /admin
+              // deliberately: CHANGE #653 sends EVERY '/partner/...' path back
+              // to the app root (the routed partner surface is gone), so a URL
+              // there would be swallowed 500 lines above this and never fire.
+              //
+              // ?partner=<id> is honoured only for an operator —
+              // partner_scorecard() clamps every other caller back to
+              // my_partner_id(), so this can never show one partner another
+              // partner's month. It exists so the post-deploy verifier can
+              // photograph the card at all: Flutter canvas cannot be clicked
+              // headlessly, and the partner's own copy of this card is drawn
+              // inside their statement, which has no URL of its own.
+              if (name.split('?').first == '/admin/partner-scorecard') {
                 final q = Uri.tryParse(name)?.queryParameters['partner'];
                 return MaterialPageRoute(
                   settings: settings,

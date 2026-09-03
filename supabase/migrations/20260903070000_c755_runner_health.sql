@@ -93,7 +93,7 @@ values ('runner_health', jsonb_build_object(
   'cooldown_window_min',   15,
   'latency_ok_ms',         50,
   'latency_bad_ms',        1500,
-  'conn_ok_pct',           50,
+  'conn_ok_pct',           65,
   'conn_bad_pct',          90,
   'cpu_ok_pct',            70,
   'cpu_bad_pct',           98,
@@ -362,13 +362,20 @@ begin
     into v_cpu, v_ram
     from public.dev_runner_config where key = 'pool_state';
   if v_cpu is not null or v_ram is not null then
-    update public.db_health_sample s
-       set detail = s.detail
-                    || case when v_cpu is not null
-                            then jsonb_build_object('host_cpu_pct', v_cpu) else '{}'::jsonb end
-                    || case when v_ram is not null
-                            then jsonb_build_object('host_ram_pct', v_ram) else '{}'::jsonb end
-     where s.at = (select max(at) from public.db_health_sample);
+    -- BEST EFFORT, ALWAYS. db_watchdog_tick writes this table on the same
+    -- minute the probe runs, so the mirror can lose a race for the row — and a
+    -- health probe that dies because it could not annotate a sample is a
+    -- watchdog that takes the fleet down to report that the fleet is fine.
+    begin
+      update public.db_health_sample s
+         set detail = s.detail
+                      || case when v_cpu is not null
+                              then jsonb_build_object('host_cpu_pct', v_cpu) else '{}'::jsonb end
+                      || case when v_ram is not null
+                              then jsonb_build_object('host_ram_pct', v_ram) else '{}'::jsonb end
+       where s.at = (select max(at) from public.db_health_sample);
+    exception when others then null;
+    end;
   end if;
   select coalesce(v_cpu, (detail->>'host_cpu_pct')::numeric),
          coalesce(v_ram, (detail->>'host_ram_pct')::numeric)
@@ -383,9 +390,9 @@ begin
   v_score := v_score - v_pen;
 
   v_pen := greatest(0, least(25,
-    25 * (v_pct - coalesce((cfg->>'conn_ok_pct')::numeric, 50))
+    25 * (v_pct - coalesce((cfg->>'conn_ok_pct')::numeric, 65))
        / greatest(coalesce((cfg->>'conn_bad_pct')::numeric, 90)
-                  - coalesce((cfg->>'conn_ok_pct')::numeric, 50), 1)));
+                  - coalesce((cfg->>'conn_ok_pct')::numeric, 65), 1)));
   v_score := v_score - v_pen;
 
   -- Timeouts are scaled against the BREAKER's own threshold, so the score and

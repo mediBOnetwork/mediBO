@@ -40,6 +40,7 @@ import '../../widgets/response_deadline.dart';
 import '../../widgets/order_item_card.dart';
 import '../../widgets/sup_pay_panel.dart';
 import '../../widgets/supplier_closure_control.dart'; // cmd #435
+import '../../widgets/supplier_console_row.dart'; // CHANGE #753
 import 'admin_supplier_page.dart'; // CHANGE #753 — the supplier page
 import 'admin_add_medicine_screen.dart';
 import 'unmapped_companies_screen.dart';
@@ -4594,7 +4595,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   Widget _consoleRow(Map<String, dynamic> row) {
     final id = (row['id'] as String?) ?? '';
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      _consoleRowBody(row, id),
+      SupplierConsoleRow(
+        row: row,
+        onOpen: () => openAdminSupplierPage(context, id),
+        onMenu: (item) => _runConsoleMenu(row, item),
+      ),
       // The ⋮ menu's Companies and SPN entries open the existing inline
       // editors in place — the same two panels, reached from the new menu.
       if (_companiesSupplierId == id)
@@ -4612,97 +4617,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           onSaved: () => _load(showSpinner: false),
         ),
     ]);
-  }
-
-  Widget _consoleRowBody(Map<String, dynamic> row, String id) {
-    return InkWell(
-      onTap: () => openAdminSupplierPage(context, id),
-      child: Container(
-        constraints: BoxConstraints(minHeight: Ds.touch.listRowMinHeight),
-        padding: EdgeInsets.symmetric(
-            horizontal: Ds.space.x16, vertical: Ds.space.x12),
-        decoration: BoxDecoration(
-          color: Ds.c.surface,
-          border: Border(bottom: BorderSide(color: Ds.c.divider)),
-        ),
-        child: Row(children: [
-          Expanded(
-            flex: 4,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text((row['name'] as String?) ?? '',
-                    style: Ds.t.bodyStrong, overflow: TextOverflow.ellipsis),
-                SizedBox(height: Ds.space.x4),
-                Text(
-                  '${(row['zone_label'] as String?) ?? ''}  ·  '
-                  '${(row['rank_label'] as String?) ?? ''}  '
-                  '${(row['spn_label'] as String?) ?? ''}',
-                  style: Ds.t.caption,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
-          ),
-          SizedBox(width: Ds.space.x8),
-          Expanded(
-            flex: 3,
-            child: Text(
-              (row['waiting_label'] as String?) ?? '',
-              style: row['has_waiting'] == true
-                  ? Ds.t.caption.copyWith(color: Ds.c.warning)
-                  : Ds.t.caption,
-              textAlign: TextAlign.right,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          SizedBox(width: Ds.space.x8),
-          Expanded(
-            flex: 2,
-            child: Text(
-              (row['dues_label'] as String?) ?? '',
-              style: row['has_dues'] == true
-                  ? Ds.t.bodyStrong.copyWith(color: Ds.c.danger)
-                  : Ds.t.caption,
-              textAlign: TextAlign.right,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          SizedBox(width: Ds.space.x12),
-          BackendChip(chip: backendChipOf(row, 'kyc_chip')),
-          SizedBox(width: Ds.space.x8),
-          _consoleMenu(row),
-        ]),
-      ),
-    );
-  }
-
-  Widget _consoleMenu(Map<String, dynamic> row) {
-    final items = (row['menu'] is List)
-        ? (row['menu'] as List)
-            .whereType<Map>()
-            .map((e) => e.cast<String, dynamic>())
-            .toList()
-        : const <Map<String, dynamic>>[];
-    if (items.isEmpty) return const SizedBox.shrink();
-    return PopupMenuButton<int>(
-      icon: Icon(Icons.more_vert, size: Ds.space.x16 + Ds.space.x4,
-          color: Ds.c.textSecondary),
-      tooltip: '',
-      onSelected: (i) => _runConsoleMenu(row, items[i]),
-      itemBuilder: (_) => [
-        for (var i = 0; i < items.length; i++)
-          PopupMenuItem<int>(
-            value: i,
-            child: Text(
-              (items[i]['label'] as String?) ?? '',
-              style: (items[i]['tone'] == 'danger')
-                  ? Ds.t.body.copyWith(color: Ds.c.danger)
-                  : Ds.t.body,
-            ),
-          ),
-      ],
-    );
   }
 
   _SupRow? _rowById(String id) {

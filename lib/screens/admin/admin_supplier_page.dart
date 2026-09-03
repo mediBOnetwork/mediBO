@@ -38,6 +38,13 @@ Future<void> openAdminSupplierPage(BuildContext context, String supplierId,
 class AdminSupplierPage extends StatefulWidget {
   final String supplierId;
   final String initialTab;
+
+  /// Test seam. Null in production -> the real RPCs. The protected suite sets
+  /// this to serve fixture payloads so the block renderers can be proven
+  /// without Supabase.
+  static Future<Object?> Function(String rpc, Map<String, dynamic> params)?
+      rpcOverride;
+
   const AdminSupplierPage(
       {super.key, required this.supplierId, this.initialTab = ''});
 
@@ -46,7 +53,10 @@ class AdminSupplierPage extends StatefulWidget {
 }
 
 class _AdminSupplierPageState extends State<AdminSupplierPage> {
-  final _sb = Supabase.instance.client;
+  // Resolved lazily: with `rpcOverride` set (the protected suite) Supabase is
+  // never initialised, and an eager field initializer would throw at
+  // createState() before a single widget was built.
+  SupabaseClient get _sb => Supabase.instance.client;
 
   Map<String, dynamic>? _page;
   String _tabKey = '';
@@ -75,14 +85,20 @@ class _AdminSupplierPageState extends State<AdminSupplierPage> {
 
   String _s(Object? v) => v == null ? '' : v.toString();
 
+  Future<Object?> _rpc(String name, Map<String, dynamic> params) {
+    final over = AdminSupplierPage.rpcOverride;
+    if (over != null) return over(name, params);
+    return _sb.rpc(name, params: params);
+  }
+
   Future<void> _loadPage() async {
     setState(() {
       _loadingPage = true;
       _error = '';
     });
     try {
-      final res = await _sb.rpc('admin_supplier_page',
-          params: {'p_supplier_id': widget.supplierId});
+      final res = await _rpc(
+          'admin_supplier_page', {'p_supplier_id': widget.supplierId});
       final m = _asMap(res);
       if (m['ok'] != true) {
         setState(() {
@@ -131,7 +147,7 @@ class _AdminSupplierPageState extends State<AdminSupplierPage> {
     try {
       final params = <String, dynamic>{'p_supplier_id': widget.supplierId}
         ..addAll(_tabArgs[_tabKey] ?? const {});
-      final res = await _sb.rpc(rpc, params: params);
+      final res = await _rpc(rpc, params);
       if (!mounted) return;
       setState(() {
         _tab = _asMap(res);
@@ -216,7 +232,7 @@ class _AdminSupplierPageState extends State<AdminSupplierPage> {
     }
 
     try {
-      final res = await _sb.rpc(rpc, params: params);
+      final res = await _rpc(rpc, params);
       final m = _asMap(res);
       if (action['export'] == true) {
         final content = _s(m['content']);

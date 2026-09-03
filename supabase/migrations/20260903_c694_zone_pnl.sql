@@ -516,3 +516,91 @@ insert into public.access_role_default (role, feature_key, can_view, can_write) 
   ('super_admin', 'partner.zone_pnl', true,  true)
 on conflict (role, feature_key) do update
   set can_view = excluded.can_view, can_write = excluded.can_write;
+
+-- ── 8. the P&L as a document ───────────────────────────────────────────────
+-- The renderer (bill-render) draws whatever the payload describes — its own
+-- comment says "the column widths arrive in the payload — so a fourth document
+-- kind is a payload, not a code change". So this is a payload and one branch,
+-- and the Flutter side reuses partner_doc_request/partner_doc_status verbatim.
+insert into public.pnl_label (key, label) values
+  ('zone.doc_title',    'Zone P&L — {zone}'),
+  ('zone.doc_subtitle', 'Generated {at}'),
+  ('zone.doc_period',   'Period'),
+  ('zone.doc_zone',     'Zone'),
+  ('zone.doc_orders',   'Orders'),
+  ('zone.col_line',     'Line'),
+  ('zone.col_amount',   'Amount'),
+  ('zone.doc_note',     'Every figure here comes from the same records your settlement statement is built from.')
+on conflict (key) do update set label = excluded.label;
+
+create or replace function public._c694_doc_payload(p_zone smallint, p_period text)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path to 'public'
+as $function$
+declare
+  v jsonb; z jsonb; v_p jsonb; v_rows jsonb; v_title text;
+begin
+  v := public.zone_pnl(p_zone, p_period);
+  if coalesce(v->>'ok','false') <> 'true' then
+    return jsonb_build_object('ok', false, 'error', coalesce(v->>'error','not_found'));
+  end if;
+  z := v->'zones'->0;
+  if z is null then return jsonb_build_object('ok', false, 'error','not_found'); end if;
+  v_p := v->'period';
+
+  -- The document prints the SAME lines the screen printed, already filtered by
+  -- partner_visible: a partner's PDF can never carry a line its own screen
+  -- would not show it.
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'label', e->>'label', 'amount', e->>'amount_display')), '[]'::jsonb)
+    into v_rows from jsonb_array_elements(z->'lines') e;
+
+  v_title := replace(public._pnl_c('zone.doc_title'), '{zone}',
+                     coalesce(z->>'zone_name','—'));
+
+  return jsonb_build_object('ok', true,
+    'stamp', md5(coalesce(z->>'revenue','') || coalesce(z->>'gross_margin','')
+                 || coalesce(z->>'partner_share','') || coalesce(z->>'orders','')
+                 || coalesce(v_p->>'from','') || coalesce(v_p->>'to','')),
+    'file_name', 'zone-pnl-' || coalesce(z->>'zone_id','0') || '-'
+                 || coalesce(v_p->>'from','') || '.pdf',
+    'title', v_title,
+    'doc', jsonb_build_object(
+      'title', v_title,
+      'subtitle', replace(public._pnl_c('zone.doc_subtitle'), '{at}',
+                          public.ist_fmt(now(), 'dmy_hm')),
+      'brand', public._c('partner_doc.doc_brand'),
+      'header', jsonb_build_array(
+        jsonb_build_object('label', public._pnl_c('zone.doc_zone'),
+                           'value', coalesce(z->>'zone_name','—')),
+        jsonb_build_object('label', public._pnl_c('zone.doc_period'),
+                           'value', coalesce(v_p->>'from','') || ' → ' || coalesce(v_p->>'to','')),
+        jsonb_build_object('label', public._pnl_c('zone.doc_orders'),
+                           'value', coalesce(z->>'orders','0'))),
+      'sections', jsonb_build_array(
+        jsonb_build_object(
+          'heading', public._pnl_c('zone.costs_heading'),
+          'columns', jsonb_build_array(
+            jsonb_build_object('key','label','label',public._pnl_c('zone.col_line'),
+                               'align','left','width',330),
+            jsonb_build_object('key','amount','label',public._pnl_c('zone.col_amount'),
+                               'align','right','width',110)),
+          'rows', v_rows,
+          'empty_label', public._pnl_c('zone.empty'))),
+      'totals', jsonb_build_array(
+        jsonb_build_object('label', public._pnl_c('zone.tile_gross'),
+                           'value', z->>'gross_display'),
+        jsonb_build_object('label', public._pnl_c('zone.tile_partner'),
+                           'value', z->>'partner_display'),
+        jsonb_build_object('label', public._pnl_c('zone.tile_medibo'),
+                           'value', z->>'medibo_display')),
+      'notes', jsonb_build_array(public._pnl_c('zone.doc_note')),
+      'footer', public._c('partner_doc.footer')));
+end $function$;
+
+comment on function public._c694_doc_payload(smallint, text) is
+  'CHANGE #694 — the zone P&L as a bill-render payload. Prints the SAME lines '
+  'the screen printed, already filtered by pnl_line_type.partner_visible.';

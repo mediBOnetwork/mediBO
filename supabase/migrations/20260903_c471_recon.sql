@@ -1505,3 +1505,73 @@ on conflict (feature_key) do update set
   roles_allowed = excluded.roles_allowed, deep_link = excluded.deep_link,
   search_terms = excluded.search_terms, description = excluded.description,
   is_active = true;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 12. THE MORNING POST ALSO LANDS SOMEWHERE THAT CANNOT BE SWITCHED OFF
+-- ─────────────────────────────────────────────────────────────────────────────
+-- notify() is the channel the spec asks for, and it is called. But its WhatsApp
+-- path needs a Meta-approved template and its push path needs a live device
+-- token, and neither is this command's to grant: the first attempt logged
+-- `route_disabled` because `recon_morning` has no template_id. A drift report
+-- that silently depends on a template approval is a drift report nobody reads,
+-- so a run that found something ALSO raises a warn-level rg_alerts row — the
+-- platform's own "Om reads this" surface, the same one the watchdogs use, and
+-- warn severity never counts into rg_check's critical total.
+create or replace function public.recon_notify_latest()
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $$
+declare
+  cfg public.recon_config%rowtype;
+  r   public.recon_runs%rowtype;
+  v_lines text; v_res jsonb;
+begin
+  select * into cfg from public.recon_config where id = 1;
+  select * into r from public.recon_runs
+   where finished_at is not null and notified_at is null
+   order by id desc limit 1;
+  if not found then
+    return jsonb_build_object('ok', true, 'skipped', 'nothing_new');
+  end if;
+
+  if r.status = 'green' and not coalesce(cfg.notify_green, true) then
+    update public.recon_runs set notified_at = now() where id = r.id;
+    return jsonb_build_object('ok', true, 'skipped', 'green_muted', 'run_id', r.id);
+  end if;
+
+  select string_agg(x.line, E'\n')
+    into v_lines
+    from (select f.entity_label || ' · ' || coalesce(nullif(f.diff_label,''), f.detail_label) as line
+            from public.recon_findings f
+           where f.run_id = r.id
+           order by f.severity, f.id
+           limit greatest(coalesce(cfg.max_notify_lines, 12), 1)) x;
+
+  v_res := public.notify('recon_morning', null, jsonb_build_object(
+             'summary', r.summary_label,
+             'window',  public._cf('recon.window_label',
+                          jsonb_build_object('from', to_char(r.window_from,'DD Mon'),
+                                             'to',   to_char(r.window_to - 1,'DD Mon'))),
+             'detail',  coalesce(nullif(v_lines,''), r.detail_label, ''),
+             'channel', 'email'));
+
+  if r.status <> 'green' then
+    insert into public.rg_alerts (fingerprint, severity, kind, name, detail,
+                                  first_seen, last_seen, seen_count)
+    values ('c471_recon_drift', 'warn', 'money', 'Money reconciliation drift',
+            jsonb_build_object('run_id', r.id, 'summary', r.summary_label,
+                               'detail', coalesce(nullif(v_lines,''), r.detail_label, ''),
+                               'findings', r.findings, 'route', 'recon'),
+            now(), now(), 1)
+    on conflict (fingerprint) do update set
+      severity = excluded.severity, detail = excluded.detail,
+      last_seen = now(), seen_count = public.rg_alerts.seen_count + 1;
+  end if;
+
+  update public.recon_runs set notified_at = now() where id = r.id;
+  return jsonb_build_object('ok', true, 'run_id', r.id, 'status', r.status,
+                            'notify', v_res,
+                            'alerted', r.status <> 'green');
+end $$;

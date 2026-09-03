@@ -953,3 +953,101 @@ as $$
     'copy_keys',       (select count(*) from ui_copy where key like 'ops_board.%'));
 $$;
 grant execute on function public.c688_ops_board_proof() to authenticated;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 13. THE TAB BADGE — the breached count, so a breach is visible unopened.
+-- (fulfill_stage_counts is replaced whole; only the ops_board block is new.)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.fulfill_stage_counts(p_stages text[])
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v      jsonb := '{}'::jsonb;
+  v_arr  jsonb;
+  n      integer;
+begin
+  if p_stages is null or cardinality(p_stages) = 0 then
+    return v;
+  end if;
+
+  if ('supplier_shop' = any (p_stages)) or ('warehouse' = any (p_stages)) then
+    begin v_arr := public.fw_list_arrivals(); exception when others then v_arr := null; end;
+    if 'supplier_shop' = any (p_stages) then
+      v := v || jsonb_build_object('supplier_shop', coalesce((v_arr->>'count')::int, 0));
+    end if;
+    if 'warehouse' = any (p_stages) then
+      v := v || jsonb_build_object('warehouse', coalesce((v_arr->>'warehouse_count')::int, 0));
+    end if;
+  end if;
+
+  if 'customer_order' = any (p_stages) then
+    begin n := coalesce((public.admin_customer_orders()->>'count')::int, 0);
+    exception when others then n := 0; end;
+    v := v || jsonb_build_object('customer_order', coalesce(n, 0));
+  end if;
+
+  if 'supplier_inquiry' = any (p_stages) then
+    begin select count(*) into n from public.get_supplier_inquiry_overview();
+    exception when others then n := 0; end;
+    v := v || jsonb_build_object('supplier_inquiry', coalesce(n, 0));
+  end if;
+
+  if 'supplier_order' = any (p_stages) then
+    begin n := coalesce((public.admin_supplier_orders()->>'count')::int, 0);
+    exception when others then n := 0; end;
+    v := v || jsonb_build_object('supplier_order', coalesce(n, 0));
+  end if;
+
+  if 'bag' = any (p_stages) then
+    begin n := jsonb_array_length(coalesce(public.fw_list_bags()->'bags', '[]'::jsonb));
+    exception when others then n := 0; end;
+    v := v || jsonb_build_object('bag', coalesce(n, 0));
+  end if;
+
+  if 'pack' = any (p_stages) then
+    begin n := jsonb_array_length(coalesce(public.pack_list_orders()->'orders', '[]'::jsonb));
+    exception when others then n := 0; end;
+    v := v || jsonb_build_object('pack', coalesce(n, 0));
+  end if;
+
+  if 'delivery' = any (p_stages) then
+    begin n := jsonb_array_length(coalesce(public.admin_delivery_queue()->'orders', '[]'::jsonb));
+    exception when others then n := 0; end;
+    v := v || jsonb_build_object('delivery', coalesce(n, 0));
+  end if;
+
+  if 'dispute' = any (p_stages) then
+    begin
+      select count(*) into n
+        from jsonb_array_elements(
+               coalesce(public.fw_get_disputes()->'disputes', '[]'::jsonb)) d
+       where (d->>'is_active')::boolean is true;
+    exception when others then n := 0; end;
+    v := v || jsonb_build_object('dispute', coalesce(n, 0));
+  end if;
+
+  -- CHANGE #690 — the exceptions badge is the console's own count, so the tab
+  -- and the screen can never disagree about how much is stuck.
+  if 'exceptions' = any (p_stages) then
+    begin n := coalesce((public.exceptions_queue()->>'count')::int, 0);
+    exception when others then n := 0; end;
+    v := v || jsonb_build_object('exceptions', coalesce(n, 0));
+  end if;
+
+  -- CHANGE #688 — the ops board badge is the BREACHED count, the same red the
+  -- board itself sorts to the top. A number on the tab is how a breach is seen
+  -- without opening the tab.
+  if 'ops_board' = any (p_stages) then
+    begin n := coalesce((public.ops_board()->'counts'->>'red')::int, 0);
+    exception when others then n := 0; end;
+    v := v || jsonb_build_object('ops_board', coalesce(n, 0));
+  end if;
+
+  return v;
+end
+$function$
+
+;

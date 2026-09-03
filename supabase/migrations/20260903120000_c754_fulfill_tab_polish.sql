@@ -631,3 +631,20 @@ on conflict (name) do update
 -- bundle and the APK. This RPC reads admin settings and already refuses a
 -- non-admin, but a tokenless caller has no business reaching it at all.
 revoke execute on function public.supplier_toggle_chips() from anon;
+
+-- ORDER OF OPERATIONS (learned the hard way, 2026-09-03).
+--
+-- These three UPDATEs are the whole visible half of fix 3, and they take effect
+-- the instant they land — access_boot() is live, the deployed app already reads
+-- `v`, and the duplicate tabs vanished from Customers and Suppliers before a
+-- single line of Dart shipped. That is max-backend working exactly as intended,
+-- and it is also the trap: the SAME flag is read by the EMBEDDED instances of
+-- those screens inside Fulfill, and the build in production had no
+-- `widget.embedded` guard yet — so Fulfill -> Customer order would have
+-- redirected itself to the Customers list.
+--
+-- So the rows were put back to is_active=true and re-flipped only after
+-- verify_live.sh confirmed the bundle carrying the guard. Re-running this file
+-- is safe and idempotent; if it is ever applied ahead of a build that lacks
+-- lib/screens/admin/admin_*_screen_web.dart's embedded guard, flip them back:
+--   update partner_screen_tab set is_active = true where moved_to_route is not null;

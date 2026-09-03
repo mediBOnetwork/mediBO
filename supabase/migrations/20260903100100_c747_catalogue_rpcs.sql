@@ -67,7 +67,11 @@ returns jsonb
 language sql stable security definer
 set search_path to 'public'
 as $$
-  with z as (select public._viewer_zone_or_null() as zid)
+  -- Resolved with the switch FORCED ON, so turning it off does not make the
+  -- control disappear — `has` is "does this viewer get a switch", `on` is
+  -- "is it flipped". Collapsing the two would erase the control the moment
+  -- somebody used it.
+  with z as (select public._cat_zone(true) as zid)
   select case when (select zid from z) is null then
     jsonb_build_object('has', false, 'on', false, 'zone_id', null,
       'label', public.uic('catalogue.zone_switch','Available in my zone'),
@@ -86,11 +90,26 @@ $$;
 -- The zone actually applied to a query: the viewer's zone when the switch is
 -- on, and NULL — meaning no zone filter at all — otherwise. One place, so the
 -- switch, the counts and the list can never disagree.
+--
+-- The extra condition is not defensive padding, it is a real case: the count
+-- refresh only walks zones that are ACTIVE and not synthetic, so a customer
+-- attached to any other zone (the synthetic test pharmacy is zone 99, and a
+-- newly-created zone is in that state until its first refresh finishes) would
+-- be filtered against a cache with nothing in it and shown an EMPTY catalogue.
+-- Caught by the documented test.cust1 credential, which is exactly such a
+-- customer. A zone the cache cannot speak for gets no zone filter and no
+-- switch — the whole catalogue, honestly, rather than a confident nothing.
 create or replace function public._cat_zone(p_on boolean default true)
 returns smallint
 language sql stable security definer
 set search_path to 'public'
-as $$ select case when coalesce(p_on, true) then public._viewer_zone_or_null() end $$;
+as $$
+  select z.zid from (select public._viewer_zone_or_null() as zid) z
+   where coalesce(p_on, true)
+     and z.zid is not null
+     and exists (select 1 from public.catalogue_facet_count c
+                  where c.zone_id = z.zid and c.facet = 'meta');
+$$;
 
 -- Counts are read at the zone the switch resolved to; 0 is the whole catalogue.
 create or replace function public._cat_count_zone(p_on boolean default true)

@@ -949,3 +949,1093 @@ begin
       jsonb_build_object('kind','list','title',public._c('admin_cus2.o_title'),
                          'empty', public._c('admin_cus2.o_empty'), 'items', v_items)));
 end $$;
+
+-- ── 16. Bills & Payments tab — invoices, claims, and the verify decision ──
+--
+-- "Billed" is the order's own line money (PTR-based trade rate ± discount +
+-- GST, computed where it has always been computed). "Paid" is every payment
+-- claim that has not been rejected. Outstanding is the difference and never
+-- a credit limit: mediBO does not deal in credit.
+create or replace function public.admin_customer_tab_billing(p_customer_id uuid)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._cus810_gate();
+  pp pharmacy_profiles%rowtype;
+  v_ids uuid[]; v_inv jsonb; v_claims jsonb;
+  v_billed numeric := 0; v_paid numeric := 0; v_phones text[];
+begin
+  if v_role = 'none' then return public._cus810_deny(false); end if;
+  pp := public._cus810_row(p_customer_id);
+  if pp.id is null then return public._cus810_deny(false); end if;
+  v_ids := public._cus810_order_ids(pp.id);
+
+  v_phones := array_remove(array[
+      public.identity_norm(pp.phone), public.identity_norm(pp.whatsapp_no),
+      public.identity_norm(pp.other_contact_no), public.identity_norm(pp.last_payment_wa_no)], null);
+
+  select coalesce(sum(v.val),0) into v_billed
+    from orders o
+    left join lateral (select coalesce((select sum(coalesce(oi.line_total, oi.quantity*oi.price))
+                                          from order_items oi where oi.order_id = o.id
+                                           and coalesce(oi.unfulfillable,false) = false),0) as val) v on true
+   where o.id = any(v_ids);
+
+  select coalesce(sum(pc.amount),0) into v_paid from payment_claims pc
+   where pc.order_id = any(v_ids)
+     and coalesce(pc.status,'') not in ('rejected','duplicate','need_details');
+
+  select coalesce(jsonb_agg(y order by ord desc), '[]'::jsonb) into v_inv from (
+    select o.created_at as ord, jsonb_build_object(
+      'title', coalesce(nullif(o.invoice_no,''), nullif(o.order_code,''), left(o.id::text,8)),
+      'subtitle', to_char(coalesce(o.invoice_issued_at, o.created_at) at time zone 'Asia/Kolkata','FMDD Mon YYYY'),
+      'meta', public._c('admin_cus2.b_paid')||' '||public._cus810_money(coalesce(pd.amt,0)),
+      'trailing', public._cus810_money(coalesce(v.val,0)),
+      'trailing_tone', case when coalesce(v.val,0) - coalesce(pd.amt,0) > 0.009 then 'danger' else 'success' end) as y
+      from orders o
+      left join lateral (select coalesce((select sum(coalesce(oi.line_total, oi.quantity*oi.price))
+                                            from order_items oi where oi.order_id = o.id
+                                             and coalesce(oi.unfulfillable,false) = false),0) as val) v on true
+      left join lateral (select coalesce((select sum(pc.amount) from payment_claims pc
+                                           where pc.order_id = o.id
+                                             and coalesce(pc.status,'') not in ('rejected','duplicate','need_details')),0) as amt) pd on true
+     where o.id = any(v_ids) and coalesce(v.val,0) > 0
+     order by o.created_at desc limit 60) s;
+
+  select coalesce(jsonb_agg(y order by ord desc), '[]'::jsonb) into v_claims from (
+    select coalesce(pc.paid_ts, pc.received_at) as ord, jsonb_build_object(
+      'title', public._cus810_money(pc.amount)
+               || case when coalesce(pc.utr,'') <> '' then '  ·  '||pc.utr else '' end,
+      'subtitle', to_char(coalesce(pc.paid_ts, pc.received_at) at time zone 'Asia/Kolkata','FMDD Mon YYYY, HH12:MI AM'),
+      'meta', array_to_string(array_remove(array[
+                nullif(coalesce(pc.payment_method, pc.app, ''),''),
+                (select nullif(o2.order_code,'') from orders o2 where o2.id = pc.order_id)], null), '  ·  '),
+      'chip', jsonb_build_object('show', true,
+        'label', initcap(replace(coalesce(pc.status,''),'_',' ')),
+        'bg', case when coalesce(pc.status,'') in ('rejected','duplicate','need_details') then '#FEE2E2'
+                   when coalesce(pc.status,'') in ('verified','matched','linked','approved') then '#D1FAE5'
+                   else '#FEF3C7' end,
+        'fg', case when coalesce(pc.status,'') in ('rejected','duplicate','need_details') then '#991B1B'
+                   when coalesce(pc.status,'') in ('verified','matched','linked','approved') then '#065F46'
+                   else '#92400E' end,
+        'border','#E5E7EB'),
+      -- The verify decision, on the same RPC the payments queue uses.
+      'actions', case when coalesce(pc.status,'') in ('verified','matched','linked','approved','rejected')
+                      then '[]'::jsonb
+                 else jsonb_build_array(
+                   jsonb_build_object('label', public._c('admin_cus2.b_verify'), 'tone','success',
+                     'rpc','admin_claim_decide',
+                     'args', jsonb_build_object('p_claim_id', pc.id, 'p_action','approve')),
+                   jsonb_build_object('label', public._c('admin_cus2.b_reject'), 'tone','danger',
+                     'rpc','admin_claim_decide',
+                     'args', jsonb_build_object('p_claim_id', pc.id, 'p_action','reject'),
+                     'prompt', jsonb_build_object(
+                       'title', public._c('admin_cus2.reason_title'),
+                       'hint',  public._c('admin_cus2.reason_hint'),
+                       'ok',    public._c('admin_cus2.reason_ok'),
+                       'cancel',public._c('admin_cus2.reason_cancel'),
+                       'arg',   'p_reason'))) end) as y
+      from payment_claims pc
+     where pc.order_id = any(v_ids)
+        or (cardinality(v_phones) > 0 and pc.sender_phone is not null
+            and public.identity_norm(pc.sender_phone) = any(v_phones))
+     order by coalesce(pc.paid_ts, pc.received_at) desc limit 80) s;
+
+  return jsonb_build_object('ok', true, 'blocks', jsonb_build_array(
+    jsonb_build_object('kind','tiles','tiles', jsonb_build_array(
+      jsonb_build_object('label', public._c('admin_cus2.b_billed'),
+                         'value', public._cus810_money(v_billed), 'tone','neutral'),
+      jsonb_build_object('label', public._c('admin_cus2.b_paid'),
+                         'value', public._cus810_money(v_paid), 'tone','success'),
+      jsonb_build_object('label', public._c('admin_cus2.b_outstanding'),
+                         'value', public._cus810_money(greatest(v_billed - v_paid,0)),
+                         'tone', case when v_billed - v_paid > 0.009 then 'danger' else 'success' end))),
+    jsonb_build_object('kind','list','title',public._c('admin_cus2.b_invoices'),
+                       'empty', public._c('admin_cus2.b_empty_inv'), 'items', v_inv),
+    jsonb_build_object('kind','list','title',public._c('admin_cus2.b_claims'),
+                       'empty', public._c('admin_cus2.b_empty_claims'), 'items', v_claims)));
+end $$;
+
+-- ── 17. Cart tab — the live cart, its unavailable lines, and Remove ───────
+create or replace function public.admin_customer_tab_cart(p_customer_id uuid)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._cus810_gate();
+  pp pharmacy_profiles%rowtype;
+  v_items jsonb; v_n int := 0; v_val numeric := 0; v_oos int := 0;
+begin
+  if v_role = 'none' then return public._cus810_deny(false); end if;
+  pp := public._cus810_row(p_customer_id);
+  if pp.id is null then return public._cus810_deny(false); end if;
+
+  with ci as (
+    -- Availability is the SAME answer the customer's own cart reads:
+    -- storefront_effective_count() over the zone truth, not a raw stock number
+    -- and not a second opinion invented here (CHANGE #640).
+    select c.*, (coalesce(c.price,0) * coalesce(c.quantity,0)) as line_val,
+           (m.id is not null and coalesce(public.storefront_effective_count(m.id, m.supplier_count),0) >= 1)
+             as available
+      from cart_items c
+      left join "MEDICINE" m on m.id::text = c.product_id
+     where (c.customer_id = pp.id
+            or (c.customer_id is null and pp.user_id is not null and c.user_id = pp.user_id))
+       and c.removed_by_admin is not true
+  )
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'title', coalesce(nullif(ci.product_name,''), ci.product_id),
+           'subtitle', array_to_string(array_remove(array[
+                         nullif(coalesce(ci.manufacturer,''),''),
+                         nullif(coalesce(ci.pack_size,''),'')], null), '  ·  '),
+           'meta', ci.quantity::text||' × '||public._cus810_money(ci.price),
+           'trailing', public._cus810_money(ci.line_val),
+           'trailing_tone', case when not ci.available then 'danger' else 'neutral' end,
+           'chip', case when not ci.available then jsonb_build_object('show', true,
+                          'label', public._c('admin_cus2.c_unavailable'),
+                          'bg','#FEE2E2','fg','#991B1B','border','#FECACA')
+                        else jsonb_build_object('show', false) end,
+           'actions', jsonb_build_array(jsonb_build_object(
+             'label', public._c('admin_cus2.c_remove'), 'tone','danger',
+             'rpc','admin_cart_remove_item',
+             'args', jsonb_build_object('p_item_id', ci.id)))
+         ) order by ci.updated_at desc nulls last), '[]'::jsonb),
+         count(*)::int, coalesce(sum(ci.line_val),0),
+         count(*) filter (where not ci.available)::int
+    into v_items, v_n, v_val, v_oos
+    from ci;
+
+  return jsonb_build_object('ok', true, 'blocks', jsonb_build_array(
+    jsonb_build_object('kind','tiles','tiles', jsonb_build_array(
+      jsonb_build_object('label', public._c('admin_cus2.c_lines'), 'value', v_n::text, 'tone','neutral'),
+      jsonb_build_object('label', public._c('admin_cus2.c_total'),
+                         'value', public._cus810_money(v_val), 'tone','neutral'),
+      jsonb_build_object('label', public._c('admin_cus2.c_unavailable'),
+                         'value', v_oos::text,
+                         'tone', case when v_oos > 0 then 'danger' else 'success' end))),
+    jsonb_build_object('kind','list','title',public._c('admin_cus2.c_title'),
+                       'empty', public._c('admin_cus2.c_empty'), 'items', v_items)));
+end $$;
+
+-- ── 18. Staff tab — the customer_users logins on this pharmacy ────────────
+create or replace function public.admin_customer_staff_set_active(p_id bigint, p_active boolean)
+returns jsonb
+language plpgsql volatile security definer set search_path to 'public'
+as $$
+declare v_role text := public._cus810_gate(); v_cid uuid;
+begin
+  if v_role = 'none' then
+    return jsonb_build_object('ok', false, 'message', public._c('admin_cus2.forbidden'));
+  end if;
+  select customer_id into v_cid from customer_users where id = p_id;
+  if v_cid is null then
+    return jsonb_build_object('ok', false, 'message', public._c('admin_cus2.not_found'));
+  end if;
+  if (public._cus810_row(v_cid)).id is null then
+    return jsonb_build_object('ok', false, 'message', public._c('admin_cus2.forbidden'));
+  end if;
+  update customer_users set is_active = coalesce(p_active,false), updated_at = now() where id = p_id;
+  perform public.audit_write('customer_user.set_active','customer_user', p_id::text,
+            jsonb_build_object('is_active', not coalesce(p_active,false)),
+            jsonb_build_object('is_active', coalesce(p_active,false)));
+  return jsonb_build_object('ok', true, 'message', public._c('admin_cus2.s_saved'));
+end $$;
+
+create or replace function public.admin_customer_tab_staff(p_customer_id uuid)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._cus810_gate();
+  pp pharmacy_profiles%rowtype; v_items jsonb;
+begin
+  if v_role = 'none' then return public._cus810_deny(false); end if;
+  pp := public._cus810_row(p_customer_id);
+  if pp.id is null then return public._cus810_deny(false); end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'title', coalesce(nullif(cu.display_name,''), cu.identity),
+           'subtitle', cu.identity,
+           'meta', coalesce(nullif(public._c('cu_access.'||cu.access_key),''), cu.access_key)
+                   ||'  ·  '||to_char(cu.created_at at time zone 'Asia/Kolkata','FMDD Mon YYYY'),
+           'chip', jsonb_build_object('show', true,
+             'label', case when coalesce(cu.is_active,true) then 'Active' else 'Disabled' end,
+             'bg', case when coalesce(cu.is_active,true) then '#D1FAE5' else '#F3F4F6' end,
+             'fg', case when coalesce(cu.is_active,true) then '#065F46' else '#374151' end,
+             'border','#E5E7EB'),
+           'actions', jsonb_build_array(jsonb_build_object(
+             'label', case when coalesce(cu.is_active,true) then public._c('admin_cus2.s_disable')
+                           else public._c('admin_cus2.s_enable') end,
+             'tone', case when coalesce(cu.is_active,true) then 'warning' else 'brand' end,
+             'rpc','admin_customer_staff_set_active',
+             'args', jsonb_build_object('p_id', cu.id, 'p_active', not coalesce(cu.is_active,true))))
+         ) order by cu.created_at), '[]'::jsonb)
+    into v_items
+    from customer_users cu where cu.customer_id = pp.id;
+
+  return jsonb_build_object('ok', true, 'blocks', jsonb_build_array(
+    jsonb_build_object('kind','kv','title',public._c('admin_cus2.s_owner'),
+      'rows', jsonb_build_array(
+        public._cus810_kv('Email', pp.email),
+        public._cus810_kv('Phone', pp.phone),
+        public._cus810_kv('Auth user', coalesce(pp.user_id::text,'')))),
+    jsonb_build_object('kind','list','title',public._c('admin_cus2.s_title'),
+                       'empty', public._c('admin_cus2.s_empty'), 'items', v_items)));
+end $$;
+
+-- ── 19. Addresses tab ────────────────────────────────────────────────────
+create or replace function public.admin_customer_tab_addresses(p_customer_id uuid)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._cus810_gate();
+  pp pharmacy_profiles%rowtype; v_items jsonb;
+begin
+  if v_role = 'none' then return public._cus810_deny(false); end if;
+  pp := public._cus810_row(p_customer_id);
+  if pp.id is null then return public._cus810_deny(false); end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'title', coalesce(nullif(a.label,''), a.city, '—'),
+           'subtitle', array_to_string(array_remove(array[
+                         nullif(coalesce(a.address,''),''),
+                         nullif(coalesce(a.city,''),''),
+                         nullif(coalesce(a.state,''),''),
+                         nullif(coalesce(a.pincode,''),'')], null), ', '),
+           'meta', array_to_string(array_remove(array[
+                         nullif(coalesce(a.contact_name,''),''),
+                         nullif(coalesce(a.contact_phone,''),''),
+                         nullif(coalesce(a.delivery_instruction,''),'')], null), '  ·  '),
+           'chip', case when coalesce(a.is_default,false) then jsonb_build_object('show', true,
+                          'label', public._c('admin_cus2.a_default'),
+                          'bg','#D1FAE5','fg','#065F46','border','#A7F3D0')
+                        else jsonb_build_object('show', false) end,
+           'actions', case when coalesce(a.map_link,'') = '' then '[]'::jsonb
+                      else jsonb_build_array(jsonb_build_object(
+                        'label', public._c('admin_cus2.a_map'), 'tone','neutral',
+                        'url', a.map_link)) end
+         ) order by coalesce(a.is_default,false) desc, a.created_at), '[]'::jsonb)
+    into v_items
+    from customer_addresses a
+   where a.customer_id = pp.id and coalesce(a.is_deleted,false) = false;
+
+  return jsonb_build_object('ok', true, 'blocks', jsonb_build_array(
+    jsonb_build_object('kind','list','title',public._c('admin_cus2.a_title'),
+                       'empty', public._c('admin_cus2.a_empty'), 'items', v_items)));
+end $$;
+
+-- ── 20. Performance tab (NEW) ────────────────────────────────────────────
+--
+-- Order frequency, average basket, on-time payment, disputes/returns rate, NPS
+-- (#697's order_feedback), lifetime value and the top ten products. Every
+-- number is FORMATTED here: the screen prints '-18.4%' because this function
+-- said so.
+--
+-- "On-time payment" is measured against the payment term this customer
+-- actually carries — mediBO has no credit line, so the clock starts at the
+-- order and the term is the window, defaulting to the platform's own.
+create or replace function public.admin_customer_tab_performance(p_customer_id uuid)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._cus810_gate();
+  pp pharmacy_profiles%rowtype;
+  v_ids uuid[];
+  v_orders int := 0; v_first timestamptz; v_last timestamptz;
+  v_ltv numeric := 0; v_basket numeric := 0; v_months numeric := 0;
+  v_freq numeric := 0; v_paid_n int := 0; v_ontime_n int := 0;
+  v_ret int := 0; v_nps numeric; v_nps_n int := 0; v_top jsonb;
+  v_term_days int;
+begin
+  if v_role = 'none' then return public._cus810_deny(false); end if;
+  pp := public._cus810_row(p_customer_id);
+  if pp.id is null then return public._cus810_deny(false); end if;
+  v_ids := public._cus810_order_ids(pp.id);
+
+  v_term_days := coalesce(nullif(regexp_replace(coalesce(pp.payment_term,''),'[^0-9]','','g'),'')::int,
+                          coalesce((select (value#>>'{}')::int from app_settings
+                                     where key='customer_payment_term_days'), 15));
+
+  select count(*)::int, min(o.created_at), max(o.created_at),
+         coalesce(sum(v.val),0)
+    into v_orders, v_first, v_last, v_ltv
+    from orders o
+    left join lateral (select coalesce((select sum(coalesce(oi.line_total, oi.quantity*oi.price))
+                                          from order_items oi where oi.order_id = o.id
+                                           and coalesce(oi.unfulfillable,false) = false),0) as val) v on true
+   where o.id = any(v_ids);
+
+  v_basket := case when v_orders > 0 then v_ltv / v_orders else 0 end;
+  v_months := greatest(
+      coalesce(extract(epoch from (coalesce(v_last, now()) - coalesce(v_first, now()))) / 2629800.0, 0), 1);
+  v_freq := v_orders / v_months;
+
+  -- An order counts as paid on time when its payments cleared inside the term.
+  select count(*)::int,
+         count(*) filter (where p.last_paid is not null
+                            and p.last_paid <= o.created_at + (v_term_days || ' days')::interval)::int
+    into v_paid_n, v_ontime_n
+    from orders o
+    join lateral (select max(coalesce(pc.paid_ts, pc.received_at)) as last_paid,
+                         coalesce(sum(pc.amount),0) as amt
+                    from payment_claims pc
+                   where pc.order_id = o.id
+                     and coalesce(pc.status,'') not in ('rejected','duplicate','need_details')) p on true
+    left join lateral (select coalesce((select sum(coalesce(oi.line_total, oi.quantity*oi.price))
+                                          from order_items oi where oi.order_id = o.id
+                                           and coalesce(oi.unfulfillable,false) = false),0) as val) v on true
+   where o.id = any(v_ids) and coalesce(v.val,0) > 0 and p.amt >= v.val - 0.01;
+
+  select count(distinct r.order_id)::int into v_ret
+    from order_returns r where r.order_id = any(v_ids);
+
+  select round(avg(f.nps)::numeric,1), count(*)::int into v_nps, v_nps_n
+    from order_feedback f where f.order_id = any(v_ids) and f.nps is not null;
+
+  select coalesce(jsonb_agg(t order by ord desc), '[]'::jsonb) into v_top from (
+    select sum(coalesce(oi.line_total, oi.quantity*oi.price)) as ord,
+           jsonb_build_array(
+             jsonb_build_object('text', coalesce(nullif(oi.product_name,''), oi.product_id::text)),
+             jsonb_build_object('text', sum(coalesce(oi.quantity,0))::text),
+             jsonb_build_object('text', public._cus810_money(sum(coalesce(oi.line_total, oi.quantity*oi.price))))) as t
+      from order_items oi
+     where oi.order_id = any(v_ids)
+       and coalesce(oi.unfulfillable,false) = false
+     group by coalesce(nullif(oi.product_name,''), oi.product_id::text)
+     order by 1 desc
+     limit 10) s;
+
+  return jsonb_build_object('ok', true, 'blocks', jsonb_build_array(
+    jsonb_build_object('kind','tiles','title',public._c('admin_cus2.p_title'),'tiles', jsonb_build_array(
+      jsonb_build_object('label', public._c('admin_cus2.p_ltv'),
+                         'value', public._cus810_money(v_ltv), 'tone','brand'),
+      jsonb_build_object('label', public._c('admin_cus2.p_freq'),
+                         'value', case when v_orders = 0 then public._c('admin_cus2.p_none')
+                                  else replace(public._c('admin_cus2.p_per_month'),'{n}',
+                                               trim(to_char(round(v_freq,1),'FM990.0'))) end,
+                         'tone','neutral'),
+      jsonb_build_object('label', public._c('admin_cus2.p_basket'),
+                         'value', public._cus810_money(v_basket), 'tone','neutral'),
+      jsonb_build_object('label', public._c('admin_cus2.p_ontime'),
+                         'value', case when v_paid_n = 0 then public._c('admin_cus2.p_none')
+                                  else public._cus810_pct(100.0 * v_ontime_n / v_paid_n) end,
+                         'tone', case when v_paid_n = 0 then 'muted'
+                                      when 100.0 * v_ontime_n / v_paid_n >= 80 then 'success'
+                                      else 'warning' end),
+      jsonb_build_object('label', public._c('admin_cus2.p_disputes'),
+                         'value', case when v_orders = 0 then public._c('admin_cus2.p_none')
+                                  else public._cus810_pct(100.0 * v_ret / v_orders) end,
+                         'tone', case when v_ret = 0 then 'success' else 'warning' end),
+      jsonb_build_object('label', public._c('admin_cus2.p_nps'),
+                         'value', case when v_nps_n = 0 then public._c('admin_cus2.p_none')
+                                  else trim(to_char(v_nps,'FM990.0')) end,
+                         'tone', case when v_nps is null then 'muted'
+                                      when v_nps >= 9 then 'success'
+                                      when v_nps >= 7 then 'warning' else 'danger' end))),
+    jsonb_build_object('kind','table','title',public._c('admin_cus2.p_top'),
+      'columns', jsonb_build_array(
+        jsonb_build_object('label', public._c('admin_cus2.p_col_product'),'align','left'),
+        jsonb_build_object('label', public._c('admin_cus2.p_col_qty'),    'align','right'),
+        jsonb_build_object('label', public._c('admin_cus2.p_col_value'),  'align','right')),
+      'rows', v_top,
+      'empty', public._c('admin_cus2.p_top_empty'))));
+end $$;
+
+-- ── 21. History tab (NEW) — ONE timeline, every source in date order ──────
+create or replace function public.admin_customer_tab_history(
+  p_customer_id uuid, p_limit int default 60)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._cus810_gate();
+  pp pharmacy_profiles%rowtype;
+  v_ids uuid[]; v_lim int := least(greatest(coalesce(p_limit,60),10),400);
+  v_items jsonb; v_total int;
+begin
+  if v_role = 'none' then return public._cus810_deny(false); end if;
+  pp := public._cus810_row(p_customer_id);
+  if pp.id is null then return public._cus810_deny(false); end if;
+  v_ids := public._cus810_order_ids(pp.id);
+
+
+  with ev as (
+    select o.created_at as at,
+           replace(public._c('admin_cus2.h_order'),'{a}',
+                   coalesce(nullif(o.order_code,''), left(o.id::text,8))) as title,
+           coalesce(sl.label, initcap(coalesce(o.status,''))) as subtitle,
+           coalesce(sl.tone,'info') as tone
+      from orders o
+      left join order_status_label sl on sl.status = lower(coalesce(o.status,''))
+     where o.id = any(v_ids)
+    union all
+    select coalesce(pc.paid_ts, pc.received_at),
+           replace(public._c('admin_cus2.h_payment'),'{a}', public._cus810_money(pc.amount)),
+           initcap(replace(coalesce(pc.status,''),'_',' '))
+             || case when coalesce(pc.utr,'') <> '' then '  ·  '||pc.utr else '' end,
+           case when coalesce(pc.status,'') in ('rejected','duplicate','need_details') then 'danger'
+                when coalesce(pc.status,'') in ('verified','matched','linked','approved') then 'success'
+                else 'warning' end
+      from payment_claims pc where pc.order_id = any(v_ids)
+    union all
+    select t.created_at,
+           replace(public._c('admin_cus2.h_ticket'),'{a}', coalesce(t.ref, left(t.id::text,8))),
+           coalesce(t.topic_code,'')||'  ·  '||coalesce(t.status,''),
+           case when coalesce(t.status,'') in ('closed','resolved') then 'success' else 'warning' end
+      from support_ticket t where t.customer_id = pp.id
+    union all
+    select r.raised_at,
+           replace(public._c('admin_cus2.h_return'),'{a}',
+                   coalesce(nullif(r.product_name,''), r.product_id::text)),
+           coalesce(r.reason_code,'')||'  ·  '||coalesce(r.status,''),
+           case when coalesce(r.status,'') = 'approved' then 'success'
+                when coalesce(r.status,'') = 'rejected' then 'danger' else 'warning' end
+      from order_returns r where r.order_id = any(v_ids)
+    union all
+    select a.at, public._c('admin_cus2.h_status'),
+           replace(a.action,'customer.','')
+             || case when coalesce(a.actor_email,'') <> '' then '  ·  '||a.actor_email else '' end
+             || case when coalesce(a.after->>'reason','') <> ''
+                     then '  ·  '||(a.after->>'reason') else '' end,
+           'info'
+      from audit_log a
+     where a.entity_type = 'customer' and a.entity_id = pp.id::text
+    union all
+    select n.created_at, public._c('admin_cus2.h_note'),
+           n.body || case when coalesce(n.created_by,'') <> '' then '  ·  '||n.created_by else '' end,
+           'neutral'
+      from customer_note n where n.customer_id = pp.id
+    union all
+    select m.created_at, public._c('admin_cus2.h_merge'),
+           m.merged_name||'  ·  '||m.matched_on, 'info'
+      from customer_merge_log m where m.kept_id = pp.id
+    union all
+    select g.created_at, public._c('admin_cus2.h_nudge'),
+           g.template||case when coalesce(g.sent_by,'') <> '' then '  ·  '||g.sent_by else '' end,
+           'brand'
+      from customer_nudge_log g where g.customer_id = pp.id
+  )
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'title', x.title, 'subtitle', x.subtitle, 'tone', x.tone,
+           'when', to_char(x.at at time zone 'Asia/Kolkata','FMDD Mon YYYY, HH12:MI AM'))
+         order by x.at desc), '[]'::jsonb),
+         (select count(*)::int from ev where ev.at is not null)
+    into v_items, v_total
+    from (select * from ev where ev.at is not null order by ev.at desc limit v_lim) x;
+
+  return jsonb_build_object('ok', true,
+    'limit', v_lim, 'has_more', v_total > v_lim,
+    'more_label', public._c('admin_cus2.o_more'),
+    'blocks', jsonb_build_array(
+      jsonb_build_object('kind','timeline','title',public._c('admin_cus2.h_title'),
+                         'empty', public._c('admin_cus2.h_empty'), 'items', v_items)));
+end $$;
+
+-- ── 22. Lifecycle with a reason ──────────────────────────────────────────
+--
+-- The old card carried Approve / Reject / Suspend / Delete as bare buttons and
+-- recorded no WHY. `block` and `unblock` are the words the console uses for
+-- what the database has always called suspend/reactivate; the reason is
+-- written into the audit row, which is what the History tab reads back.
+create or replace function public.admin_customer_action(p_customer_id uuid, p_action text)
+returns jsonb
+language plpgsql volatile security definer set search_path to 'public'
+as $$
+declare
+  v_role text := coalesce(public.role_for_medibo_only(), 'none');
+  v_who  text;
+  v_cfg  jsonb := coalesce((select value from app_settings where key='customer_status_values'), '{}'::jsonb);
+  v_act  text := lower(btrim(coalesce(p_action,'')));
+  pp pharmacy_profiles%rowtype;
+  bb pharmacy_profiles%rowtype;
+begin
+  if v_role not in ('admin','super_admin')
+     or not public.admin_can('admin.customers','write') then
+    raise exception 'forbidden' using hint = 'Only an admin may change customer status.';
+  end if;
+
+  -- CHANGE #810 — the console's own vocabulary, mapped onto the actions the
+  -- database already had. Nothing new happens; the words match the dropdown.
+  if v_act = 'block'   then v_act := 'suspend'; end if;
+  if v_act = 'unblock' then v_act := 'reactivate'; end if;
+
+  select * into pp from pharmacy_profiles where id = p_customer_id;
+  if not found then raise exception 'customer_not_found'; end if;
+  bb := pp;
+
+  v_who := coalesce(nullif(public.my_login_email(),''), auth.uid()::text, 'unknown');
+
+  if v_act = 'approve' then
+    update pharmacy_profiles set
+      approved = true, status = coalesce(v_cfg->>'approved','approved'),
+      approved_at = now(), approved_by = v_who
+    where id = p_customer_id;
+
+  elsif v_act = 'reject' then
+    update pharmacy_profiles set
+      approved = false, status = coalesce(v_cfg->>'rejected','rejected')
+    where id = p_customer_id;
+
+  elsif v_act = 'suspend' then
+    update pharmacy_profiles set status = coalesce(v_cfg->>'suspended','suspended')
+    where id = p_customer_id;
+
+  elsif v_act = 'reactivate' then
+    update pharmacy_profiles set status = coalesce(v_cfg->>'approved','approved')
+    where id = p_customer_id;
+
+  elsif v_act = 'delete' then
+    update pharmacy_profiles set
+      is_deleted = true, deleted_at = now(), deleted_by = v_who,
+      deleted_snapshot = to_jsonb(pp)
+    where id = p_customer_id;
+
+  elsif v_act = 'restore' then
+    update pharmacy_profiles set
+      is_deleted = false, deleted_at = null, deleted_by = null, deleted_snapshot = null
+    where id = p_customer_id;
+
+  else
+    raise exception 'unknown_action: %', p_action;
+  end if;
+
+  select * into pp from pharmacy_profiles where id = p_customer_id;
+
+  perform public.audit_write('customer.' || v_act, 'customer', p_customer_id::text,
+            jsonb_build_object('approved', bb.approved, 'status', bb.status,
+                               'is_deleted', bb.is_deleted),
+            jsonb_build_object('approved', pp.approved, 'status', pp.status,
+                               'is_deleted', pp.is_deleted));
+
+  return jsonb_build_object(
+    'ok', true, 'action', v_act,
+    'customer_id',   coalesce(pp.id::text,''),
+    'pharmacy_name', coalesce(pp.pharmacy_name,''),
+    'user_id',       coalesce(pp.user_id::text,''),
+    'email',         coalesce(pp.email,''),
+    'approved',      coalesce(pp.approved,false),
+    'status',        coalesce(pp.status,''),
+    'is_deleted',    coalesce(pp.is_deleted,false),
+    'acted_by',      v_who);
+end $$;
+
+create or replace function public.admin_customer_action_reason(
+  p_customer_id uuid, p_action text, p_reason text default null)
+returns jsonb
+language plpgsql volatile security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._cus810_gate();
+  v_act text := lower(btrim(coalesce(p_action,'')));
+  v_reason text := btrim(coalesce(p_reason,''));
+  v_res jsonb; pp pharmacy_profiles%rowtype;
+begin
+  if v_role = 'none' then
+    return jsonb_build_object('ok', false, 'message', public._c('admin_cus2.forbidden'));
+  end if;
+  if (public._cus810_row(p_customer_id)).id is null then
+    return jsonb_build_object('ok', false, 'message', public._c('admin_cus2.not_found'));
+  end if;
+  if v_act in ('reject','block','suspend','delete') and v_reason = '' then
+    return jsonb_build_object('ok', false, 'message', public._c('admin_cus2.reason_error'));
+  end if;
+
+  select * into pp from pharmacy_profiles where id = p_customer_id;
+  v_res := public.admin_customer_action(p_customer_id, v_act);
+
+  if v_reason <> '' then
+    -- The reason rides its own audit row, so History prints it verbatim next
+    -- to the status change it explains.
+    perform public.audit_write('customer.reason', 'customer', p_customer_id::text,
+              jsonb_build_object('action', v_act),
+              jsonb_build_object('action', v_act, 'reason', v_reason));
+    if v_act = 'delete' then
+      insert into customer_delete_log (customer_id, customer_name, reason, deleted_by)
+      values (p_customer_id, coalesce(pp.pharmacy_name, pp.customer_name, ''), v_reason,
+              coalesce(nullif(public.my_login_email(),''), auth.uid()::text, 'unknown'));
+    end if;
+  end if;
+
+  return v_res || jsonb_build_object('message',
+    case when v_act = 'delete' then public._c('admin_cus2.deleted_toast')
+         else public._c('admin_cus2.st_saved') end);
+end $$;
+
+-- ── 23. Edit form / save — the form is DATA, the patch is allow-listed ────
+create table if not exists public.admin_customer_edit_field (
+  col        text primary key,
+  label      text not null,
+  kind       text not null default 'text',
+  sort_order integer not null default 100,
+  is_active  boolean not null default true
+);
+alter table public.admin_customer_edit_field enable row level security;
+do $c810p2$ begin
+  if not exists (select 1 from pg_policies where schemaname='public'
+                   and tablename='admin_customer_edit_field' and policyname='acef_read') then
+    create policy acef_read on public.admin_customer_edit_field for select using (true);
+  end if;
+end $c810p2$;
+
+insert into public.admin_customer_edit_field (col, label, kind, sort_order) values
+  ('pharmacy_name',      'Pharmacy / clinic name', 'text', 10),
+  ('customer_name',      'Customer name',          'text', 20),
+  ('owner_name',         'Owner name',             'text', 30),
+  ('whatsapp_no',        'WhatsApp no.',           'text', 40),
+  ('phone',              'Phone',                  'text', 50),
+  ('email',              'Email',                  'text', 60),
+  ('other_contact_no',   'Other contact',          'text', 70),
+  ('store_type',         'Store type',             'text', 80),
+  ('range_zone',         'Range / zone',           'text', 90),
+  ('address_local',      'Local address',          'text', 100),
+  ('address',            'Address',                'text', 110),
+  ('city',               'City',                   'text', 120),
+  ('district',           'District',               'text', 125),
+  ('state',              'State',                  'text', 130),
+  ('pincode',            'Pincode',                'text', 140),
+  ('store_location_link','Store location link',    'text', 150),
+  ('dl_20b',             'Drug licence 20B',       'text', 160),
+  ('dl_21b',             'Drug licence 21B',       'text', 170),
+  ('drug_license',       'Drug licence',           'text', 180),
+  ('gst_no',             'GST no.',                'text', 190),
+  ('gstin',              'GSTIN',                  'text', 200),
+  ('payment_term',       'Payment term',           'text', 210),
+  ('customer_code',      'Customer code',          'text', 220)
+on conflict (col) do update
+  set label = excluded.label, kind = excluded.kind, sort_order = excluded.sort_order;
+
+create or replace function public.admin_customer_edit_form(p_customer_id uuid)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._cus810_gate(); pp pharmacy_profiles%rowtype;
+  v_row jsonb; v_fields jsonb;
+begin
+  if v_role = 'none' then
+    return jsonb_build_object('ok', false, 'message', public._c('admin_cus2.forbidden'));
+  end if;
+  pp := public._cus810_row(p_customer_id);
+  if pp.id is null then
+    return jsonb_build_object('ok', false, 'message', public._c('admin_cus2.not_found'));
+  end if;
+  v_row := to_jsonb(pp);
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'col', f.col, 'label', f.label, 'kind', f.kind,
+           'value', coalesce(v_row->>f.col,'')) order by f.sort_order), '[]'::jsonb)
+    into v_fields
+    from admin_customer_edit_field f where f.is_active;
+
+  return jsonb_build_object('ok', true,
+    'title', public._c('admin_cus2.e_title'),
+    'save_label', public._c('admin_cus2.e_save'),
+    'cancel_label', public._c('admin_cus2.e_cancel'),
+    'fields', v_fields);
+end $$;
+
+create or replace function public.admin_customer_edit_save(p_customer_id uuid, p_patch jsonb)
+returns jsonb
+language plpgsql volatile security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._cus810_gate(); v_clean jsonb := '{}'::jsonb; k text;
+begin
+  if v_role = 'none' then
+    return jsonb_build_object('ok', false, 'message', public._c('admin_cus2.forbidden'));
+  end if;
+  if (public._cus810_row(p_customer_id)).id is null then
+    return jsonb_build_object('ok', false, 'message', public._c('admin_cus2.not_found'));
+  end if;
+  -- The registry is the allow-list: a key the form never offered cannot ride
+  -- along, which is exactly how `approved` used to be writable from a form.
+  for k in select f.col from admin_customer_edit_field f where f.is_active loop
+    if p_patch ? k then
+      v_clean := v_clean || jsonb_build_object(k, nullif(btrim(coalesce(p_patch->>k,'')),''));
+    end if;
+  end loop;
+  if v_clean = '{}'::jsonb then
+    return jsonb_build_object('ok', true, 'message', public._c('admin_cus2.e_saved'));
+  end if;
+  perform public.admin_customer_update(p_customer_id, v_clean);
+  return jsonb_build_object('ok', true, 'message', public._c('admin_cus2.e_saved'));
+end $$;
+
+-- ── 24. Set zone — the same RPC the rest of the admin uses ───────────────
+create or replace function public.admin_customer_set_zone(p_customer_id uuid, p_zone_id smallint)
+returns jsonb
+language plpgsql volatile security definer set search_path to 'public'
+as $$
+declare v_role text := public._cus810_gate();
+begin
+  if v_role = 'none' then
+    return jsonb_build_object('ok', false, 'message', public._c('admin_cus2.forbidden'));
+  end if;
+  perform public.admin_set_entity_zone('customer', p_customer_id, p_zone_id, true);
+  return jsonb_build_object('ok', true, 'message', public._c('admin_cus2.zone_saved'));
+end $$;
+
+-- ── 25. Notes & follow-ups ───────────────────────────────────────────────
+create or replace function public.admin_customer_note_add(
+  p_customer_id uuid, p_body text, p_remind_on date default null)
+returns jsonb
+language plpgsql volatile security definer set search_path to 'public'
+as $$
+declare v_role text := public._cus810_gate(); v_body text := btrim(coalesce(p_body,''));
+begin
+  if v_role = 'none' then
+    return jsonb_build_object('ok', false, 'message', public._c('admin_cus2.forbidden'));
+  end if;
+  if (public._cus810_row(p_customer_id)).id is null then
+    return jsonb_build_object('ok', false, 'message', public._c('admin_cus2.not_found'));
+  end if;
+  if v_body = '' then
+    return jsonb_build_object('ok', false, 'message', public._c('admin_cus2.note_empty_body'));
+  end if;
+  insert into customer_note (customer_id, body, remind_on, created_by)
+  values (p_customer_id, v_body, p_remind_on,
+          coalesce(nullif(public.my_login_email(),''), auth.uid()::text, 'unknown'));
+  return jsonb_build_object('ok', true, 'message', public._c('admin_cus2.note_saved'));
+end $$;
+
+create or replace function public.admin_customer_note_done(p_note_id bigint)
+returns jsonb
+language plpgsql volatile security definer set search_path to 'public'
+as $$
+declare v_role text := public._cus810_gate(); v_cid uuid;
+begin
+  if v_role = 'none' then
+    return jsonb_build_object('ok', false, 'message', public._c('admin_cus2.forbidden'));
+  end if;
+  select customer_id into v_cid from customer_note where id = p_note_id;
+  if v_cid is null or (public._cus810_row(v_cid)).id is null then
+    return jsonb_build_object('ok', false, 'message', public._c('admin_cus2.not_found'));
+  end if;
+  update customer_note
+     set status = 'done', done_at = now(),
+         done_by = coalesce(nullif(public.my_login_email(),''), auth.uid()::text, 'unknown')
+   where id = p_note_id;
+  return jsonb_build_object('ok', true, 'message', public._c('admin_cus2.note_done_toast'));
+end $$;
+
+-- The ops inbox for customer follow-ups: everything open and due, zone-fenced,
+-- oldest first — the same list the Customers header strip counts.
+create or replace function public.admin_customer_followups(p_limit int default 100)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._cus810_gate();
+  v_zone smallint := public.admin_active_zone();
+  v_today date := (now() at time zone 'Asia/Kolkata')::date;
+  v_items jsonb;
+begin
+  if v_role = 'none' then
+    return jsonb_build_object('ok', false, 'message', public._c('admin_cus2.forbidden'));
+  end if;
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'title', coalesce(nullif(pp.pharmacy_name,''), pp.customer_name, '—'),
+           'subtitle', n.body,
+           'meta', case when n.remind_on < v_today
+                        then replace(public._c('admin_cus2.note_overdue'),'{d}',
+                                     to_char(n.remind_on,'FMDD Mon YYYY'))
+                        else replace(public._c('admin_cus2.note_due'),'{d}',
+                                     to_char(n.remind_on,'FMDD Mon YYYY')) end,
+           'trailing_tone', case when n.remind_on < v_today then 'danger' else 'warning' end,
+           'customer_id', pp.id,
+           'actions', jsonb_build_array(jsonb_build_object(
+             'label', public._c('admin_cus2.note_done'), 'tone','brand',
+             'rpc','admin_customer_note_done',
+             'args', jsonb_build_object('p_note_id', n.id))))
+         order by n.remind_on), '[]'::jsonb)
+    into v_items
+    from customer_note n
+    join pharmacy_profiles pp on pp.id = n.customer_id
+   where n.status = 'open' and n.remind_on is not null and n.remind_on <= v_today
+     and coalesce(pp.is_deleted,false) = false
+     and (v_zone is null or pp.zone_id = v_zone)
+   limit least(greatest(coalesce(p_limit,100),10),500);
+
+  return jsonb_build_object('ok', true,
+    'title', public._c('admin_cus2.fu_title'),
+    'empty', public._c('admin_cus2.fu_empty'),
+    'items', v_items);
+end $$;
+
+-- ── 26. Churn nudge — the EXISTING reorder_due template, one tap ──────────
+create or replace function public.admin_customer_churn_nudge(p_customer_id uuid)
+returns jsonb
+language plpgsql volatile security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._cus810_gate(); pp pharmacy_profiles%rowtype;
+  v_ids uuid[]; v_last uuid; v_items text := ''; v_amt numeric := 0;
+  v_res jsonb; v_days int;
+begin
+  if v_role = 'none' then
+    return jsonb_build_object('ok', false, 'message', public._c('admin_cus2.forbidden'));
+  end if;
+  pp := public._cus810_row(p_customer_id);
+  if pp.id is null then
+    return jsonb_build_object('ok', false, 'message', public._c('admin_cus2.not_found'));
+  end if;
+  if public._cus810_wa(coalesce(nullif(pp.whatsapp_no,''), pp.phone)) is null then
+    return jsonb_build_object('ok', false, 'message', public._c('admin_cus2.nudge_no_number'));
+  end if;
+
+  v_ids := public._cus810_order_ids(pp.id);
+  select o.id into v_last from orders o where o.id = any(v_ids)
+   order by o.created_at desc limit 1;
+
+  -- The nudge is built from what they last bought, so the message is theirs.
+  select coalesce(string_agg(x.nm, ', '), ''), coalesce(sum(x.val),0)
+    into v_items, v_amt
+    from (select coalesce(nullif(oi.product_name,''), oi.product_id::text) as nm,
+                 coalesce(oi.line_total, oi.quantity*oi.price) as val
+            from order_items oi
+           where oi.order_id = v_last and coalesce(oi.unfulfillable,false) = false
+           order by coalesce(oi.line_total, oi.quantity*oi.price) desc
+           limit 5) x;
+
+  select ((now() at time zone 'Asia/Kolkata')::date
+          - (max(o.created_at) at time zone 'Asia/Kolkata')::date)
+    into v_days from orders o where o.id = any(v_ids);
+
+  v_res := public.wa_send_event('reorder_due', pp.id, jsonb_build_object(
+    'customer_name', coalesce(nullif(pp.owner_name,''), nullif(pp.customer_name,''),
+                              nullif(pp.pharmacy_name,''), ''),
+    'reorder_items', coalesce(nullif(v_items,''), '—'),
+    'reorder_amount', trim(to_char(round(coalesce(v_amt,0),0),'FM99999999990'))));
+
+  if coalesce((v_res->>'ok')::boolean,false) then
+    insert into customer_nudge_log (customer_id, template, days_idle, sent_by)
+    values (pp.id, 'reorder_due', v_days,
+            coalesce(nullif(public.my_login_email(),''), auth.uid()::text, 'unknown'));
+    return jsonb_build_object('ok', true, 'message', public._c('admin_cus2.nudge_sent'));
+  end if;
+
+  -- The route's own refusal, verbatim: never re-worded here.
+  return jsonb_build_object('ok', false,
+    'message', coalesce(nullif(v_res->>'message',''), v_res->>'reason', ''));
+end $$;
+
+-- ── 27. Merge duplicates — preview, then apply, with an audit row ─────────
+--
+-- WHICH tables carry a customer forward is DATA. A table added tomorrow is one
+-- INSERT here, not a rewrite of the merge.
+create table if not exists public.customer_merge_table (
+  table_name text primary key,
+  col        text not null default 'customer_id',
+  label      text not null,
+  sort_order integer not null default 100,
+  is_active  boolean not null default true
+);
+alter table public.customer_merge_table enable row level security;
+
+insert into public.customer_merge_table (table_name, col, label, sort_order) values
+  ('orders',                  'customer_id','Orders',            10),
+  ('cart_items',              'customer_id','Cart lines',        20),
+  ('customer_users',          'customer_id','Staff logins',      30),
+  ('customer_addresses',      'customer_id','Addresses',         40),
+  ('customer_note',           'customer_id','Notes',             50),
+  ('support_ticket',          'customer_id','Support tickets',   60),
+  ('order_feedback',          'customer_id','Feedback',          70),
+  ('customer_action_log',     'customer_id','Activity log',      80),
+  ('customer_substitute_pref','customer_id','Substitute prefs',  90),
+  ('delivery_ratings',        'customer_id','Delivery ratings', 100),
+  ('loyalty_ledger',          'customer_id','Loyalty ledger',   110),
+  ('order_list',              'customer_id','Saved lists',      120),
+  ('reorder_prefs',           'customer_id','Reorder prefs',    130),
+  ('reorder_subscriptions',   'customer_id','Reorder subs',     140)
+on conflict (table_name) do update
+  set label = excluded.label, sort_order = excluded.sort_order;
+
+create or replace function public._cus810_dupes(p_customer_id uuid)
+returns table (id uuid, name text, matched_on text)
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare pp pharmacy_profiles%rowtype; v_ph text; v_gst text; v_dl text;
+begin
+  -- `id` is an OUT column of this function, so the source table must be
+  -- aliased or the reference is ambiguous.
+  select p0.* into pp from pharmacy_profiles p0 where p0.id = p_customer_id;
+  if pp.id is null then return; end if;
+  v_ph  := nullif(right(regexp_replace(coalesce(pp.phone,'')||coalesce(pp.whatsapp_no,''),'[^0-9]','','g'), 10),'');
+  v_gst := nullif(upper(btrim(coalesce(nullif(pp.gstin,''), pp.gst_no, ''))),'');
+  v_dl  := nullif(upper(btrim(coalesce(nullif(pp.dl_20b,''), nullif(pp.dl_21b,''), pp.drug_license, ''))),'');
+
+  return query
+  select q.id, q.nm, q.m from (
+    select x.id,
+           coalesce(nullif(btrim(coalesce(x.pharmacy_name,'')),''),
+                    nullif(btrim(coalesce(x.customer_name,'')),''), '—') as nm,
+           case
+             when v_ph is not null and right(regexp_replace(coalesce(x.phone,''),'[^0-9]','','g'),10) = v_ph
+               then public._c('admin_cus2.m_match_phone')
+             when v_ph is not null and right(regexp_replace(coalesce(x.whatsapp_no,''),'[^0-9]','','g'),10) = v_ph
+               then public._c('admin_cus2.m_match_phone')
+             when v_gst is not null and upper(btrim(coalesce(nullif(x.gstin,''), x.gst_no,''))) = v_gst
+               then public._c('admin_cus2.m_match_gst')
+             when v_dl is not null and upper(btrim(coalesce(nullif(x.dl_20b,''), nullif(x.dl_21b,''), x.drug_license,''))) = v_dl
+               then public._c('admin_cus2.m_match_dl')
+           end as m
+      from pharmacy_profiles x
+     where x.id <> p_customer_id
+       and coalesce(x.is_deleted,false) = false
+       and coalesce(x.is_synthetic,false) = false) q
+   where q.m is not null;
+end $$;
+
+create or replace function public.admin_customer_merge_preview(
+  p_customer_id uuid, p_other_id uuid default null)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._cus810_gate(); pp pharmacy_profiles%rowtype;
+  v_items jsonb; v_moves jsonb := '[]'::jsonb; r record; v_n bigint;
+begin
+  if v_role = 'none' then
+    return jsonb_build_object('ok', false, 'message', public._c('admin_cus2.forbidden'));
+  end if;
+  pp := public._cus810_row(p_customer_id);
+  if pp.id is null then
+    return jsonb_build_object('ok', false, 'message', public._c('admin_cus2.not_found'));
+  end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', d.id, 'title', d.name, 'subtitle', d.matched_on,
+           'actions', jsonb_build_array(jsonb_build_object(
+             'label', public._c('admin_cus2.m_ok'), 'tone','danger',
+             'rpc','admin_customer_merge_apply',
+             'args', jsonb_build_object('p_customer_id', p_customer_id, 'p_other_id', d.id),
+             'confirm', jsonb_build_object(
+               'title', public._c('admin_cus2.m_confirm_title'),
+               'body',  public._c('admin_cus2.m_intro'),
+               'ok',    public._c('admin_cus2.m_ok'),
+               'cancel',public._c('admin_cus2.cancel'),
+               'needs_reason', false)))) order by d.name), '[]'::jsonb)
+    into v_items
+    from public._cus810_dupes(p_customer_id) d;
+
+  -- What actually moves, counted on the duplicate the caller named.
+  if p_other_id is not null then
+    for r in select * from customer_merge_table where is_active order by sort_order loop
+      execute format('select count(*) from public.%I where %I = $1', r.table_name, r.col)
+        into v_n using p_other_id;
+      if coalesce(v_n,0) > 0 then
+        v_moves := v_moves || jsonb_build_array(
+          jsonb_build_object('label', r.label, 'value', v_n::text, 'tone','neutral'));
+      end if;
+    end loop;
+  end if;
+
+  return jsonb_build_object('ok', true,
+    'title', public._c('admin_cus2.m_title'),
+    'intro', public._c('admin_cus2.m_intro'),
+    'empty', public._c('admin_cus2.m_none'),
+    'items', v_items,
+    'moves_title', public._c('admin_cus2.m_moves'),
+    'moves', v_moves);
+end $$;
+
+create or replace function public.admin_customer_merge_apply(
+  p_customer_id uuid, p_other_id uuid)
+returns jsonb
+language plpgsql volatile security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._cus810_gate();
+  keep pharmacy_profiles%rowtype; gone pharmacy_profiles%rowtype;
+  r record; v_n bigint; v_moved jsonb := '{}'::jsonb; v_match text;
+  v_who text := coalesce(nullif(public.my_login_email(),''), auth.uid()::text, 'unknown');
+begin
+  if v_role = 'none' then
+    return jsonb_build_object('ok', false, 'message', public._c('admin_cus2.forbidden'));
+  end if;
+  keep := public._cus810_row(p_customer_id);
+  gone := public._cus810_row(p_other_id);
+  if keep.id is null or gone.id is null or keep.id = gone.id then
+    return jsonb_build_object('ok', false, 'message', public._c('admin_cus2.not_found'));
+  end if;
+
+  select d.matched_on into v_match from public._cus810_dupes(p_customer_id) d where d.id = p_other_id;
+  if v_match is null then
+    return jsonb_build_object('ok', false, 'message', public._c('admin_cus2.m_none'));
+  end if;
+
+  for r in select * from customer_merge_table where is_active order by sort_order loop
+    execute format('update public.%I set %I = $1 where %I = $2', r.table_name, r.col, r.col)
+      using keep.id, gone.id;
+    get diagnostics v_n = row_count;
+    if coalesce(v_n,0) > 0 then
+      v_moved := v_moved || jsonb_build_object(r.table_name, v_n);
+    end if;
+  end loop;
+
+  update pharmacy_profiles set
+    is_deleted = true, deleted_at = now(), deleted_by = v_who,
+    deleted_snapshot = to_jsonb(gone)
+  where id = gone.id;
+
+  insert into customer_merge_log (kept_id, merged_id, kept_name, merged_name,
+                                  matched_on, moved, merged_by)
+  values (keep.id, gone.id,
+          coalesce(keep.pharmacy_name, keep.customer_name, ''),
+          coalesce(gone.pharmacy_name, gone.customer_name, ''),
+          v_match, v_moved, v_who);
+
+  perform public.audit_write('customer.merge','customer', keep.id::text,
+            jsonb_build_object('merged_id', gone.id, 'merged_name',
+                               coalesce(gone.pharmacy_name, gone.customer_name,'')),
+            jsonb_build_object('moved', v_moved, 'matched_on', v_match));
+
+  return jsonb_build_object('ok', true, 'message', public._c('admin_cus2.m_done'),
+                            'moved', v_moved);
+end $$;
+
+-- ── 28. Grants ───────────────────────────────────────────────────────────
+do $c810g$
+declare f record;
+begin
+  for f in select p.oid::regprocedure::text as sig
+             from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+            where n.nspname='public'
+              and p.proname in (
+                'admin_customers_console','admin_customer_page',
+                'admin_customer_tab_info','admin_customer_tab_orders',
+                'admin_customer_tab_billing','admin_customer_tab_cart',
+                'admin_customer_tab_staff','admin_customer_tab_addresses',
+                'admin_customer_tab_performance','admin_customer_tab_history',
+                'admin_customer_action_reason','admin_customer_edit_form',
+                'admin_customer_edit_save','admin_customer_set_zone',
+                'admin_customer_note_add','admin_customer_note_done',
+                'admin_customer_followups','admin_customer_churn_nudge',
+                'admin_customer_merge_preview','admin_customer_merge_apply',
+                'admin_customer_staff_set_active')
+  loop
+    execute format('revoke all on function %s from public', f.sig);
+    execute format('revoke all on function %s from anon', f.sig);
+    execute format('grant execute on function %s to authenticated', f.sig);
+    execute format('grant execute on function %s to service_role', f.sig);
+  end loop;
+end $c810g$;
+
+insert into public.partner_rpc_allow (proname, source, note) values
+  ('admin_customers_console','change_810','customers console list'),
+  ('admin_customer_page','change_810','customer page header'),
+  ('admin_customer_tab_info','change_810','customer info tab'),
+  ('admin_customer_tab_orders','change_810','customer orders tab'),
+  ('admin_customer_tab_billing','change_810','customer bills tab'),
+  ('admin_customer_tab_cart','change_810','customer cart tab'),
+  ('admin_customer_tab_staff','change_810','customer staff tab'),
+  ('admin_customer_tab_addresses','change_810','customer addresses tab'),
+  ('admin_customer_tab_performance','change_810','customer performance tab'),
+  ('admin_customer_tab_history','change_810','customer history tab'),
+  ('admin_customer_followups','change_810','customer follow-ups inbox')
+on conflict (proname) do nothing;
+
+select public.partner_rpc_allow_refresh();

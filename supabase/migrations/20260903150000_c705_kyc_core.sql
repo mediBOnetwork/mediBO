@@ -100,6 +100,7 @@ create policy kyc_docs_owner_read on storage.objects
 insert into public.app_settings (key, value)
 values ('kyc_gate', jsonb_build_object(
           'grace_days', 14,           -- existing approved accounts keep working this long
+          'enforced_from', '2026-09-03',  -- the day the requirement started existing
           'remind_days', jsonb_build_array(30, 7, 1),
           'required_kinds', jsonb_build_array('drug_licence'),
           'enforce', true))
@@ -191,14 +192,18 @@ declare
   v_rejected text[] := '{}';
   v_soonest date;
   v_approved_at timestamptz;
+  v_approved boolean := false;
+  v_from date := coalesce((v_cfg->>'enforced_from')::date, date '2026-09-03');
   v_in_grace boolean := false;
   v_grace_until date;
   k text;
 begin
   if v_kind = 'pharmacy' then
-    select approved_at into v_approved_at from pharmacy_profiles where id = p_owner_id;
+    select approved_at, coalesce(approved,false) into v_approved_at, v_approved
+      from pharmacy_profiles where id = p_owner_id;
   elsif v_kind = 'supplier' then
-    select approved_at into v_approved_at from supplier_profiles where id = p_owner_id;
+    select approved_at, coalesce(approved,false) into v_approved_at, v_approved
+      from supplier_profiles where id = p_owner_id;
   else
     return jsonb_build_object('ok', false, 'error','bad_owner_kind');
   end if;
@@ -233,13 +238,18 @@ begin
     when array_length(v_pending,1)  is not null then 'pending'
     else 'verified' end;
 
-  -- An account that was already approved before this change keeps trading for
-  -- grace_days, then the block applies. A NEW account has no grace.
-  v_grace_until := case when v_approved_at is null then null
-                        else (v_approved_at at time zone 'Asia/Kolkata')::date + v_grace end;
+  -- Grace exists because the REQUIREMENT is new, not because the account is:
+  -- every account that was already approved when this shipped keeps trading for
+  -- grace_days from enforced_from, and then the block applies. An account
+  -- approved after that date already had to pass the approve gate, and an
+  -- account that is not approved at all has nothing to keep. approved_at is
+  -- NULL on most of these rows (36/36 suppliers), so it is a filter, never the
+  -- clock — reading the clock off it gave 36 suppliers no grace at all.
+  v_grace_until := case when v_approved then v_from + v_grace else null end;
   v_in_grace := v_state <> 'verified'
-                and v_grace_until is not null
-                and v_today <= greatest(v_grace_until, (date '2026-09-03' + v_grace));
+                and v_approved
+                and (v_approved_at is null or (v_approved_at at time zone 'Asia/Kolkata')::date <= v_from)
+                and v_today <= v_grace_until;
 
   return jsonb_build_object(
     'ok', true,
@@ -250,7 +260,7 @@ begin
     'enforce', coalesce((v_cfg->>'enforce')::boolean, true),
     'in_grace', v_in_grace,
     'grace_days', v_grace,
-    'grace_until', greatest(v_grace_until, (date '2026-09-03' + v_grace)),
+    'grace_until', v_grace_until,
     'expiry', v_soonest,
     'expiry_label', case when v_soonest is null then _c('kyc.no_expiry_label')
                          else _cf('kyc.expiry_label',

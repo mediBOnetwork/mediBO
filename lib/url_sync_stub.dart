@@ -3,6 +3,7 @@
 void captureInitialPath() {}
 String currentPath() => '/';
 String currentSearch() => '';
+String initialSearch() => '';
 String currentHash() => '';
 void pushUrl(String path) {}
 void replaceUrl(String path) {}

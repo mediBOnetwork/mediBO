@@ -171,7 +171,9 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
   @override
   void initState() {
     super.initState();
-    _route = widget.initialRoute ?? CatalogueRoute.parse(currentSearch());
+    // initialSearch(), not currentSearch(): boot's usePathUrlStrategy rewrite
+    // has already erased the live query string by the time this runs.
+    _route = widget.initialRoute ?? CatalogueRoute.parse(initialSearch());
     _searchCtrl.text = _route.query;
     _scroll.addListener(_onScroll);
     if (widget.active) _boot();

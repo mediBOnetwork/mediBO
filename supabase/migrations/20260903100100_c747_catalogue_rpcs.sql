@@ -312,9 +312,15 @@ as $$
     'stale_label', public.uic('catalogue.counts_note','Counts refresh automatically.'),
     'search_hint', public.uic('catalogue.search_hint','Search a salt or a company'),
     'tabs', jsonb_build_array(
+      -- The Browse tab counts what the TREE will show, not what the catalogue
+      -- holds: 2.2 lakh rows carry no therapeutic class at all, so the whole-
+      -- catalogue total on the tab and the tree's own header underneath it were
+      -- two different numbers a foot apart on the same screen.
       jsonb_build_object('key','browse','label', public.uic('catalogue.tab_browse','Browse'),
         'kind','tree',
-        'count_label', public.cat_count_label(public._cat_meta((select cz from z), 'total'))),
+        'count_label', public.cat_count_label(
+          coalesce((select sum(n)::bigint from public.catalogue_facet_count
+                     where facet='therapeutic' and zone_id=(select cz from z)), 0::bigint))),
       jsonb_build_object('key','companies','label', public.uic('catalogue.tab_companies','Companies'),
         'kind','companies',
         'count_label', to_char(public._cat_meta((select cz from z), 'companies'),'FM9,99,99,999')

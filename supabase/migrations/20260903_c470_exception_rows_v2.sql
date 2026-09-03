@@ -304,7 +304,10 @@ language sql stable security definer set search_path to 'public' as $function$
     left join public.partner_settlement_ack a
            on a.period_id = p.id and a.resolved_at is null
    where coalesce(p.closed_at, p.computed_at) is not null
-     and coalesce(p.status,'') not in ('draft','cancelled')
+     -- 'due' is the only status that means "closed and waiting on the partner":
+     -- 'open' is still accruing and 'settled' is already paid.
+     and coalesce(p.status,'') = 'due'
+     and p.settled_at is null
      and (a.period_id is null or coalesce(a.state,'') not in ('accepted','acknowledged'))
 
   union all

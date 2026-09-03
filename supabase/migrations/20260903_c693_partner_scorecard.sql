@@ -1446,8 +1446,16 @@ on conflict (feature_key) do update set
   default_access = excluded.default_access,
   roles_allowed = excluded.roles_allowed,
   search_terms = excluded.search_terms, description = excluded.description,
-  deep_link = excluded.deep_link,
-  is_active = true;
+  deep_link = excluded.deep_link;
+-- The two tiles stay DARK until the build that opens them is live. A registry
+-- row is a promise of a door (CHANGE #570): activating it before the Dart route
+-- ships is how a tile lands on "route unavailable". The activation is the last
+-- step of this change, after verify_live.sh is green.
+update public.feature_registry set is_active = false
+ where feature_key in ('admin.partner_scorecards','partner.scorecard')
+   and not exists (select 1 from public.app_settings
+                    where key = 'c693_scorecard_tiles_live'
+                      and value::text = 'true');
 
 insert into public.surface_route(route_key, feature_key, kind, handled_by, note)
 values

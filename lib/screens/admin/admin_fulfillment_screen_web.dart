@@ -4212,7 +4212,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            if (!widget.arrivals) const SupplierMapGroupsPanel(),
+            // CHANGE #754 — the map card is pinned by build(); an empty day no
+            // longer drags it into the middle of the screen.
             Text(FulfillLookups.instance.emptyOrdersLabel ?? '',
                 style: TextStyle(color: _kSub, fontSize: 15),
                 textAlign: TextAlign.center),
@@ -4235,11 +4236,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         child: ConstrainedBox(
           constraints: BoxConstraints(maxWidth: maxW),
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            if (!widget.arrivals)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                child: const SupplierMapGroupsPanel(),
-              ),
+            // CHANGE #754 — pinned by build(), not rebuilt per branch.
             Expanded(
               child: ListView.builder(
                 controller: _listScrollCtrl,
@@ -4418,7 +4415,34 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // ── BUILD ───────────────────────────────────────────────────────────────────
 
   @override
+  /// CHANGE #754 — the Supplier Shop map, as ONE widget for the life of the
+  /// tab.
+  ///
+  /// It used to be three separate `const SupplierMapGroupsPanel()`s: one in
+  /// the empty-day branch, one in the mobile list and one in the wide layout.
+  /// Crossing between those branches — an empty day, a filter that matched
+  /// nothing, a rotation, a viewport change — destroyed the map and built a
+  /// new one, and every new Google Maps load is billed. Held in a field and
+  /// rendered ABOVE the branch, so no branch can take it away.
+  final Widget _mapPanel = const SupplierMapGroupsPanel();
+
+  @override
   Widget build(BuildContext context) {
+    // Pinned at the TOP of the tab (Om: it floated mid-screen on a day with no
+    // orders, because the only thing on screen was a centred empty state and
+    // the card was inside it).
+    if (widget.arrivals) return _buildCollectBody(context);
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Padding(
+        padding: EdgeInsets.fromLTRB(
+            Ds.space.x16, Ds.space.x12, Ds.space.x16, 0),
+        child: _mapPanel,
+      ),
+      Expanded(child: _buildCollectBody(context)),
+    ]);
+  }
+
+  Widget _buildCollectBody(BuildContext context) {
     if (_loadingSuppliers) {
       return Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
     }
@@ -5194,11 +5218,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         'items=${_items.length};visible=${visibleItems.length};error=${_error != null}');
 
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      // ── Supplier map dropdown (Supplier Shop tab only) — purely additive ─────
-      if (!widget.arrivals) ...[
-        const SupplierMapGroupsPanel(),
-        const SizedBox(height: 12),
-      ],
+      // CHANGE #754 — the map card is pinned above this layout by build(), so
+      // switching between the wide and narrow layouts no longer disposes it.
       // ── Single merged bar (dropdown + progress + both pills) ─────────────────
       _buildWideSingleBar(isAdmin),
       const SizedBox(height: 16),

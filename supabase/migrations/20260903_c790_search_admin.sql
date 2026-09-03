@@ -362,3 +362,164 @@ values ('search_synonyms', 'admin.search_synonyms', 'feature', 'home_shell',
 on conflict (route_key, feature_key) do update
   set handled_by = excluded.handled_by, kind = excluded.kind,
       note = excluded.note, is_active = true;
+
+-- ── 4. the typeahead's typo lane becomes a bounded KNN fallback ────────────
+-- The GiST trigram index is what makes `norm <-> q` an ORDERED index scan, so
+-- the typo lane asks for the 24 nearest strings and stops, instead of asking
+-- GIN for every row above a similarity threshold and rechecking them all on
+-- the heap. Measured on the live 51k-row cache: the GIN lane returned 30 rows
+-- for "montic" in 420 ms (and 99 ms even when it returned NOTHING — that is
+-- the index scan's own floor); the KNN lane answers the same query in 41 ms
+-- and ranks better (Montiz-FX 0.56, Montina 0.50).
+create index if not exists idx_ssc_norm_gist
+  on public.search_suggest_cache using gist (norm gist_trgm_ops);
+
+CREATE OR REPLACE FUNCTION public.search_suggest(p_q text, p_zone boolean DEFAULT true)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_min    int := coalesce((select (value #>> '{}')::int from public.app_settings
+                             where key = 'search_suggest_min_chars'), 2);
+  v_per    int := coalesce((select (value #>> '{}')::int from public.app_settings
+                             where key = 'search_suggest_per_group'), 5);
+  v_norm   text := public._norm_name(p_q);
+  v_zid    smallint := public._cat_zone(coalesce(p_zone, true));
+  v_exp    jsonb;
+  v_terms  text[];
+  v_groups jsonb;
+  v_typo   boolean := false;
+  v_lit    int := 0;
+  v_near   text[] := '{}';
+  v_knn    int := coalesce((select (value #>> '{}')::int from public.app_settings
+                             where key = 'search_suggest_knn'), 60);
+begin
+  if length(replace(v_norm, ' ', '')) < v_min then
+    return jsonb_build_object(
+      'ok', true, 'ready', false, 'q', coalesce(p_q, ''), 'min_chars', v_min,
+      'groups', '[]'::jsonb,
+      'expanded', jsonb_build_object('has', false),
+      'zone', jsonb_build_object('on', v_zid is not null, 'zone_id', v_zid),
+      'hint', public.uic('search.suggest_min_chars',
+                         'Type at least 2 letters to see suggestions'),
+      'empty_label', '');
+  end if;
+
+  -- The Hinglish mapping runs FIRST, so "bukhar" is matched against
+  -- Paracetamol and not against a brand that happens to start with "buk".
+  v_exp   := public.search_query_expand(v_norm);
+  v_terms := array[v_norm];
+  if coalesce((v_exp->>'has')::boolean, false) then
+    v_terms := v_terms || public._norm_name(v_exp->>'target');
+  end if;
+
+  -- Does the literal search find anything at all? One cheap probe (~5 ms on
+  -- the live cache) decides whether the typo lane is worth opening.
+  -- EXISTS, not count(*): a broad prefix like "montic" matches hundreds of
+  -- families and counting them all cost 430 ms on its own, which is the very
+  -- budget this probe exists to protect. It stops at the first row.
+  select case when exists (
+    select 1
+      from (select distinct term from unnest(v_terms) term where term <> '') t
+      join public.search_suggest_cache s
+        on ( s.norm like t.term || '%'
+             or (length(t.term) >= 4 and s.norm like '%' || t.term || '%') )
+     where (v_zid is null or s.zones @> array[v_zid])
+  ) then 0 else 1 end into v_lit;
+  v_typo := v_lit = 1 and exists (
+    select 1 from unnest(v_terms) term where length(term) >= 4);
+
+  -- The typo lane, resolved ONCE into a bounded key list before the main
+  -- query. Selecting the keys out of the KNN scan and then joining them back
+  -- with `key = any(...)` cost another 93 ms, because the cache's primary key
+  -- is (kind, key) and a key-only predicate cannot use it — so the keys are
+  -- qualified with their kind and matched on the full key below.
+  if v_typo then
+    select coalesce(array_agg(z.kind || '\u0001' || z.key), '{}') into v_near
+      from (
+        select s.kind, s.key
+          from public.search_suggest_cache s
+         where (v_zid is null or s.zones @> array[v_zid])
+         order by s.norm <-> v_norm
+         limit v_knn
+      ) z;
+  end if;
+
+  with t as (
+    select distinct term from unnest(v_terms) term where term <> ''
+  ),
+  cand as (
+    select s.kind, s.key, s.label, s.sub_label, s.n, s.rank,
+           min(case when s.norm = t.term then 0
+                    when s.norm like t.term || '%' then 1
+                    when s.norm like '%' || t.term || '%' then 2
+                    else 3 end) as tier,
+           max(similarity(s.norm, t.term)) as sim,
+           max(s.query) as query
+      from t
+      join public.search_suggest_cache s
+        on ( s.norm like t.term || '%'
+             -- the contains lane only opens at four characters: below that a
+             -- prefix is already the honest answer
+             or (length(t.term) >= 4 and s.norm like '%' || t.term || '%')
+             -- CHANGE #790E — the TYPO lane is a bounded FALLBACK, not a
+             -- third arm of the same OR. Measured on the live cache: prefix
+             -- alone 1 ms, prefix+contains 5 ms, and adding `%` to the same
+             -- OR took the whole call to 570 ms — GIN returned 9,835 rows and
+             -- the heap recheck threw 9,808 away, on every keystroke, against
+             -- a spec budget of 100 ms. It now runs only when the literal
+             -- lanes found NOTHING (which is when a shopper has actually
+             -- mistyped), and then as a KNN scan of the nearest v_knn rows.
+             or (v_typo and (s.kind || '\u0001' || s.key) = any(v_near)) )
+     where (v_zid is null or s.zones @> array[v_zid])
+     group by s.kind, s.key, s.label, s.sub_label, s.n, s.rank
+  ),
+  ranked as (
+    select c.*, row_number() over (partition by c.kind
+             order by c.tier asc, c.rank desc, c.n desc, length(c.label) asc) as rn
+      from cand c
+  ),
+  picked as (
+    select * from ranked where rn <= v_per
+  ),
+  grouped as (
+    select k.kind, k.ord, k.title,
+           jsonb_agg(jsonb_build_object(
+             'kind', p.kind, 'key', p.key, 'label', p.label,
+             'sub_label', case when p.kind = 'brand' and p.sub_label <> ''
+                               then replace(public.uic('search.family_by', 'by {company}'),
+                                            '{company}', p.sub_label)
+                               else p.sub_label end,
+             'count_label', public._suggest_count_label(p.kind, p.n),
+             'n', p.n,
+             'query', p.query) order by p.rn) as items
+      from (values ('brand', 1, public.uic('search.group_brand', 'Brands')),
+                   ('salt', 2, public.uic('search.group_salt', 'Salts')),
+                   ('company', 3, public.uic('search.group_company', 'Companies')),
+                   ('category', 4, public.uic('search.group_category', 'Categories')))
+             as k(kind, ord, title)
+      join picked p on p.kind = k.kind
+     group by k.kind, k.ord, k.title
+  )
+  select coalesce(jsonb_agg(jsonb_build_object('kind', g.kind, 'title', g.title,
+                                               'items', g.items) order by g.ord),
+                  '[]'::jsonb)
+    into v_groups
+    from grouped g;
+
+  return jsonb_build_object(
+    'ok', true, 'ready', true, 'q', coalesce(p_q, ''), 'min_chars', v_min,
+    'groups', coalesce(v_groups, '[]'::jsonb),
+    'expanded', v_exp,
+    'zone', jsonb_build_object(
+       'on', v_zid is not null, 'zone_id', v_zid,
+       'note', case when v_zid is null then ''
+                    else public.uic('search.zone_note',
+                                    'Suggestions from what your zone can send') end),
+    'hint', '',
+    'empty_label', case when coalesce(jsonb_array_length(v_groups), 0) > 0 then ''
+                        else public.uic('search.suggest_empty',
+                               'No matches yet — press search to look through the full catalogue') end);
+end $function$;

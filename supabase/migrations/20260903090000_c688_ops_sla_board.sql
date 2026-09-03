@@ -726,6 +726,11 @@ as $$
 declare
   v_stamp jsonb;
   v_lim   int := greatest(least(coalesce(p_limit, 20), 100), 1);
+  -- An alert is the FLIP, not the standing state. Only a crossing inside this
+  -- window notifies, so installing the clock on a 41-day backlog does not
+  -- WhatsApp a partner thirty-two times in one tick; those orders still show
+  -- red on the board, which is what the board is for.
+  v_win   int := greatest(coalesce(nullif(public.uic('ops_board.alert_window_min', ''), '')::int, 180), 5);
   r       record;
   v_fired int := 0; v_sent int := 0;
   v_res   jsonb;
@@ -750,6 +755,8 @@ begin
          order by (f.zone_id is null) limit 1) cfg on true
      where now() - coalesce(h.entered_at, c.since, c.created_at)
              >= make_interval(mins => cfg.sla_minutes)
+       and now() - coalesce(h.entered_at, c.since, c.created_at)
+             <= make_interval(mins => cfg.sla_minutes + v_win)
        and not exists (
              select 1 from ops_sla_alert a
               where a.order_id = c.order_id
@@ -886,6 +893,7 @@ insert into public.ui_copy (key, value) values
   ('ops_board.chip_amber',           to_jsonb('Due soon {n}'::text)),
   ('ops_board.chip_green',           to_jsonb('On time {n}'::text)),
   ('ops_board.refresh_ms',           to_jsonb('30000'::text)),
+  ('ops_board.alert_window_min',     to_jsonb('180'::text)),
   ('ops_board.updated_label',        to_jsonb('Updated {t}'::text)),
   ('ops_board.empty_title',          to_jsonb('Nothing open'::text)),
   ('ops_board.empty_message',        to_jsonb('Every order in this zone is closed or cancelled.'::text)),

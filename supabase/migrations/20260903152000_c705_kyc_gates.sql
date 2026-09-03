@@ -120,6 +120,8 @@ begin
   -- only on the transition INTO approved, and only when enforcement is on
   if coalesce(new.approved,false) is not true then return new; end if;
   if tg_op = 'UPDATE' and coalesce(old.approved,false) is true then return new; end if;
+  -- A synthetic row is a fixture, never an onboarding decision (see kyc_state).
+  if coalesce(new.is_synthetic,false) then return new; end if;
   if not coalesce((select (value->>'enforce')::boolean from app_settings where key='kyc_gate'), true)
     then return new; end if;
 

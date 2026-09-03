@@ -196,13 +196,16 @@ declare
   v_from date := coalesce((v_cfg->>'enforced_from')::date, date '2026-09-03');
   v_in_grace boolean := false;
   v_grace_until date;
+  v_synthetic boolean := false;
   k text;
 begin
   if v_kind = 'pharmacy' then
-    select approved_at, coalesce(approved,false) into v_approved_at, v_approved
+    select approved_at, coalesce(approved,false), coalesce(is_synthetic,false)
+      into v_approved_at, v_approved, v_synthetic
       from pharmacy_profiles where id = p_owner_id;
   elsif v_kind = 'supplier' then
-    select approved_at, coalesce(approved,false) into v_approved_at, v_approved
+    select approved_at, coalesce(approved,false), coalesce(is_synthetic,false)
+      into v_approved_at, v_approved, v_synthetic
       from supplier_profiles where id = p_owner_id;
   else
     return jsonb_build_object('ok', false, 'error','bad_owner_kind');
@@ -262,7 +265,15 @@ begin
     'owner_id', p_owner_id,
     'state', v_state,
     'clear', (v_state = 'verified'),
-    'enforce', coalesce((v_cfg->>'enforce')::boolean, true),
+    -- A SYNTHETIC account is a fixture, not a customer: the QA logins the
+    -- protected suite and the journey probes trade with, and the throwaway
+    -- shops c419/c420/c424/c427 create and delete inside one call. They carry
+    -- is_synthetic (an applicant can never set it — it is not on
+    -- submit_registration's allow-list), every money report already excludes
+    -- them (#857), and asking a fixture for a drug licence would have blocked
+    -- the fleet's own proofs rather than a single real pharmacy.
+    'enforce', (coalesce((v_cfg->>'enforce')::boolean, true) and not v_synthetic),
+    'synthetic', v_synthetic,
     'in_grace', v_in_grace,
     'grace_days', v_grace,
     'grace_until', v_grace_until,

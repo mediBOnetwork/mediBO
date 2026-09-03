@@ -193,6 +193,7 @@ class _OrderFeedbackCardState extends State<OrderFeedbackCard> {
               Expanded(child: Text(_s(d, 'label'), style: Ds.t.body)),
               for (var i = 1; i <= _starsMax; i++)
                 _StarTap(
+                  key: Key('fb_star_${key}_$i'),
                   filled: i <= score,
                   onTap: () => setState(() {
                     _scores[key] = i;
@@ -213,6 +214,7 @@ class _OrderFeedbackCardState extends State<OrderFeedbackCard> {
               children: [
                 for (final c in chips)
                   _ChipTap(
+                    key: Key('fb_chip_${key}_${_s(c, 'key')}'),
                     label: _s(c, 'label'),
                     selected: _chips.contains(_s(c, 'key')),
                     onTap: () => setState(() {
@@ -271,7 +273,7 @@ class _OrderFeedbackCardState extends State<OrderFeedbackCard> {
 class _StarTap extends StatelessWidget {
   final bool filled;
   final VoidCallback onTap;
-  const _StarTap({required this.filled, required this.onTap});
+  const _StarTap({super.key, required this.filled, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -292,8 +294,12 @@ class _ChipTap extends StatelessWidget {
   final String label;
   final bool selected;
   final VoidCallback onTap;
-  const _ChipTap(
-      {required this.label, required this.selected, required this.onTap});
+  const _ChipTap({
+    super.key,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {

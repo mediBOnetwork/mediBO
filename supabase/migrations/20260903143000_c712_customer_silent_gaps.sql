@@ -1217,6 +1217,25 @@ begin
     end if;
   end if;
 
+  -- 5 · THE PER-USER SWITCH IS ON THE WIRE, not just in the settings screen.
+  --     notify() is asked twice for the same event: once plainly, and once
+  --     after the recipient switched that event off.
+  update public.orders set user_id = v_super where id = v_order;
+  if (public.notify('sourcing_started', '9999900001',
+        jsonb_build_object('order_id', v_order::text, 'count', '1'))->>'reason')
+     = 'user_opted_out' then
+    raise exception 'refused before anyone opted out';
+  end if;
+  insert into public.notification_settings (user_id, audience, action_key, channel, label, enabled)
+  values (v_super, 'customer', 'sourcing_started', 'all', 'c712 probe', false);
+  if (public.notify('sourcing_started', '9999900001',
+        jsonb_build_object('order_id', v_order::text, 'count', '1'))->>'reason')
+     is distinct from 'user_opted_out' then
+    raise exception 'a recipient who switched this event off still received it: %',
+      public.notify('sourcing_started', '9999900001',
+        jsonb_build_object('order_id', v_order::text, 'count', '1'));
+  end if;
+
   -- and the timeline shows them to the CUSTOMER (not internal:true chatter).
   v_s := public._order_timeline_events(v_order, 'customer', false);
   if not exists (select 1 from jsonb_array_elements(v_s) e
@@ -1229,6 +1248,7 @@ begin
 end $x$;
 $body$)
 on conflict (name) do update set body = excluded.body;
+
 
 -- ═══════════════════════ 13 · per-channel switches (spec item 4) ═══════════
 
@@ -1382,3 +1402,206 @@ begin
 end $fn$;
 
 grant execute on function public.notification_channel_set(text, text, text, boolean) to authenticated;
+
+-- ═══════════════════════ 14 · the per-user switch, on the wire ═════════════
+-- Spec item 2 asks for "per-user notification_settings honoured". They were
+-- not: see the comment inside. This is the only edit to notify(), and with no
+-- user-level rows in the table today it is a no-op for every existing event —
+-- it starts mattering the moment someone uses the opt-out screen.
+
+CREATE OR REPLACE FUNCTION public.notify(p_event_key text, p_recipient text DEFAULT NULL::text, p_vars jsonb DEFAULT '{}'::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'net'
+AS $function$
+declare
+  r            record;
+  v            jsonb;
+  v_vars       jsonb := coalesce(p_vars, '{}'::jsonb);
+  v_channel    text  := coalesce(nullif(v_vars->>'channel',''), 'whatsapp');
+  v_order      uuid  := nullif(v_vars->>'order_id','')::uuid;
+  v_cust       uuid  := nullif(v_vars->>'customer_id','')::uuid;
+  v_url        text  := nullif(v_vars->>'legacy_url','');
+  v_body       jsonb := case when v_vars ? 'legacy_body' then v_vars->'legacy_body' end;
+  v_force_tpl  boolean := coalesce((v_vars->>'force_template')::boolean, false);
+  v_retry      bigint := nullif(v_vars->>'_retry_id','')::bigint;
+  v_req        bigint;
+  v_tokens     jsonb;
+  v_ph         text;
+  v_aud        text;
+  v_win        jsonb;
+  v_open       boolean;
+  v_reason     text;
+  v_push       jsonb;   -- CHANGE #298
+  v_uid        uuid;    -- CHANGE #712 — the recipient, for the per-user switch
+begin
+  if coalesce(btrim(p_event_key),'') = '' then
+    return jsonb_build_object('ok', false, 'reason','no_event_key');
+  end if;
+
+  select * into r from public.wa_event_routes where event_key = p_event_key;
+  v_aud := coalesce(r.audience, 'customer');
+
+  v_tokens := v_vars - 'order_id' - 'customer_id' - 'legacy_url' - 'legacy_body'
+                     - 'channel' - 'force_template' - '_retry_id' - '_no_push';
+
+  v_ph := nullif(right(regexp_replace(coalesce(p_recipient,''),'\D','','g'),10),'');
+  if coalesce(length(v_ph),0) <> 10 and v_order is not null then
+    v_ph := right(regexp_replace(coalesce(public._order_customer_phone(v_order),''),'\D','','g'),10);
+  end if;
+  if coalesce(length(v_ph),0) <> 10 and v_cust is not null then
+    select right(regexp_replace(coalesce(nullif(btrim(pp.whatsapp_no),''), pp.phone, ''),'\D','','g'),10)
+      into v_ph from public.pharmacy_profiles pp where pp.id = v_cust;
+  end if;
+  if coalesce(length(v_ph),0) <> 10 and v_aud = 'admin' then
+    v_ph := right(regexp_replace(
+              coalesce((select value #>> '{}' from public.app_settings where key='admin_wa_phone'),''),
+              '\D','','g'), 10);
+  end if;
+
+  -- No route at all → legacy passthrough, byte-for-byte what the caller used
+  -- to post on its own, plus a ledger row.
+  if r.event_key is null then
+    if v_url is null then
+      perform public.notify_log(p_event_key, v_ph, v_channel, 'skipped', 'none',
+        null, 'unknown_event', null, v_order, v_cust, v_vars);
+      return jsonb_build_object('ok', false, 'reason','unknown_event');
+    end if;
+    select net.http_post(
+      url     := v_url,
+      headers := jsonb_build_object('Content-Type','application/json',
+                                    'x-notify-secret','medibo_order_notify_2027'),
+      body    := coalesce(v_body,'{}'::jsonb),
+      timeout_milliseconds := 20000) into v_req;
+    perform public.notify_log(p_event_key, v_ph, v_channel, 'sent', 'legacy',
+      v_req::text, null, null, v_order, v_cust, v_vars);
+    return jsonb_build_object('ok', true, 'path','legacy', 'reason','no_route',
+                              'request_id', v_req);
+  end if;
+
+  if coalesce(length(v_ph),0) <> 10 then
+    perform public._wa_log_attempt(p_event_key, v_order, null, 'skipped', false, 'no_phone');
+    perform public.notify_log(p_event_key, null, v_channel, 'skipped', 'none',
+      null, 'no_phone', null, v_order, v_cust, v_vars);
+    return jsonb_build_object('ok', false, 'reason','no_phone');
+  end if;
+
+  if not public.notif_should_send(v_aud, p_event_key, v_ph) then
+    perform public._wa_log_attempt(p_event_key, v_order, v_ph, 'skipped', false, 'notification_off');
+    perform public.notify_log(p_event_key, v_ph, v_channel, 'skipped', 'none',
+      null, 'notification_off', null, v_order, v_cust, v_vars);
+    return jsonb_build_object('ok', false, 'reason','notification_off');
+  end if;
+
+  -- CHANGE #712 · the per-user switch, honoured on the WIRE and not only in
+  -- the settings screen. notif_optout_set() has written user rows since the
+  -- opt-out surface shipped, and nothing read them here: notif_should_send is
+  -- the GLOBAL setting, and the push path was handed p_user_id => null, so
+  -- notif_user_allows could never see a row. A recipient who switched an event
+  -- off still received it on every channel. The user is resolved from the
+  -- order (or the pharmacy behind it) and passed on to push below, and the
+  -- test allowlist still overrides everything — that is what it is for.
+  if v_uid is null then
+    if v_order is not null then
+      select o.user_id into v_uid from public.orders o where o.id = v_order;
+    end if;
+    if v_uid is null and v_cust is not null then
+      select pp.user_id into v_uid from public.pharmacy_profiles pp where pp.id = v_cust;
+    end if;
+  end if;
+
+  if v_uid is not null
+     and not public.notif_user_allows(v_uid, v_aud, p_event_key, 'whatsapp')
+     and not public.notif_phone_allowlisted(v_aud, v_ph) then
+    perform public._wa_log_attempt(p_event_key, v_order, v_ph, 'skipped', false, 'user_opted_out');
+    perform public.notify_log(p_event_key, v_ph, v_channel, 'skipped', 'none',
+      null, 'user_opted_out', null, v_order, v_cust, v_vars);
+    return jsonb_build_object('ok', false, 'reason','user_opted_out');
+  end if;
+
+  v_win  := public.notify_window(v_ph);
+  v_open := coalesce((v_win->>'open')::boolean, false);
+
+  -- 0. PUSH FIRST (CHANGE #298). Free and instant, so it is tried before the
+  --    paid channel. WhatsApp stays the fallback: no active device token, push
+  --    switched off for this event, a per-user opt-out, or an FCM failure all
+  --    fall straight through to the template path below. A push FCM accepts
+  --    returns here; if it later fails, the edge function calls
+  --    notif_push_result(), which re-enters notify() with _no_push set, so
+  --    this branch can never loop.
+  if not coalesce((v_vars->>'_no_push')::boolean, false) then
+    begin
+      v_push := public.notif_push_send(p_event_key, v_ph, v_uid, v_order, v_tokens, v_aud);
+    exception when others then
+      v_push := jsonb_build_object('ok', false, 'reason', 'push_exception',
+                                   'message', sqlerrm);
+    end;
+    if coalesce((v_push->>'ok')::boolean, false) then
+      perform public._wa_log_attempt(p_event_key, v_order, v_ph, 'push', true,
+                                     coalesce(v_push->>'reason', 'push_queued'), v_push);
+      return jsonb_build_object('ok', true, 'path', 'push', 'detail', v_push);
+    end if;
+  end if;
+
+  -- 1. TEMPLATE FIRST. Always. This is the order_placed fix.
+  begin
+    v := public.wa_send_event_or_fallback(p_event_key, v_cust, v_tokens, v_ph, v_order);
+  exception when others then
+    v := jsonb_build_object('ok', false, 'reason','exception', 'message', sqlerrm);
+  end;
+
+  if coalesce((v->>'ok')::boolean, false) then
+    perform public._wa_log_attempt(p_event_key, v_order, v_ph, 'template', true,
+                                   coalesce(v->>'used_event', p_event_key), v);
+    perform public.notify_log(p_event_key, v_ph, v_channel, 'sent', 'template',
+      v->>'recipient_id', null, null, v_order, v_cust, v_vars, v);
+    if v_retry is not null then
+      update public.notification_retry_queue set status='done', updated_at=now() where id = v_retry;
+    end if;
+    return jsonb_build_object('ok', true, 'path','template', 'window_open', v_open, 'detail', v);
+  end if;
+
+  v_reason := coalesce(v->>'reason','template_failed');
+
+  -- 2. FREE-FORM, and only inside the tracked window.
+  if v_url is not null and v_open and not v_force_tpl then
+    select net.http_post(
+      url     := v_url,
+      headers := jsonb_build_object('Content-Type','application/json',
+                                    'x-notify-secret','medibo_order_notify_2027'),
+      body    := coalesce(v_body,'{}'::jsonb),
+      timeout_milliseconds := 20000) into v_req;
+    perform public._wa_log_attempt(p_event_key, v_order, v_ph, 'freeform', true,
+                                   'window_open_no_template: ' || v_reason, v);
+    perform public.notify_log(p_event_key, v_ph, v_channel, 'sent', 'freeform',
+      v_req::text, null, null, v_order, v_cust, v_vars, v);
+    if v_retry is not null then
+      update public.notification_retry_queue set status='done', updated_at=now() where id = v_retry;
+    end if;
+    return jsonb_build_object('ok', true, 'path','freeform', 'window_open', true,
+                              'reason', v_reason, 'request_id', v_req);
+  end if;
+
+  -- 3. Nothing legal to send right now → QUEUE it. Never a silent drop.
+  perform public._wa_log_attempt(p_event_key, v_order, v_ph, 'skipped', false, v_reason, v);
+  perform public.notify_log(p_event_key, v_ph, v_channel, 'queued', 'none',
+    null, v_reason, null, v_order, v_cust, v_vars, v);
+
+  if v_retry is not null then
+    update public.notification_retry_queue
+       set attempts = attempts + 1, last_reason = v_reason,
+           next_attempt_at = now() + public.notify_backoff(attempts + 1),
+           status = case when attempts + 1 >= max_attempts then 'dead' else 'pending' end,
+           updated_at = now()
+     where id = v_retry;
+  else
+    perform public.notify_enqueue_retry(p_event_key, v_ph, v_vars, v_reason,
+                                        v_order, v_cust, v_channel, v_force_tpl);
+  end if;
+
+  return jsonb_build_object('ok', false, 'path','queued', 'window_open', v_open,
+                            'reason', v_reason);
+end $function$
+
+;

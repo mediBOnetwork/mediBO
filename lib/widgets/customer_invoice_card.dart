@@ -22,6 +22,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../design_tokens.dart';
+import 'delivery_proof_card.dart';
 import 'bill_actions_row.dart';
 
 class CustomerInvoiceCard extends StatefulWidget {
@@ -152,6 +153,13 @@ class _CustomerInvoiceCardState extends State<CustomerInvoiceCard> {
               ]),
             ),
       ],
+
+      // CHANGE #691 (register row 126) — proof of delivery on the document the
+      // buyer files. `has:false` until the stop is closed, so nothing is drawn
+      // on an invoice for an order still on the road.
+      DeliveryProofCard(
+          proof: (d['delivery_proof'] as Map?)?.cast<String, dynamic>() ??
+              const {}),
 
       // The rendered PDF, when one exists. Download / WhatsApp / Share are the
       // same implementation the admin card uses.

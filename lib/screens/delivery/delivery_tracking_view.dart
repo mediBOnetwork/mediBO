@@ -32,6 +32,7 @@ import '../../services/live_feed.dart';
 
 import '../../fulfill/fulfill_lookups.dart';
 import '../../utils/render_log.dart';
+import '../../widgets/delivery_proof_card.dart';
 import 'run_live_map.dart';
 
 Color get _kText => FulfillLookups.instance.color('c_ff111827', const Color(0xFF111827));
@@ -52,6 +53,12 @@ class DeliveryTrackingData {
 
   final String stopsAheadLabel;
   final bool hasStopsAhead;
+
+  /// CHANGE #691 (register rows 122 / 126). The arrival window and the proof of
+  /// delivery, each a finished block from the backend. Rendered by
+  /// DeliveryEtaCard / DeliveryProofCard, which compute nothing either.
+  final Map<String, dynamic> eta;
+  final Map<String, dynamic> proof;
 
   final double riderLat;
   final double riderLng;
@@ -115,6 +122,8 @@ class DeliveryTrackingData {
     required this.orderCode,
     required this.stopsAheadLabel,
     required this.hasStopsAhead,
+    this.eta = const {},
+    this.proof = const {},
     required this.riderLat,
     required this.riderLng,
     required this.hasRiderLocation,
@@ -174,6 +183,8 @@ class DeliveryTrackingData {
       orderCode: '',
       stopsAheadLabel: ahead,
       hasStopsAhead: ahead.isNotEmpty,
+      eta: m['eta'] is Map ? Map<String, dynamic>.from(m['eta'] as Map) : const {},
+      proof: m['proof'] is Map ? Map<String, dynamic>.from(m['proof'] as Map) : const {},
       riderLat: riderLat?.toDouble() ?? 0,
       riderLng: riderLng?.toDouble() ?? 0,
       hasRiderLocation: riderLat != null && riderLng != null,
@@ -204,6 +215,8 @@ class DeliveryTrackingData {
       orderCode: _s(m['order_code']),
       stopsAheadLabel: _s(m['stops_ahead_label']),
       hasStopsAhead: m['has_stops_ahead'] == true,
+      eta: m['eta'] is Map ? Map<String, dynamic>.from(m['eta'] as Map) : const {},
+      proof: m['proof'] is Map ? Map<String, dynamic>.from(m['proof'] as Map) : const {},
       riderLat: _d(m['rider_lat']),
       riderLng: _d(m['rider_lng']),
       hasRiderLocation: m['has_rider_location'] == true,
@@ -374,19 +387,16 @@ class _DeliveryTrackingViewState extends State<DeliveryTrackingView> {
             privacyNote: d.callPrivacyNote,
           ),
         ],
-        if (d.hasStopsAhead && d.stopsAheadLabel.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: const Color(0xFFE6F1FB),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(d.stopsAheadLabel,
-                style: const TextStyle(
-                    fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF0C447C))),
-          ),
-        ],
+        // CHANGE #691 (register row 122) — "3 stops before you" WAS the whole
+        // answer, because deliveries.eta_min was stamped once by the optimiser
+        // and never rebased. The card now leads with a time and keeps the stop
+        // count under it; both strings are the payload's, and the stop-count
+        // chip moved inside the card so the two can never disagree.
+        DeliveryEtaCard(eta: d.eta),
+
+        // CHANGE #691 (register row 126) — proof of delivery, on the stop it
+        // belongs to. `has:false` until the order is delivered.
+        DeliveryProofCard(proof: d.proof),
 
         // F2 — the live map, shown while the backend says tracking is on.
         // CHANGE #700: the marker now rides run:<run_id> and animates between

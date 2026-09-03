@@ -1222,3 +1222,44 @@ values ('delivery_out_message', to_jsonb(
    'Expected: {eta}' || chr(10) ||
    'Live track: {link}')::text))
 on conflict (key) do nothing;
+
+-- 18. THE INVOICE CARD carries the proof too — same block, same words.
+CREATE OR REPLACE FUNCTION public.customer_invoice(p_order_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare o orders%rowtype; v_doc jsonb; v_file jsonb;
+begin
+  perform public._assert_can_see_order(p_order_id);
+  select * into o from orders where id = p_order_id;
+  v_doc := public.customer_bill(p_order_id);
+
+  v_file := case when o.cust_bill_path is not null
+    then jsonb_build_object('has', true, 'bucket', o.cust_bill_bucket,
+           'path', o.cust_bill_path, 'name', o.cust_bill_name,
+           'uploaded_at', o.cust_bill_uploaded_at, 'uploaded_by', o.cust_bill_uploaded_by)
+    else jsonb_build_object('has', false) end;
+
+  return jsonb_build_object(
+    'ok', true,
+    'order_id', p_order_id,
+    'order_code', coalesce(o.order_code,''),
+    'ready',      coalesce((v_doc->>'ready')::boolean, false),
+    -- the document's own title: TAX INVOICE once dispatched, PROFORMA before
+    'title',      coalesce(v_doc->>'title', public.uic('bill.not_ready_title','Invoice not ready')),
+    'proforma',   coalesce((v_doc->>'proforma')::boolean, false),
+    'invoice_no', coalesce(o.invoice_no, ''),
+    'issued_label', case when o.invoice_issued_at is not null
+                         then public.ist_fmt(o.invoice_issued_at, 'date') else '' end,
+    'not_ready_message', case when coalesce((v_doc->>'ready')::boolean,false)
+                              then '' else coalesce(v_doc->>'message','') end,
+    'unrated_lines', coalesce(v_doc->'unrated_lines', '[]'::jsonb),
+    -- CHANGE #691 (register row 126): the proof rides with the invoice,
+    -- so the document the buyer files and the card they read agree.
+    'delivery_proof', public._delivery_proof_block(p_order_id),
+    'open_label',   public.uic('bill.open_label','View invoice'),
+    'file',       v_file,
+    'document',   case when coalesce((v_doc->>'ready')::boolean,false) then v_doc else null end);
+end $function$;

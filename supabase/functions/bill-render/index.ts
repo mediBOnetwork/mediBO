@@ -115,6 +115,25 @@ function clip(s: string, font: any, size: number, max: number): string {
   return t
 }
 
+
+// ── CHANGE #691 (register row 126): proof of delivery, on the document ───────
+// _delivery_proof_block() already worded every caption and value; this only
+// lays them out, and only when the backend said has:true. The photo lives in
+// the private `delivery-proofs` bucket, so it is downloaded with the service
+// key and embedded — the PDF must stay readable after any signed URL expires.
+async function proofImageBytes(bucket: string, path: string):
+    Promise<{ bytes: Uint8Array; kind: 'jpg' | 'png' } | null> {
+  if (!bucket || !path) return null
+  try {
+    const { data, error } = await supabase.storage.from(bucket).download(path)
+    if (error || !data) return null
+    const bytes = new Uint8Array(await data.arrayBuffer())
+    if (bytes.length < 4) return null
+    const png = bytes[0] === 0x89 && bytes[1] === 0x50
+    return { bytes, kind: png ? 'png' : 'jpg' }
+  } catch (_) { return null }
+}
+
 async function renderPdf(bill: any): Promise<Uint8Array> {
   const inv = bill.invoice ?? {}, tot = bill.totals ?? {}
   const pay = bill.payment ?? {}, foot = bill.footer ?? {}, counts = bill.counts ?? {}
@@ -268,6 +287,58 @@ async function renderPdf(bill: any): Promise<Uint8Array> {
 
   if (foot.terms) { txt(clip(String(foot.terms), F, 6.5, W - 2 * M), M, py, 6.5, F, grey); py -= 10 }
   if (foot.jurisdiction) txt(clip(String(foot.jurisdiction), F, 6.5, W - 2 * M), M, py, 6.5, F, grey)
+
+  // ── CHANGE #691: proof of delivery, on its own page so it can never push
+  //    the tax invoice's own layout around. Absent unless the stop is closed.
+  const proof = bill.delivery_proof ?? {}
+  if (proof.has === true) {
+    const pp = pdf.addPage([W, H])
+    pages.push(pp)
+    let py2 = H - M
+    pp.drawText(ansi(proof.heading ?? ''), { x: M, y: py2, size: 13, font: FB, color: brand })
+    py2 -= 8
+    pp.drawLine({ start: { x: M, y: py2 }, end: { x: W - M, y: py2 }, thickness: 0.6, color: line })
+    py2 -= 20
+
+    const rows: [string, string][] = []
+    if (proof.has_receiver === true)
+      rows.push([String(proof.receiver_caption ?? ''), String(proof.receiver_name ?? '')])
+    if (proof.has_time === true)
+      rows.push([String(proof.time_caption ?? ''), String(proof.time_label ?? '')])
+    rows.push([String(proof.method_caption ?? ''), String(proof.method_label ?? '')])
+    if (proof.map?.has === true)
+      rows.push([String(proof.map.label ?? ''), `${proof.map.lat}, ${proof.map.lng}`])
+    rows.push(['Invoice', String(inv.number ?? '')])
+
+    for (const [k, v] of rows) {
+      if (!v) continue
+      pp.drawText(ansi(k), { x: M, y: py2, size: 8, font: F, color: grey })
+      pp.drawText(ansi(v), { x: M + 140, y: py2, size: 9, font: FB, color: ink })
+      py2 -= 16
+    }
+    py2 -= 10
+
+    for (const shot of [proof.photo, proof.signature]) {
+      if (!shot || shot.has !== true) continue
+      const got = await proofImageBytes(String(shot.bucket ?? ''), String(shot.path ?? ''))
+      if (!got) continue
+      try {
+        const img = got.kind === 'png'
+          ? await pdf.embedPng(got.bytes)
+          : await pdf.embedJpg(got.bytes)
+        const maxW = 300, maxH = py2 - M - 20
+        if (maxH < 60) break
+        const scale = Math.min(maxW / img.width, maxH / img.height, 1)
+        pp.drawText(ansi(shot.label ?? ''), { x: M, y: py2, size: 8, font: F, color: grey })
+        py2 -= 8
+        pp.drawImage(img, {
+          x: M, y: py2 - img.height * scale,
+          width: img.width * scale, height: img.height * scale,
+        })
+        py2 -= img.height * scale + 18
+      } catch (_) { /* an unreadable proof photo never fails a bill */ }
+    }
+  }
 
   // ── SAMPLE watermark, last so it sits over the page ──────────────────────
   if (bill.watermark) {

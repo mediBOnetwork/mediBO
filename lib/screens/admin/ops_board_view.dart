@@ -18,6 +18,7 @@
 import 'package:flutter/material.dart';
 
 import '../../design_tokens.dart';
+import '../../widgets/delivery_proof_card.dart';
 
 /// Maps the backend's tone word onto the token layer. An unknown tone renders
 /// neutral rather than throwing — a new tone from the backend must never white-
@@ -395,6 +396,12 @@ class OpsOrderDetailView extends StatelessWidget {
           ),
           SizedBox(height: Ds.space.x8),
         ],
+        // CHANGE #691 (register row 126) — the ops timeline (#75) ends with the
+        // SAME proof block the customer is shown, from the same RPC field, so
+        // support is never looking at less than the person they are talking to.
+        DeliveryProofCard(
+          proof: (payload['proof'] as Map?)?.cast<String, dynamic>() ?? const {},
+        ),
       ]),
     );
   }

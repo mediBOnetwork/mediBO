@@ -7,9 +7,18 @@
 // state is limited to the three RPC params plus purely-visual UI state
 // (dropdown open/closed) — never used to filter what's rendered.
 //
-// Purely additive: mounted above the existing Supplier Shop list in
-// admin_fulfillment_screen.dart; does not touch that list, the Warehouse
-// tab, or any other screen.
+// CHANGE #754 — three fixes, all of them "stop deciding in Dart":
+//   • The card is PINNED at the top of the Supplier Shop tab and is ONE widget
+//     instance for the life of the tab. It used to be three separate
+//     `const SupplierMapGroupsPanel()`s in three build branches (empty day /
+//     list / wide), so an empty day, a filter that matched nothing or a
+//     viewport change threw the map away and paid for a fresh provider load.
+//   • Two sizes, never zero: the header arrow toggles mini <-> full, both from
+//     the payload's own `map_mini_height` / `map_full_height`. The body is
+//     never swapped for a SizedBox.shrink() — that disposes the map.
+//   • The status chips are a legend/filter row BELOW the map instead of a
+//     strip inside the map area, and an empty day writes the backend's
+//     `empty_label` OVER the live map rather than in the middle of the tab.
 
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -17,8 +26,12 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../design_tokens.dart';
+import '../fulfill/supplier_map_panel_view.dart';
 import '../screens/admin/admin_customer_screen.dart' show AdminCustomerScreen;
+import '../services/admin_date_scope.dart';
 import '../services/ui_copy.dart';
+import '../utils/render_log.dart';
 import '../utils/toast.dart';
 import 'adaptive_map.dart';
 
@@ -39,7 +52,14 @@ class SupplierMapGroupsPanel extends StatefulWidget {
   State<SupplierMapGroupsPanel> createState() => _SupplierMapGroupsPanelState();
 }
 
-class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel> {
+class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel>
+    with AutomaticKeepAliveClientMixin {
+  /// CHANGE #754 — the tab this card sits on is a page of an IndexedStack, and
+  /// a lazily-built list can still deactivate a subtree. Keeping alive is what
+  /// makes "one map for the life of the screen" true rather than aspirational.
+  @override
+  bool get wantKeepAlive => true;
+
   bool _open = false;
   bool _loading = false;
   Map<String, dynamic>? _data;
@@ -60,10 +80,18 @@ class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel> {
   void initState() {
     super.initState();
     _load();
+    // The card outlives every date change now, so it has to hear about them
+    // itself — it used to be remounted into a fresh _load() by accident.
+    AdminDateScope.instance.addListener(_onScopeChanged);
+  }
+
+  void _onScopeChanged() {
+    if (mounted) _load();
   }
 
   @override
   void dispose() {
+    AdminDateScope.instance.removeListener(_onScopeChanged);
     _mapTouchLock.dispose();
     super.dispose();
   }
@@ -125,113 +153,140 @@ class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel> {
 
   @override
   Widget build(BuildContext context) {
-    final headerLabel = _data?['header_label']?.toString() ?? 'View suppliers in map';
+    super.build(context); // AutomaticKeepAliveClientMixin
+    // Every layout answer on this card is [SupplierMapPanelView]'s, which is
+    // where the protected test can reach them without a network.
+    final v = SupplierMapPanelView.fromJson(_data);
+
+    RenderLog.write('c754_map_pinned', _open ? 'full' : 'mini');
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
+      margin: EdgeInsets.only(bottom: Ds.space.x12),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        border: Border.all(color: Ds.c.divider),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        InkWell(
-          borderRadius: BorderRadius.circular(12),
-          onTap: () => setState(() => _open = !_open),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            child: Row(children: [
-              const Icon(Icons.map_outlined, size: 18, color: Color(0xFF1B7A43)),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(headerLabel,
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-              ),
-              if (_loading) ...[
-                const SizedBox(
-                  width: 14, height: 14,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43)),
-                ),
-                const SizedBox(width: 10),
-              ],
-              AnimatedRotation(
-                turns: _open ? 0.5 : 0.0,
-                duration: const Duration(milliseconds: 220),
-                curve: Curves.easeInOutCubic,
-                child: const Icon(Icons.keyboard_arrow_down_rounded, color: Color(0xFF6B7280)),
-              ),
-            ]),
+        _header(v.headerLabel),
+        // ── The map. ONE instance, always in the tree, two heights. ────────
+        // It is deliberately NOT inside the AnimatedSize below: animating a
+        // child in and out is what disposed the map on every collapse.
+        if (v.loaded)
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+                Ds.space.x12, 0, Ds.space.x12, Ds.space.x12),
+            child: _SupplierPointsMap(
+              center: _data?['map_center'] as Map?,
+              points: v.mapPoints,
+              touchLock: _mapTouchLock,
+              height: v.mapHeight(open: _open),
+              emptyLabel: v.emptyLabel,
+            ),
           ),
-        ),
+        // ── The legend/filter row, OUTSIDE the map area (Om: the chips were
+        //    rendering on top of the map itself). ──────────────────────────
+        if (v.showsLegend) _legend(v.legendLabel, v.badges),
+        // Only the supplier groups fold away with the arrow.
         AnimatedSize(
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeInOutCubic,
+          duration: Ds.motion.standard,
+          curve: Ds.motion.curve,
           clipBehavior: Clip.antiAlias,
-          child: (_open && _data != null) ? _buildBody(_data!) : const SizedBox.shrink(),
+          alignment: Alignment.topCenter,
+          child: v.showsGroups(open: _open)
+              ? _groupList(v)
+              : SizedBox(width: double.infinity, height: Ds.space.x12),
         ),
       ]),
     );
   }
 
-  Widget _buildBody(Map<String, dynamic> data) {
-    final badges = ((data['badges'] as List?) ?? [])
-        .map((b) => Map<String, dynamic>.from(b as Map))
-        .toList();
-    final mapPoints = ((data['map_points'] as List?) ?? [])
-        .map((p) => Map<String, dynamic>.from(p as Map))
-        .toList();
-    final mapCenter = data['map_center'] as Map?;
-    final groups = ((data['groups'] as List?) ?? [])
-        .map((g) => Map<String, dynamic>.from(g as Map))
-        .toList();
-    final activeChip = data['active_chip']?.toString();
-    final activeChipComplex = data['active_chip_complex']?.toString();
+  Widget _header(String headerLabel) {
+    return InkWell(
+      borderRadius: Ds.r.rCard,
+      onTap: () => setState(() => _open = !_open),
+      child: Padding(
+        padding: EdgeInsets.symmetric(
+            horizontal: Ds.space.x12, vertical: Ds.space.x12),
+        child: Row(children: [
+          Icon(Icons.map_outlined, size: Ds.t.bodySize, color: Ds.c.brand),
+          SizedBox(width: Ds.space.x8),
+          Expanded(child: Text(headerLabel, style: Ds.t.bodyStrong)),
+          if (_loading) ...[
+            SizedBox(
+              width: Ds.t.captionSize,
+              height: Ds.t.captionSize,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Ds.c.brand),
+            ),
+            SizedBox(width: Ds.space.x8),
+          ],
+          AnimatedRotation(
+            turns: _open ? 0.5 : 0.0,
+            duration: Ds.motion.standard,
+            curve: Ds.motion.curve,
+            child: Icon(Icons.keyboard_arrow_down_rounded, color: Ds.c.textSecondary),
+          ),
+        ]),
+      ),
+    );
+  }
 
+  Widget _legend(String legendLabel, List<Map<String, dynamic>> badges) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(Ds.space.x12, 0, Ds.space.x12, Ds.space.x8),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (legendLabel.isNotEmpty) ...[
+          Text(legendLabel, style: Ds.t.caption),
+          SizedBox(height: Ds.space.x8),
+        ],
+        Wrap(
+          spacing: Ds.space.x8,
+          runSpacing: Ds.space.x8,
+          children: [for (final b in badges) _badgePill(b)],
+        ),
+      ]),
+    );
+  }
+
+  Widget _groupList(SupplierMapPanelView v) {
+    final activeChip = _data?['active_chip']?.toString();
+    final activeChipComplex = _data?['active_chip_complex']?.toString();
     return ValueListenableBuilder<bool>(
       valueListenable: _mapTouchLock,
       builder: (_, locked, child) => ConstrainedBox(
-        constraints: const BoxConstraints(maxHeight: 620),
+        constraints: BoxConstraints(maxHeight: Ds.space.x48 * 8),
         child: SingleChildScrollView(
           physics: locked ? const NeverScrollableScrollPhysics() : null,
-          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+          padding: EdgeInsets.fromLTRB(
+              Ds.space.x12, 0, Ds.space.x12, Ds.space.x12),
           child: child,
         ),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        SizedBox(
-          height: 40,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: badges.length,
-            separatorBuilder: (_, _) => const SizedBox(width: 8),
-            itemBuilder: (_, i) => _badgePill(badges[i]),
-          ),
-        ),
-        const SizedBox(height: 12),
-        _SupplierPointsMap(center: mapCenter, points: mapPoints, touchLock: _mapTouchLock),
-        const SizedBox(height: 12),
-        for (final g in groups) _buildGroup(g, activeChip, activeChipComplex),
+        for (final g in v.groups) _buildGroup(g, activeChip, activeChipComplex),
       ]),
     );
   }
 
   Widget _badgePill(Map<String, dynamic> badge) {
     final selected = badge['selected'] == true;
-    final bg = _hexColor(badge['fill']?.toString(), const Color(0xFFF3F4F6));
-    final fg = _hexColor(badge['fg']?.toString(), const Color(0xFF374151));
+    final bg = _hexColor(badge['fill']?.toString(), Ds.c.bg);
+    final fg = _hexColor(badge['fg']?.toString(), Ds.c.text);
     return InkWell(
-      borderRadius: BorderRadius.circular(20),
+      borderRadius: Ds.r.rChip,
       onTap: () => _onTapBadge(badge),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+        padding: EdgeInsets.symmetric(
+            horizontal: Ds.space.x12, vertical: Ds.space.x8),
         decoration: BoxDecoration(
           color: bg,
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: Ds.r.rChip,
           border: Border.all(color: selected ? fg : Colors.transparent, width: 2),
         ),
         child: Center(
           child: Text(badge['text']?.toString() ?? '',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: fg)),
+              style: Ds.t.caption.copyWith(fontWeight: FontWeight.w700, color: fg)),
         ),
       ),
     );
@@ -248,14 +303,14 @@ class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel> {
         .toList();
 
     return Container(
-      margin: const EdgeInsets.only(top: 10),
+      margin: EdgeInsets.only(top: Ds.space.x8),
       decoration: BoxDecoration(
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Ds.c.divider),
+        borderRadius: Ds.r.rButton,
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         InkWell(
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: Ds.r.rButton,
           onTap: () => setState(() {
             if (open) {
               _openGroups.remove(key);
@@ -264,17 +319,20 @@ class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel> {
             }
           }),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x12, vertical: Ds.space.x12),
             child: Row(children: [
               Expanded(
                 child: Text(g['header']?.toString() ?? '',
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                    style: Ds.t.caption.copyWith(
+                        fontWeight: FontWeight.w700, color: Ds.c.text)),
               ),
               AnimatedRotation(
                 turns: open ? 0.5 : 0.0,
-                duration: const Duration(milliseconds: 200),
-                curve: Curves.easeInOutCubic,
-                child: const Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: Color(0xFF6B7280)),
+                duration: Ds.motion.standard,
+                curve: Ds.motion.curve,
+                child: Icon(Icons.keyboard_arrow_down_rounded,
+                    size: Ds.t.bodySize, color: Ds.c.textSecondary),
               ),
             ]),
           ),
@@ -285,13 +343,14 @@ class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel> {
           clipBehavior: Clip.antiAlias,
           child: open
               ? Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                  padding: EdgeInsets.fromLTRB(
+                      Ds.space.x12, 0, Ds.space.x12, Ds.space.x12),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Wrap(
-                      spacing: 8, runSpacing: 8,
+                      spacing: Ds.space.x8, runSpacing: Ds.space.x8,
                       children: chips.map((c) => _chipPill(key, c, activeChip, activeChipComplex)).toList(),
                     ),
-                    const SizedBox(height: 10),
+                    SizedBox(height: Ds.space.x8),
                     for (final s in suppliers) _supplierRow(s),
                   ]),
                 )
@@ -309,50 +368,53 @@ class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel> {
   ) {
     final selected = activeChip == chip['key']?.toString() && activeChipComplex == groupKey;
     return InkWell(
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: Ds.r.rChip,
       onTap: () => _onTapChip(groupKey, chip),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+        alignment: Alignment.center,
+        padding: EdgeInsets.symmetric(
+            horizontal: Ds.space.x12, vertical: Ds.space.x8),
         decoration: BoxDecoration(
-          color: selected ? const Color(0xFF1B7A43) : const Color(0xFFF1F3F4),
-          borderRadius: BorderRadius.circular(16),
+          color: selected ? Ds.c.brand : Ds.c.bg,
+          borderRadius: Ds.r.rChip,
         ),
         child: Text(chip['label']?.toString() ?? '',
-            style: TextStyle(
-                fontSize: 11, fontWeight: FontWeight.w600,
-                color: selected ? Colors.white : const Color(0xFF374151))),
+            style: Ds.t.caption.copyWith(
+                fontWeight: FontWeight.w600,
+                color: selected ? Ds.c.surface : Ds.c.text)),
       ),
     );
   }
 
   Widget _supplierRow(Map<String, dynamic> s) {
     final dot = (s['dot_packed'] as Map?) ?? {};
-    final fill = _hexColor(dot['fill']?.toString(), const Color(0xFFD1D5DB));
-    final border = _hexColor(dot['border']?.toString(), const Color(0xFF9CA3AF));
+    final fill = _hexColor(dot['fill']?.toString(), Ds.c.divider);
+    final border = _hexColor(dot['border']?.toString(), Ds.c.textSecondary);
     final shopLabel = s['shop_label']?.toString() ?? '';
     final supplier = s['supplier']?.toString() ?? '';
     final address = s['address']?.toString() ?? '';
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+      padding: EdgeInsets.symmetric(vertical: Ds.space.x4),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Container(
-          width: 10, height: 10,
-          margin: const EdgeInsets.only(top: 4),
+          width: Ds.space.x8,
+          height: Ds.space.x8,
+          margin: EdgeInsets.only(top: Ds.space.x4),
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: fill,
-            border: Border.all(color: border, width: 1.5),
+            border: Border.all(color: border),
           ),
         ),
-        const SizedBox(width: 8),
+        SizedBox(width: Ds.space.x8),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('$shopLabel  $supplier'.trim(),
-                style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
-            if (address.isNotEmpty) ...[
-              const SizedBox(height: 1),
-              Text(address, style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
-            ],
+                style: Ds.t.caption.copyWith(
+                    fontWeight: FontWeight.w600, color: Ds.c.text)),
+            if (address.isNotEmpty)
+              Text(address, style: Ds.t.caption),
           ]),
         ),
       ]),
@@ -370,10 +432,21 @@ class _SupplierPointsMap extends StatefulWidget {
   final Map? center;
   final List<Map<String, dynamic>> points;
   final ValueNotifier<bool> touchLock;
+
+  /// CHANGE #754 — `map_mini_height` or `map_full_height`, straight off the
+  /// payload. Changing it RESIZES the one map; it never replaces it.
+  final double height;
+
+  /// CHANGE #754 — the backend's empty-day sentence, laid over the live map.
+  /// Empty string means the day has points and nothing is overlaid.
+  final String emptyLabel;
+
   const _SupplierPointsMap({
     required this.center,
     required this.points,
     required this.touchLock,
+    required this.height,
+    required this.emptyLabel,
   });
 
   @override
@@ -454,17 +527,29 @@ class _SupplierPointsMapState extends State<_SupplierPointsMap> {
       ));
     }
 
-    // A7 — no plotted suppliers: AdaptiveMap prints map_config.empty_label
-    // instead of a blank grey map. No copy is written in this file.
+    // A7 — no plotted suppliers: the empty copy is shown instead of a blank
+    // grey map. CHANGE #754 — it OVERLAYS rather than replaces, so the map is
+    // never disposed on an empty day, and the sentence is the RPC's
+    // `empty_label` (dated, IST) rather than the generic map_config one.
     return AdaptiveMap(
       pins: pins,
       center: (centerLat != null && centerLng != null)
           ? MapPoint(centerLat, centerLng)
           : null,
       cameraSignature: '${pins.length}|$centerLat,$centerLng',
-      height: 320,
-      borderRadius: const BorderRadius.all(Radius.circular(10)),
+      height: widget.height,
+      borderRadius: Ds.r.rButton,
       touchLock: widget.touchLock,
+      emptyOverlay: true,
+      emptyState: widget.emptyLabel.isEmpty
+          ? null
+          : Center(
+              child: Padding(
+                padding: EdgeInsets.all(Ds.space.x16),
+                child: Text(widget.emptyLabel,
+                    textAlign: TextAlign.center, style: Ds.t.caption),
+              ),
+            ),
       logKey: 'c634_supplier_map',
     );
   }

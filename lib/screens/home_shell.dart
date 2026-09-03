@@ -809,6 +809,12 @@ class _HomeShellState extends State<HomeShell> {
       if (msg.isNotEmpty) showToast(context, msg, isError: true);
       return;
     }
+    // CHANGE #754 — a route whose screen moved into Fulfill opens there
+    // instead. The pairing is the backend's; see shell_extra_routes.dart.
+    if (shellOpenFulfillStage(
+        route, (i) => setState(() { _index = i; _cartOpen = false; }))) {
+      return;
+    }
     switch (route) {
       case 'home': _goHome(); break;
       case 'dashboard': setState(() { _index = 3; _cartOpen = false; }); break;
@@ -826,11 +832,6 @@ class _HomeShellState extends State<HomeShell> {
       case 'bags':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const BagsScreen()));
-        break;
-      case 'exceptions': // CHANGE #690 — a Fulfill stage, not a page.
-        setState(() { _index = 10; _cartOpen = false; });
-        WidgetsBinding.instance.addPostFrameCallback(
-            (_) => AdminFulfillmentScreen.openStage('exceptions'));
         break;
       // CHANGE #174 — PTR / GST backfill. Not gated here: admin_pricing_list()
       // and product_pricing_upsert() both check get_my_role() themselves and

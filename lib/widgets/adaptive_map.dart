@@ -27,6 +27,7 @@ import 'package:flutter_map/flutter_map.dart' as fm;
 import 'package:google_maps_flutter/google_maps_flutter.dart' as gm;
 import 'package:latlong2/latlong.dart' as ll;
 
+import '../design_tokens.dart';
 import '../services/map_config.dart';
 import '../services/maps_js_loader_stub.dart'
     if (dart.library.js_interop) '../services/maps_js_loader_web.dart';
@@ -147,6 +148,16 @@ class AdaptiveMap extends StatefulWidget {
   /// user-facing string of its own.
   final Widget? emptyState;
 
+  /// CHANGE #754 — keep the map MOUNTED on an empty day and lay the empty copy
+  /// over it, instead of swapping the map out for a paragraph.
+  ///
+  /// Replacing the map disposes it, and the next non-empty day pays for a
+  /// whole new provider load — real money on the Google JS provider, and on
+  /// the Supplier Shop tab an operator crosses an empty day constantly (every
+  /// date change, every filter that matches nothing). A caller that sets this
+  /// keeps ONE map for the life of the screen.
+  final bool emptyOverlay;
+
   /// Render-log key so a deploy can be proven from curl alone.
   final String logKey;
 
@@ -163,6 +174,7 @@ class AdaptiveMap extends StatefulWidget {
     this.borderRadius = const BorderRadius.all(Radius.circular(12)),
     this.touchLock,
     this.emptyState,
+    this.emptyOverlay = false,
     this.logKey = 'c634_map',
   });
 
@@ -208,17 +220,39 @@ class _AdaptiveMapState extends State<AdaptiveMap> {
 
         // A7 — nothing to plot: show the screen's own empty copy (or the
         // backend's map_config.empty_label) instead of a grey rectangle.
+        // CHANGE #754 — unless the caller asked for the copy to OVERLAY, which
+        // keeps the one map instance alive across an empty day.
+        Widget? empty;
         if (_allPoints.isEmpty) {
-          final empty = widget.emptyState ?? _configEmpty(cfg);
+          empty = widget.emptyState ?? _configEmpty(cfg);
           if (empty != null) {
             RenderLog.write('c634_map_empty', 1);
-            return SizedBox(height: widget.height, child: empty);
+            if (!widget.emptyOverlay) {
+              return SizedBox(height: widget.height, child: empty);
+            }
           }
         }
 
         final map = cfg.usesGoogleJs
             ? _GoogleJsMap(cfg: cfg, host: widget)
             : _TileMap(cfg: cfg, host: widget);
+
+        if (empty != null) {
+          RenderLog.write('c754_map_empty_overlay', 1);
+          return _shell(
+            child: Stack(fit: StackFit.expand, children: [
+              map,
+              // Ignores pointers: the operator can still pan the live map
+              // underneath the sentence telling them the day is empty.
+              IgnorePointer(
+                child: Container(
+                  color: Ds.c.surface.withValues(alpha: 0.82),
+                  child: empty,
+                ),
+              ),
+            ]),
+          );
+        }
 
         return _shell(child: map);
       },

@@ -349,16 +349,30 @@ class _SectionLabel extends StatelessWidget {
       );
 }
 
+/// Tiles share the row: the column count comes from the width on offer, so a
+/// phone gets two across and a desktop as many as fit — never a fixed pixel
+/// width (DESIGN.md: proportional widths, breakpoints 360…1280+).
+double _tileWidth(double maxWidth, double gap, double minTile) {
+  final cols = (maxWidth / (minTile + gap)).floor().clamp(1, 6);
+  return (maxWidth - gap * (cols - 1)) / cols;
+}
+
 class _TileWrap extends StatelessWidget {
   const _TileWrap({required this.tiles, required this.onOpen});
   final List<Map<String, dynamic>> tiles;
   final StaffTileTap onOpen;
   @override
-  Widget build(BuildContext context) => Wrap(
-        spacing: Ds.space.x12,
-        runSpacing: Ds.space.x12,
-        children: [for (final t in tiles) _HomeTile(tile: t, onOpen: onOpen)],
-      );
+  Widget build(BuildContext context) => LayoutBuilder(builder: (_, box) {
+        final w = _tileWidth(box.maxWidth, Ds.space.x12, Ds.space.x48 * 3);
+        return Wrap(
+          spacing: Ds.space.x12,
+          runSpacing: Ds.space.x12,
+          children: [
+            for (final t in tiles)
+              SizedBox(width: w, child: _HomeTile(tile: t, onOpen: onOpen)),
+          ],
+        );
+      });
 }
 
 /// One tile. Label, glyph and badge are the payload's; the tap hands the
@@ -379,7 +393,6 @@ class _HomeTile extends StatelessWidget {
         onTap: () => onOpen(tile),
         borderRadius: Ds.r.rCard,
         child: Container(
-          width: 180,
           constraints: BoxConstraints(minHeight: Ds.space.x48 + Ds.space.x16),
           padding: EdgeInsets.all(Ds.space.x12),
           decoration: BoxDecoration(
@@ -428,7 +441,9 @@ class _StatsRow extends StatelessWidget {
   final StaffTileTap onOpen;
 
   @override
-  Widget build(BuildContext context) => Wrap(
+  Widget build(BuildContext context) => LayoutBuilder(builder: (_, box) {
+        final w = _tileWidth(box.maxWidth, Ds.space.x12, Ds.space.x48 * 3);
+        return Wrap(
         spacing: Ds.space.x12,
         runSpacing: Ds.space.x12,
         children: [
@@ -438,7 +453,7 @@ class _StatsRow extends StatelessWidget {
               borderRadius: Ds.r.rCard,
               child: Container(
                 key: Key('c1016_stat_${_s(s, 'key')}'),
-                width: 200,
+                width: w,
                 padding: EdgeInsets.all(Ds.space.x16),
                 decoration: BoxDecoration(
                   color: Ds.c.surface,
@@ -466,6 +481,7 @@ class _StatsRow extends StatelessWidget {
             ),
         ],
       );
+      });
 }
 
 class _SearchField extends StatelessWidget {
@@ -495,19 +511,22 @@ class _SearchField extends StatelessWidget {
 class _HomeSkeleton extends StatelessWidget {
   const _HomeSkeleton();
   @override
-  Widget build(BuildContext context) => Wrap(
-        spacing: Ds.space.x12,
-        runSpacing: Ds.space.x12,
-        children: [
-          for (var i = 0; i < 6; i++)
-            Container(
-              width: 180,
-              height: Ds.space.x48 + Ds.space.x16,
-              decoration: BoxDecoration(
-                color: Ds.c.bg,
-                borderRadius: Ds.r.rCard,
+  Widget build(BuildContext context) => LayoutBuilder(builder: (_, box) {
+        final w = _tileWidth(box.maxWidth, Ds.space.x12, Ds.space.x48 * 3);
+        return Wrap(
+          spacing: Ds.space.x12,
+          runSpacing: Ds.space.x12,
+          children: [
+            for (var i = 0; i < 6; i++)
+              Container(
+                width: w,
+                height: Ds.space.x48 + Ds.space.x16,
+                decoration: BoxDecoration(
+                  color: Ds.c.bg,
+                  borderRadius: Ds.r.rCard,
+                ),
               ),
-            ),
-        ],
-      );
+          ],
+        );
+      });
 }

@@ -306,6 +306,17 @@ Current files and what they hold down:
   reason while Approve sends none, and a chips block sends back the backend's
   own arg and value.
 
+- `staff_nav_test.dart` — the six-verb staff shell (CHANGE #1016): the tab
+  bar is staff_nav().tabs in payload order (a hidden tab is absent, never a
+  hole), a refusal is the empty payload, old route keys land on the
+  nav_redirect table verbatim (when_no_seed keeps a link that carries a
+  subject), the v1/v2 layout is the payload word and never a Dart clock, a
+  home renders its sections and tiles in payload order with every label,
+  badge phrase and stat sentence verbatim, the strip draws nothing for an
+  empty answer, a tap hands back the backend's own tile map, and the seven
+  partner doors resolve through shell_staff_routes.dart while an unknown route
+  resolves to null.
+
 The suite runs on the Dart VM in ~2s. Keep it that way: no network, no goldens,
 no Supabase, no camera — mock RPC payloads inline. If a widget resists mocking,
 extract its decisions into a pure class and test that.

@@ -301,6 +301,40 @@ void main() {
               'is /delivery-register for the public site and the delivery app');
     });
 
+    test('the customer menu admits no operator role', () {
+      // Spec item 5: anything admin/partner/supplier-only must be hidden from
+      // role customer. The audit is the registry itself — a customer_menu row
+      // may admit `customer` and `super_admin` (the operator viewing their own
+      // pharmacy) and nothing else. An admin tool that wandered onto this
+      // surface fails here rather than in front of a pharmacy.
+      final dir = Directory('supabase/migrations');
+      final offenders = <String>[];
+      var seen = 0;
+      final roleList = RegExp(r"array\[([^\]]*)\], 'medibo'");
+      for (final f in dir.listSync().whereType<File>()) {
+        if (!f.path.endsWith('.sql')) continue;
+        final sql = f.readAsStringSync();
+        if (!sql.contains("'customer_menu'")) continue;
+        for (final m in roleList.allMatches(sql)) {
+          seen++;
+          final roles = m
+              .group(1)!
+              .split(',')
+              .map((r) => r.trim().replaceAll("'", ''))
+              .where((r) => r.isNotEmpty);
+          for (final r in roles) {
+            if (r != 'customer' && r != 'super_admin') {
+              offenders.add('${f.path}: $r');
+            }
+          }
+        }
+      }
+      expect(offenders, isEmpty);
+      // Never vacuous: the scan must actually have read the registry rows.
+      expect(seen, greaterThanOrEqualTo(7),
+          reason: 'the role-list scan matched nothing — it stopped auditing');
+    });
+
     test('no migration registers it onto the customer menu surface', () {
       final dir = Directory('supabase/migrations');
       for (final f in dir.listSync().whereType<File>()) {

@@ -7,10 +7,8 @@ import '../models/user_profile.dart';
 import '../services/ui_copy.dart';
 import '../utils/render_log.dart';
 import '../view_as_state.dart';
-import '../design_tokens.dart';
 import 'auth/business_details_screen.dart';
 import 'admin/view_as_picker_dialog.dart';
-import 'admin/loyalty_admin_screen.dart';
 import 'customer/profile_account_menu.dart'; // CHANGE #745 — the registry menu
 import '../services/customer_surfaces.dart'; // CHANGE #745
 // CHANGE #536 — the four pharmacy screens this file used to import are gone.
@@ -624,11 +622,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 // the backend's as well, and delete stays last.
                 if (isRegistered) ProfileAccountMenu(interactive: !isViewAs),
 
-                // Loyalty control panel (CHANGE #176) — super-admin only, and
-                // loyalty_config_get() re-checks the role server-side, so this
-                // mirrors the backend gate rather than being the only one.
-                if (!isViewAs && (session?.isSuperAdmin ?? false))
-                  _LoyaltyAdminEntryCard(),
+                // CHANGE #745 — the loyalty control panel used to be gated
+                // right here on `session.isSuperAdmin`, a second source of
+                // truth next to the registry. It is a registry row now
+                // (roles_allowed = {super_admin}), so a pharmacy's payload
+                // simply does not contain it and ProfileAccountMenu above
+                // draws whatever the backend sent. View As stays below because
+                // it is a compile-flag dev tool, not a nav entry.
 
                 // View As (Dev) — super-admin only, build-phase gated; hidden in viewAs mode
                 // RULE 1 — the role gating this comes from my_session() too.
@@ -962,66 +962,3 @@ class _ViewAsChip extends StatelessWidget {
 /// CHANGE #176 — one shape for both new profile rows, so a second entry cannot
 /// drift from the first. Modelled on [_WishlistEntryCard]; label text comes from
 /// ui_copy, never a Dart literal.
-class _MenuEntryCard extends StatelessWidget {
-  final IconData icon;
-  final String copyKey;
-  final Widget Function() destination;
-  const _MenuEntryCard({
-    required this.icon,
-    required this.copyKey,
-    required this.destination,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-          Ds.space.x16, Ds.space.x8, Ds.space.x16, 0),
-      child: GestureDetector(
-        onTap: () => Navigator.of(context).push(
-          MaterialPageRoute<void>(builder: (_) => destination()),
-        ),
-        child: Container(
-          padding: EdgeInsets.symmetric(
-              horizontal: Ds.space.x16, vertical: Ds.space.x16),
-          decoration: BoxDecoration(
-            color: Ds.c.surface,
-            borderRadius: Ds.r.rCard,
-            border: Border.all(color: Ds.c.divider),
-            boxShadow: Ds.elevation.e1,
-          ),
-          child: Row(
-            children: [
-              Icon(icon, size: 22, color: Ds.c.brand),
-              SizedBox(width: Ds.space.x12),
-              Expanded(
-                child: Text(
-                  c(copyKey),
-                  style: Ds.t.body.copyWith(fontWeight: FontWeight.w600),
-                ),
-              ),
-              Icon(Icons.chevron_right, size: 20, color: Ds.c.textSecondary),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// CHANGE #745 — _DeliverWithUsEntryCard is GONE. "Deliver with mediBO" was
-// offered to every signed-in account including pharmacies buying trade stock,
-// which is not who rider signup is for. It is not a hidden row and not a
-// role-gated row: it is absent from the customer app, and /delivery-register
-// (main.dart) remains the door for the public site and the delivery app.
-
-class _LoyaltyAdminEntryCard extends StatelessWidget {
-  const _LoyaltyAdminEntryCard();
-
-  @override
-  Widget build(BuildContext context) => _MenuEntryCard(
-        icon: Icons.workspace_premium_outlined,
-        copyKey: 'profile.row_loyalty_admin',
-        destination: () => const LoyaltyAdminScreen(),
-      );
-}

@@ -5,6 +5,7 @@ import '../../design_tokens.dart';
 import '../../services/customer_surfaces.dart';
 import '../../user_state.dart';
 import '../../widgets/delete_account_section.dart';
+import '../admin/loyalty_admin_screen.dart';
 import '../admin/nav_registry_view.dart' show navIcon, navIconResolves;
 import '../rewards_screen.dart';
 import '../wishlist_screen.dart';
@@ -24,6 +25,7 @@ Widget? customerMenuScreen(String routeKey) => switch (routeKey) {
       'cust_profile_edit' => const ProfileEditScreen(),
       'cust_addresses' => const AddressBookScreen(),
       'cust_staff_logins' => const CustomerStaffScreen(),
+      'cust_loyalty_admin' => const LoyaltyAdminScreen(),
       'cust_wishlist' => const WishlistScreen(),
       'cust_rewards' => const RewardsScreen(),
       _ => null,

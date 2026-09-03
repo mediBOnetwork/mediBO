@@ -566,7 +566,7 @@ begin
   if v_on then
     -- The flag is ON: margin is allowed to appear, so there is nothing to
     -- police here. This test exists for the OFF state.
-    return;
+    raise exception 'RG_ROLLBACK';
   end if;
 
   -- 1. The card/PDP/compare pricing block carries no margin number — checked on
@@ -618,6 +618,10 @@ begin
   if coalesce((select value from public.storefront_ui_label where key='cmp_add'), '') = '' then
     raise exception 'RG_FAIL: cmp_add is gone from storefront_ui_label — the product page compare needs it';
   end if;
+
+  -- The harness runs every behaviour inside a transaction and expects it to
+  -- end by rolling itself back, so a test can probe freely and leave nothing.
+  raise exception 'RG_ROLLBACK';
 end $body$;
 $rg$,
 true,

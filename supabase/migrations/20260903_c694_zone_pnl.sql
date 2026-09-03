@@ -604,3 +604,18 @@ end $function$;
 comment on function public._c694_doc_payload(smallint, text) is
   'CHANGE #694 — the zone P&L as a bill-render payload. Prints the SAME lines '
   'the screen printed, already filtered by pnl_line_type.partner_visible.';
+
+-- ── 9. the anon fence ──────────────────────────────────────────────────────
+-- `revoke ... from anon` is NOT enough: every function is created with an
+-- implicit GRANT EXECUTE TO PUBLIC, and anon inherits that. Revoking from
+-- `anon` alone leaves the PUBLIC grant standing, so the anon key — which
+-- ships inside the web bundle and the APK — could still call the zone P&L.
+-- Caught by privileged_rpcs_are_not_anon in the same command that wrote it.
+revoke all on function public.zone_pnl(smallint, text) from public, anon;
+revoke all on function public.zone_pnl_scan(text) from public, anon;
+revoke all on function public._c694_zone_slice(smallint, date, date, boolean) from public, anon;
+revoke all on function public._c694_doc_payload(smallint, text) from public, anon;
+revoke all on function public._c694_period(text) from public, anon;
+
+grant execute on function public.zone_pnl(smallint, text) to authenticated;
+grant execute on function public._c694_doc_payload(smallint, text) to authenticated;

@@ -122,6 +122,7 @@ class _SupplierRecordsScreenState extends State<SupplierRecordsScreen>
   Widget _tabBody(String key) => switch (key) {
         'documents' => SupplierDocumentsTab(rpc: widget.rpc),
         'debits' => SupplierDebitsTab(rpc: widget.rpc),
+        'returns' => SupplierReturnsTab(rpc: widget.rpc),
         'sales' => SupplierSalesTab(rpc: widget.rpc),
         'bills' => SupplierBillsTab(rpc: widget.rpc),
         _ => const SizedBox.shrink(),
@@ -460,6 +461,300 @@ class _DebitCard extends StatelessWidget {
                     SizedBox(width: Ds.space.x4),
                     Text(photoLabel, style: Ds.t.caption),
                   ],
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 2b. RETURNS TO SUPPLIER  (CHANGE #710)
+//
+// The debit notes raised on this supplier, beside the deductions list they sit
+// next to in the payload's own tab order. Nothing here is computed: the status
+// word, its colour, every rupee, the effect sentence and the acknowledge
+// button's label are all supplier_returns_list()'s. The acknowledge action is
+// the one write, and the toast it shows is the RPC's.
+// ═══════════════════════════════════════════════════════════════════════════
+class SupplierReturnsTab extends StatefulWidget {
+  final SupplierRpc? rpc;
+  final Future<String> Function(String bucket, String path)? sign;
+  final Future<void> Function(String url)? open;
+  const SupplierReturnsTab({super.key, this.rpc, this.sign, this.open});
+
+  @override
+  State<SupplierReturnsTab> createState() => SupplierReturnsTabState();
+}
+
+class SupplierReturnsTabState extends State<SupplierReturnsTab> {
+  Map<String, dynamic>? _payload;
+  String _busyId = '';
+
+  Future<Map<String, dynamic>> _call(String fn, Map<String, dynamic> p) =>
+      widget.rpc != null ? widget.rpc!(fn, p) : SupplierApi.call(fn, p);
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final p = await _call('supplier_returns_list', const {});
+    if (!mounted) return;
+    setState(() => _payload = p);
+    RenderLog.write('c710_returns', supplierRows(p['rows']).length);
+  }
+
+  void _toast(String message, Object? tone) {
+    if (message.isEmpty || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message), backgroundColor: supplierTone(tone)));
+  }
+
+  Future<void> acknowledge(String id) async {
+    if (id.isEmpty || _busyId.isNotEmpty) return;
+    setState(() => _busyId = id);
+    try {
+      final res = await _call('supplier_return_ack', {'p_id': id});
+      if (!mounted) return;
+      _toast(supplierStr(res, 'message').isEmpty
+          ? supplierStr(res, 'toast')
+          : supplierStr(res, 'message'),
+          res['ok'] == true ? 'success' : 'danger');
+      if (res['ok'] == true) await _load();
+    } finally {
+      if (mounted) setState(() => _busyId = '');
+    }
+  }
+
+  /// The same ask-then-poll contract the documents tab uses, on the backend's
+  /// own `poll_ms`. This screen never invents an interval or a timeout.
+  Future<void> download(String id) async {
+    if (id.isEmpty || _busyId.isNotEmpty) return;
+    setState(() => _busyId = id);
+    try {
+      var res =
+          await _call('supplier_doc_request', {'p_kind': 'debit_note', 'p_ref': id});
+      var poll = SupplierDocPoll.from(res);
+      var tries = 0;
+      while (poll != null && tries < 20) {
+        await Future<void>.delayed(Duration(milliseconds: poll.pollMs));
+        if (!mounted) return;
+        res = await _call('supplier_doc_status', {'p_id': poll.docId});
+        poll = SupplierDocPoll.from(res);
+        tries++;
+      }
+      if (!mounted) return;
+      if (res['ok'] != true || supplierStr(res, 'status') == 'building') {
+        _toast(supplierStr(res, 'message'), res['ok'] == true ? 'info' : 'danger');
+        return;
+      }
+      final url = widget.sign != null
+          ? await widget.sign!(supplierStr(res, 'bucket'), supplierStr(res, 'path'))
+          : await SupplierRecordsApi.signedUrl(
+              supplierStr(res, 'bucket'), supplierStr(res, 'path'));
+      if (url.isEmpty) return;
+      if (widget.open != null) {
+        await widget.open!(url);
+      } else {
+        await launchUrl(Uri.parse(url),
+            webOnlyWindowName: '_blank', mode: LaunchMode.externalApplication);
+      }
+    } finally {
+      if (mounted) setState(() => _busyId = '');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => SupplierReturnsView(
+        payload: _payload,
+        busyId: _busyId,
+        onAck: acknowledge,
+        onDownload: download,
+        onRetry: _load,
+      );
+}
+
+class SupplierReturnsView extends StatelessWidget {
+  final Map<String, dynamic>? payload;
+  final String busyId;
+  final void Function(String id)? onAck;
+  final void Function(String id)? onDownload;
+  final Future<void> Function()? onRetry;
+  const SupplierReturnsView({
+    super.key,
+    required this.payload,
+    this.busyId = '',
+    this.onAck,
+    this.onDownload,
+    this.onRetry,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = payload;
+    if (p == null) return const _Skeleton();
+    if (p['ok'] == false) {
+      return _Refusal(message: supplierStr(p, 'message'), onRetry: onRetry);
+    }
+
+    final rows = supplierRows(p['rows']);
+    final summary = supplierRows(p['summary']);
+    final payableNote = supplierStr(p, 'payable_note');
+    return ListView(
+      padding: EdgeInsets.all(Ds.space.x16),
+      children: [
+        Text(supplierStr(p, 'subtitle'), style: Ds.t.caption),
+        SizedBox(height: Ds.space.x16),
+        if (summary.isNotEmpty) _TileRow(tiles: summary),
+        if (rows.isEmpty) ...[
+          SizedBox(height: Ds.space.x24),
+          _Empty(text: supplierStr(p, 'empty_label')),
+        ] else ...[
+          if (payableNote.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x16),
+            Text(payableNote, style: Ds.t.caption.copyWith(color: Ds.c.danger)),
+          ],
+          SizedBox(height: Ds.space.x16),
+          for (final r in rows)
+            _ReturnCard(
+              row: r,
+              docLabel: supplierStr(p, 'doc_label'),
+              busy: busyId == supplierStr(r, 'id'),
+              onAck: onAck,
+              onDownload: onDownload,
+            ),
+        ],
+      ],
+    );
+  }
+}
+
+class _ReturnCard extends StatelessWidget {
+  final Map<String, dynamic> row;
+  final String docLabel;
+  final bool busy;
+  final void Function(String id)? onAck;
+  final void Function(String id)? onDownload;
+  const _ReturnCard({
+    required this.row,
+    required this.docLabel,
+    required this.busy,
+    this.onAck,
+    this.onDownload,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final id = supplierStr(row, 'id');
+    final items = supplierRows(row['items']);
+    // Two different backend strings that happen to live under one name in the
+    // payload: `ack_label` is the button while the return is unacknowledged and
+    // the "Acknowledged on …" sentence once it is. `acknowledged` decides which.
+    final acknowledged = row['acknowledged'] == true;
+    final ackButton = supplierStr(row, 'ack_label');
+    final ackDone = supplierStr(row, 'ack_done_label');
+    return Container(
+      margin: EdgeInsets.only(bottom: Ds.space.x12),
+      padding: EdgeInsets.all(Ds.space.x16),
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        boxShadow: Ds.elevation.e1,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(supplierStr(row, 'debit_no'), style: Ds.t.bodyStrong),
+              ),
+              SizedBox(width: Ds.space.x12),
+              Text(supplierStr(row, 'total_value'),
+                  style: Ds.t.bodyStrong.copyWith(color: Ds.c.danger)),
+            ],
+          ),
+          SizedBox(height: Ds.space.x8),
+          Wrap(
+            spacing: Ds.space.x8,
+            runSpacing: Ds.space.x8,
+            children: [
+              _Chip(
+                  label: supplierStr(row, 'status_label'),
+                  tone: supplierStr(row, 'status_tone')),
+              _Chip(label: supplierStr(row, 'order_label'), tone: 'info'),
+              _Chip(label: supplierStr(row, 'at_label'), tone: ''),
+            ],
+          ),
+          SizedBox(height: Ds.space.x12),
+          // Each backend string keeps its own Text: this file never glues a
+          // product, a reason and a rupee figure into one sentence.
+          for (final i in items) ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(supplierStr(i, 'product_name'), style: Ds.t.body),
+                      SizedBox(height: Ds.space.x4),
+                      Text(supplierStr(i, 'reason_label'), style: Ds.t.caption),
+                    ],
+                  ),
+                ),
+                SizedBox(width: Ds.space.x12),
+                Text(supplierStr(i, 'qty_value'), style: Ds.t.caption),
+                SizedBox(width: Ds.space.x12),
+                Text(supplierStr(i, 'amount_value'), style: Ds.t.body),
+              ],
+            ),
+            SizedBox(height: Ds.space.x8),
+          ],
+          SizedBox(height: Ds.space.x8),
+          Text(supplierStr(row, 'effect_label'),
+              style: Ds.t.caption.copyWith(color: Ds.c.danger)),
+          if (supplierStr(row, 'carry_value').isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(
+                '${supplierStr(row, 'carry_label')} · '
+                '${supplierStr(row, 'carry_value')}',
+                style: Ds.t.caption),
+          ],
+          if (acknowledged && ackDone.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(ackDone, style: Ds.t.caption),
+          ],
+          SizedBox(height: Ds.space.x12),
+          Row(
+            children: [
+              if (row['can_ack'] == true && ackButton.isNotEmpty)
+                Expanded(
+                  child: SizedBox(
+                    height: Ds.space.x48,
+                    child: FilledButton(
+                      onPressed: busy ? null : () => onAck?.call(id),
+                      child: Text(ackButton),
+                    ),
+                  ),
+                ),
+              if (row['can_ack'] == true && row['can_doc'] == true)
+                SizedBox(width: Ds.space.x12),
+              if (row['can_doc'] == true && docLabel.isNotEmpty)
+                Expanded(
+                  child: SizedBox(
+                    height: Ds.space.x48,
+                    child: OutlinedButton(
+                      onPressed: busy ? null : () => onDownload?.call(id),
+                      child: Text(docLabel),
+                    ),
+                  ),
                 ),
             ],
           ),

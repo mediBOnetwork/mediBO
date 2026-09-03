@@ -441,7 +441,9 @@ begin
                       jsonb_build_object('amount', public.inr_money(r.grand_total))),
     'at_label', public.ist_fmt(coalesce(r.sent_at, r.created_at), 'dmy_hm'),
     'acknowledged', (r.acknowledged_at is not null),
-    'ack_label', case when r.acknowledged_at is null then ''
+    -- The DONE sentence. The button's own label is 'ack_label', added by the
+    -- surface that offers the button, so the two never collide in one object.
+    'ack_done_label', case when r.acknowledged_at is null then ''
                       else public._c710_fmt('sup_return.ack_done_label','Acknowledged on {at}',
                              jsonb_build_object('at', public.ist_fmt(r.acknowledged_at,'dmy_hm'))) end,
     'ack_note', r.acknowledged_note,
@@ -2093,3 +2095,28 @@ revoke all on function public.partner_return_send(uuid) from public, anon;
 grant execute on function public.partner_return_send(uuid) to authenticated, service_role;
 revoke all on function public._c710_release_stock(uuid) from public, anon;
 grant execute on function public._c710_release_stock(uuid) to authenticated, service_role;
+-- CHANGE #710 — register the new protected file in the canonical rule. A
+-- targeted replace on the CURRENT body, so a concurrent edit is preserved.
+do $m$
+declare v_body text; v_new text; v_anchor text;
+begin
+  select body into v_body from public.agent_memory where section = 'protected_tests' for update;
+  if v_body is null then return; end if;
+  if position('supplier_return_test.dart' in v_body) > 0 then return; end if;
+
+  v_anchor := 'The suite runs on the Dart VM in ~2s.';
+  v_new := '- `supplier_return_test.dart` — the return-to-supplier flow and its' || chr(10) ||
+'  debit note: no rupee, status word, tone, GST figure or return ceiling is' || chr(10) ||
+'  computed in Dart (the fixture''s total deliberately does NOT equal the sum of' || chr(10) ||
+'  its lines), Acknowledge is the backend''s can_ack flag while the' || chr(10) ||
+'  "Acknowledged on …" sentence is its own `ack_done_label` key, rows and lines' || chr(10) ||
+'  render in payload order, ok:false and an unknown /return-ack/<token> print' || chr(10) ||
+'  the backend''s refusal instead of throwing, and the partner editor''s Send /' || chr(10) ||
+'  Remove / PDF buttons are can_send / can_edit / can_doc.' || chr(10) || chr(10);
+
+  update public.agent_memory
+     set body = replace(v_body, v_anchor, v_new || v_anchor),
+         version = version + 1,
+         updated_at = now()
+   where section = 'protected_tests';
+end $m$;

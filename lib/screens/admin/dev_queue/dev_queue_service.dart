@@ -124,6 +124,15 @@ class DevQueueService {
   Future<Map<String, dynamic>> runnerBoot({int limit = 12}) async =>
       _asMap(await _c.rpc('runner_boot_status', params: {'p_limit': limit}));
 
+  /// CHANGE #916 — the regression guard, which until now had no surface at
+  /// all: its only way to reach Om was to file an urgent "RG red after #N"
+  /// command. Verdict, the recent runs in order, what the watcher will do
+  /// about a red and the guard alerts of the last day are all built by
+  /// `rg_guard_card()`; the section renders them in payload order. Read-only —
+  /// it never runs the guard, so opening the screen costs no catalogue scan.
+  Future<Map<String, dynamic>> guardCard({int runs = 8}) async =>
+      _asMap(await _c.rpc('rg_guard_card', params: {'p_runs': runs}));
+
   /// CHANGE #404 — is masked calling actually on, and what is still missing
   /// before real calls flow. Render-ready: every word and tone on the card is
   /// built by this RPC.

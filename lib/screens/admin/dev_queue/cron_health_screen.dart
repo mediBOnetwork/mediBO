@@ -7,6 +7,7 @@ import 'build_lane_section.dart';
 import 'masked_calling_section.dart';
 import 'runner_boot_section.dart';
 import 'db_lane_section.dart';
+import 'guard_lane_section.dart';
 import 'deploy_lane_section.dart';
 import 'dev_queue_common.dart';
 import 'dev_queue_service.dart';
@@ -50,6 +51,10 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
   // CHANGE #530 — the boot doctor's verdict per runner. Same panel contract as
   // the lanes above: its own RPC, so a refused read never blanks the others.
   Map<String, dynamic> _boot = const {};
+  // CHANGE #916 — the regression guard. Same panel contract again, and the
+  // reason a suppressed "RG red" command hides nothing: before this the guard
+  // had no surface, so "no command" and "nothing wrong" looked identical.
+  Map<String, dynamic> _guard = const {};
   bool _loading = true;
   String? _error;
 
@@ -94,8 +99,15 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
       } catch (_) {
         // Same contract once more: a panel, never the page.
       }
+      Map<String, dynamic> rg = const {};
+      try {
+        rg = await _svc.guardCard();
+      } catch (_) {
+        // Same contract once more: a panel, never the page.
+      }
       if (!mounted) return;
       setState(() {
+        _guard = rg;
         _boot = rb;
         _db = db;
         _lane = lane;
@@ -142,6 +154,17 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
         RenderLog.write(
           'c530_runner_boot_rows',
           '${((_boot['runners'] as List?) ?? const []).length}',
+        );
+        // CHANGE #916 — painted-proof for the regression guard, same contract
+        // as the lanes: 'ok' only when the backend answered AND the section
+        // drew its payload.
+        RenderLog.write(
+          'c916_rg_guard',
+          _guard['ok'] == true ? 'ok' : (_guard.isEmpty ? 'absent' : 'refused'),
+        );
+        RenderLog.write(
+          'c916_rg_guard_sections',
+          '${((_guard['sections'] as List?) ?? const []).length}',
         );
         RenderLog.write('c273_cron_tasks', '${tasks.length}');
         // The before/after report is the command's deliverable, so it gets its
@@ -272,6 +295,14 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
                     if (_boot.isNotEmpty) ...[
                       SizedBox(height: Ds.space.x24),
                       RunnerBootSection(data: _boot),
+                    ],
+                    // CHANGE #916 — and its own condition once more: the
+                    // regression guard is the fifth panel, and the surface
+                    // that lets the watcher stay quiet about a churning red
+                    // without anything being hidden.
+                    if (_guard.isNotEmpty) ...[
+                      SizedBox(height: Ds.space.x24),
+                      GuardLaneSection(data: _guard),
                     ],
                     SizedBox(height: Ds.space.x16),
                     _tickCard(tick),

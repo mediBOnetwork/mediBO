@@ -54,6 +54,8 @@ Map<String, dynamic> _row({
   String outcomeLabel = '',
   String tone = 'warn',
   bool canClose = true,
+  String stageChip = '',
+  Map<String, dynamic>? link,
   Map<String, dynamic>? action,
 }) =>
     {
@@ -68,6 +70,9 @@ Map<String, dynamic> _row({
       'status_label': statusLabel,
       'outcome_label': outcomeLabel,
       'tone': tone,
+      'stage_chip': stageChip,
+      'link': link ??
+          const {'has': false, 'label': 'Open', 'route': ''},
       'close_label': 'Close',
       'can_close': canClose,
       'next_action': action ??
@@ -125,6 +130,8 @@ final _rows = <Map<String, dynamic>>[
     slaLabel: '3h past deadline',
     ownerLabel: 'Owner: mediBO admin',
     tone: 'warn',
+    stageChip: 'No stage',
+    link: const {'has': true, 'label': 'Open', 'route': 'wa_ops'},
     action: const {
       'has': true,
       'kind': 'rpc',
@@ -145,6 +152,8 @@ final _rows = <Map<String, dynamic>>[
     ownerLabel: 'Owner: Jai Mahakal Medical And Surgical',
     tone: 'bad',
     canClose: false,
+    stageChip: 'Stage: Count',
+    link: const {'has': true, 'label': 'Open', 'route': 'warehouse'},
     action: const {
       'has': true,
       'kind': 'route',
@@ -462,5 +471,80 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(asked, [null, 'dispute_open', null]);
+  });
+
+  // ── CHANGE #470 ───────────────────────────────────────────────────────────
+  //
+  // The register row asked for one queue over EVERY flow, and two of its
+  // fields are new: the STAGE the thing is stuck at, and a one-tap link to the
+  // exact screen that fixes it. Both are backend strings. What is held down:
+  //
+  //   9.  The stage chip prints VERBATIM. 'Stage: Count' is the backend's
+  //       sentence built from sla_stage.label — the screen never title-cases a
+  //       stage_key and never derives a stage from the reason.
+  //   10. A reason with no stage still says so in the backend's words, and a
+  //       row that sent no chip at all draws nothing rather than a placeholder.
+  //   11. The link is offered ONLY where the action cannot already reach the
+  //       screen. kind:'route' IS the link (the backend resolves both from one
+  //       field), so a second button there would be the same tap twice.
+  //   12. Tapping the link navigates the backend's route and calls no RPC.
+
+  testWidgets('9 — the stage chip prints verbatim, never derived',
+      (tester) async {
+    await _pump(tester, ExceptionsScreen(
+      queueRpc: ({String? reason, String status = 'open'}) async => _payload(),
+    ));
+
+    expect(find.text('Stage: Count'), findsOneWidget);
+    expect(find.text('No stage'), findsOneWidget);
+    // The reason label is 'Count mismatch'; nothing on the screen turned the
+    // stage_key 'count' into a chip by itself.
+    expect(find.text('Count'), findsNothing);
+  });
+
+  testWidgets('10 — a row that sent no stage chip draws no chip at all',
+      (tester) async {
+    await _pump(tester, ExceptionsScreen(
+      queueRpc: ({String? reason, String status = 'open'}) async => _payload(),
+    ));
+
+    expect(
+        find.byKey(const Key(
+            'exc_stage_dispute_open:aaaaaaaa-0690-4690-8690-aaaaaaaaaaaa')),
+        findsNothing);
+    expect(find.byKey(const Key('exc_stage_count_variance:b8d20334')),
+        findsOneWidget);
+  });
+
+  testWidgets('11 — the link appears only where the action is not already a route',
+      (tester) async {
+    await _pump(tester, ExceptionsScreen(
+      queueRpc: ({String? reason, String status = 'open'}) async => _payload(),
+    ));
+
+    // kind:'rpc' — retrying the send never reached wa_ops before.
+    expect(find.byKey(const Key('exc_link_wa_send_failed:8799')), findsOneWidget);
+    // kind:'route' — the action button already goes to the warehouse.
+    expect(find.byKey(const Key('exc_link_count_variance:b8d20334')), findsNothing);
+  });
+
+  testWidgets('12 — tapping the link navigates the backend route, calls no RPC',
+      (tester) async {
+    final routes = <String>[];
+    var rpcCalls = 0;
+    await _pump(tester, ExceptionsScreen(
+      queueRpc: ({String? reason, String status = 'open'}) async => _payload(),
+      actionRpc: (id) async {
+        rpcCalls += 1;
+        return {'ok': true, 'message': ''};
+      },
+      onNavigate: routes.add,
+    ));
+
+    await tester.tap(find.byKey(const Key('exc_link_wa_send_failed:8799')));
+    await tester.pumpAndSettle();
+
+    expect(routes, ['wa_ops']);
+    expect(rpcCalls, 0);
   });
 }

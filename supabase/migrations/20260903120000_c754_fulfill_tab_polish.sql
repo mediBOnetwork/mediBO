@@ -625,3 +625,9 @@ $body$,
   'CHANGE #754 — one screen is registered under one tab bar only.')
 on conflict (name) do update
   set body = excluded.body, enabled = excluded.enabled, note = excluded.note;
+
+-- Supabase's default privileges hand every new function an EXPLICIT grant to
+-- `anon`, so revoking PUBLIC is not enough: the anon key ships inside the web
+-- bundle and the APK. This RPC reads admin settings and already refuses a
+-- non-admin, but a tokenless caller has no business reaching it at all.
+revoke execute on function public.supplier_toggle_chips() from anon;

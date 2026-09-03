@@ -20,6 +20,7 @@ import '../admin/admin_fulfillment_screen_web.dart';
 import '../admin/admin_supplier_screen_web.dart';
 import '../admin/order_alerts_screen.dart' show OrderAlertCard;
 import 'partner_statement_screen.dart';
+import 'zone_pnl_screen.dart';
 import 'partner_expense_screen.dart';
 import 'partner_staff_screen.dart';
 import 'partner_tasks_screen.dart';
@@ -105,6 +106,10 @@ Widget? partnerDestination(String routeKey, {List<dynamic>? tabs}) {
     // so a grant can govern the tab that had no key at all.
     case 'disputes':        return AdminFulfillmentScreen(initialTab: 4, allowedTabs: allowed);
     case 'settlement':      return const PartnerStatementScreen();
+    // CHANGE #694 — the same Zone P&L screen the office reads, zone-clamped:
+    // zone_pnl() resolves the partner's own zone from its row and filters the
+    // lines by pnl_line_type.partner_visible, so this door needs no argument.
+    case 'partner_zone_pnl': return const ZonePnlScreen();
     default:                return null;
   }
 }

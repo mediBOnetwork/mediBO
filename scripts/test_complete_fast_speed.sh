@@ -21,6 +21,17 @@
 #
 # Exit 0 both green · 1 a guard failed · 2 backend unreachable (never treated as
 # red — an unreachable database must not wedge the deploy lane).
+#
+# CHANGE #956 — "unreachable" used to mean ONLY an empty or unparseable reply.
+# PostgREST's own failures are perfectly valid JSON:
+#     {"code":"PGRST002","message":"Could not query the database for the schema
+#      cache. Retrying."}
+# so `.ok` was simply absent, the guard read RED, and the deploy aborted. On
+# 2026-09-03 that killed two consecutive batches — CHANGE #1071 and #1072 —
+# while the DATABASE was healthy (24 of 60 connections, psql instant) and the
+# guard passed on the very next manual run. The transport was down, not the
+# feature. A PostgREST error code, or a message naming a contention/transport
+# failure, is now retried and then reported as UNREACHABLE, never as red.
 set -uo pipefail
 
 DEVCMD="${DEVCMD:-$HOME/mediBO-runner/devcmd.sh}"
@@ -28,12 +39,43 @@ GUARDS=(c641_complete_fast_under_2s c641_no_rg_in_http_rpcs)
 
 [ -x "$DEVCMD" ] || { echo "complete_fast probe: devcmd not found at $DEVCMD — UNREACHABLE"; exit 2; }
 
+# A reply that is the TRANSPORT talking, not the guard. Kept in step with
+# public._journey_contention_phrase(), which classifies the same sentences for
+# journeys (dev_journey_runs) and QA (qa_report).
+is_transport_error() {
+  local body="$1"
+  case "$(jq -r '.code // ""' <<<"$body")" in PGRST*) return 0;; esac
+  local msg
+  msg="$(jq -r '((.message // "") + " " + (.error // "") + " " + (.details // "")) | ascii_downcase' <<<"$body")"
+  case "$msg" in
+    *"schema cache"*|*"could not query the database"*|*"lock timeout"*|\
+    *"statement timeout"*|*"deadlock detected"*|*"too many clients"*|\
+    *"remaining connection slots"*|*"server closed the connection"*|\
+    *"terminating connection due to"*|*"connection refused"*|\
+    *"connection reset by peer"*|*"service unavailable"*|*"gateway"*) return 0;;
+  esac
+  return 1
+}
+
 rc=0
 for g in "${GUARDS[@]}"; do
-  out="$("$DEVCMD" rpc rg_run_behavior "$(printf '{"p_name":"%s"}' "$g")" 2>/dev/null)"
-  if [ -z "$out" ] || ! jq -e . >/dev/null 2>&1 <<<"$out"; then
-    echo "  $g: UNREACHABLE (no reply)"; exit 2
-  fi
+  out=''
+  # Three tries: a schema-cache stall clears in seconds, and one unlucky poll
+  # must not cost a whole batch's build.
+  for attempt in 1 2 3; do
+    out="$("$DEVCMD" rpc rg_run_behavior "$(printf '{"p_name":"%s"}' "$g")" 2>/dev/null)"
+    if [ -z "$out" ] || ! jq -e . >/dev/null 2>&1 <<<"$out"; then
+      [ "$attempt" -lt 3 ] && { sleep 10; continue; }
+      echo "  $g: UNREACHABLE (no reply after $attempt tries)"; exit 2
+    fi
+    if is_transport_error "$out"; then
+      [ "$attempt" -lt 3 ] && { sleep 10; continue; }
+      echo "  $g: UNREACHABLE — the transport answered, the guard did not:" \
+           "$(jq -r '.code // ""' <<<"$out") $(jq -r '.message // .error // ""' <<<"$out")"
+      exit 2
+    fi
+    break
+  done
   if [ "$(jq -r '.ok // false' <<<"$out")" = "true" ]; then
     echo "  $g: GREEN"
   else

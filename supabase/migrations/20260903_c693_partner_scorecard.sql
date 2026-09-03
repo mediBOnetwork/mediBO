@@ -1467,7 +1467,19 @@ values
   ('partner_scorecard', 'partner.scorecard', 'feature', 'home_shell',
    'CHANGE #693 — same lookup; the partner sees its own card, admin sees the ranked list.')
 on conflict (route_key, feature_key) do update set
-  handled_by = excluded.handled_by, note = excluded.note, is_active = true;
+  handled_by = excluded.handled_by, note = excluded.note;
+
+-- …and so does the ROUTE row. scripts/gen_registered_routes.sh mirrors every
+-- ACTIVE surface_route into test/protected/registered_routes.dart, and
+-- admin_nav_reachability_test then demands a Dart door for each one. Declaring
+-- a route whose door has not shipped turns the next mirror regeneration —
+-- anybody's — into a red build. Activated with the tiles, in one step, once
+-- shellExtraRouteScreen() knows both keys.
+update public.surface_route set is_active = false
+ where route_key in ('partner_scorecards','partner_scorecard')
+   and not exists (select 1 from public.app_settings
+                    where key = 'c693_scorecard_tiles_live'
+                      and value::text = 'true');
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 18. THE NIGHTLY SNAPSHOT. The payout side already rides

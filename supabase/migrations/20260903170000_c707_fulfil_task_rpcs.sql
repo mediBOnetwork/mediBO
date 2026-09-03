@@ -100,13 +100,17 @@ $fn$;
 create or replace function public._c707_task_block(p_task_id bigint)
 returns jsonb
 language plpgsql stable security definer set search_path to 'public' as $fn$
-declare t record; w record; v_qty text;
+-- A plain text variable, NOT a record. An unassigned task never selects the
+-- worker row, and plpgsql evaluates coalesce(w.name, ...) even when the CASE
+-- branch needing it is not taken -- so a record here raises "record w is not
+-- assigned yet" on the commonest row the board draws.
+declare t record; v_name text; v_qty text;
 begin
   select * into t from public.fulfil_task where id = p_task_id;
   if not found then return jsonb_build_object('has', false); end if;
   if t.worker_id is not null then
-    select coalesce(nullif(btrim(coalesce(display_name,'')),''), identity) as name
-      into w from public.partner_worker where id = t.worker_id;
+    select coalesce(nullif(btrim(coalesce(display_name,'')),''), identity)
+      into v_name from public.partner_worker where id = t.worker_id;
   end if;
 
   v_qty := case when coalesce(t.qty_handled,0) = 0 then public._c('ft.qty_none')
@@ -121,9 +125,9 @@ begin
     'worker_id',      t.worker_id,
     'worker_label',   case when t.worker_id is null then public._c('ft.unassigned')
                            when t.source = 'auto'
-                             then public._cf('ft.assigned_auto', jsonb_build_object('worker', w.name))
-                           else public._cf('ft.assigned_to', jsonb_build_object('worker', w.name)) end,
-    'worker_name',    coalesce(w.name, ''),
+                             then public._cf('ft.assigned_auto', jsonb_build_object('worker', v_name))
+                           else public._cf('ft.assigned_to', jsonb_build_object('worker', v_name)) end,
+    'worker_name',    coalesce(v_name, ''),
     'worker_tone',    case when t.worker_id is null then 'warning' else 'success' end,
     'source',         t.source,
     'source_label',   case t.source when 'auto' then public._c('ft.source_auto')
@@ -182,7 +186,7 @@ begin
     end if;
   end loop;
 
-  select coalesce(jsonb_agg(x order by x.sort_order, x.entered_at), '[]'::jsonb)
+  select coalesce(jsonb_agg(q.x order by q.sort_order, q.entered_at), '[]'::jsonb)
     into v_rows
   from (
     select st.sort_order,
@@ -470,7 +474,7 @@ create or replace function public.fulfil_task_finish(
 returns jsonb
 language plpgsql security definer set search_path to 'public' as $fn$
 declare
-  t record; w record; v_worker bigint := public.my_fulfil_worker_id(); v_override boolean := false;
+  t record; v_name text; v_worker bigint := public.my_fulfil_worker_id(); v_override boolean := false;
 begin
   select * into t from public.fulfil_task where id = p_task_id;
   if not found then
@@ -483,15 +487,15 @@ begin
   end if;
 
   if t.worker_id is not null then
-    select coalesce(nullif(btrim(coalesce(display_name,'')),''), identity) as name
-      into w from public.partner_worker where id = t.worker_id;
+    select coalesce(nullif(btrim(coalesce(display_name,'')),''), identity)
+      into v_name from public.partner_worker where id = t.worker_id;
   end if;
 
   if t.worker_id is null or v_worker is distinct from t.worker_id then
     if not public._c707_can('write') then
       return jsonb_build_object('ok',false,'error','not_yours','tone','danger',
         'message', public._cf('ft.err_not_yours',
-                     jsonb_build_object('worker', coalesce(w.name, public._c('ft.unassigned')))));
+                     jsonb_build_object('worker', coalesce(v_name, public._c('ft.unassigned')))));
     end if;
     v_override := (t.worker_id is not null);
   end if;
@@ -510,9 +514,9 @@ begin
     perform public.partner_audit('partner.fulfil_tasks','task_override_close',
       jsonb_build_object('task_id', p_task_id, 'assigned_worker', t.worker_id,
                          'reason', p_override_reason,
-                         'summary', 'Closed ' || t.stage_key || ' assigned to ' || coalesce(w.name,'—')));
+                         'summary', 'Closed ' || t.stage_key || ' assigned to ' || coalesce(v_name,'—')));
     return jsonb_build_object('ok',true,'tone','warning','override',true,
-      'message', public._cf('ft.override_ok', jsonb_build_object('worker', coalesce(w.name,'—'))),
+      'message', public._cf('ft.override_ok', jsonb_build_object('worker', coalesce(v_name,'—'))),
       'task', public._c707_task_block(p_task_id));
   end if;
 

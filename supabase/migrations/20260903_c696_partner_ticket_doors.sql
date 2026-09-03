@@ -696,22 +696,42 @@ on conflict (slug) do update set
   default_target = excluded.default_target, decimals = excluded.decimals,
   sort_order = excluded.sort_order, active = true;
 
--- ── the door, DECLARED (#570 / #821) ────────────────────────────────────────
+-- ── the door, DECLARED (#570 / #821) ───────────────────────────────────────
+--
+-- Found before deploy by asking nav_registry() as each role instead of assuming:
+-- the registry row was copied from #713's partner.order_threads, and that row
+-- appears on NOBODY's dashboard. nav_registry() has two branches and the copied
+-- row satisfies neither:
+--   * the office branch takes only `feature_key like 'admin.%'` — a key in the
+--     `partner.` namespace is filtered out however the grants read;
+--   * the partner branch takes only a row whose roles_allowed CONTAINS
+--     'partner' — and the copied row allowed {admin,super_admin}.
+-- So the feature had a working backend, a declared route and no way in. That is
+-- the exact "no orphans either way" failure §11 exists for.
+--
+-- The shape that works is admin.feedback's (#697/#821): ONE row, in the admin
+-- namespace, with 'partner' in roles_allowed and partner_eligible — the office
+-- branch takes it on the namespace, the partner branch on the role, and the
+-- per-partner grant still decides what a partner may do.
+
+-- The wrong key, retired. It never shipped: it was created minutes ago in this
+-- same command and no grant, pin or usage row can predate it.
+delete from public.surface_route where feature_key = 'partner.issues';
+delete from public.access_role_default where feature_key = 'partner.issues';
+delete from public.feature_registry where feature_key = 'partner.issues';
+
 insert into public.surface_route (route_key, feature_key, kind, handled_by, note, is_active)
 values
-  ('partner_issues', 'partner.issues', 'feature', 'home_shell',
+  ('partner_issues', 'admin.partner_issues', 'feature', 'home_shell',
    'CHANGE #696 - the mediBO <-> partner escalation channel. Opened by '
    'shellExtraRouteScreen() in lib/screens/shell/shell_extra_routes.dart. '
-   'partner_ticket_list() answers a partner with their OWN tickets and the '
+   'partner_ticket_list() answers a partner with their OWN issues and the '
    'office with every zone, and refuses anyone who is neither, so the door is '
    'not the guard.',
    true)
 on conflict (route_key, feature_key) do update
-   set kind       = excluded.kind,
-       handled_by = excluded.handled_by,
-       note       = excluded.note,
-       is_active  = excluded.is_active,
-       updated_at = now();
+   set kind = excluded.kind, handled_by = excluded.handled_by,
+       note = excluded.note, is_active = excluded.is_active, updated_at = now();
 
 insert into public.feature_registry
   (feature_key, label, group_label, icon_key, route_key, sort_order, owner,
@@ -719,41 +739,33 @@ insert into public.feature_registry
    roles_allowed, deep_link, search_terms, description,
    partner_feature_key, canonical_key, badge_source, badge_noun)
 values
-  ('partner.issues', 'Partner issues', 'Support', 'support_agent',
-   'partner_issues', 7, 'partner', true, 'write', true, 'orders', 'dashboard',
-   '{admin,super_admin}', '/admin/go/partner_issues',
+  ('admin.partner_issues', 'Partner issues', 'Support', 'support_agent',
+   'partner_issues', 8, 'partner', true, 'write', true, 'orders', 'dashboard',
+   '{admin,super_admin,partner}', '/admin/go/partner_issues',
    'issue ticket escalation partner complaint sla breach settlement query count dispute app bug raise',
    'Issues between mediBO and a zone partner - raised either way, with an SLA clock, a timeline and a closing outcome.',
-   'partner.issues', 'partner.issues',
+   'admin.partner_issues', 'admin.partner_issues',
    'partner_issues', 'issues waiting')
 on conflict (feature_key) do update
-  set label          = excluded.label,
-      group_label    = excluded.group_label,
-      route_key      = excluded.route_key,
-      icon_key       = excluded.icon_key,
-      sort_order     = excluded.sort_order,
-      owner          = excluded.owner,
+  set label = excluded.label, group_label = excluded.group_label,
+      route_key = excluded.route_key, icon_key = excluded.icon_key,
+      sort_order = excluded.sort_order, owner = excluded.owner,
       partner_eligible = excluded.partner_eligible,
-      default_access = excluded.default_access,
-      is_active      = true,
-      category       = excluded.category,
-      surface        = excluded.surface,
-      roles_allowed  = excluded.roles_allowed,
-      deep_link      = excluded.deep_link,
-      search_terms   = excluded.search_terms,
-      description    = excluded.description,
-      badge_source   = excluded.badge_source,
-      badge_noun     = excluded.badge_noun;
+      default_access = excluded.default_access, is_active = true,
+      category = excluded.category, surface = excluded.surface,
+      roles_allowed = excluded.roles_allowed, deep_link = excluded.deep_link,
+      search_terms = excluded.search_terms, description = excluded.description,
+      badge_source = excluded.badge_source, badge_noun = excluded.badge_noun;
 
 -- A NEW feature_registry row is seeded can_view=false for admin and partner
--- (#713 shipped a declared door nobody but the office could open). These are
--- the grants that make the door real.
+-- (#713 shipped a declared door nobody but the office could open). Write for
+-- all three: raising, replying and closing are the whole feature, and what a
+-- partner may see is still clamped by partner_ticket_list() to their own zone.
 insert into public.access_role_default (role, feature_key, can_view, can_write)
 values
-  ('admin',       'partner.issues', true, true),
-  ('partner',     'partner.issues', true, true),
-  ('super_admin', 'partner.issues', true, true)
+  ('admin',       'admin.partner_issues', true, true),
+  ('partner',     'admin.partner_issues', true, true),
+  ('super_admin', 'admin.partner_issues', true, true)
 on conflict (role, feature_key) do update
-  set can_view = excluded.can_view,
-      can_write = excluded.can_write,
+  set can_view = excluded.can_view, can_write = excluded.can_write,
       updated_at = now();

@@ -1871,3 +1871,77 @@ begin
   return exists (select 1 from supplier_profiles where id = d.owner_id and user_id = auth.uid());
 end $$;
 grant execute on function public.kyc_verify_scope_ok(uuid) to authenticated;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 17. THE JOURNEY THE QA BLOCKER BECAME (CHANGE #706)
+--
+-- Rule 14.4: a bug finding retires a CLASS, not the row it was photographed on.
+-- The class here is "a privileged KYC RPC is reachable from a client role",
+-- which is what `create or replace function` produces every single time unless
+-- the author remembers to REVOKE. So this asserts the whole set by NAME PATTERN
+-- rather than the five functions that happened to be wrong: any future
+-- kyc_ocr_*, kyc_verify_doc or kyc_identity_claim_set that ships with the
+-- default PUBLIC grant fails this journey the day it lands.
+create or replace function public._journey_qa_706_473()
+returns jsonb
+language plpgsql security definer set search_path to 'public' as $$
+declare
+  v_open    text[] := '{}';
+  v_closed  int := 0;
+  v_service int := 0;
+  r record;
+  v_scoped boolean;
+begin
+  for r in
+    select p.oid,
+           p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' as sig
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public'
+       and (p.proname like 'kyc\_ocr\_%'
+            or p.proname in ('kyc_verify_doc','kyc_identity_claim_set'))
+  loop
+    if has_function_privilege('anon', r.oid, 'EXECUTE')
+       or has_function_privilege('authenticated', r.oid, 'EXECUTE') then
+      v_open := v_open || r.sig;
+    else
+      v_closed := v_closed + 1;
+    end if;
+    if has_function_privilege('service_role', r.oid, 'EXECUTE') then
+      v_service := v_service + 1;
+    end if;
+  end loop;
+
+  -- The read half stays open to a signed-in user, so it must be SCOPED instead:
+  -- kyc_verify_panel and kyc_verify_evaluate take a doc_id, and without the
+  -- scope test any pharmacy could read another account's licence.
+  v_scoped := (to_regprocedure('public.kyc_verify_scope_ok(uuid)') is not null)
+          and (select prosrc like '%kyc_verify_scope_ok%'
+                 from pg_proc where oid = 'public.kyc_verify_panel(uuid)'::regprocedure)
+          and (select prosrc like '%kyc_verify_scope_ok%'
+                 from pg_proc where oid = 'public.kyc_verify_evaluate(uuid)'::regprocedure);
+
+  return jsonb_build_object(
+    'status', case when array_length(v_open,1) is null
+                    and v_closed >= 5 and v_service >= 5 and v_scoped
+                   then 'passed' else 'failed' end,
+    'evidence', jsonb_build_object('db_proof',
+      'privileged KYC rpcs closed to anon+authenticated=' || v_closed::text ||
+      ' | still reachable by a client role=' ||
+        coalesce(nullif(array_to_string(v_open, ', '), ''), 'none') ||
+      ' | service_role keeps its own access=' || v_service::text ||
+      ' | the two doc_id readers are scope-tested=' || v_scoped::text));
+end $$;
+
+-- The journey arrived as a stub reading "TODO implement before completing
+-- #706"; say what it actually proves, so the library is readable.
+update public.dev_journeys
+   set steps = jsonb_build_array(
+         'Enumerate every kyc_ocr_*, kyc_verify_doc and kyc_identity_claim_set function',
+         'Assert none is EXECUTE-able by anon or authenticated (the default PUBLIC grant that create-or-replace leaves behind)',
+         'Assert service_role still is, so the kyc-verify edge function keeps working',
+         'Assert kyc_verify_panel and kyc_verify_evaluate go through kyc_verify_scope_ok, since they stay open to a signed-in caller and take a doc_id'),
+       assertions = jsonb_build_array(
+         'no privileged KYC RPC is reachable from a client role',
+         'service_role access is intact',
+         'the two doc_id readers are scope-tested')
+ where name = 'qa-706-473';

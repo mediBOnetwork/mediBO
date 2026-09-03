@@ -13,8 +13,26 @@
 -- ═══════════════════════════════════════════════════════════════════════════
 
 -- ── 1. Licence / KYC expiry columns (additive; #705 builds the upload flow) ──
-alter table public.supplier_profiles add column if not exists dl_expiry    date;
-alter table public.supplier_profiles add column if not exists gstin_expiry date;
+--
+-- `add column if not exists` still takes an ACCESS EXCLUSIVE lock to discover
+-- there is nothing to do, and supplier_profiles is one of the busiest tables on
+-- the box: re-running this file while the fleet is building died on a lock
+-- timeout at line 16, before a single function was replaced. Asking the
+-- catalogue first costs nothing and makes the whole file re-runnable under
+-- load, which is the point of an idempotent migration.
+do $c753cols$
+begin
+  if not exists (select 1 from information_schema.columns
+                  where table_schema='public' and table_name='supplier_profiles'
+                    and column_name='dl_expiry') then
+    alter table public.supplier_profiles add column dl_expiry date;
+  end if;
+  if not exists (select 1 from information_schema.columns
+                  where table_schema='public' and table_name='supplier_profiles'
+                    and column_name='gstin_expiry') then
+    alter table public.supplier_profiles add column gstin_expiry date;
+  end if;
+end $c753cols$;
 
 -- ── 2. Tab registry — the supplier page's tab list is DATA, not Dart ────────
 create table if not exists public.admin_supplier_tab (
@@ -1124,10 +1142,22 @@ begin
   return new;
 end $$;
 
-drop trigger if exists trg_753_spn_history on public.supplier_profiles;
-create trigger trg_753_spn_history
-  after update of "SPN" on public.supplier_profiles
-  for each row execute function public.trg_753_spn_history();
+-- Same lock story as the columns above: dropping and recreating a trigger takes
+-- ACCESS EXCLUSIVE on supplier_profiles, and re-running this file while the
+-- fleet is building timed out here too. Skip the churn when the trigger is
+-- already the one we want.
+do $c753trg$
+begin
+  if not exists (select 1 from pg_trigger
+                  where tgrelid = 'public.supplier_profiles'::regclass
+                    and tgname = 'trg_753_spn_history'
+                    and not tgisinternal) then
+    drop trigger if exists trg_753_spn_history on public.supplier_profiles;
+    create trigger trg_753_spn_history
+      after update of "SPN" on public.supplier_profiles
+      for each row execute function public.trg_753_spn_history();
+  end if;
+end $c753trg$;
 
 -- ── 17. One month of metrics for one supplier ─────────────────────────────
 create or replace function public._sup753_metrics(p_supplier_id uuid, p_month date)
@@ -2739,7 +2769,19 @@ begin
           'arg',   'p_company')),
       jsonb_build_object('key','automatch','label',public._c('admin_sup2.c_automatch'),'tone','neutral',
         'rpc','admin_supplier_company_automatch',
-        'args', jsonb_build_object('p_supplier_id', sp.id)))),
+        'args', jsonb_build_object('p_supplier_id', sp.id)),
+      -- Bulk link: the paste is split in SQL, so "one per line or comma
+      -- separated" stays a backend rule rather than a Dart regex.
+      jsonb_build_object('key','bulk','label',public._c('admin_sup2.c_bulk'),'tone','neutral',
+        'rpc','admin_supplier_company_bulk_add',
+        'args', jsonb_build_object('p_supplier_id', sp.id),
+        'prompt', jsonb_build_object(
+          'title', public._c('admin_sup2.c_bulk_title'),
+          'hint',  public._c('admin_sup2.c_bulk_hint'),
+          'ok',    public._c('admin_sup2.c_bulk_ok'),
+          'cancel',public._c('admin_sup2.c_cancel'),
+          'multiline', true,
+          'arg',   'p_text')))),
     jsonb_build_object('kind','chips','key','filter','arg','p_filter','chips', jsonb_build_array(
       jsonb_build_object('key','all',     'label',public._c('admin_sup2.c_all'),     'count',v_total,           'active',v_f='all'),
       jsonb_build_object('key','unmapped','label',public._c('admin_sup2.c_unmapped'),'count',v_total - v_mapped,'active',v_f='unmapped'),

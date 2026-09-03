@@ -39,24 +39,105 @@ String _read(String path) {
 void main() {
   final navSrc = _read('lib/screens/admin/admin_nav_entries.dart');
   final shellSrc = _read('lib/screens/home_shell.dart');
+  final shardSrc = _read('lib/screens/shell/shell_extra_routes.dart');
 
-  /// Every `case 'x':` the router handles.
-  final handled = RegExp(r"case\s+'([a-z0-9_]+)'\s*:")
+  /// Every `case 'x':` the router handles directly.
+  final shellCases = RegExp(r"case\s+'([a-z0-9_]+)'\s*:")
       .allMatches(shellSrc)
       .map((m) => m.group(1)!)
       .toSet();
 
+  /// CHANGE #821 — the doors the shell does NOT hold a `case` for.
+  ///
+  /// This is the half that shipped the bug. `home_shell.dart` is capped at
+  /// 2,000 lines by its own guard, so since #570 a screen is registered as an
+  /// arm of `shellExtraRouteScreen` in shell/shell_extra_routes.dart and the
+  /// shell keeps ONE `case _ when shellExtraRouteScreen(route) != null`
+  /// lookup. This test only ever read `case` labels, so a shard-routed door
+  /// read as no door at all: adding 'feedback' to the mirror failed the suite
+  /// with "renders a tile that does nothing on tap" while
+  /// `'feedback' => const AdminFeedbackScreen()` sat five lines away. A gate
+  /// that punishes the correct wiring is a gate nobody can use, which is why
+  /// the mirror was 31 routes behind the registry by #821 and the Feedback
+  /// desk shipped through it.
+  final shardArms = RegExp(r"'([a-z0-9_]+)'\s*=>")
+      .allMatches(shardSrc)
+      .map((m) => m.group(1)!)
+      .toSet();
+
+  /// ...and the routes whose door is DATA, not Dart: `shellOpenFulfillStage`
+  /// sends them to AdminFulfillmentScreen on the stage the backend pairs them
+  /// with, so there is deliberately no `case` and no arm to find. The list is
+  /// generated from that same pairing (scripts/gen_registered_routes.sh).
+  final handled = <String>{
+    ...shellCases,
+    ...shardArms,
+    ...kFulfillRedirectedRoutes,
+  };
+
   test('the router still has a switch (the regex still matches)', () {
-    expect(handled, isNotEmpty,
+    expect(shellCases, isNotEmpty,
         reason: 'no case labels found — _handleAdminNav changed shape');
   });
 
-  test('every registered feature has a router case', () {
+  test('every registered feature has a door', () {
     final orphans =
         kRegisteredAdminRoutes.toSet().difference(handled).toList()..sort();
     expect(orphans, isEmpty,
         reason: 'these registry routes render a tile that does nothing on '
             'tap: $orphans');
+  });
+
+  // ── CHANGE #821 ─────────────────────────────────────────────────────────
+  // The three properties the Feedback desk needed and did not have. Om's
+  // report named the symptom ("the tile has no door"); these hold the CLASS.
+
+  test('CHANGE #821 — a shard-routed door counts as a door', () {
+    // The regression this file shipped: 'feedback' is opened by
+    // shellExtraRouteScreen, not by a case, and the gate called it a dead tap.
+    expect(shardArms, contains('feedback'),
+        reason: 'the Feedback desk (#697) is opened by shell_extra_routes.dart');
+    expect(handled, contains('feedback'),
+        reason: 'a door in the shard is still a door — this is the exact '
+            'blindness that let #697 ship an unreachable tile');
+    expect(kRegisteredAdminRoutes, contains('feedback'),
+        reason: 'and the mirror must name it, or nothing is being checked');
+    // The shell reaches the shard through one lookup. If that goes, every arm
+    // in the shard becomes a dead tap at once.
+    expect(shellSrc, contains('shellExtraRouteScreen(route) != null'),
+        reason: 'the shell must keep its one lookup into the route shard');
+  });
+
+  test('CHANGE #821 — every shard arm and shell case is in the mirror', () {
+    // The other direction of drift: a door written in Dart that the mirror
+    // never hears about is a route no test can ever check. Only routes the
+    // registry actually ships are required — the shell also switches on keys
+    // that are not features (tabs, sub-screens), and those are not doors.
+    final declared = kRegisteredAdminRoutes.toSet();
+    final undeclaredArms = shardArms.difference(declared).toList()..sort();
+    expect(undeclaredArms, isEmpty,
+        reason: 'these shard routes open a screen that surface_route never '
+            'declared — regenerate with scripts/gen_registered_routes.sh '
+            'after adding the surface_route row: $undeclaredArms');
+  });
+
+  test('CHANGE #821 — the mirror is generated, not remembered', () {
+    // It drifted 31 routes behind the registry while it was hand-maintained,
+    // and that drift is what made the gate above vacuous. The header is the
+    // instruction the next command needs; the rg payload target
+    // c821_shell_doors is what makes the drift loud.
+    final src = _read('test/protected/registered_routes.dart');
+    expect(src, contains('scripts/gen_registered_routes.sh'),
+        reason: 'the mirror must name the script that regenerates it');
+    expect(src, contains('kFulfillRedirectedRoutes'),
+        reason: 'the backend-paired doors must be listed, or every fulfill '
+            'route reads as an orphan');
+    // A mirror this small means somebody hand-trimmed it back.
+    expect(kRegisteredAdminRoutes.length, greaterThan(60),
+        reason: 'the registry ships ~80 shell doors — a short list is a stale '
+            'list, and a stale list checks nothing');
+    expect(kRegisteredAdminRoutes.toSet(), hasLength(kRegisteredAdminRoutes.length),
+        reason: 'a duplicated route key means the file was hand-edited');
   });
 
   test('the profile dropdown is identity only — no feature list survives here',

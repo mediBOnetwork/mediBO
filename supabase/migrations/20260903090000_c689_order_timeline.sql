@@ -862,7 +862,7 @@ begin
     'events_empty',    public.uic('order_timeline.events_empty',''),
     'privacy_note',    case when v_access = 'customer'
                             then public.uic('order_timeline.privacy_note','') else '' end);
-end $function$
+end $function$;
 
 
 

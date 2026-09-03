@@ -1065,3 +1065,27 @@ $function$
 update public.access_role_default
    set can_view = true, can_write = false, updated_at = now()
  where feature_key = 'partner.ops_board' and role = 'admin';
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 15. PARTNER VISIBILITY — the grant that actually decides it
+--
+-- partner_permissions is the legacy mirror; access_effective reads access_grant
+-- (subject_kind='partner'), and a partner USER additionally needs the
+-- role='partner' default, because its formula is
+-- `coalesce(org, own, base) AND coalesce(own, base)`. Both, or the tab is
+-- invisible to exactly the people the spec named.
+-- ─────────────────────────────────────────────────────────────────────────────
+update public.access_role_default
+   set can_view = true, can_write = false, updated_at = now()
+ where feature_key = 'partner.ops_board' and role = 'partner';
+
+insert into public.access_grant (subject_kind, subject_id, feature_key, can_view, can_write, updated_by)
+select 'partner', rp.id::text, 'partner.ops_board', true, false, 'CHANGE #688'
+  from public.region_partners rp
+ where coalesce(rp.is_active, true)
+on conflict (subject_kind, subject_id, feature_key) do update set can_view = true;
+
+-- partner_rpc_allow rows land with clamp_ok=false; the refresh re-runs the
+-- per-function clamp audit, and until it does a partner is refused at the
+-- fence no matter what the matrix says.
+select public.partner_rpc_allow_refresh();

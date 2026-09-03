@@ -18,7 +18,9 @@
 import 'package:flutter/material.dart';
 
 import '../../design_tokens.dart';
+import '../../models/order_timeline_view.dart';
 import '../../widgets/delivery_proof_card.dart';
+import '../../widgets/order_event_timeline.dart';
 
 /// Maps the backend's tone word onto the token layer. An unknown tone renders
 /// neutral rather than throwing — a new tone from the backend must never white-
@@ -324,7 +326,26 @@ class _Centered extends StatelessWidget {
 class OpsOrderDetailView extends StatelessWidget {
   final Map<String, dynamic> payload;
 
-  const OpsOrderDetailView({super.key, required this.payload});
+  /// CHANGE #689 (feature_gaps #75) — the order_timeline() payload for the SAME
+  /// order. The SLA steps above answer "which stage is breaching"; this answers
+  /// "what actually happened, who did it, and who do I ring". Absent (the RPC
+  /// refused, or nobody has the matrix key) the block simply does not render —
+  /// the detail sheet is the ops board's, with or without it.
+  final Map<String, dynamic> timeline;
+
+  /// Runs one timeline action. Null on a surface that cannot act.
+  final TimelineActRunner? onTimelineAct;
+
+  /// Handed the fresh payload an action returned.
+  final void Function(Map<String, dynamic>)? onTimelineRefreshed;
+
+  const OpsOrderDetailView({
+    super.key,
+    required this.payload,
+    this.timeline = const {},
+    this.onTimelineAct,
+    this.onTimelineRefreshed,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -402,6 +423,17 @@ class OpsOrderDetailView extends StatelessWidget {
         DeliveryProofCard(
           proof: (payload['proof'] as Map?)?.cast<String, dynamic>() ?? const {},
         ),
+        // CHANGE #689 (feature_gaps #75) — and then the whole story: every
+        // event from every table, the actor on each one, and the one-tap
+        // action on the step this order is waiting on.
+        if (timeline.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x24),
+          OrderEventTimeline(
+            view: OrderTimelineView.from(timeline),
+            onAct: onTimelineAct,
+            onRefreshed: onTimelineRefreshed,
+          ),
+        ],
       ]),
     );
   }

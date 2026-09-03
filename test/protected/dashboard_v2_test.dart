@@ -38,8 +38,29 @@
 //      the caller opens the door the backend chose — never one Dart derived
 //      from `kind`.
 //
+// CHANGE #813 added four more, all of them the same rule in a new place:
+//
+//   7. Every number is a DOOR and a SHARE, and both are the backend's. A tap
+//      hands the metric row back with its own route_key/deep_link; a long press
+//      hands back `metric.share` — url and sentence composed in SQL. The trend
+//      arrow is `delta_arrow`, and the fixture ships a DOWN arrow on a POSITIVE
+//      delta, so any sign test in Dart draws the wrong one.
+//
+//   8. The needs-you queue carries FOUR states and colour carries nothing else:
+//      overdue, due today, cleared today, and merely open. The tone is the
+//      payload's; a row whose action has:false (a cleared one) offers no button.
+//
+//   9. Zone cards are a swipeable pager: one dot per card, and a card tap runs
+//      the backend's own {rpc,args} action rather than a route Dart guessed.
+//
+//  10. Loading is a SHAPE. The skeleton and the search sheet contain no
+//      CircularProgressIndicator at all — the spec's "no spinners" is a test,
+//      not a habit.
+//
 // No network, no Supabase, no goldens. Fixture mirrors a real dashboard_v2()
 // response taken off the live database on 2026-09-03.
+
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -66,6 +87,7 @@ Map<String, dynamic> _payload({
       'first_thing': '7 orders waiting for accept',
       'strip': {
         'title': 'Today',
+        'share_hint': 'Long-press a number to share it',
         // Deliberately NOT alphabetical, and money_out's tone contradicts the
         // sign of its delta.
         'metrics': [
@@ -80,6 +102,16 @@ Map<String, dynamic> _payload({
             'delta': 2,
             'delta_display': '+2 vs yesterday',
             'delta_tone': 'good',
+            'delta_arrow': 'up',
+            'route_key': 'customer_orders',
+            'deep_link': '/admin/go/fulfillment',
+            'can_open': true,
+            'share': {
+              'has': true,
+              'label': 'Share on WhatsApp',
+              'text': 'Orders received: two (+2 vs yesterday) · Raipur Zone',
+              'url': 'https://wa.me/?text=Orders%20received',
+            },
             'spark': [0, 1, 1, 2, 2, 0, 2],
           },
           {
@@ -93,6 +125,18 @@ Map<String, dynamic> _payload({
             'delta_display': '+₹4.2K vs yesterday',
             // Positive delta, WARN tone — money out rising is not good news.
             'delta_tone': 'warn',
+            // …and a DOWN arrow on a positive delta, so any sign test in Dart
+            // draws the wrong arrow and fails.
+            'delta_arrow': 'down',
+            'route_key': 'supplier_payment',
+            'deep_link': '',
+            'can_open': true,
+            'share': {
+              'has': true,
+              'label': 'Share on WhatsApp',
+              'text': 'Money out: ₹4.2K',
+              'url': 'https://wa.me/?text=Money%20out',
+            },
             'spark': [0, 0, 0, 0, 0, 0, 4200],
           },
         ],
@@ -226,6 +270,15 @@ Map<String, dynamic> _payload({
                 'zone_id': 2,
                 'zone_label': 'Bilaspur Zone',
                 'route_key': 'dashboard',
+                'is_current': false,
+                'action': {
+                  'has': true,
+                  'kind': 'rpc',
+                  'label': 'Show this zone',
+                  'rpc': 'admin_set_zone_scope',
+                  'args': {'p_zone_id': 2},
+                  'route': '',
+                },
                 'metrics': [
                   {
                     'key': 'orders_received',
@@ -234,10 +287,31 @@ Map<String, dynamic> _payload({
                   },
                 ],
               },
+              {
+                'zone_id': 3,
+                'zone_label': 'Durg Zone',
+                'route_key': 'dashboard',
+                'is_current': true,
+                'action': {
+                  'has': true,
+                  'kind': 'rpc',
+                  'label': 'Show this zone',
+                  'rpc': 'admin_set_zone_scope',
+                  'args': {'p_zone_id': 3},
+                  'route': '',
+                },
+                'metrics': [
+                  {
+                    'key': 'orders_received',
+                    'short_label': 'Received',
+                    'value_display': '4',
+                  },
+                ],
+              },
             ],
       },
       'updated_label': 'Updated 3:42 PM',
-      'refresh_ms': 60000,
+      'refresh_ms': 30000,
     };
 
 Future<void> _pump(
@@ -245,6 +319,7 @@ Future<void> _pump(
   Map<String, dynamic> payload, {
   void Function(Map<String, dynamic>)? onOpen,
   Future<void> Function(Map<String, dynamic>)? onAction,
+  void Function(Map<String, dynamic>)? onShare,
 }) async {
   // The card is a full dashboard head — taller than the 800x600 default
   // surface, so every row is on screen and tappable under test.
@@ -258,6 +333,7 @@ Future<void> _pump(
           payload: payload,
           onOpen: onOpen ?? (_) {},
           onAction: onAction ?? (_) async {},
+          onShare: onShare ?? (_) {},
         ),
       ),
     ),
@@ -560,6 +636,233 @@ void main() {
 
       expect(find.byKey(const Key('c812_search_empty')), findsOneWidget);
       expect(find.text('Type at least two characters.'), findsOneWidget);
+    });
+  });
+
+  group('CHANGE #813 — every number is a door and a share', () {
+    testWidgets('a tap hands back the metric row with its own target',
+        (tester) async {
+      final opened = <Map<String, dynamic>>[];
+      await _pump(tester, _payload(), onOpen: opened.add);
+
+      await tester.tap(
+          find.byKey(const Key('c813_metric_tap_orders_received')));
+      await tester.pumpAndSettle();
+
+      expect(opened, hasLength(1));
+      expect(opened.single['route_key'], 'customer_orders');
+      expect(opened.single['deep_link'], '/admin/go/fulfillment');
+    });
+
+    testWidgets('a long press hands back the payload share block, verbatim',
+        (tester) async {
+      final shared = <Map<String, dynamic>>[];
+      await _pump(tester, _payload(), onShare: shared.add);
+
+      await tester.longPress(
+          find.byKey(const Key('c813_metric_tap_money_out')));
+      await tester.pumpAndSettle();
+
+      expect(shared, hasLength(1));
+      // The sentence and the link are SQL's. Dart composes neither.
+      expect(shared.single['url'], 'https://wa.me/?text=Money%20out');
+      expect(shared.single['text'], 'Money out: ₹4.2K');
+    });
+
+    testWidgets('the arrow is delta_arrow, never the sign of the delta',
+        (tester) async {
+      await _pump(tester, _payload());
+
+      // money_out's delta is POSITIVE and its arrow is 'down'.
+      final down = tester.widget<Icon>(
+          find.byKey(const Key('c813_arrow_money_out')));
+      expect(down.icon, Icons.arrow_downward);
+
+      final up = tester.widget<Icon>(
+          find.byKey(const Key('c813_arrow_orders_received')));
+      expect(up.icon, Icons.arrow_upward);
+    });
+
+    testWidgets('a metric with no target and no share is not wrapped in a tap',
+        (tester) async {
+      final p = _payload();
+      final metrics = (p['strip'] as Map)['metrics'] as List;
+      (metrics[0] as Map)
+        ..['can_open'] = false
+        ..['share'] = {'has': false};
+      await _pump(tester, p);
+
+      expect(find.byKey(const Key('c813_metric_tap_orders_received')),
+          findsNothing);
+      // The number itself is still on screen — absent target, not absent tile.
+      expect(find.byKey(const Key('c812_metric_orders_received')),
+          findsOneWidget);
+    });
+
+    testWidgets('the share hint is the backend sentence', (tester) async {
+      await _pump(tester, _payload());
+      expect(find.text('Long-press a number to share it'), findsOneWidget);
+    });
+  });
+
+  group('CHANGE #813 — the queue carries four states', () {
+    List<Map<String, dynamic>> fourStates() => [
+          {
+            'id': 'a',
+            'label': 'ORD-1',
+            'sub_label': 'overdue one',
+            'over_label': '2h over',
+            'owner_label': '',
+            'state': 'overdue',
+            'tone': 'bad',
+            'source': 'ops',
+            'action': {
+              'has': true,
+              'kind': 'route',
+              'label': 'Open',
+              'rpc': '',
+              'args': <String, dynamic>{},
+              'route': 'ops_board',
+            },
+          },
+          {
+            'id': 'b',
+            'label': 'ORD-2',
+            'sub_label': 'due later today',
+            'over_label': 'due in 3h',
+            'owner_label': '',
+            'state': 'due_today',
+            'tone': 'warn',
+            'source': 'ops',
+            'action': {
+              'has': true,
+              'kind': 'route',
+              'label': 'View',
+              'rpc': '',
+              'args': <String, dynamic>{},
+              'route': 'ops_board',
+            },
+          },
+          {
+            'id': 'c',
+            'label': 'Bills not imported',
+            'sub_label': 'cleared today',
+            'over_label': 'done 20m ago',
+            'owner_label': '',
+            'state': 'done',
+            'tone': 'good',
+            'source': 'done',
+            'action': {'has': false},
+          },
+          {
+            'id': 'd',
+            'label': 'ORD-4',
+            'sub_label': 'plenty of time',
+            'over_label': '2d left',
+            'owner_label': '',
+            'state': 'open',
+            'tone': 'neutral',
+            'source': 'ops',
+            'action': {
+              'has': true,
+              'kind': 'route',
+              'label': 'View',
+              'rpc': '',
+              'args': <String, dynamic>{},
+              'route': 'ops_board',
+            },
+          },
+        ];
+
+    testWidgets('each state paints its own colour, and only the tone decides',
+        (tester) async {
+      await _pump(tester, _payload(needs: fourStates()));
+
+      Color bar(String id) {
+        final c = tester.widget<Container>(find.byKey(Key('c813_state_$id')));
+        return ((c.decoration as BoxDecoration).color)!;
+      }
+
+      final colours = {bar('a'), bar('b'), bar('c'), bar('d')};
+      // Four states, four distinct colours — never one red list.
+      expect(colours, hasLength(4));
+    });
+
+    testWidgets('the cleared row offers no action button', (tester) async {
+      await _pump(tester, _payload(needs: fourStates()));
+      expect(find.text('done 20m ago'), findsOneWidget);
+      // Three rows carry an action; the cleared one does not.
+      expect(find.byType(TextButton), findsNWidgets(3));
+    });
+
+    testWidgets('the state wording is printed, never derived', (tester) async {
+      await _pump(tester, _payload(needs: fourStates()));
+      expect(find.text('due in 3h'), findsOneWidget);
+      expect(find.text('2d left'), findsOneWidget);
+    });
+  });
+
+  group('CHANGE #813 — zone cards are a pager', () {
+    testWidgets('one dot per card, and the pager is swipeable',
+        (tester) async {
+      await _pump(tester, _payload());
+      expect(find.byKey(const Key('c813_zone_pager')), findsOneWidget);
+      final dots = tester.widget<Row>(find.byKey(const Key('c813_zone_dots')));
+      expect(dots.children, hasLength(2));
+    });
+
+    testWidgets('a card tap runs the backend action, not a guessed route',
+        (tester) async {
+      final calls = <Map<String, dynamic>>[];
+      final opened = <Map<String, dynamic>>[];
+      await _pump(tester, _payload(),
+          onOpen: opened.add, onAction: (a) async => calls.add(a));
+
+      await tester.tap(find.byKey(const Key('c813_zone_tap_2')));
+      await tester.pumpAndSettle();
+
+      expect(opened, isEmpty);
+      expect(calls, hasLength(1));
+      expect(calls.single['rpc'], 'admin_set_zone_scope');
+      expect(calls.single['args'], {'p_zone_id': 2});
+    });
+  });
+
+  group('CHANGE #813 — loading is a shape, not a spinner', () {
+    testWidgets('the dashboard skeleton contains no spinner', (tester) async {
+      await tester.pumpWidget(const MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(child: DashboardV2Skeleton()),
+        ),
+      ));
+      await tester.pump();
+      expect(find.byKey(const Key('c813_skeleton')), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+    });
+
+    testWidgets('the search sheet shows skeleton rows while a query is in flight',
+        (tester) async {
+      final gate = Completer<Map<String, dynamic>>();
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: UniversalSearchSheet(
+            search: (q) => gate.future,
+            onPick: (_) {},
+            placeholder: 'Search',
+          ),
+        ),
+      ));
+      await tester.pump();
+      await tester.enterText(
+          find.byKey(const Key('c812_search_field')), 'sahu');
+      await tester.pump();
+
+      expect(find.byKey(const Key('c813_search_skeleton')), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+
+      gate.complete(const {'ok': true, 'groups': [], 'hint': 'Nothing matched.'});
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('c813_search_skeleton')), findsNothing);
     });
   });
 }

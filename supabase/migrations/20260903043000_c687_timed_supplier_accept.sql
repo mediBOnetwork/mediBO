@@ -1388,3 +1388,109 @@ BEGIN
   END IF;
 END;
 $function$;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 16. THE LEDGER AND THE STATS MUST AGREE ON A WORD
+--     Found by accepting a real order over HTTPS as the supplier and then
+--     reading his own scorecard: the ledger wrote outcome='accept' (the ACTION
+--     name) while supplier_response_stats counted 'accepted' (the STATE name),
+--     so a supplier who answered inside the deadline still read "Answered in
+--     time —" with answered=0. The ledger now stores the state name, and the
+--     stats count both spellings so the rows already written keep counting.
+-- ─────────────────────────────────────────────────────────────────────────
+create or replace function public.supplier_respond_order(
+  p_order_code text, p_action text, p_reason text default null, p_lines jsonb default null)
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+declare
+  v_self text; v_row supplier_orders%rowtype; v_res jsonb; v_started timestamptz;
+begin
+  select * into v_row from supplier_orders
+   where order_code = p_order_code or id::text = p_order_code limit 1;
+
+  v_res := public._c687_respond_order_core(p_order_code, p_action, p_reason, p_lines);
+
+  if coalesce((v_res->>'ok')::boolean, false) and v_row.id is not null
+     and p_action in ('accept','partial','decline') then
+    select sp.supplier_name into v_self from current_supplier_profile() sp;
+    v_started := coalesce(v_row.auto_order_sent_at, v_row.created_at);
+    perform public.supplier_response_note(
+      coalesce(v_row.supplier_name, v_self),
+      'po_' || p_action,
+      -- the STATE name, the same vocabulary accept_state and the stats use
+      case p_action when 'accept'  then 'accepted'
+                    when 'decline' then 'declined'
+                    else 'partial' end,
+      v_row.id, v_row.order_code, null, null, v_row.zone_id,
+      v_started, v_row.accept_due_at,
+      case when p_action = 'decline' then p_reason end,
+      jsonb_build_object('cascaded', coalesce(v_res->'cascaded', to_jsonb(0)),
+                         'on_time', (v_row.accept_due_at is null
+                                     or now() <= v_row.accept_due_at)));
+  end if;
+
+  return v_res;
+end $function$;
+
+create or replace function public.supplier_response_stats(
+  p_supplier text default null, p_days integer default 30)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path to 'public'
+as $function$
+declare
+  v_asked int; v_answered int; v_missed int; v_median numeric; v_rate numeric;
+  v_since timestamptz := now() - make_interval(days => greatest(1, coalesce(p_days, 30)));
+  -- 'accept'/'partial' are the pre-fix ACTION spellings; they are kept here so
+  -- the rows already in the ledger keep counting.
+  v_answered_set text[] := array['responded','accepted','accept','partial','declined'];
+begin
+  select count(*) filter (where l.kind = 'inquiry_asked'),
+         count(*) filter (where l.outcome = any(v_answered_set)),
+         count(*) filter (where l.outcome = 'no_response'),
+         percentile_cont(0.5) within group (order by l.response_seconds)
+           filter (where l.response_seconds is not null
+                     and l.outcome = any(v_answered_set))
+    into v_asked, v_answered, v_missed, v_median
+  from supplier_response_log l
+  where l.created_at >= v_since
+    and (p_supplier is null
+         or lower(btrim(l.supplier_name)) = lower(btrim(p_supplier)));
+
+  v_asked    := coalesce(v_asked, 0);
+  v_answered := coalesce(v_answered, 0);
+  v_missed   := coalesce(v_missed, 0);
+  v_rate := case when (v_answered + v_missed) = 0 then null
+                 else round(100.0 * v_answered / (v_answered + v_missed), 0) end;
+
+  return jsonb_build_object(
+    'ok', true,
+    'has',             ((v_answered + v_missed) > 0),
+    'supplier',        coalesce(p_supplier, ''),
+    'window_days',     greatest(1, coalesce(p_days, 30)),
+    'title',           public.uic('spn.response_title', 'Response record'),
+    'empty_label',     public.uic('spn.response_none', 'No inquiries yet'),
+    'asked',           v_asked,
+    'asked_label',     public.uic('spn.response_asked_label', 'Asked'),
+    -- the denominator the rate is actually computed over: an ask still inside
+    -- its own window is neither answered nor missed yet.
+    'asked_value',     (v_answered + v_missed)::text,
+    'answered',        v_answered,
+    'missed',          v_missed,
+    'rate_label',      public.uic('spn.response_rate_label', 'Answered in time'),
+    'rate_value',      case when v_rate is null then '—'
+                            else to_char(v_rate, 'FM990') || '%' end,
+    'rate_tone',       case when v_rate is null then 'info'
+                            when v_rate >= 80 then 'success'
+                            when v_rate >= 50 then 'warning'
+                            else 'danger' end,
+    'median_label',    public.uic('spn.response_median_label', 'Typical reply time'),
+    'median_seconds',  case when v_median is null then null else round(v_median)::int end,
+    'median_value',    case when v_median is null then '—'
+                            else public.fmt_duration_short(round(v_median)::int) end);
+end $function$;

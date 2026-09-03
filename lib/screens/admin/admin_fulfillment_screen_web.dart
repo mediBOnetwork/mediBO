@@ -16,6 +16,7 @@ import '../../design_tokens.dart';
 import '../../utils/render_log.dart';
 import 'dispute/dispute_models.dart';
 import '../../fulfill/fulfill_view_logic.dart'; // C355: shared logic for both layouts
+import '../../fulfill/fulfill_landing_stage.dart';
 import '../../fulfill/fulfill_lookups.dart'; // C531: backend-owned strings/colours cache
 // dispute_card.dart removed in #170 — Disputes tab rebuilt with accordion layout
 import '../../utils/responsive.dart';
@@ -9035,40 +9036,25 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
       setState(() {
         _pipeline = payload;
         _pipelineLoading = false;
-        // Keep the operator where they were. Only fall back to the first
-        // stage when the current one is gone (or was never chosen) — a
-        // permission change must not silently move someone's tab.
-        if (_pendingStage.isNotEmpty &&
-            payload.indexOfStage(_pendingStage) >= 0) {
-          _stage = _pendingStage;
-          _pendingStage = '';
-        }
-        if (payload.indexOfStage(_stage) < 0) {
-          _stage = payload.firstStage;
-        }
-        // CHANGE #688 — the BACKEND picks the landing stage.
-        //
-        // `_stage` is seeded in initState from `initialTab` (0), which is the
-        // legacy 'supplier_shop'. That is a Dart-side answer to a question the
-        // payload already answers: `firstStage` is documented as "the stage a
-        // fresh mount should land on: the first one the backend sent", and
-        // reordering the bar in Postgres was supposed to move that landing.
-        // So on the FIRST payload — and only when the caller named no stage,
-        // no legacy tab and no allow-list, and the operator has not picked one
-        // yet — the console lands where the backend put its first tab. Any
-        // later reload keeps the operator exactly where they are.
-        if (!_landed &&
-            !_stagePicked &&
-            _pendingStage.isEmpty &&
-            widget.initialStage == null &&
-            widget.initialTab == 0 &&
-            // partner_home_screen.dart routes 'collect' as initialTab:0 +
-            // allowedTabs, which is indistinguishable from the default here —
-            // so a bounded caller keeps the stage it asked for.
-            widget.allowedTabs == null &&
-            payload.firstStage.isNotEmpty) {
-          _stage = payload.firstStage;
-        }
+        // CHANGE #754 — the whole landing decision is one pure function now
+        // (lib/fulfill/fulfill_landing_stage.dart), because #688 and #690 have
+        // fought over it twice: #690 applied the deep link's stage and cleared
+        // `_pendingStage`, and #688's guard then read that just-cleared field
+        // and landed on the first tab anyway. It is pinned by a protected test
+        // rather than by the order of statements in this setState.
+        final landing = resolveLandingStage(
+          stages: [for (final t in payload.tabs) t.stageKey],
+          current: _stage,
+          pending: _pendingStage,
+          landed: _landed,
+          picked: _stagePicked,
+          initialStage: widget.initialStage,
+          initialTab: widget.initialTab,
+          bounded: widget.allowedTabs != null,
+        );
+        _stage = landing.stage;
+        _stagePicked = landing.picked;
+        _pendingStage = '';
         _landed = true;
         if (_stage.isNotEmpty) _visited.add(_stage);
       });

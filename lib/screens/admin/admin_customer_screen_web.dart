@@ -2160,6 +2160,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   /// either: the button is gone, so there would be no way back. Land on the
   /// first tab the matrix does allow.
   void _redirectIfTabHidden() {
+    // CHANGE #754 — an EMBEDDED instance is a Fulfill stage, not this screen's
+    // tab bar. Its permission is `fulfill_tabs()`, and the customer/orders row
+    // is now retired precisely BECAUSE the stage owns it, so honouring that
+    // row here would bounce the Fulfill Customer-order tab off its own body.
+    if (widget.embedded) return;
     if (_tabOn(_tabKeys[_filter] ?? '')) return;
     for (final e in _tabKeys.entries) {
       if (_tabOn(e.value)) {

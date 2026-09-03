@@ -223,6 +223,9 @@ class PartnerScorecardCard extends StatelessWidget {
 /// The partner's own destination (`route_key: partner_scorecard`). One RPC,
 /// one card. A partner asking for somebody else's id is clamped to its own by
 /// `partner_scorecard()` itself, so this screen sends no id at all.
+///
+/// The shell PUSHES this as a bare route (shellExtraRouteScreen), so it brings
+/// its own Scaffold and prints the BACKEND's heading as the page title.
 class PartnerScorecardScreen extends StatefulWidget {
   const PartnerScorecardScreen({super.key, this.rpc, this.partnerId});
 
@@ -269,24 +272,30 @@ class _PartnerScorecardScreenState extends State<PartnerScorecardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) return const PartnerSkeleton(rows: 3);
     final p = _payload ?? const <String, dynamic>{};
-    if (p['ok'] != true) {
-      // The backend's own refusal when it answered; its own load-failure copy
-      // when it did not. Never a Dart sentence.
-      final msg = _s(p['message']);
-      return PartnerNotice(
-        text: msg.isEmpty ? c('pscore.load_failed') : msg,
-        onRetry: _load,
-        retryLabel: msg.isEmpty ? c('pscore.retry') : '',
-      );
-    }
-    return RefreshIndicator(
-      onRefresh: _load,
-      child: ListView(
-        padding: EdgeInsets.all(Ds.space.x16),
-        children: [PartnerScorecardCard(payload: p)],
-      ),
+    final title = _s(p['heading']).isEmpty ? c('pscore.heading') : _s(p['heading']);
+    return Scaffold(
+      backgroundColor: Ds.c.bg,
+      appBar: AppBar(title: Text(title)),
+      body: _loading
+          ? const PartnerSkeleton(rows: 3)
+          : p['ok'] != true
+              // The backend's own refusal when it answered; its own
+              // load-failure copy when it did not. Never a Dart sentence.
+              ? PartnerNotice(
+                  text: _s(p['message']).isEmpty
+                      ? c('pscore.load_failed')
+                      : _s(p['message']),
+                  onRetry: _load,
+                  retryLabel: c('pscore.retry'),
+                )
+              : RefreshIndicator(
+                  onRefresh: _load,
+                  child: ListView(
+                    padding: EdgeInsets.all(Ds.space.x16),
+                    children: [PartnerScorecardCard(payload: p)],
+                  ),
+                ),
     );
   }
 }

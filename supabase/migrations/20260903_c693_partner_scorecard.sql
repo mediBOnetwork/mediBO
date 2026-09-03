@@ -573,19 +573,11 @@ begin
      where coalesce(r.is_active, true)
      order by r.id
   loop
+    -- The row IS the card. Expanding a partner on this screen must show the
+    -- partner their own card verbatim, so nothing is re-derived here.
     card := public.partner_scorecard(rp.id, v_month);
     if coalesce((card->>'ok')::boolean, false) then
-      v_rows := v_rows || jsonb_build_object(
-        'partner_id',   rp.id,
-        'partner_label',card->>'partner_label',
-        'zone_label',   card->>'zone_label',
-        'has_score',    (card->>'has_score')::boolean,
-        'score',        (card->>'score')::numeric,
-        'score_label',  card->>'score_label',
-        'score_tone',   card->>'score_tone',
-        'bonus_total_label', card->>'bonus_total_label',
-        'has_bonus',    (card->>'has_bonus')::boolean,
-        'metrics',      card->'metrics');
+      v_rows := v_rows || card;
     end if;
   end loop;
 
@@ -1286,7 +1278,9 @@ insert into public.ui_copy(key, value) values
   ('pscore.schemes_empty',  to_jsonb('No partner incentive schemes yet.'::text)),
   ('pscore.scheme_all_partners', to_jsonb('All partners'::text)),
   ('pscore.digest_line',    to_jsonb('Scorecard {month}: score {score}. {metrics}. Incentive earned {bonus}.'::text)),
-  ('pscore.settlement_line',to_jsonb('Incentive bonus'::text))
+  ('pscore.settlement_line',to_jsonb('Incentive bonus'::text)),
+  ('pscore.load_failed',    to_jsonb('Could not load the scorecard.'::text)),
+  ('pscore.retry',          to_jsonb('Try again'::text))
 on conflict (key) do update set value = excluded.value, updated_at = now();
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -1430,18 +1424,20 @@ on conflict (key) do update set label = excluded.label, tone = excluded.tone;
 insert into public.feature_registry
   (feature_key, label, group_label, icon_key, route_key, sort_order, owner,
    partner_eligible, default_access, category, surface, roles_allowed,
-   search_terms, description)
+   search_terms, description, deep_link)
 values
   ('admin.partner_scorecards', 'Partner scorecards', 'Partners', 'rule',
    'partner_scorecards', 65, 'medibo', false, 'none', 'money', 'dashboard',
    array['admin','super_admin'],
    'partner scorecard score ranking target incentive bonus fulfilment',
-   'Every fulfilment partner ranked on the month, with monthly targets and partner incentive schemes.'),
+   'Every fulfilment partner ranked on the month, with monthly targets and partner incentive schemes.',
+   '/admin/partner-scorecards'),
   ('partner.scorecard', 'My scorecard', 'Partner', 'rule',
    'partner_scorecard', 66, 'partner', true, 'read', 'money', 'dashboard',
    array['admin','super_admin'],
    'scorecard score target incentive bonus',
-   'The partner''s own monthly scorecard, targets and incentive progress.')
+   'The partner''s own monthly scorecard, targets and incentive progress.',
+   '/partner/scorecard')
 on conflict (feature_key) do update set
   label = excluded.label, group_label = excluded.group_label,
   icon_key = excluded.icon_key, route_key = excluded.route_key,
@@ -1450,6 +1446,7 @@ on conflict (feature_key) do update set
   default_access = excluded.default_access,
   roles_allowed = excluded.roles_allowed,
   search_terms = excluded.search_terms, description = excluded.description,
+  deep_link = excluded.deep_link,
   is_active = true;
 
 insert into public.surface_route(route_key, feature_key, kind, handled_by, note)

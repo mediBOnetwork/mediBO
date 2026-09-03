@@ -33,6 +33,8 @@ import 'screens/customer/profile_edit_screen.dart'; // CHANGE #745: /customer/pr
 import 'screens/customer/address_book_screen.dart'; // CHANGE #745: /customer/addresses
 import 'screens/rewards_screen.dart'; // CHANGE #745: /rewards
 import 'screens/admin/admin_partner_console_screen.dart';
+import 'screens/admin/admin_partner_scorecards_screen.dart';
+import 'screens/partner/partner_scorecard_card.dart';
 import 'screens/admin/partner_audit_log_screen.dart';
 import 'screens/admin/settlement_screen.dart'; // /admin/settlement
 import 'screens/home_shell.dart';
@@ -1019,6 +1021,29 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                 return MaterialPageRoute(
                   settings: settings,
                   builder: (_) => const AgencyDispatchScreen(),
+                );
+              }
+              // CHANGE #693 — the partner scorecards console, at a real URL
+              // for the same reason /admin/partner-access has one: Flutter
+              // canvas cannot be clicked headlessly, so without a URL the
+              // post-deploy verifier can never prove the screen painted.
+              // Authorisation stays in the backend — admin_partner_scorecards()
+              // answers not_authorized itself and the screen renders that
+              // refusal. Still reachable by tapping: Dashboard -> Money ->
+              // Partner scorecards.
+              if (name.split('?').first == '/admin/partner-scorecards') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const AdminPartnerScorecardsScreen(),
+                );
+              }
+              // The partner's own card, at its own URL for the same reason.
+              // partner_scorecard() clamps a non-operator caller to their own
+              // partner id, so this URL can never show somebody else's month.
+              if (name.split('?').first == '/partner/scorecard') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const PartnerScorecardScreen(),
                 );
               }
               if (name.startsWith('/admin/partner-audit')) {

@@ -23,6 +23,11 @@ import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
 import 'partner_ui.dart';
 
+/// The sheet returns null when it is dismissed and this sentinel when the
+/// partner chose "Unassigned" — two different silences that must not collapse
+/// into one.
+const Object _clear = Object();
+
 class PartnerTasksScreen extends StatefulWidget {
   const PartnerTasksScreen({super.key});
 
@@ -83,6 +88,10 @@ class _PartnerTasksScreenState extends State<PartnerTasksScreen> {
     final d = _d;
     if (d == null) return;
     final workers = (d['workers'] as List? ?? const []);
+    final task = (row['task'] is Map)
+        ? Map<String, dynamic>.from(row['task'] as Map)
+        : const <String, dynamic>{};
+    final assigned = task['assigned'] == true;
     final picked = await showModalBottomSheet<Object?>(
       context: context,
       backgroundColor: Ds.c.surface,
@@ -101,8 +110,21 @@ class _PartnerTasksScreenState extends State<PartnerTasksScreen> {
               children: [
                 for (final w in workers)
                   ActionChip(
+                    // Padded to the touch minimum: this chip is the whole
+                    // gesture of the feature, on a warehouse phone.
+                    padding: EdgeInsets.symmetric(
+                        horizontal: Ds.space.x12, vertical: Ds.space.x8),
                     label: Text(((w as Map)['name'] ?? '').toString()),
                     onPressed: () => Navigator.of(ctx).pop(w['worker_id']),
+                  ),
+                // Clearing the owner is the same RPC with no worker, and its
+                // caption is the payload's own word for "nobody".
+                if (assigned)
+                  ActionChip(
+                    padding: EdgeInsets.symmetric(
+                        horizontal: Ds.space.x12, vertical: Ds.space.x8),
+                    label: Text((d['unassigned_label'] as String?) ?? ''),
+                    onPressed: () => Navigator.of(ctx).pop(_clear),
                   ),
               ],
             ),
@@ -122,7 +144,10 @@ class _PartnerTasksScreenState extends State<PartnerTasksScreen> {
     await _call('fulfil_task_assign', {
       'p_order_id': row['order_id'],
       'p_stage_key': row['stage_key'],
-      'p_worker_id': picked,
+      // `_clear` is this file's way of saying "the sheet was dismissed with
+      // Unassign", which is a null worker on the wire — distinct from the null
+      // that means "the sheet was dismissed with nothing".
+      'p_worker_id': identical(picked, _clear) ? null : picked,
     });
   }
 

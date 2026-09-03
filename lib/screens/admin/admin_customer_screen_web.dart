@@ -45,6 +45,8 @@ import '../../widgets/cash_payment_sheet.dart';
 import '../../widgets/fullscreen_image.dart';
 import '../../utils/bill_mime.dart'; // CHANGE #465
 import 'admin_customer_360_screen.dart'; // CHANGE #396
+import 'admin_customer_page.dart'; // CHANGE #810
+import '../../widgets/customer_console_row.dart'; // CHANGE #810
 
 // CHANGE #242: payment-image sharing now goes through the platform-conditional
 // download_bytes wrapper (Web Share API on web / share_plus on Android), so no
@@ -695,7 +697,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       return;
     }
     _bootedForAdmin = true;
+    // CHANGE #810 — Customer 360 is a route this screen owns, so the customer
+    // page is handed the opener rather than importing the route itself.
+    AdminCustomerPage.open360 = (ctx, id) => Navigator.of(ctx).push(
+        MaterialPageRoute(builder: (_) => AdminCustomer360Screen(customerId: id)));
     _load();
+    _loadCusConsole(); // CHANGE #810
     _subscribeRealtime();
     _loadSLeadsTotal();
   }
@@ -751,6 +758,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     }
     _realtimeChannels.clear();
     _scrollCtrl.dispose();
+    _cusSearchDebounce?.cancel();   // CHANGE #810
+    _cusSearchCtl.dispose();
     super.dispose();
   }
 
@@ -1375,125 +1384,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         .catchError((_) {});
   }
 
-  // ── Suspend / Reactivate approved customers ────────────────────────────────
-
-  Future<void> _suspendCustomer(_ApprovedRow row) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: Text(c('admin_customer.suspend_customer'),
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-        content: Text(
-          cf('admin_customer.suspend_confirm_prompt', {'a': row.pharmacyName.isNotEmpty ? row.pharmacyName : row.customerName}),
-          style: const TextStyle(fontSize: 13),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text(c('admin_customer.cancel')),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
-            child: Text(c('admin_customer.suspend')),
-          ),
-        ],
-      ),
-    );
-    if (confirm != true) return;
-    try {
-      // #578 — 'suspended' was a status word spelled in Dart; it now comes
-      // from app_settings.customer_status_values, and the admin check lives
-      // in the database rather than in RLS alone.
-      await Supabase.instance.client.rpc('admin_customer_action',
-          params: {'p_customer_id': row.id, 'p_action': 'suspend'});
-      _load(showSpinner: false);
-    } catch (e) {
-      if (mounted) {
-        showToast(context, cf('admin_customer.suspend_failed', {'a': '$e'}), isError: true);
-      }
-    }
-  }
-
-  Future<void> _reactivateCustomer(_ApprovedRow row) async {
-    try {
-      await Supabase.instance.client
-          .rpc('admin_customer_action',
-              params: {'p_customer_id': row.id, 'p_action': 'reactivate'});
-      _load(showSpinner: false);
-    } catch (e) {
-      if (mounted) {
-        showToast(context, cf('admin_customer.reactivate_failed', {'a': '$e'}), isError: true);
-      }
-    }
-  }
-
-  Future<void> _editCustomer(_ApprovedRow row) async {
-    final saved = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => _CustomerEditDialog(row: row),
-    );
-    if (saved == true) _load(showSpinner: false);
-  }
-
-  // Part A-3 / Part C-1: delete customer
-  Future<void> _deleteCustomer(_ApprovedRow row) async {
-    final displayName = row.pharmacyName.isNotEmpty ? row.pharmacyName : row.customerName;
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: Text(cf('admin_customer.delete_confirm_title', {'a': displayName}),
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700,
-                color: Color(0xFF111827))),
-        content: Text(
-          c('admin_customer.delete_login_access_warning'),
-          style: const TextStyle(fontSize: 13, color: Color(0xFF374151)),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text(c('admin_customer.cancel')),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
-            child: Text(c('admin_customer.delete')),
-          ),
-        ],
-      ),
-    );
-    if (confirm != true) return;
-    try {
-      final client    = Supabase.instance.client;
-      // #578 — deleted_by came from auth.currentUser.email (a CREDENTIAL, not
-      // an account) with a Dart fallback of 'admin', deleted_at from the
-      // device clock, and the snapshot was whatever the client held. The
-      // server stamps all three from the row itself.
-      await client.rpc('admin_customer_action',
-          params: {'p_customer_id': row.id, 'p_action': 'delete'});
-      // Supabase Admin API: DELETE /auth/v1/admin/users/{user_id}
-      final uid = row.rawData['user_id'] as String?;
-      if (uid != null) {
-        try {
-          await client.functions.invoke(
-            'admin-user-actions',
-            body: {'action': 'delete_user', 'user_id': uid},
-          );
-        } catch (_) {} // non-fatal — profile already marked deleted in DB
-      }
-      _load(showSpinner: false);
-      if (mounted) {
-        showToast(context, c('admin_customer.customer_deleted'), duration: const Duration(seconds: 3));
-      }
-    } catch (e) {
-      if (mounted) {
-        showToast(context, cf('admin_customer.delete_failed', {'a': '$e'}), isError: true);
-      }
-    }
-  }
+  // ── Suspend / Reactivate / Edit / Delete an approved customer ────────────
+  //
+  // CHANGE #810 — these four moved to the customer page, where each one now
+  // collects a reason and records it: Block and Delete go through
+  // admin_customer_action_reason(), and Edit is a backend-described form
+  // (admin_customer_edit_form / _save) rather than a hardcoded field list.
 
   // Part A-4 / Part C-2: restore deleted customer
   Future<void> _restoreCustomer(Map<String, dynamic> deletedRow) async {
@@ -1831,6 +1727,303 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     });
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CHANGE #810 — the Customers CONSOLE.
+  //
+  // The tall per-customer card is gone. Rows, chips and their counts, the sort
+  // options and every label all arrive from admin_customers_console(); this
+  // screen holds the chosen filters and prints what came back. Numbers and
+  // actions live on the customer page you reach by tapping a row.
+  // ═══════════════════════════════════════════════════════════════════════════
+  Map<String, dynamic> _cusConsole = const {};
+  final Set<String> _cusFilters = <String>{};
+  final TextEditingController _cusSearchCtl = TextEditingController();
+  String _cusQuery = '';
+  String _cusSort = '';
+  bool _cusLoading = false;
+  Timer? _cusSearchDebounce;
+
+  List<Map<String, dynamic>> _cusList(String key) {
+    final v = _cusConsole[key];
+    return v is List
+        ? v.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList()
+        : const <Map<String, dynamic>>[];
+  }
+
+  String _cusStr(String key) => (_cusConsole[key] as String?) ?? '';
+
+  Future<void> _loadCusConsole() async {
+    if (!mounted) return;
+    setState(() => _cusLoading = true);
+    try {
+      final res = await Supabase.instance.client.rpc(
+        'admin_customers_console',
+        params: {
+          'p_filters': _cusFilters.toList(),
+          if (_cusSort.isNotEmpty) 'p_sort': _cusSort,
+          if (_cusQuery.isNotEmpty) 'p_search': _cusQuery,
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _cusConsole = res is Map ? res.cast<String, dynamic>() : const {};
+        _cusLoading = false;
+      });
+      RenderLog.write('c810_customer_rows', '${_cusList('rows').length}');
+      RenderLog.write('c810_customer_chips', '${_cusList('chips').length}');
+    } catch (_) {
+      if (mounted) setState(() => _cusLoading = false);
+    }
+  }
+
+  void _onCusSearchChanged(String v) {
+    _cusQuery = v.trim();
+    _cusSearchDebounce?.cancel();
+    _cusSearchDebounce =
+        Timer(const Duration(milliseconds: 300), _loadCusConsole);
+  }
+
+  void _toggleCusFilter(String key) {
+    if (key.isEmpty) return;
+    setState(() {
+      if (!_cusFilters.remove(key)) _cusFilters.add(key);
+    });
+    _loadCusConsole();
+  }
+
+  void _setCusSort(String key) {
+    if (key.isEmpty || key == _cusSort) return;
+    setState(() => _cusSort = key);
+    _loadCusConsole();
+  }
+
+  /// ONE horizontally scrollable row of small chips, with the sort sheet
+  /// behind the filter icon. No zone chip: the header's zone picker already
+  /// said which zone this is.
+  Widget _buildCusChips(double pad) {
+    final chips = _cusList('chips');
+    if (chips.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.fromLTRB(0, 0, 0, Ds.space.x12),
+      child: Row(children: [
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: EdgeInsets.symmetric(horizontal: pad),
+            child: Row(children: [
+              for (final ch in chips) ...[
+                _CusChip(
+                  label: (ch['label'] as String?) ?? '',
+                  count:
+                      ch['count'] is num ? (ch['count'] as num).toInt() : null,
+                  active: ch['active'] == true,
+                  onTap: () => _toggleCusFilter((ch['key'] as String?) ?? ''),
+                ),
+                SizedBox(width: Ds.space.x8),
+              ],
+            ]),
+          ),
+        ),
+        Padding(
+          padding: EdgeInsets.only(right: pad),
+          child: IconButton(
+            tooltip: _cusStr('filters_label'),
+            icon: Icon(Icons.tune,
+                size: Ds.space.x16 + Ds.space.x4, color: Ds.c.textSecondary),
+            onPressed: _openCusSortSheet,
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Future<void> _openCusSortSheet() async {
+    final sorts = _cusList('sorts');
+    if (sorts.isEmpty) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet))),
+      builder: (sctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Padding(
+            padding: EdgeInsets.all(Ds.space.x16),
+            child: Text(_cusStr('sort_sheet_title'), style: Ds.t.subtitle),
+          ),
+          for (final so in sorts)
+            ListTile(
+              title: Text((so['label'] as String?) ?? '', style: Ds.t.body),
+              trailing: so['active'] == true
+                  ? Icon(Icons.check,
+                      color: Ds.c.brand, size: Ds.space.x16 + Ds.space.x4)
+                  : null,
+              onTap: () {
+                Navigator.pop(sctx);
+                _setCusSort((so['key'] as String?) ?? '');
+              },
+            ),
+          SizedBox(height: Ds.space.x8),
+        ]),
+      ),
+    );
+  }
+
+  /// The follow-ups inbox strip. It appears only when the backend says a
+  /// follow-up is due, and its wording and count are the payload's.
+  Widget _buildCusFollowups(double pad) {
+    final fu = _cusConsole['followups'];
+    final m = fu is Map ? fu.cast<String, dynamic>() : const {};
+    if (m['has'] != true) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.fromLTRB(pad, 0, pad, Ds.space.x12),
+      child: InkWell(
+        onTap: () => _openCusFollowups((m['rpc'] as String?) ?? ''),
+        borderRadius: Ds.r.rButton,
+        child: Container(
+          width: double.infinity,
+          constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+          padding: EdgeInsets.all(Ds.space.x12),
+          decoration: BoxDecoration(
+            color: Ds.c.warningSoft,
+            borderRadius: Ds.r.rButton,
+          ),
+          child: Row(children: [
+            Icon(Icons.notifications_active_outlined,
+                size: Ds.space.x16 + Ds.space.x4, color: Ds.c.warning),
+            SizedBox(width: Ds.space.x8),
+            Expanded(
+              child: Text((m['label'] as String?) ?? '',
+                  style: Ds.t.body.copyWith(color: Ds.c.warning)),
+            ),
+            Icon(Icons.chevron_right, color: Ds.c.warning),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openCusFollowups(String rpc) async {
+    if (rpc.isEmpty) return;
+    Map<String, dynamic> res;
+    try {
+      final raw = await Supabase.instance.client.rpc(rpc);
+      res = raw is Map ? raw.cast<String, dynamic>() : const {};
+    } catch (e) {
+      if (mounted) showToast(context, '$e', isError: true);
+      return;
+    }
+    if (!mounted) return;
+    final items = (res['items'] is List)
+        ? (res['items'] as List)
+            .whereType<Map>()
+            .map((e) => e.cast<String, dynamic>())
+            .toList()
+        : const <Map<String, dynamic>>[];
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet))),
+      builder: (sctx) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.all(Ds.space.x16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text((res['title'] as String?) ?? '', style: Ds.t.subtitle),
+              SizedBox(height: Ds.space.x12),
+              if (items.isEmpty)
+                Text((res['empty'] as String?) ?? '',
+                    style: Ds.t.bodySecondary)
+              else
+                for (final it in items)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text((it['title'] as String?) ?? '',
+                        style: Ds.t.bodyStrong),
+                    subtitle: Text(
+                        '${(it['subtitle'] as String?) ?? ''}\n${(it['meta'] as String?) ?? ''}',
+                        style: Ds.t.caption),
+                    isThreeLine: true,
+                    onTap: () {
+                      Navigator.pop(sctx);
+                      _openCustomerPage((it['customer_id'] as String?) ?? '');
+                    },
+                  ),
+              SizedBox(height: Ds.space.x8),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The page owns every customer action now — approval, edit, zone, notes,
+  /// merge, block and delete-with-reason all run there. The list only reloads
+  /// afterwards, because a rename, a merge or a delete changes what it shows.
+  Future<void> _openCustomerPage(String id, {String initialTab = ''}) async {
+    if (id.isEmpty) return;
+    await openAdminCustomerPage(context, id, initialTab: initialTab);
+    if (!mounted) return;
+    await _load(showSpinner: false);
+    await _loadCusConsole();
+  }
+
+  Widget _buildCustomersConsole(bool isDesktop) {
+    final pad = isDesktop ? Ds.space.x24 : Ds.space.x16;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Padding(
+        padding: EdgeInsets.fromLTRB(pad, 0, pad, Ds.space.x8),
+        child: TextField(
+          controller: _cusSearchCtl,
+          onChanged: _onCusSearchChanged,
+          textInputAction: TextInputAction.search,
+          style: Ds.t.caption,
+          decoration: InputDecoration(
+            hintText: _cusStr('search_hint'),
+            prefixIcon: Icon(Icons.search, size: Ds.space.x16 + Ds.space.x4),
+            suffixIcon: _cusQuery.isEmpty
+                ? null
+                : IconButton(
+                    icon: Icon(Icons.clear, size: Ds.space.x16 + Ds.space.x4),
+                    onPressed: () {
+                      _cusSearchCtl.clear();
+                      _onCusSearchChanged('');
+                    },
+                  ),
+            isDense: true,
+            contentPadding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x12, vertical: Ds.space.x8),
+            border: OutlineInputBorder(borderRadius: Ds.r.rButton),
+          ),
+        ),
+      ),
+      _buildCusChips(pad),
+      _buildCusFollowups(pad),
+      if (_cusLoading && _cusList('rows').isEmpty)
+        Padding(
+          padding: EdgeInsets.all(Ds.space.x32),
+          child: const Center(child: CircularProgressIndicator()),
+        )
+      else if (_cusList('rows').isEmpty)
+        _ssvEmptyState(_cusStr('empty_label'))
+      else ...[
+        Padding(
+          padding: EdgeInsets.fromLTRB(pad, 0, pad, Ds.space.x8),
+          child: Text(_cusStr('count_label'), style: Ds.t.caption),
+        ),
+        for (final row in _cusList('rows'))
+          CustomerConsoleRow(
+            row: row,
+            onOpen: () => _openCustomerPage((row['id'] as String?) ?? ''),
+          ),
+      ],
+    ]);
+  }
+
   Widget _buildScrollContent(bool isDesktop) {
     // S Leads tab (CHANGE #443 — scraped lead-generation UI)
     if (_isSLeadsView) {
@@ -1864,13 +2057,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         children: [
           // CHANGE #547 — Import Customer, mirroring Import Supplier's styling.
           _buildImportCustomerButton(),
-          if (_approvedRows.isEmpty)
-            _ssvEmptyState('0 approved customers')
-          else ...[
-            if (isDesktop) _buildApprovedTableHeader(),
-            ..._approvedRows.map((r) =>
-                isDesktop ? _buildDesktopApprovedRow(r) : _buildMobileApprovedCard(r)),
-          ],
+          // CHANGE #810 — the console replaces the tall per-customer card.
+          _buildCustomersConsole(isDesktop),
           const SizedBox(height: 32),
           // Part C-2: collapsible Recently Deleted section
           _buildDeletedSection(isDesktop),
@@ -3922,222 +4110,14 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // APPROVED CUSTOMERS view  (Tasks 3 + 4)
+  // APPROVED CUSTOMERS view — replaced by the CHANGE #810 console.
+  //
+  // The tall card (desktop table row + mobile card, each with its own Edit /
+  // Suspend / Delete buttons and an expanding detail panel) is gone. Its every
+  // capability moved to the customer page: Edit is the backend-described edit
+  // form, Suspend is Block-with-reason, Delete is Delete-with-reason, and the
+  // expanded detail panel is the Info tab. See _buildCustomersConsole above.
   // ═══════════════════════════════════════════════════════════════════════════
-
-  Widget _buildApprovedTableHeader() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 10),
-      decoration: const BoxDecoration(
-        color: Color(0xFFF9FAFB),
-        border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
-      ),
-      child: Row(children: [
-        _th('PHARMACY', flex: 4),
-        _th('CONTACT', flex: 3),
-        _th('PHONE', flex: 2),
-        _th('CODE', flex: 2),
-        _th('CITY', flex: 2),
-        _th('STATUS', flex: 2),
-        const SizedBox(width: 230), // actions column (Edit + Suspend + Delete)
-        const SizedBox(width: 32),  // chevron
-      ]),
-    );
-  }
-
-  Widget _buildDesktopApprovedRow(_ApprovedRow row) {
-    final isExpanded = row.id.let((id) => _expanded.contains(id));
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      InkWell(
-        onTap: () => _toggleExpand(row.id),
-        mouseCursor: SystemMouseCursors.click,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 13),
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
-          ),
-          child: Row(children: [
-            Expanded(
-                flex: 4,
-                child: Text(
-                    row.pharmacyName.isNotEmpty ? row.pharmacyName : '—',
-                    style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF111827)),
-                    overflow: TextOverflow.ellipsis)),
-            Expanded(
-                flex: 3,
-                child: Text(
-                    row.customerName.isNotEmpty ? row.customerName : '—',
-                    style: const TextStyle(
-                        fontSize: 13, color: Color(0xFF374151)),
-                    overflow: TextOverflow.ellipsis)),
-            Expanded(
-                flex: 2,
-                child: Text(row.phone.isNotEmpty ? row.phone : '—',
-                    style: const TextStyle(
-                        fontSize: 12, color: Color(0xFF6B7280)))),
-            Expanded(
-                flex: 2,
-                child: Text(
-                    row.customerCode.isNotEmpty ? row.customerCode : '—',
-                    style: const TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF374151),
-                        fontFamily: 'monospace'))),
-            Expanded(
-                flex: 2,
-                child: Text(
-                    [row.city, row.state]
-                        .where((s) => s.isNotEmpty)
-                        .join(', ')
-                        .let((s) => s.isNotEmpty ? s : '—'),
-                    style: const TextStyle(
-                        fontSize: 12, color: Color(0xFF6B7280)),
-                    overflow: TextOverflow.ellipsis)),
-            Expanded(
-              flex: 2,
-              child: _CustomerStatusBadge(status: row.status),
-            ),
-            // Edit + Suspend/Reactivate + Delete actions (inner InkWells — absorb tap)
-            SizedBox(
-              width: 230,
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                _actionBtn('Edit', const Color(0xFF1B7A43),
-                    () => _editCustomer(row)),
-                const SizedBox(width: 6),
-                _actionBtn(
-                  row.isSuspended ? 'Reactivate' : 'Suspend',
-                  row.isSuspended
-                      ? const Color(0xFF1B7A43)
-                      : const Color(0xFFD97706),
-                  () => row.isSuspended
-                      ? _reactivateCustomer(row)
-                      : _suspendCustomer(row),
-                ),
-                const SizedBox(width: 6),
-                _actionBtn('Delete', const Color(0xFFDC2626),
-                    () => _deleteCustomer(row)),
-              ]),
-            ),
-            // Rotating chevron
-            SizedBox(
-              width: 32,
-              child: AnimatedRotation(
-                turns: isExpanded ? 0.5 : 0.0,
-                duration: const Duration(milliseconds: 200),
-                child: const Icon(Icons.expand_more,
-                    size: 18, color: Color(0xFF6B7280)),
-              ),
-            ),
-          ]),
-        ),
-      ),
-      if (isExpanded) _buildDynamicDetails(row.rawData, lpad: 44, rpad: 28),
-    ]);
-  }
-
-  Widget _buildMobileApprovedCard(_ApprovedRow row) {
-    final isExpanded = _expanded.contains(row.id);
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: row.isSuspended
-              ? const Color(0xFFFECACA)
-              : const Color(0xFFE5E7EB),
-        ),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: InkWell(
-          onTap: () => _toggleExpand(row.id),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                // Name line: [Full customer/pharmacy name] [Active status badge]
-                Builder(builder: (_) {
-                  RenderLog.write('customer_card_restructured', 'true');
-                  return const SizedBox.shrink();
-                }),
-                Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                  Expanded(
-                      child: Text(
-                          row.pharmacyName.isNotEmpty
-                              ? row.pharmacyName
-                              : row.customerName.isNotEmpty
-                                  ? row.customerName
-                                  : 'Unknown',
-                          style: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                              color: Color(0xFF111827)),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis)),
-                  const SizedBox(width: 8),
-                  _CustomerStatusBadge(status: row.status),
-                ]),
-                if (row.customerName.isNotEmpty) ...[
-                  const SizedBox(height: 3),
-                  Text(row.customerName,
-                      style: const TextStyle(
-                          fontSize: 12, color: Color(0xFF6B7280)),
-                      overflow: TextOverflow.ellipsis),
-                ],
-                if (row.phone.isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(row.phone,
-                      style: const TextStyle(
-                          fontSize: 12, color: Color(0xFF6B7280))),
-                ],
-                const SizedBox(height: 8),
-                Wrap(spacing: 12, runSpacing: 4, children: [
-                  if (row.customerCode.isNotEmpty)
-                    _mobileField('Code', row.customerCode),
-                  if (row.paymentTerm.isNotEmpty)
-                    _mobileField('Payment', row.paymentTerm),
-                  if (row.city.isNotEmpty)
-                    _mobileField(
-                        'City',
-                        [row.city, row.state]
-                            .where((s) => s.isNotEmpty)
-                            .join(', ')),
-                ]),
-                const SizedBox(height: 12),
-                // Action buttons (inner InkWells — absorb tap)
-                Wrap(spacing: 8, runSpacing: 6, children: [
-                  _actionBtn('Edit', const Color(0xFF1B7A43),
-                      () => _editCustomer(row)),
-                  _actionBtn(
-                    row.isSuspended ? 'Reactivate' : 'Suspend',
-                    row.isSuspended
-                        ? const Color(0xFF1B7A43)
-                        : const Color(0xFFD97706),
-                    () => row.isSuspended
-                        ? _reactivateCustomer(row)
-                        : _suspendCustomer(row),
-                  ),
-                  _actionBtn('Delete', const Color(0xFFDC2626),
-                      () => _deleteCustomer(row)),
-                ]),
-              ]),
-            ),
-            if (isExpanded) ...[
-              const Divider(height: 1, color: Color(0xFFE5E7EB)),
-              _buildDynamicDetails(row.rawData, lpad: 16, rpad: 16),
-            ],
-          ]),
-        ),
-      ),
-    );
-  }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // CUSTOMER DETAIL CARD  (deduplicated, explicit field list)
@@ -4929,49 +4909,6 @@ class _PaymentBadge extends StatelessWidget {
 
 // ── Customer status badge ─────────────────────────────────────────────────────
 
-class _CustomerStatusBadge extends StatelessWidget {
-  final String status;
-  const _CustomerStatusBadge({required this.status});
-
-  @override
-  Widget build(BuildContext context) {
-    final Color color;
-    final String label;
-    final IconData icon;
-    switch (status) {
-      case 'suspended':
-        color = const Color(0xFFDC2626);
-        label = 'Suspended';
-        icon  = Icons.block_outlined;
-        break;
-      case 'approved':
-        color = const Color(0xFF1B7A43);
-        label = 'Active';
-        icon  = Icons.verified_outlined;
-        break;
-      default:
-        color = const Color(0xFFD97706);
-        label = status.isNotEmpty ? status : 'Active';
-        icon  = Icons.info_outline;
-    }
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withValues(alpha: 0.3)),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, size: 11, color: color),
-        const SizedBox(width: 3),
-        Text(label,
-            style: TextStyle(
-                fontSize: 11, fontWeight: FontWeight.w600, color: color)),
-      ]),
-    );
-  }
-}
-
 // ── Order confirmation ────────────────────────────────────────────────────────
 //
 // CHANGE #608 — _ConfirmActions is DELETED.
@@ -5472,216 +5409,12 @@ class _StepperButton extends StatelessWidget {
   }
 }
 
-// ── Customer Edit Dialog  (Task 4) ────────────────────────────────────────────
-
-// All editable fields in pharmacy_profiles (non-system columns).
-const _kEditFields = [
-  ('pharmacy_name',     'Pharmacy / Clinic Name', true),
-  ('customer_name',     'Customer Name',          false),
-  ('owner_name',        'Owner Name',             false),
-  ('whatsapp_no',       'WhatsApp No.',           false),
-  ('phone',             'Phone',                  false),
-  ('email',             'Email',                  false),
-  ('other_contact_no',  'Other Contact',          false),
-  ('store_type',        'Store Type',             false),
-  ('range_zone',        'Range / Zone',           false),
-  ('address_local',     'Local Address',          false),
-  ('address',           'Address',                false),
-  ('city',              'City',                   false),
-  ('state',             'State',                  false),
-  ('pincode',           'Pincode',                false),
-  ('store_location_link','Store Location Link',   false),
-  ('dl_20b',            'Drug Licence 20B',       false),
-  ('dl_21b',            'Drug Licence 21B',       false),
-  ('gst_no',            'GST No.',                false),
-  ('gstin',             'GSTIN',                  false),
-  ('drug_license',      'Drug License',           false),
-  ('payment_term',      'Payment Term',           false),
-  ('customer_code',     'Customer Code',          false),
-];
-
-class _CustomerEditDialog extends StatefulWidget {
-  final _ApprovedRow row;
-  const _CustomerEditDialog({required this.row});
-
-  @override
-  State<_CustomerEditDialog> createState() => _CustomerEditDialogState();
-}
-
-class _CustomerEditDialogState extends State<_CustomerEditDialog> {
-  late final Map<String, TextEditingController> _ctrl;
-  final _formKey = GlobalKey<FormState>();
-  bool _saving = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = {
-      for (final (key, _, _) in _kEditFields)
-        key: TextEditingController(
-          text: widget.row.rawData[key]?.toString() ?? '',
-        ),
-    };
-  }
-
-  @override
-  void dispose() {
-    for (final c in _ctrl.values) c.dispose();
-    super.dispose();
-  }
-
-  Future<void> _save() async {
-    if (!(_formKey.currentState?.validate() ?? false)) return;
-    setState(() => _saving = true);
-    try {
-      final client = Supabase.instance.client;
-      final updates = <String, dynamic>{
-        for (final (key, _, _) in _kEditFields)
-          key: _ctrl[key]!.text.trim().isEmpty ? null : _ctrl[key]!.text.trim(),
-      };
-
-      // CHANGE #578 — admin_customer_update() applies the patch.
-      //
-      // The old code UPDATEd pharmacy_profiles with whatever keys the form
-      // held: nothing stopped `approved`, `status` or `user_id` riding along —
-      // the very columns my_session().can_place_order reads. The RPC has an
-      // explicit allow-list and reports anything it refused rather than
-      // dropping it quietly.
-      //
-      // The customer_code uniqueness pre-check is gone too. It was a SELECT
-      // followed by a throw in Dart: racy, and redundant because
-      // pharmacy_profiles_customer_code_unique already enforces it. The index
-      // is the guard; the RPC surfaces its violation as customer_code_taken.
-      await client.rpc('admin_customer_update', params: {
-        'p_customer_id': widget.row.id,
-        'p_patch': updates,
-      });
-      if (mounted) Navigator.pop(context, true);
-    } catch (e) {
-      if (mounted) {
-        setState(() => _saving = false);
-        showToast(context, cf('admin_customer.save_failed_e', {'e': '$e'}), isError: true);
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: 580, maxHeight: MediaQuery.of(context).size.height * 0.88),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          // Header
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 18, 12, 0),
-            child: Row(children: [
-              Expanded(
-                child: Text(c('admin_customer.edit_customer'),
-                    style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF111827))),
-              ),
-              IconButton(
-                icon: const Icon(Icons.close, size: 18),
-                onPressed: _saving ? null : () => Navigator.pop(context),
-                visualDensity: VisualDensity.compact,
-              ),
-            ]),
-          ),
-          const Divider(height: 16, indent: 20, endIndent: 20),
-          // Scrollable form
-          Expanded(
-            child: Form(
-              key: _formKey,
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-                child: LayoutBuilder(builder: (ctx, constraints) {
-                  final wide = constraints.maxWidth > 460;
-                  return Wrap(
-                    spacing: 12,
-                    runSpacing: 14,
-                    children: _kEditFields.map((rec) {
-                      final (key, label, required) = rec;
-                      return SizedBox(
-                        width: wide
-                            ? (constraints.maxWidth - 12) / 2
-                            : constraints.maxWidth,
-                        child: TextFormField(
-                          controller: _ctrl[key],
-                          decoration: InputDecoration(
-                            labelText: label,
-                            labelStyle: const TextStyle(
-                                fontSize: 12, color: Color(0xFF6B7280)),
-                            border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(8)),
-                            contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 10),
-                            isDense: true,
-                          ),
-                          style: const TextStyle(fontSize: 13),
-                          validator: required
-                              ? (v) => (v == null || v.trim().isEmpty)
-                                  ? '$label is required'
-                                  : null
-                              : null,
-                        ),
-                      );
-                    }).toList(),
-                  );
-                }),
-              ),
-            ),
-          ),
-          const Divider(height: 1, indent: 20, endIndent: 20),
-          // Footer buttons
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 10, 20, 16),
-            child: Row(children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: _saving ? null : () => Navigator.pop(context),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF374151),
-                    side: const BorderSide(color: Color(0xFFD1D5DB)),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8)),
-                    padding: const EdgeInsets.symmetric(vertical: 11),
-                  ),
-                  child: Text(c('admin_customer.cancel'),
-                      style: TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w600)),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: FilledButton(
-                  onPressed: _saving ? null : _save,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF1B7A43),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8)),
-                    padding: const EdgeInsets.symmetric(vertical: 11),
-                  ),
-                  child: _saving
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white))
-                      : Text(c('admin_customer.save_changes'),
-                          style: TextStyle(
-                              fontSize: 13, fontWeight: FontWeight.w600)),
-                ),
-              ),
-            ]),
-          ),
-        ]),
-      ),
-    );
-  }
-}
+// ── Customer Edit Dialog — replaced by the CHANGE #810 backend-described form.
+//
+// The dialog held a const list of 23 (column, label, required) records: the
+// field list, the labels and which one was mandatory were all Dart. They now
+// live in admin_customer_edit_field and arrive from admin_customer_edit_form(),
+// so adding a field to the customer form is an INSERT, not a deploy.
 
 // ─── CSV Import Dialog ────────────────────────────────────────────────────────
 
@@ -15004,6 +14737,43 @@ class _SubstitutePanelState extends State<_SubstitutePanel> {
           ),
         ],
       ],
+    );
+  }
+}
+
+/// CHANGE #810 — one filter chip on the Customers list. Label and count are
+/// the payload's; this widget only says whether it is on.
+class _CusChip extends StatelessWidget {
+  final String label;
+  final int? count;
+  final bool active;
+  final VoidCallback onTap;
+  const _CusChip(
+      {required this.label,
+      this.count,
+      required this.active,
+      required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: Ds.r.rChip,
+      child: Container(
+        constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+        alignment: Alignment.center,
+        padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
+        decoration: BoxDecoration(
+          color: active ? Ds.c.brandSoft : Ds.c.surface,
+          borderRadius: Ds.r.rChip,
+          border: Border.all(color: active ? Ds.c.brand : Ds.c.divider),
+        ),
+        child: Text(
+          count == null ? label : '$label  $count',
+          style:
+              active ? Ds.t.caption.copyWith(color: Ds.c.brand) : Ds.t.caption,
+        ),
+      ),
     );
   }
 }

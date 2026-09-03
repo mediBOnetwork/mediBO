@@ -934,6 +934,16 @@ Current files and what they hold down:
   SERVER recomputed them, and CartOrderRefusal treats only
   error:'unavailable_in_cart' as that refusal, keeping its message verbatim.
 
+- `customer_console_test.dart` — the Customers console and the customer page
+  (CHANGE #810): the row prints name/subtitle/status verbatim and shows the
+  churn flag only when the payload sent `has:true` (a label with has:false
+  draws nothing), the page's header chips, churn sentence and tab list are the
+  payload's, an unknown block kind renders zero pixels, Performance prints the
+  backend's own rupees and percentages, an empty list shows the backend's empty
+  state, ok:false renders the refusal instead of throwing, Block collects a
+  reason while Approve sends none, and a chips block sends back the backend's
+  own arg and value.
+
 The suite runs on the Dart VM in ~2s. Keep it that way: no network, no goldens,
 no Supabase, no camera — mock RPC payloads inline. If a widget resists mocking,
 extract its decisions into a pure class and test that.

@@ -962,9 +962,15 @@ begin
     'semaphore_label',   c755_copy('dev_queue.health_sem_label','{}'::jsonb),
     'streak',         coalesce(h.green_streak, 0),
     'streak_label',   c755_copy('dev_queue.health_streak_label','{}'::jsonb),
-    'streak_display', c755_copy('dev_queue.health_streak_fmt',
-                        jsonb_build_object('n', coalesce(h.green_streak,0),
-                                           'need', case when v_tripped then v_req else v_up_need end)),
+    -- "5 of 3 green" is nonsense: the streak only has a TARGET while something
+    -- is waiting on it (a resume, or a step up). With nothing pending it is
+    -- just a run of good probes and says so.
+    'streak_display', case when v_tripped or v_target > v_sem
+        then c755_copy('dev_queue.health_streak_fmt',
+               jsonb_build_object('n', coalesce(h.green_streak,0),
+                                  'need', case when v_tripped then v_req else v_up_need end))
+        else c755_copy('dev_queue.health_streak_plain',
+               jsonb_build_object('n', coalesce(h.green_streak,0))) end,
     'next_action',    v_next,
     'probe', jsonb_build_object(
       'active',  v_active,
@@ -1131,6 +1137,7 @@ insert into public.ui_copy (key, value) values
   ('dev_queue.health_sem_label',       '"Parallel builds"'::jsonb),
   ('dev_queue.health_streak_label',    '"Green streak"'::jsonb),
   ('dev_queue.health_streak_fmt',      '"{n} of {need} green"'::jsonb),
+  ('dev_queue.health_streak_plain',    '"{n} green in a row"'::jsonb),
   ('dev_queue.health_next_hold',       '"Holding at {sem} — database healthy"'::jsonb),
   ('dev_queue.health_next_up',         '"Scaling to {next} after {left} more green probe(s)"'::jsonb),
   ('dev_queue.health_next_down',       '"Scaling down to {sem} — database under pressure"'::jsonb),

@@ -809,19 +809,10 @@ class _HomeShellState extends State<HomeShell> {
       if (msg.isNotEmpty) showToast(context, msg, isError: true);
       return;
     }
-    // CHANGE #754 — a route whose screen now lives in the Fulfill pipeline
-    // opens Fulfill on that stage, wherever the link came from: an old nav
-    // row, a bookmark, a /admin/go/<route> URL. The pairing is the backend's
-    // (access_boot().routes[].stage), so moving the NEXT screen into Fulfill
-    // is a registry edit, not a deploy. This also generalises #690's one-off
-    // 'exceptions' branch below, which is left in place because it is the same
-    // answer and costs nothing.
-    final stage = Access.instance.fulfillStageForRoute(route);
-    if (stage.isNotEmpty) {
-      RenderLog.write('c754_route_to_fulfill', '$route>$stage');
-      setState(() { _index = 10; _cartOpen = false; });
-      WidgetsBinding.instance.addPostFrameCallback(
-          (_) => AdminFulfillmentScreen.openStage(stage));
+    // CHANGE #754 — a route whose screen moved into Fulfill opens there
+    // instead. The pairing is the backend's; see shell_extra_routes.dart.
+    if (shellOpenFulfillStage(
+        route, (i) => setState(() { _index = i; _cartOpen = false; }))) {
       return;
     }
     switch (route) {
@@ -841,11 +832,6 @@ class _HomeShellState extends State<HomeShell> {
       case 'bags':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const BagsScreen()));
-        break;
-      case 'exceptions': // CHANGE #690 — a Fulfill stage, not a page.
-        setState(() { _index = 10; _cartOpen = false; });
-        WidgetsBinding.instance.addPostFrameCallback(
-            (_) => AdminFulfillmentScreen.openStage('exceptions'));
         break;
       // CHANGE #174 — PTR / GST backfill. Not gated here: admin_pricing_list()
       // and product_pricing_upsert() both check get_my_role() themselves and

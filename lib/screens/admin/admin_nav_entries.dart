@@ -4,6 +4,25 @@ import '../../design_tokens.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import 'nav_registry_view.dart';
+import 'recon_screen.dart';
+
+/// CHANGE #471 — the door to Money › Reconciliation, opened from here rather
+/// than written inline in the shell.
+///
+/// `home_shell.dart` sits at 1,998 lines of a hard 2,000-line guard
+/// (test/protected/god_file_guard_test.dart), and the four lines a `case` and
+/// its import cost turned that guard red on the first attempt. The usual home
+/// for a door in that situation is `shell/shell_extra_routes.dart` — but that
+/// file is the most contended in the repo (nine commands were queued on it
+/// when this shipped), while this one is registered conflict-exempt precisely
+/// because it is only ever appended to. So the shell keeps a one-line case and
+/// the push lives here, next to the nav list it belongs to.
+///
+/// Authorisation is not the door: recon_home(), recon_run_detail() and
+/// recon_run_now() each gate on is_admin() and the screen prints whatever they
+/// answer.
+void openRecon(BuildContext context) => Navigator.push<void>(
+    context, MaterialPageRoute<void>(builder: (_) => const ReconScreen()));
 
 /// One item in an admin nav surface.
 class AdminNavEntry {

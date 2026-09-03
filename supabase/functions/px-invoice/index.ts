@@ -144,10 +144,17 @@ async function render(inv: any): Promise<Uint8Array> {
   if (col % 2 === 1) y -= 12
   y -= 6; hr(y); y -= 14
 
-  // 130+46+40+30+52+62+38+65 = 463 <= 523 printable
+  // px deal:    130+46+40+30+52+62+38+65 = 463 <= 523 printable
+  // settlement: 294+50+52+62+65          = 523 <= 523 printable
+  // CHANGE #695 — a key with no width here silently falls back to 50px, which
+  // is fine for a code and wrong for a sentence. The settlement line is ONE
+  // description of a service and it gets the whole slack the narrow columns
+  // leave: at 200 it clipped mid-period ("...(27 Aug – 02"), which on a tax
+  // document reads as a different supply than the one that was billed.
   const WCOL: Record<string, number> = {
     product: 130, batch: 46, expiry: 40, qty: 30, rate: 52,
     taxable: 62, gst: 38, amount: 65,
+    desc: 294, sac: 50,
   }
   const RIGHT = new Set(['qty', 'rate', 'taxable', 'gst', 'amount'])
   const cols = (Array.isArray(inv.columns) ? inv.columns : [])
@@ -198,27 +205,71 @@ async function render(inv: any): Promise<Uint8Array> {
     y -= 6
   }
 
+  // CHANGE #695 — the two footer halves share one line, so the left one is
+  // CLIPPED to the room the right one leaves. They used to be drawn at fixed
+  // ends and a long terms string ran straight through the note ("...paid on
+  // the due dateThis is a computer-generated tax invoice."), which is the kind
+  // of overlap nobody notices until it is on a document sent to a CA.
   const foot = inv.footer ?? {}
   hr(y); y -= 12
-  if (foot.items) txt(foot.items, PM, y, 7.5, F, grey)
+  const noteW = foot.note ? F.widthOfTextAtSize(ansi(foot.note), 7.5) : 0
+  if (foot.items) {
+    txt(clip(String(foot.items), F, 7.5, PW - 2 * PM - noteW - 12), PM, y, 7.5, F, grey)
+  }
   if (foot.note) rtxt(foot.note, PW - PM, y, 7.5, F, grey)
 
   return await pdf.save()
 }
 
+// CHANGE #695 — the renderer above is now shared.
+//
+// It already draws a GST tax invoice and computes NOTHING: parties, meta rows,
+// columns, lines, totals and net all arrive finished from SQL. The settlement
+// tax invoice is the same document with a different source, so it reuses this
+// drawing code rather than a second copy of it — one place for a layout bug,
+// one place for the font fallback, one place for the rupee glyph.
+//
+// A source names the pair of RPCs that feed and answer it. 'px_deal' is the
+// default and its request body is unchanged, so #420's caller keeps working
+// exactly as it did.
+type Source = {
+  idKey: string                              // body key carrying the id
+  input: string                              // render-input RPC
+  report: string                             // report RPC
+  idArg: string                              // the id argument both take
+}
+const SOURCES: Record<string, Source> = {
+  px_deal: {
+    idKey: 'deal_id',
+    input: 'px_invoice_render_input',
+    report: 'px_invoice_report',
+    idArg: 'p_deal_id',
+  },
+  settlement_invoice: {
+    idKey: 'invoice_id',
+    input: 'settlement_invoice_render_input',
+    report: 'settlement_invoice_report',
+    idArg: 'p_invoice_id',
+  },
+}
+
 Deno.serve(async (req) => {
-  let dealId = ''
+  let id = ''
+  let src: Source = SOURCES.px_deal
   try {
     const body = await req.json().catch(() => ({}))
-    dealId = String(body?.deal_id ?? '')
-    if (!dealId) return json({ error: 'deal_id required' }, 400)
+    const key = String(body?.source ?? 'px_deal')
+    if (!SOURCES[key]) return json({ error: 'unknown source: ' + key }, 400)
+    src = SOURCES[key]
+    id = String(body?.[src.idKey] ?? '')
+    if (!id) return json({ error: src.idKey + ' required' }, 400)
 
     const { data: input, error: inErr } = await supabase
-      .rpc('px_invoice_render_input', { p_deal_id: dealId })
-    if (inErr) throw new Error('px_invoice_render_input: ' + inErr.message)
+      .rpc(src.input, { [src.idArg]: id })
+    if (inErr) throw new Error(src.input + ': ' + inErr.message)
     if (!input?.ok) {
-      await supabase.rpc('px_invoice_report', {
-        p_deal_id: dealId, p_ok: false,
+      await supabase.rpc(src.report, {
+        [src.idArg]: id, p_ok: false,
         p_error: 'render_input: ' + (input?.error ?? 'unknown'),
       }).catch(() => {})
       return json({ ok: false, reason: input?.error ?? 'no_input' })
@@ -230,17 +281,17 @@ Deno.serve(async (req) => {
               { contentType: 'application/pdf', upsert: true })
     if (up.error) throw new Error('upload: ' + up.error.message)
 
-    const { data: rep } = await supabase.rpc('px_invoice_report', {
-      p_deal_id: dealId, p_ok: true, p_bucket: input.bucket,
+    const { data: rep } = await supabase.rpc(src.report, {
+      [src.idArg]: id, p_ok: true, p_bucket: input.bucket,
       p_path: input.path, p_name: input.file_name, p_bytes: bytes.length,
     })
-    return json({ ok: true, deal_id: dealId, path: input.path,
+    return json({ ok: true, [src.idKey]: id, path: input.path,
                   name: input.file_name, bytes: bytes.length, report: rep })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    if (dealId) {
-      await supabase.rpc('px_invoice_report',
-        { p_deal_id: dealId, p_ok: false, p_error: msg }).catch(() => {})
+    if (id) {
+      await supabase.rpc(src.report,
+        { [src.idArg]: id, p_ok: false, p_error: msg }).catch(() => {})
     }
     return json({ ok: false, error: msg }, 200)
   }

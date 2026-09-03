@@ -384,3 +384,135 @@ comment on function public.zone_pnl(smallint, text) is
 
 revoke all on function public.zone_pnl(smallint, text) from anon;
 grant execute on function public.zone_pnl(smallint, text) to authenticated;
+
+-- ── 6. a zone running under the floor is reported ──────────────────────────
+-- pnl_alert is a per-LINE table (one row per bill line sold below cost), so a
+-- ZONE-level margin warning gets its own table rather than being forced into
+-- a shape that has an order_code and a product in it.
+create table if not exists public.zone_pnl_alert (
+  id            bigserial primary key,
+  zone_id       smallint not null,
+  period_key    text not null,
+  period_from   date not null,
+  period_to     date not null,
+  revenue       numeric not null default 0,
+  gross_margin  numeric not null default 0,
+  margin_pct    numeric,
+  floor_pct     numeric not null,
+  message       text not null,
+  created_at    timestamptz not null default now(),
+  seen_at       timestamptz,
+  unique (zone_id, period_key)
+);
+
+alter table public.zone_pnl_alert enable row level security;
+drop policy if exists zone_pnl_alert_admin on public.zone_pnl_alert;
+create policy zone_pnl_alert_admin on public.zone_pnl_alert
+  for select to authenticated
+  using (public.get_my_role() in ('admin','super_admin'));
+
+create or replace function public.zone_pnl_scan(p_period text default 'month')
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+declare
+  v_p jsonb := public._c694_period(p_period);
+  v_floor numeric := coalesce((select (value #>> '{}')::numeric from public.app_settings
+                                where key = 'zone_pnl_margin_floor_pct'), 6.0);
+  z record; v_slice jsonb; v_n int := 0; v_msg text;
+begin
+  for z in select id, name from public.zones
+            where is_active and not coalesce(is_synthetic,false) order by id loop
+    v_slice := public._c694_zone_slice(z.id::smallint,
+                 (v_p->>'from')::date, (v_p->>'to')::date, false);
+    -- A zone that billed nothing has no margin to be under a floor. Reporting
+    -- one would fill the inbox with every dormant zone, every run.
+    continue when coalesce((v_slice->>'revenue')::numeric, 0) = 0;
+    continue when (v_slice->>'margin_pct') is null;
+    continue when (v_slice->>'margin_pct')::numeric >= v_floor;
+
+    v_msg := replace(replace(replace(public._pnl_c('zone.margin_alert'),
+               '{zone}', z.name),
+               '{pct}', to_char((v_slice->>'margin_pct')::numeric, 'FM990.00')),
+               '{threshold}', to_char(v_floor, 'FM990.##'));
+
+    insert into public.zone_pnl_alert (zone_id, period_key, period_from, period_to,
+      revenue, gross_margin, margin_pct, floor_pct, message)
+    values (z.id::smallint,
+            (v_p->>'key') || ':' || (v_p->>'from'),
+            (v_p->>'from')::date, (v_p->>'to')::date,
+            (v_slice->>'revenue')::numeric, (v_slice->>'gross_margin')::numeric,
+            (v_slice->>'margin_pct')::numeric, v_floor, v_msg)
+    -- One row per zone per period: a nightly scan must not file the same
+    -- warning thirty times before somebody reads it.
+    on conflict (zone_id, period_key) do update
+      set revenue = excluded.revenue, gross_margin = excluded.gross_margin,
+          margin_pct = excluded.margin_pct, message = excluded.message;
+    v_n := v_n + 1;
+  end loop;
+
+  return jsonb_build_object('ok', true, 'period', v_p->>'key',
+                            'floor_pct', v_floor, 'zones_under_floor', v_n);
+end $function$;
+
+comment on function public.zone_pnl_scan(text) is
+  'CHANGE #694 — files a zone whose margin is under the floor. One row per '
+  'zone per period, so a nightly run cannot spam the inbox.';
+
+-- On the ONE dispatcher (never a bare */N schedule), in the quiet window.
+insert into public.cron_task (name, ord, mode, gate_sql, work_sql, enabled, note,
+                              base_interval_s, run_at_ist, dml)
+values ('zone_pnl_margin_scan', 950, 'poll',
+        null, 'select public.zone_pnl_scan(''month'')', true,
+        'CHANGE #694 — reports a zone running under the margin floor.',
+        null, '02:40', true)
+on conflict (name) do update
+  set work_sql = excluded.work_sql, note = excluded.note, enabled = true;
+
+-- ── 7. the doors — THREE rows, not two ─────────────────────────────────────
+-- surface_route (the door) + feature_registry (the tile) are the two every
+-- migration remembers. access_role_default is the third, and it is auto-seeded
+-- with can_view=false for 'admin' and 'partner' — so without it #653 refuses
+-- the route, the deep link resolves, the RPC answers, and the screen still
+-- never opens. #713 shipped and was verified live before that was noticed.
+insert into public.feature_registry
+  (feature_key, label, group_label, icon_key, route_key, sort_order, owner,
+   partner_eligible, default_access, is_active, category, surface,
+   roles_allowed, description)
+values
+  ('admin.zone_pnl', 'Zone P&L', 'Money', 'rule', 'zone_pnl', 58, 'medibo',
+   false, 'none', true, 'money', 'dashboard',
+   array['admin','super_admin'],
+   'CHANGE #694 — revenue, costs, commission and delivery payouts per zone per period, every zone side by side.'),
+  ('partner.zone_pnl', 'Zone P&L', 'Money', 'rule', 'partner_zone_pnl', 59, 'partner',
+   true, 'read', true, 'money', 'dashboard',
+   array['partner','admin','super_admin'],
+   'CHANGE #694 — the partner''s own zone: the same numbers its settlement statement is built from.')
+on conflict (feature_key) do update
+  set label = excluded.label, group_label = excluded.group_label,
+      route_key = excluded.route_key, roles_allowed = excluded.roles_allowed,
+      surface = excluded.surface, partner_eligible = excluded.partner_eligible,
+      default_access = excluded.default_access,
+      description = excluded.description, is_active = true;
+
+insert into public.surface_route (route_key, feature_key, kind, handled_by, note, is_active)
+values
+  ('zone_pnl', 'admin.zone_pnl', 'feature', 'home_shell',
+   'CHANGE #694 — opened by shellExtraRouteScreen() in lib/screens/shell/shell_extra_routes.dart.', true),
+  ('partner_zone_pnl', 'partner.zone_pnl', 'feature', 'partner_home_screen',
+   'CHANGE #694 — the partner console''s own door onto the same screen, zone-clamped by zone_pnl().', true)
+on conflict (route_key, feature_key) do update
+  set kind = excluded.kind, handled_by = excluded.handled_by,
+      note = excluded.note, is_active = true;
+
+-- THE THIRD ROW. Without these the tile renders and the tap does nothing.
+insert into public.access_role_default (role, feature_key, can_view, can_write) values
+  ('admin',       'admin.zone_pnl',   true,  false),
+  ('super_admin', 'admin.zone_pnl',   true,  true),
+  ('partner',     'partner.zone_pnl', true,  false),
+  ('admin',       'partner.zone_pnl', true,  false),
+  ('super_admin', 'partner.zone_pnl', true,  true)
+on conflict (role, feature_key) do update
+  set can_view = excluded.can_view, can_write = excluded.can_write;

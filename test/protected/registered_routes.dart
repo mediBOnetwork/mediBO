@@ -38,7 +38,7 @@ const kRegisteredAdminRoutes = <String>[
   'supplier_accounts',
   'suppliers', 'surface_map', 'test_mode', 'unmapped_companies',
   'users_access', 'wa_campaigns', 'wa_diagnosis', 'wa_drips', 'wa_ops',
-  'wa_segments', 'wa_templates', 'whatsapp',
+  'wa_segments', 'wa_templates', 'whatsapp', 'zone_pnl',
 ];
 
 /// CHANGE #754 / #821 — the routes whose door is the BACKEND's, not Dart's.

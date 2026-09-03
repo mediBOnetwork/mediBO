@@ -37,6 +37,7 @@ import '../admin/admin_feedback_screen.dart';
 import '../admin/returns_refunds_screen.dart';
 import '../admin/surface_map_screen.dart';
 import '../admin/damage_report_screen.dart';
+import '../partner/zone_pnl_screen.dart';
 import '../admin/search_synonyms_screen.dart';
 import '../admin/support_threads_screen.dart';
 import '../partner/partner_tasks_screen.dart';
@@ -102,6 +103,10 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       // answers not_authorized with its own sentence, so the door is opened
       // here and the authorisation stays in the RPC.
       'damage_report' => const DamageReportScreen(),
+      // CHANGE #694 — Zone P&L. zone_pnl() fences itself (mediBO sees every
+      // zone, a partner only its own) and the screen renders its refusal,
+      // the same story as damage_report above.
+      'zone_pnl' => const ZonePnlScreen(),
       // CHANGE #790 — Admin → Search synonyms. search_synonyms_list() gates
       // itself on get_my_role() and the screen renders its refusal, the same
       // story as damage_report above.

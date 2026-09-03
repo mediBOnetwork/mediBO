@@ -268,6 +268,19 @@ Current files and what they hold down:
   fallback wording, and an order with no permitted counterparty is absent from
   call_mask_targets rather than a greyed-out button.
 
+- `supplier_console_test.dart` — the admin supplier console (#753): the compact
+  row prints name/zone/rank/SPN/waiting/dues exactly as the payload sent them
+  (a '#7' rank on a lone row and a one-decimal rupee string are deliberate — a
+  Dart formatter or a positional count would rewrite both), has_waiting and
+  has_dues are backend FLAGS not numeric comparisons, an absent or show:false
+  kyc_chip renders zero pixels, the ⋮ menu is the payload list in payload order
+  and hands its confirm block back untouched; and on the supplier page the tab
+  list is the registry's (a tab the partner matrix withheld simply is not
+  there), an unknown block kind is skipped in silence, tiles/tables print
+  '—' and '-18.4%' verbatim, a chip sends the backend's typed `value` rather
+  than its string key, and ok:false renders the backend's message instead of
+  throwing.
+
 - `cart_unavailable_test.dart` — the cart's red state is the backend's flag:
   per-line unavailable/qty_locked are carried through untouched,
   unavailable_badge prints verbatim (never pluralised in Dart), the badge is

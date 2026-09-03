@@ -40,6 +40,8 @@ import '../../widgets/response_deadline.dart';
 import '../../widgets/order_item_card.dart';
 import '../../widgets/sup_pay_panel.dart';
 import '../../widgets/supplier_closure_control.dart'; // cmd #435
+import '../../widgets/supplier_console_row.dart'; // CHANGE #753
+import 'admin_supplier_page.dart'; // CHANGE #753 — the supplier page
 import 'admin_add_medicine_screen.dart';
 import 'unmapped_companies_screen.dart';
 
@@ -477,12 +479,58 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   String _supplierQuery = '';
   final TextEditingController _supplierSearchCtl = TextEditingController();
   Timer? _supplierSearchDebounce;
-  // Ordered ids returned by the last RPC response; resolved against the live
-  // _suppliers list so results stay fresh across realtime reloads.
-  List<String> _supplierSearchOrder = [];
-  List<_SupRow> get _supplierSearchResults {
-    final byId = {for (final s in _suppliers) s.id: s};
-    return _supplierSearchOrder.map((id) => byId[id]).whereType<_SupRow>().toList();
+
+  /// CHANGE #753 — the Suppliers list is ONE payload now. Rows, the filter
+  /// chips and their counts, the sort options and every row's overflow menu
+  /// all arrive from admin_suppliers_console(); this screen holds the chosen
+  /// filters/sort only so it can hand them straight back on the next call.
+  Map<String, dynamic> _console = const {};
+  final Set<String> _consoleFilters = <String>{};
+  String _consoleSort = 'spn';
+  bool _consoleLoading = false;
+
+  List<Map<String, dynamic>> _consoleList(String key) {
+    final v = _console[key];
+    return v is List
+        ? v.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList()
+        : const <Map<String, dynamic>>[];
+  }
+
+  Future<void> _loadConsole() async {
+    if (mounted) setState(() => _consoleLoading = true);
+    try {
+      final res = await Supabase.instance.client.rpc(
+        'admin_suppliers_console',
+        params: {
+          'p_filters': _consoleFilters.toList(),
+          'p_sort': _consoleSort,
+          'p_search': _supplierQuery,
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _console = res is Map ? res.cast<String, dynamic>() : const {};
+        _consoleLoading = false;
+      });
+      RenderLog.write('c753_supplier_rows', '${_consoleList('rows').length}');
+      RenderLog.write('c753_supplier_chips', '${_consoleList('chips').length}');
+    } catch (_) {
+      if (mounted) setState(() => _consoleLoading = false);
+    }
+  }
+
+  void _toggleConsoleFilter(String key) {
+    if (key.isEmpty) return;
+    setState(() {
+      if (!_consoleFilters.remove(key)) _consoleFilters.add(key);
+    });
+    _loadConsole();
+  }
+
+  void _setConsoleSort(String key) {
+    if (key.isEmpty || key == _consoleSort) return;
+    setState(() => _consoleSort = key);
+    _loadConsole();
   }
   bool _hasPendingChanges = false;
   bool _refreshLoading = false;
@@ -753,36 +801,14 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }
   }
 
-  // Debounced trigger for the admin_list_suppliers RPC — fires ~300ms after
-  // the user stops typing so company-name search (not just name/code/city)
-  // works instead of the old in-memory filter.
-  void _onSupplierSearchChanged(String v) {
+  /// CHANGE #753 — the same debounce, aimed at the console payload. Typing
+  /// re-asks the backend; the screen never filters a list it already holds.
+  void _onConsoleSearchChanged(String v) {
     final q = v.trim();
     setState(() => _supplierQuery = q);
     _supplierSearchDebounce?.cancel();
-    if (q.isEmpty) {
-      setState(() => _supplierSearchOrder = []);
-      return;
-    }
-    _supplierSearchDebounce = Timer(
-      const Duration(milliseconds: 300),
-      () => _runSupplierSearch(q),
-    );
-  }
-
-  Future<void> _runSupplierSearch(String query) async {
-    try {
-      final rows = await Supabase.instance.client
-          .rpc('admin_list_suppliers', params: {'p_search': query}) as List;
-      if (!mounted || query != _supplierQuery) return; // stale response guard
-      setState(() {
-        _supplierSearchOrder =
-            rows.map((r) => (r as Map)['id'] as String).toList();
-      });
-      RenderLog.write('c_admin_list_suppliers_search', '${_supplierSearchOrder.length}');
-    } catch (_) {
-      // Silently ignore search errors — keep the prior results visible.
-    }
+    _supplierSearchDebounce =
+        Timer(const Duration(milliseconds: 300), _loadConsole);
   }
 
   Future<void> _refreshSuppliers({bool isSave = false}) async {
@@ -861,6 +887,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       // supplier_company / order_items. Six independent reads is six chances
       // for the screen to hold a different answer than the database. Row
       // shapes are unchanged, so everything downstream parses as before.
+      // CHANGE #753 — the compact Suppliers list is its own payload and is
+      // fetched alongside, never derived from the rows below.
+      unawaited(_loadConsole());
       final screenRaw = await client.rpc('admin_supplier_screen_data',
           params: {if (scopeYmd != null) 'p_date': scopeYmd});
       final screen = (screenRaw is List ? screenRaw.first : screenRaw) as Map;
@@ -1055,22 +1084,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   // ── Suspend / Reactivate / Delete ───────────────────────────────────────────
-
-      Future<void> _deleteSupplier(_SupRow row) async {
-    try {
-      // #576 — deleted_by used auth.currentUser.email, which identifies a
-      // CREDENTIAL not an account, with a Dart fallback of 'admin'. The
-      // snapshot was whatever the client happened to hold. The server now
-      // stamps the time, resolves the admin, and snapshots the row itself.
-      final client = Supabase.instance.client;
-      await client.rpc('admin_supplier_action',
-          params: {'p_supplier_id': row.id, 'p_action': 'delete'});
-      _load(showSpinner: false);
-      if (mounted) showToast(context, c('admin_supplier.supplier_deleted'));
-    } catch (e) {
-      if (mounted) showToast(context, cf('admin_supplier.delete_failed', {'a': '$e'}), isError: true);
-    }
-  }
 
   // ── Permanent hard-delete one supplier ──────────────────────────────────────
 
@@ -4268,44 +4281,52 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   // ═══════════════════════════════════════════════════════════════════════════
 
   Widget _buildSuppliersView(bool isDesktop) {
-    final pad = isDesktop ? 28.0 : 16.0;
+    final pad = isDesktop ? Ds.space.x24 : Ds.space.x16;
     RenderLog.write('c426_supplier_search', 'box=on');
-    final visibleSuppliers =
-        _supplierQuery.isEmpty ? _suppliers : _supplierSearchResults;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const SizedBox(height: 10),
       Padding(
         padding: EdgeInsets.fromLTRB(pad, 0, pad, 8),
         child: TextField(
           controller: _supplierSearchCtl,
-          onChanged: _onSupplierSearchChanged,
+          onChanged: _onConsoleSearchChanged,
           textInputAction: TextInputAction.search,
-          style: const TextStyle(fontSize: 13),
+          style: Ds.t.caption,
           decoration: InputDecoration(
-            hintText: c('admin_supplier.hint_search_suppliers'),
-            prefixIcon: const Icon(Icons.search, size: 18),
+            hintText: (_console['search_hint'] as String?) ?? '',
+            prefixIcon: Icon(Icons.search, size: Ds.space.x16 + Ds.space.x4),
             suffixIcon: _supplierQuery.isEmpty
                 ? null
                 : IconButton(
-                    icon: const Icon(Icons.clear, size: 18),
+                    icon: Icon(Icons.clear, size: Ds.space.x16 + Ds.space.x4),
                     onPressed: () {
                       _supplierSearchCtl.clear();
-                      _onSupplierSearchChanged('');
+                      _onConsoleSearchChanged('');
                     },
                   ),
             isDense: true,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            contentPadding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x12, vertical: Ds.space.x8),
+            border: OutlineInputBorder(borderRadius: Ds.r.rButton),
           ),
         ),
       ),
-      if (_suppliers.isEmpty)
-        _emptyState('0 approved suppliers')
-      else if (visibleSuppliers.isEmpty)
-        _emptyState(c('admin_supplier.empty_no_suppliers_found'))
+      _consoleChips(pad),
+      _consoleSorts(pad),
+      if (_consoleLoading && _consoleList('rows').isEmpty)
+        Padding(
+          padding: EdgeInsets.all(Ds.space.x32),
+          child: const Center(child: CircularProgressIndicator()),
+        )
+      else if (_consoleList('rows').isEmpty)
+        _emptyState((_console['empty_label'] as String?) ?? '')
       else ...[
-        if (isDesktop) _suppliersTableHeader(),
-        ...visibleSuppliers.map((r) => isDesktop ? _desktopSupRow(r) : _mobileSupCard(r)),
+        Padding(
+          padding: EdgeInsets.fromLTRB(pad, 0, pad, Ds.space.x8),
+          child: Text((_console['count_label'] as String?) ?? '',
+              style: Ds.t.caption),
+        ),
+        ..._consoleList('rows').map(_consoleRow),
       ],
       const SizedBox(height: 32),
       _buildDeletedSection(isDesktop),
@@ -4507,246 +4528,225 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
 
-  Widget _suppliersTableHeader() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 10),
-      decoration: const BoxDecoration(
-        color: Color(0xFFF9FAFB),
-        border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
+  // ── CHANGE #753 — the compact list. Every string below is the payload's. ──
+
+  Widget _consoleChips(double pad) {
+    final chips = _consoleList('chips');
+    final zone = _console['zone_chip'];
+    if (chips.isEmpty && zone == null) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.fromLTRB(pad, 0, pad, Ds.space.x12),
+      child: Wrap(
+        spacing: Ds.space.x8,
+        runSpacing: Ds.space.x8,
+        children: [
+          if (zone is Map)
+            _ConsoleChip(
+              label: (zone['label'] as String?) ?? '',
+              count: null,
+              active: true,
+              locked: true,
+              onTap: null,
+            ),
+          for (final ch in chips)
+            _ConsoleChip(
+              label: (ch['label'] as String?) ?? '',
+              count: ch['count'] is num ? (ch['count'] as num).toInt() : null,
+              active: ch['active'] == true,
+              locked: false,
+              onTap: () => _toggleConsoleFilter((ch['key'] as String?) ?? ''),
+            ),
+        ],
       ),
+    );
+  }
+
+  Widget _consoleSorts(double pad) {
+    final sorts = _consoleList('sorts');
+    if (sorts.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.fromLTRB(pad, 0, pad, Ds.space.x12),
       child: Row(children: [
-        _th('SUPPLIER', flex: 4),
-        _th('CONTACT', flex: 3),
-        _th('PHONE', flex: 2),
-        _th('CODE', flex: 2),
-        _th('CITY', flex: 3),
-        const SizedBox(width: 420), // right action cluster placeholder
+        Text((_console['sort_label'] as String?) ?? '', style: Ds.t.caption),
+        SizedBox(width: Ds.space.x8),
+        Expanded(
+          child: Wrap(
+            spacing: Ds.space.x8,
+            runSpacing: Ds.space.x8,
+            children: [
+              for (final so in sorts)
+                _ConsoleChip(
+                  label: (so['label'] as String?) ?? '',
+                  count: null,
+                  active: so['active'] == true,
+                  locked: false,
+                  onTap: () => _setConsoleSort((so['key'] as String?) ?? ''),
+                ),
+            ],
+          ),
+        ),
       ]),
     );
   }
 
-  Widget _desktopSupRow(_SupRow row) {
-    final isExpanded = _expandedSupplierId == row.id;
+  /// One compact row: name + zone on the left, SPN rank, inquiries waiting and
+  /// dues on the right, the licence/KYC chip beside them, and the overflow
+  /// menu the backend built. Phone and code moved to the supplier page.
+  Widget _consoleRow(Map<String, dynamic> row) {
+    final id = (row['id'] as String?) ?? '';
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      InkWell(
-        onTap: () => _toggleExpand(row.id),
-        mouseCursor: SystemMouseCursors.click,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 13),
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
-          ),
-          child: Row(children: [
-            Expanded(flex: 4, child: Text(row.supplierName.isNotEmpty ? row.supplierName : '—',
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-                overflow: TextOverflow.ellipsis)),
-            Expanded(flex: 3, child: Text(row.contactName.isNotEmpty ? row.contactName : '—',
-                style: const TextStyle(fontSize: 13, color: Color(0xFF374151)), overflow: TextOverflow.ellipsis)),
-            Expanded(flex: 2, child: Text(row.phone.isNotEmpty ? row.phone : '—',
-                style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))),
-            Expanded(flex: 2, child: Text(row.supplierCode.isNotEmpty ? row.supplierCode : '—',
-                style: const TextStyle(fontSize: 12, color: Color(0xFF374151), fontFamily: 'monospace'))),
-            Expanded(flex: 3, child: Text(
-                [row.city, row.state].where((s) => s.isNotEmpty).join(', ').let((s) => s.isNotEmpty ? s : '—'),
-                style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)), overflow: TextOverflow.ellipsis)),
-            // ── Right action cluster (fixed 360px) — all non-data controls ──────
-            SizedBox(width: 420, child: Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                SupplierClosureControl( // cmd #435
-                  supplierName: row.supplierName,
-                  state: _closureStates[supplierClosureKey(row.supplierName)],
-                  onChanged: _loadClosureStates,
-                ),
-                SizedBox(width: Ds.space.x8),
-                GestureDetector(
-                  onTap: () => _toggleSpn(row.id),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: _spnSupplierId == row.id ? const Color(0xFFDBEAFE) : Colors.white,
-                      borderRadius: BorderRadius.circular(5),
-                      border: Border.all(color: _spnSupplierId == row.id ? const Color(0xFF93C5FD) : const Color(0xFFD1D5DB)),
-                    ),
-                    child: const Text('SPN', style: TextStyle(
-                        fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                GestureDetector(
-                  onTap: () => _toggleCompanies(row.id),
-                  behavior: HitTestBehavior.opaque,
-                  child: _SupplierCompaniesButton(
-                    count: _companyCounts[row.id] ?? 0,
-                    isOpen: _companiesSupplierId == row.id,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                _MatchStatusChip(status: _matchService.statuses.value[row.id], supplierId: row.id),
-                const SizedBox(width: 10),
-                _StatusPill(
-                  key: ValueKey('status_${row.id}'),
-                  supplierId: row.id,
-                  initialStatus: row.status,
-                  onStatusChanged: (newStatus, newSpn) {
-                    row.rawData['status'] = newStatus;
-                    row.rawData['SPN'] = newSpn;
-                    if (mounted) {
-                      setState(_applySort);
-                      RenderLog.write('supplier_status_saved_readback', newStatus);
-                      RenderLog.write('supplier_list_resorted_live', _sortMode == _SupSortMode.spnDesc ? 'spn' : 'name');
-                    }
-                  },
-                ),
-                const SizedBox(width: 14),
-                _actionBtn('Edit', const Color(0xFF1B7A43), () => _editSupplier(row)),
-                const SizedBox(width: 6),
-                _actionBtn('Delete', const Color(0xFFDC2626), () => _deleteSupplier(row)),
-                const SizedBox(width: 10),
-                AnimatedRotation(
-                  turns: isExpanded ? 0.5 : 0.0,
-                  duration: const Duration(milliseconds: 200),
-                  child: const Icon(Icons.expand_more, size: 18, color: Color(0xFF6B7280)),
-                ),
-              ],
-            )),
-          ]),
-        ),
+      SupplierConsoleRow(
+        row: row,
+        onOpen: () => openAdminSupplierPage(context, id),
+        onMenu: (item) => _runConsoleMenu(row, item),
       ),
-      if (_companiesSupplierId == row.id)
+      // The ⋮ menu's Companies and SPN entries open the existing inline
+      // editors in place — the same two panels, reached from the new menu.
+      if (_companiesSupplierId == id)
         _CompaniesInlineSection(
-          supplierId: row.id,
-          supplierName: row.supplierName,
+          supplierId: id,
+          supplierName: (row['name'] as String?) ?? '',
           matchService: _matchService,
-          onCompanyAdded: () => _reloadCompanyCount(row.id),
+          onCompanyAdded: () => _reloadCompanyCount(id),
         ),
-      if (_spnSupplierId == row.id)
+      if (_spnSupplierId == id)
         _SpnInlineSection(
-          key: ValueKey('spn_${row.id}'),
-          supplierId: row.id,
-          supplierName: row.supplierName,
-          onSaved: () => _load(showSpinner: false).then((_) {
-            if (mounted) setState(_applySort);
-          }),
+          key: ValueKey('spn_$id'),
+          supplierId: id,
+          supplierName: (row['name'] as String?) ?? '',
+          onSaved: () => _load(showSpinner: false),
         ),
-      if (isExpanded) _buildDetails(row.rawData, lpad: 28, rpad: 0),
     ]);
   }
 
-  Widget _mobileSupCard(_SupRow row) {
-    final isExpanded = _expandedSupplierId == row.id;
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: InkWell(
-          onTap: () => _toggleExpand(row.id),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Builder(builder: (_) {
-                  RenderLog.write('supplier_card_restructured', 'true');
-                  return const SizedBox.shrink();
-                }),
-                // Name line: [Full supplier name] [Active pill]
-                Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                  Expanded(child: Text(
-                    row.supplierName.isNotEmpty ? row.supplierName : row.contactName.isNotEmpty ? row.contactName : 'Unknown',
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  )),
-                  const SizedBox(width: 8),
-                  _StatusPill(
-                    key: ValueKey('status_${row.id}'),
-                    supplierId: row.id,
-                    initialStatus: row.status,
-                    onStatusChanged: (newStatus, newSpn) {
-                      row.rawData['status'] = newStatus;
-                      row.rawData['SPN'] = newSpn;
-                      if (mounted) {
-                        setState(_applySort);
-                        RenderLog.write('supplier_status_saved_readback', newStatus);
-                        RenderLog.write('supplier_list_resorted_live', _sortMode == _SupSortMode.spnDesc ? 'spn' : 'name');
-                      }
-                    },
-                  ),
-                ]),
-                if (row.contactName.isNotEmpty) ...[const SizedBox(height: 3), Text(row.contactName, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)), overflow: TextOverflow.ellipsis)],
-                if (row.phone.isNotEmpty) ...[const SizedBox(height: 2), Text(row.phone, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))],
-                const SizedBox(height: 8),
-                Wrap(spacing: 12, runSpacing: 4, children: [
-                  if (row.supplierCode.isNotEmpty) _mobileField('Code', row.supplierCode),
-                  if (row.paymentTerm.isNotEmpty)  _mobileField('Payment', row.paymentTerm),
-                  if (row.city.isNotEmpty)          _mobileField('City', [row.city, row.state].where((s) => s.isNotEmpty).join(', ')),
-                ]),
-                const SizedBox(height: 8),
-                _MatchStatusChip(status: _matchService.statuses.value[row.id], supplierId: row.id),
-                const SizedBox(height: 8),
-                // Last action row: [Availability] [SPN] [Companies (N)] [Edit] [Delete]
-                Wrap(spacing: 8, runSpacing: 6, children: [
-                  SupplierClosureControl( // cmd #435
-                    supplierName: row.supplierName,
-                    state: _closureStates[supplierClosureKey(row.supplierName)],
-                    onChanged: _loadClosureStates,
-                  ),
-                  GestureDetector(
-                    onTap: () => _toggleSpn(row.id),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: _spnSupplierId == row.id ? const Color(0xFFDBEAFE) : Colors.white,
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(color: _spnSupplierId == row.id ? const Color(0xFF93C5FD) : const Color(0xFFD1D5DB)),
-                      ),
-                      child: const Text('SPN', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
-                    ),
-                  ),
-                  GestureDetector(
-                    onTap: () => _toggleCompanies(row.id),
-                    behavior: HitTestBehavior.opaque,
-                    child: _SupplierCompaniesButton(
-                      count: _companyCounts[row.id] ?? 0,
-                      isOpen: _companiesSupplierId == row.id,
-                    ),
-                  ),
-                  _actionBtn('Edit',   const Color(0xFF1B7A43), () => _editSupplier(row)),
-                  _actionBtn('Delete', const Color(0xFFDC2626), () => _deleteSupplier(row)),
-                ]),
-              ]),
-            ),
-            if (_companiesSupplierId == row.id) ...[
-              const Divider(height: 1, color: Color(0xFFE5E7EB)),
-              _CompaniesInlineSection(
-                supplierId: row.id,
-                supplierName: row.supplierName,
-                matchService: _matchService,
-                onCompanyAdded: () => _reloadCompanyCount(row.id),
+  _SupRow? _rowById(String id) {
+    for (final r in _suppliers) {
+      if (r.id == id) return r;
+    }
+    return null;
+  }
+
+  Future<void> _runConsoleMenu(
+      Map<String, dynamic> row, Map<String, dynamic> item) async {
+    final id = (row['id'] as String?) ?? '';
+    final key = (item['key'] as String?) ?? '';
+    final confirm = item['confirm'];
+
+    if (confirm is Map) {
+      final reason = await _confirmMenuAction(confirm.cast<String, dynamic>());
+      if (reason == null) return;
+      if (key == 'delete') {
+        await _deleteWithReason(id, reason);
+        return;
+      }
+    }
+
+    switch (key) {
+      case 'edit':
+        final r = _rowById(id);
+        if (r != null) await _editSupplier(r);
+        break;
+      case 'spn':
+        _toggleSpn(id);
+        break;
+      case 'companies':
+        _toggleCompanies(id);
+        break;
+      case 'availability':
+        await openAdminSupplierPage(context, id, initialTab: 'availability');
+        break;
+      case 'whatsapp':
+        final url = (item['url'] as String?) ?? '';
+        if (url.isNotEmpty) {
+          await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+        }
+        break;
+      case 'deactivate':
+        await _consoleStatusAction(id, 'suspend');
+        break;
+      case 'reactivate':
+        await _consoleStatusAction(id, 'reactivate');
+        break;
+    }
+  }
+
+  Future<void> _consoleStatusAction(String id, String action) async {
+    try {
+      await Supabase.instance.client.rpc('admin_supplier_action',
+          params: {'p_supplier_id': id, 'p_action': action});
+      await _load(showSpinner: false);
+    } catch (e) {
+      if (mounted) showToast(context, '$e', isError: true);
+    }
+  }
+
+  Future<void> _deleteWithReason(String id, String reason) async {
+    try {
+      final res = await Supabase.instance.client.rpc(
+          'admin_supplier_delete_with_reason',
+          params: {'p_supplier_id': id, 'p_reason': reason});
+      final m = res is Map ? res.cast<String, dynamic>() : const {};
+      if (!mounted) return;
+      final msg = (m['message'] as String?) ?? '';
+      if (msg.isNotEmpty) showToast(context, msg, isError: m['ok'] != true);
+      await _load(showSpinner: false);
+    } catch (e) {
+      if (mounted) showToast(context, '$e', isError: true);
+    }
+  }
+
+  /// Returns null on cancel, the typed reason when the backend asked for one,
+  /// and an empty string for a plain confirm. Every word is the payload's.
+  Future<String?> _confirmMenuAction(Map<String, dynamic> confirm) async {
+    final needsReason = confirm['needs_reason'] == true;
+    final ctl = TextEditingController();
+    var error = '';
+    return showDialog<String>(
+      context: context,
+      builder: (dctx) => StatefulBuilder(
+        builder: (dctx2, setLocal) => AlertDialog(
+          backgroundColor: Ds.c.surface,
+          shape: RoundedRectangleBorder(borderRadius: Ds.r.rCard),
+          title: Text((confirm['title'] as String?) ?? '', style: Ds.t.subtitle),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text((confirm['body'] as String?) ?? '', style: Ds.t.body),
+            if (needsReason) ...[
+              SizedBox(height: Ds.space.x16),
+              TextField(
+                controller: ctl,
+                autofocus: true,
+                style: Ds.t.body,
+                decoration: InputDecoration(
+                  hintText: (confirm['reason_hint'] as String?) ?? '',
+                  hintStyle: Ds.t.caption,
+                  errorText: error.isEmpty ? null : error,
+                  filled: true,
+                  fillColor: Ds.c.bg,
+                  border: OutlineInputBorder(borderRadius: Ds.r.rButton),
+                ),
               ),
-            ],
-            if (_spnSupplierId == row.id) ...[
-              const Divider(height: 1, color: Color(0xFFE5E7EB)),
-              _SpnInlineSection(
-                key: ValueKey('spn_${row.id}'),
-                supplierId: row.id,
-                supplierName: row.supplierName,
-                onSaved: () => _load(showSpinner: false).then((_) {
-                  if (mounted) setState(_applySort);
-                }),
-              ),
-            ],
-            if (isExpanded) ...[
-              const Divider(height: 1, color: Color(0xFFE5E7EB)),
-              _buildDetails(row.rawData, lpad: 0, rpad: 0),
             ],
           ]),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dctx2),
+              child: Text((confirm['cancel'] as String?) ?? '',
+                  style: Ds.t.body),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: Ds.c.danger),
+              onPressed: () {
+                final v = ctl.text.trim();
+                if (needsReason && v.isEmpty) {
+                  setLocal(() =>
+                      error = (confirm['reason_error'] as String?) ?? '');
+                  return;
+                }
+                Navigator.pop(dctx2, v);
+              },
+              child: Text((confirm['ok'] as String?) ?? ''),
+            ),
+          ],
         ),
       ),
     );
@@ -5985,19 +5985,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         TextSpan(text: '$label: ', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF))),
         TextSpan(text: value,      style: const TextStyle(fontSize: 11, color: Color(0xFF374151))),
       ]));
-
-  static Widget _actionBtn(String label, Color color, VoidCallback onTap) => InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(6),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.07),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: color.withValues(alpha: 0.3)),
-        ),
-        child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color)),
-      ));
 }
 
 // ── Extension ─────────────────────────────────────────────────────────────────
@@ -7433,105 +7420,6 @@ class _DestTab extends StatelessWidget {
         ]),
       ),
     );
-  }
-}
-
-// ── Supplier Companies pill button (stateless — count from parent) ────────────
-
-class _SupplierCompaniesButton extends StatelessWidget {
-  final int count;
-  final bool isOpen;
-  const _SupplierCompaniesButton({required this.count, required this.isOpen});
-
-  @override
-  Widget build(BuildContext context) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: isOpen ? const Color(0xFFDBEAFE) : const Color(0xFFEFF6FF),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: const Color(0xFF93C5FD)),
-        ),
-        child: Text(cf('admin_supplier.companies_count', {'a': '$count'}),
-            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
-                color: Color(0xFF2563EB))),
-      ),
-    );
-  }
-}
-
-// ── Match status chip (shown on every supplier list card) ─────────────────────
-
-class _MatchStatusChip extends StatelessWidget {
-  final MatchStatus? status;
-  final String supplierId;
-  const _MatchStatusChip({required this.status, required this.supplierId});
-
-  @override
-  Widget build(BuildContext context) {
-    final s = status;
-    if (s == null || s.total == 0) return const SizedBox.shrink();
-
-    // Render-log instrumentation (change #76).
-    RenderLog.write('change76_status_chip_rendered', {
-      'supplierId': supplierId,
-      'matched': s.matched,
-      'pending': s.pending,
-      'isMatching': s.isMatching,
-    });
-
-    if (s.isMatching) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: const Color(0xFFFEF3C7),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.5)),
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          const SizedBox(
-            width: 10, height: 10,
-            child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF92400E)),
-          ),
-          const SizedBox(width: 5),
-          Text(
-            cf('admin_supplier.matching_n_left', {'a': '${s.pending}'}),
-            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF92400E)),
-          ),
-        ]),
-      );
-    }
-
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: const Color(0xFFD1FAE5),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: const Color(0xFF065F46).withValues(alpha: 0.3)),
-        ),
-        child: Text(
-          cf('admin_supplier.n_of_m_matched', {'a': '${s.matched}', 'b': '${s.total}'}),
-          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF065F46)),
-        ),
-      ),
-      if (s.needsReview > 0) ...[
-        const SizedBox(width: 4),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-          decoration: BoxDecoration(
-            color: const Color(0xFFFEF3C7),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Text(
-            cf('admin_supplier.n_review', {'a': '${s.needsReview}'}),
-            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Color(0xFF92400E)),
-          ),
-        ),
-      ],
-    ]);
   }
 }
 
@@ -13274,4 +13162,47 @@ class _C328PayRow extends StatelessWidget {
   // CHANGE #548: backend-formatted (ist_fmt 'dmy2_time12').
   String _fmtP(String? ts) =>
       DateLabels.instance.label(ts, DateStyle.dmy2Time12) ?? '';
+}
+
+/// CHANGE #753 — a filter/sort chip on the Suppliers list. The label and the
+/// count are the backend's; `locked` is the zone scope, which is shown but
+/// never toggled because the zone is decided server-side.
+class _ConsoleChip extends StatelessWidget {
+  final String label;
+  final int? count;
+  final bool active;
+  final bool locked;
+  final VoidCallback? onTap;
+  const _ConsoleChip({
+    required this.label,
+    required this.count,
+    required this.active,
+    required this.locked,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (label.trim().isEmpty) return const SizedBox.shrink();
+    final text = count == null ? label : '$label  $count';
+    return InkWell(
+      onTap: locked ? null : onTap,
+      borderRadius: Ds.r.rChip,
+      child: Container(
+        constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+        alignment: Alignment.center,
+        padding: EdgeInsets.symmetric(
+            horizontal: Ds.space.x12, vertical: Ds.space.x8),
+        decoration: BoxDecoration(
+          color: active ? Ds.c.brandSoft : Ds.c.surface,
+          borderRadius: Ds.r.rChip,
+          border: Border.all(color: active ? Ds.c.brand : Ds.c.divider),
+        ),
+        child: Text(
+          text,
+          style: active ? Ds.t.caption.copyWith(color: Ds.c.brand) : Ds.t.caption,
+        ),
+      ),
+    );
+  }
 }

@@ -1538,3 +1538,37 @@ mediBO may publish a new version of this agreement. The Partner signs the new ve
 This agreement is governed by the laws of India, and the courts of Chhattisgarh have jurisdiction.',
   current_date, true, now(), 'system'
 where not exists (select 1 from public.partner_agreement_version);
+
+-- ── 13. auto-solved: _kyc_claim_sync() raised on every region_partners write ─
+-- The trigger fires on region_partners (UPDATE OF dl_20b, gstin) and its very
+-- first statement reads `new.is_deleted`. region_partners has no such column, so
+-- plpgsql raised `record "new" has no field "is_deleted"` — the `v_owner <>
+-- 'partner' and ...` conjunction does not stop the field from being resolved.
+-- Every write to a partner's drug licence number or GSTIN therefore failed,
+-- including partner_onboarding_set('gst'/'dl_20b') and save_region_partner.
+-- Found by CHANGE #692's own verify path; the column test moves into its own IF.
+create or replace function public._kyc_claim_sync()
+returns trigger language plpgsql security definer set search_path to 'public' as $$
+declare v_owner text; v_dl text; v_gst text;
+begin
+  if tg_table_name = 'pharmacy_profiles' then
+    v_owner := 'pharmacy'; v_dl := new.drug_license; v_gst := new.gstin;
+  elsif tg_table_name = 'supplier_profiles' then
+    v_owner := 'supplier'; v_dl := new.drug_license; v_gst := new.gstin;
+  else
+    v_owner := 'partner';  v_dl := new.dl_20b;       v_gst := new.gstin;
+  end if;
+
+  -- `new.is_deleted` is read ONLY on the two tables that have the column.
+  if v_owner <> 'partner' then
+    if coalesce(new.is_deleted, false) then
+      delete from kyc_identity_claim
+       where owner_kind = v_owner and owner_id = new.id::text;
+      return new;
+    end if;
+  end if;
+
+  perform public.kyc_identity_claim_set('dl',    v_dl,  v_owner, new.id::text);
+  perform public.kyc_identity_claim_set('gstin', v_gst, v_owner, new.id::text);
+  return new;
+end $$;

@@ -853,6 +853,10 @@ declare
   v_active boolean; v_manual text; v_next text; v_metrics jsonb; v_hist jsonb;
   v_up_need int; v_target int; v_probe_s int; v_tripped boolean;
 begin
+  -- Same door as every other dev-queue read: the fleet's health, its pool
+  -- config and its trip history are super-admin material, not something any
+  -- signed-in pharmacy can enumerate.
+  perform _dev_guard();
   cfg := _runner_health_cfg();
   select value into wp from public.dev_runner_config where key = 'worker_pool';
   select value into ds from public.dev_runner_config where key = 'desired_state';
@@ -1131,6 +1135,7 @@ BEGIN
 END $$;
 
 grant execute on function public.runner_health_card() to authenticated, service_role;
+-- ^ the grant is the PostgREST door; _dev_guard() inside is the actual gate.
 grant execute on function public.runner_health_probe() to service_role;
 grant execute on function public.runner_breaker_trip(text, int, jsonb) to service_role;
 grant execute on function public.runner_health_wake() to service_role;

@@ -23,6 +23,11 @@ typedef DashboardOpen = void Function(Map<String, dynamic> target);
 /// Running one of the backend's own `action` blocks ({rpc, args}).
 typedef DashboardAction = Future<void> Function(Map<String, dynamic> action);
 
+/// CHANGE #813 — a long press on a number shares it. The sentence and the
+/// wa.me URL are both the payload's (`metric.share`); the host only opens it,
+/// which is also why this widget stays plugin-free and unit-testable.
+typedef DashboardShare = void Function(Map<String, dynamic> share);
+
 Map<String, dynamic> _m(Object? v) =>
     v is Map ? Map<String, dynamic>.from(v) : const <String, dynamic>{};
 
@@ -57,11 +62,16 @@ class DashboardV2Card extends StatelessWidget {
   final DashboardOpen onOpen;
   final DashboardAction onAction;
 
+  /// Optional so a caller that cannot share (a test, an embedded preview)
+  /// simply renders a number that does not offer it.
+  final DashboardShare? onShare;
+
   const DashboardV2Card({
     super.key,
     required this.payload,
     required this.onOpen,
     required this.onAction,
+    this.onShare,
   });
 
   @override
@@ -89,6 +99,8 @@ class DashboardV2Card extends StatelessWidget {
       RenderLog.write(
           'c812_dashboard',
           'metrics=${_rows(strip['metrics']).length};'
+              'tappable=${_rows(strip['metrics']).where((m) => m['can_open'] == true).length};'
+              'tones=${_rows(needs['items']).map((i) => _s(i, 'tone')).toSet().join('|')};'
               'needs=${_rows(needs['items']).length};'
               'stages=${_rows(funnel['stages']).length};'
               'alerts=${alerts.length};'
@@ -96,27 +108,88 @@ class DashboardV2Card extends StatelessWidget {
               'zones=${_rows(zones['cards']).length}');
     } catch (_) {}
 
-    return Column(
-      key: const Key('c812_dashboard'),
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
+    // CHANGE #813 — one scannable column on a phone; on a tablet or in
+    // landscape the SAME blocks split into two, so nothing is re-ordered and
+    // no block exists only in one layout.
+    return LayoutBuilder(builder: (ctx, box) {
+      final twoCol = box.maxWidth >= 900;
+      final strip1 = _TodayStrip(strip: strip, onOpen: onOpen, onShare: onShare);
+      final quick = _QuickActions(block: actions, onOpen: onOpen);
+      final needsCard =
+          _NeedsYou(block: needs, onAction: onAction, onOpen: onOpen);
+      final funnelCard =
+          _FunnelCard(block: funnel, promised: promised, onOpen: onOpen);
+      final zoneCards = _rows(zones['cards']).isEmpty
+          ? const SizedBox.shrink()
+          : _ZoneCards(block: zones, onAction: onAction, onOpen: onOpen);
+
+      final head = <Widget>[
         _Greeting(payload: payload),
         for (final a in alerts) _AlertBanner(alert: a),
         if (alerts.isNotEmpty) SizedBox(height: Ds.space.x8),
-        _TodayStrip(strip: strip),
-        SizedBox(height: Ds.space.x24),
-        _QuickActions(block: actions, onOpen: onOpen),
-        if (_rows(actions['items']).isNotEmpty) SizedBox(height: Ds.space.x24),
-        _NeedsYou(block: needs, onAction: onAction, onOpen: onOpen),
-        SizedBox(height: Ds.space.x24),
-        _FunnelCard(block: funnel, promised: promised, onOpen: onOpen),
-        if (_rows(zones['cards']).isNotEmpty) ...[
+      ];
+
+      if (twoCol) {
+        return Column(
+          key: const Key('c812_dashboard'),
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ...head,
+            strip1,
+            SizedBox(height: Ds.space.x24),
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    quick,
+                    if (_rows(actions['items']).isNotEmpty)
+                      SizedBox(height: Ds.space.x24),
+                    needsCard,
+                  ],
+                ),
+              ),
+              SizedBox(width: Ds.space.x24),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    funnelCard,
+                    if (_rows(zones['cards']).isNotEmpty) ...[
+                      SizedBox(height: Ds.space.x24),
+                      zoneCards,
+                    ],
+                  ],
+                ),
+              ),
+            ]),
+          ],
+        );
+      }
+
+      return Column(
+        key: const Key('c812_dashboard'),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ...head,
+          strip1,
           SizedBox(height: Ds.space.x24),
-          _ZoneCards(block: zones),
+          quick,
+          if (_rows(actions['items']).isNotEmpty) SizedBox(height: Ds.space.x24),
+          needsCard,
+          SizedBox(height: Ds.space.x24),
+          funnelCard,
+          if (_rows(zones['cards']).isNotEmpty) ...[
+            SizedBox(height: Ds.space.x24),
+            zoneCards,
+          ],
         ],
-      ],
-    );
+      );
+    });
   }
 }
 
@@ -191,17 +264,24 @@ class _AlertBanner extends StatelessWidget {
 
 class _TodayStrip extends StatelessWidget {
   final Map<String, dynamic> strip;
-  const _TodayStrip({required this.strip});
+  final DashboardOpen onOpen;
+  final DashboardShare? onShare;
+  const _TodayStrip({required this.strip, required this.onOpen, this.onShare});
 
   @override
   Widget build(BuildContext context) {
     final metrics = _rows(strip['metrics']);
     if (metrics.isEmpty) return const SizedBox.shrink();
+    final hint = _s(strip, 'share_hint');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
         _SectionTitle(_s(strip, 'title')),
+        if (hint.isNotEmpty && onShare != null) ...[
+          SizedBox(height: Ds.space.x4),
+          Text(hint, key: const Key('c813_share_hint'), style: Ds.t.caption),
+        ],
         SizedBox(height: Ds.space.x12),
         LayoutBuilder(builder: (ctx, box) {
           // Proportional, never a hard-coded tile width: two up on a phone,
@@ -218,7 +298,10 @@ class _TodayStrip extends StatelessWidget {
             runSpacing: gap,
             children: [
               for (final m in metrics)
-                SizedBox(width: w, child: _MetricTile(metric: m)),
+                SizedBox(
+                    width: w,
+                    child: _MetricTile(
+                        metric: m, onOpen: onOpen, onShare: onShare)),
             ],
           );
         }),
@@ -229,7 +312,17 @@ class _TodayStrip extends StatelessWidget {
 
 class _MetricTile extends StatelessWidget {
   final Map<String, dynamic> metric;
-  const _MetricTile({required this.metric});
+  final DashboardOpen onOpen;
+  final DashboardShare? onShare;
+  const _MetricTile({required this.metric, required this.onOpen, this.onShare});
+
+  /// The arrow is the payload's `delta_arrow`, never a sign test on `delta`:
+  /// "money out went up" is a WARN arrow, and only the backend knows that.
+  static const _arrows = <String, IconData>{
+    'up': Icons.arrow_upward,
+    'down': Icons.arrow_downward,
+    'flat': Icons.remove,
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -237,7 +330,14 @@ class _MetricTile extends StatelessWidget {
     final spark = (metric['spark'] is List)
         ? (metric['spark'] as List).whereType<num>().map((n) => n.toDouble()).toList()
         : const <double>[];
-    return Container(
+    final share = _m(metric['share']);
+    final canOpen = metric['can_open'] == true;
+    final canShare = onShare != null &&
+        share['has'] == true &&
+        _s(share, 'url').isNotEmpty;
+    final arrow = _arrows[_s(metric, 'delta_arrow')];
+
+    final body = Container(
       padding: EdgeInsets.all(Ds.space.x16),
       decoration: BoxDecoration(
         color: Ds.c.surface,
@@ -270,13 +370,36 @@ class _MetricTile extends StatelessWidget {
             ),
           ),
           SizedBox(height: Ds.space.x8),
-          Text(_s(metric, 'delta_display'),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Ds.t.caption.copyWith(
-                  color: tone == 'neutral' ? Ds.c.textSecondary : _ink(tone))),
+          Row(children: [
+            if (arrow != null) ...[
+              Icon(arrow,
+                  key: Key('c813_arrow_${_s(metric, 'key')}'),
+                  size: 14,
+                  color: tone == 'neutral' ? Ds.c.textSecondary : _ink(tone)),
+              SizedBox(width: Ds.space.x4),
+            ],
+            Expanded(
+              child: Text(_s(metric, 'delta_display'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Ds.t.caption.copyWith(
+                      color:
+                          tone == 'neutral' ? Ds.c.textSecondary : _ink(tone))),
+            ),
+          ]),
         ],
       ),
+    );
+
+    if (!canOpen && !canShare) return body;
+    // A number that leads somewhere is a door: tap opens the backend's own
+    // list, long press hands its share block up. Never a dead tile.
+    return InkWell(
+      key: Key('c813_metric_tap_${_s(metric, 'key')}'),
+      borderRadius: Ds.r.rCard,
+      onTap: canOpen ? () => onOpen(metric) : null,
+      onLongPress: canShare ? () => onShare!(share) : null,
+      child: body,
     );
   }
 }
@@ -427,7 +550,20 @@ class _NeedsRowState extends State<_NeedsRow> {
     final item = widget.item;
     final action = _m(item['action']);
     final tone = _s(item, 'tone');
+    // CHANGE #813 — colour carries STATE and nothing else: red overdue, amber
+    // due today, green done, grey otherwise. The state is the payload's
+    // `tone`; this bar is the only place the row is coloured.
     return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Container(
+        key: Key('c813_state_${_s(item, 'id')}'),
+        width: 3,
+        height: 44,
+        margin: EdgeInsets.only(right: Ds.space.x12),
+        decoration: BoxDecoration(
+          color: _ink(tone),
+          borderRadius: Ds.r.rChip,
+        ),
+      ),
       Expanded(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -695,33 +831,76 @@ class _RingPainter extends CustomPainter {
 
 // ── Zone cards (super admin) ─────────────────────────────────────────────────
 
-class _ZoneCards extends StatelessWidget {
+class _ZoneCards extends StatefulWidget {
   final Map<String, dynamic> block;
-  const _ZoneCards({required this.block});
+  final DashboardAction onAction;
+  final DashboardOpen onOpen;
+  const _ZoneCards(
+      {required this.block, required this.onAction, required this.onOpen});
+
+  @override
+  State<_ZoneCards> createState() => _ZoneCardsState();
+}
+
+/// CHANGE #813 — the zones are a SWIPE, not a grid. A super admin runs a
+/// handful of zones and compares them one at a time; the dots say how many
+/// there are and which one is in front.
+class _ZoneCardsState extends State<_ZoneCards> {
+  final PageController _pages = PageController();
+  int _index = 0;
+
+  @override
+  void dispose() {
+    _pages.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final cards = _rows(block['cards']);
+    final cards = _rows(widget.block['cards']);
     if (cards.isEmpty) return const SizedBox.shrink();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        _SectionTitle(_s(block, 'title')),
+        _SectionTitle(_s(widget.block, 'title')),
         SizedBox(height: Ds.space.x12),
-        LayoutBuilder(builder: (ctx, box) {
-          final perRow = box.maxWidth >= 900 ? 2 : 1;
-          final gap = Ds.space.x12;
-          final w = (box.maxWidth - gap * (perRow - 1)) / perRow;
-          return Wrap(
-            spacing: gap,
-            runSpacing: gap,
+        SizedBox(
+          height: 168,
+          child: PageView.builder(
+            key: const Key('c813_zone_pager'),
+            controller: _pages,
+            itemCount: cards.length,
+            onPageChanged: (i) => setState(() => _index = i),
+            itemBuilder: (_, i) => Padding(
+              padding: EdgeInsets.only(
+                  right: i == cards.length - 1 ? 0 : Ds.space.x12),
+              child: _ZoneCard(
+                card: cards[i],
+                onAction: widget.onAction,
+                onOpen: widget.onOpen,
+              ),
+            ),
+          ),
+        ),
+        SizedBox(height: Ds.space.x12),
+        if (cards.length > 1)
+          Row(
+            key: const Key('c813_zone_dots'),
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              for (final z in cards)
-                SizedBox(width: w, child: _ZoneCard(card: z)),
+              for (var i = 0; i < cards.length; i++)
+                Container(
+                  width: 8,
+                  height: 8,
+                  margin: EdgeInsets.symmetric(horizontal: Ds.space.x4),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: i == _index ? Ds.c.brand : Ds.c.divider,
+                  ),
+                ),
             ],
-          );
-        }),
+          ),
       ],
     );
   }
@@ -729,17 +908,22 @@ class _ZoneCards extends StatelessWidget {
 
 class _ZoneCard extends StatelessWidget {
   final Map<String, dynamic> card;
-  const _ZoneCard({required this.card});
+  final DashboardAction onAction;
+  final DashboardOpen onOpen;
+  const _ZoneCard(
+      {required this.card, required this.onAction, required this.onOpen});
 
   @override
   Widget build(BuildContext context) {
     final metrics = _rows(card['metrics']);
-    return Container(
+    final action = _m(card['action']);
+    final isCurrent = card['is_current'] == true;
+    final body = Container(
       padding: EdgeInsets.all(Ds.space.x16),
       decoration: BoxDecoration(
         color: Ds.c.surface,
         borderRadius: Ds.r.rCard,
-        border: Border.all(color: Ds.c.divider),
+        border: Border.all(color: isCurrent ? Ds.c.brand : Ds.c.divider),
         boxShadow: Ds.elevation.e1,
       ),
       child: Column(
@@ -748,6 +932,8 @@ class _ZoneCard extends StatelessWidget {
         children: [
           Text(_s(card, 'zone_label'),
               key: Key('c812_zone_${card['zone_id']}'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: Ds.t.subtitle),
           SizedBox(height: Ds.space.x12),
           Wrap(
@@ -765,8 +951,142 @@ class _ZoneCard extends StatelessWidget {
                 ),
             ],
           ),
+          if (action['has'] == true && _s(action, 'label').isNotEmpty) ...[
+            SizedBox(height: Ds.space.x12),
+            Text(_s(action, 'label'),
+                key: Key('c813_zone_action_${card['zone_id']}'),
+                style: Ds.t.caption.copyWith(color: Ds.c.brand)),
+          ],
         ],
       ),
+    );
+
+    if (action['has'] != true) return body;
+    // Tapping a zone card runs the backend's own action — the same server-side
+    // scope the picker writes, so the whole console follows the zone.
+    return InkWell(
+      key: Key('c813_zone_tap_${card['zone_id']}'),
+      borderRadius: Ds.r.rCard,
+      onTap: () {
+        if (_s(action, 'kind') == 'rpc' && _s(action, 'rpc').isNotEmpty) {
+          onAction(action);
+          return;
+        }
+        onOpen(card);
+      },
+      child: body,
+    );
+  }
+}
+
+// ── Skeletons (CHANGE #813) ──────────────────────────────────────────────────
+//
+// Loading is a SHAPE, not a spinner: the blocks that are about to arrive, in
+// their own places, so the page does not jump when the payload lands. There is
+// no text here on purpose — a skeleton that guesses wording would be inventing
+// copy the backend has not sent yet.
+
+class _SkeletonBox extends StatelessWidget {
+  final double height;
+  final double? width;
+  const _SkeletonBox({required this.height, this.width});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        height: height,
+        width: width,
+        decoration: BoxDecoration(
+          color: Ds.c.divider,
+          borderRadius: Ds.r.rChip,
+        ),
+      );
+}
+
+class DashboardV2Skeleton extends StatelessWidget {
+  const DashboardV2Skeleton({super.key});
+
+  Widget _card(Widget child) => Container(
+        width: double.infinity,
+        padding: EdgeInsets.all(Ds.space.x16),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          border: Border.all(color: Ds.c.divider),
+          boxShadow: Ds.elevation.e1,
+        ),
+        child: child,
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      key: const Key('c813_skeleton'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const _SkeletonBox(height: 24, width: 180),
+        SizedBox(height: Ds.space.x8),
+        const _SkeletonBox(height: 14, width: 240),
+        SizedBox(height: Ds.space.x24),
+        LayoutBuilder(builder: (ctx, box) {
+          final perRow = box.maxWidth >= 1000
+              ? 5
+              : box.maxWidth >= 700
+                  ? 3
+                  : 2;
+          final gap = Ds.space.x12;
+          final w = (box.maxWidth - gap * (perRow - 1)) / perRow;
+          return Wrap(
+            spacing: gap,
+            runSpacing: gap,
+            children: [
+              for (var i = 0; i < perRow; i++)
+                SizedBox(
+                  width: w,
+                  child: _card(Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const _SkeletonBox(height: 12, width: 64),
+                      SizedBox(height: Ds.space.x12),
+                      const _SkeletonBox(height: 24, width: 48),
+                      SizedBox(height: Ds.space.x12),
+                      const _SkeletonBox(height: 24),
+                    ],
+                  )),
+                ),
+            ],
+          );
+        }),
+        SizedBox(height: Ds.space.x24),
+        _card(Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const _SkeletonBox(height: 16, width: 120),
+            SizedBox(height: Ds.space.x16),
+            for (var i = 0; i < 3; i++) ...[
+              const _SkeletonBox(height: 14),
+              SizedBox(height: Ds.space.x8),
+              const _SkeletonBox(height: 12, width: 160),
+              SizedBox(height: Ds.space.x16),
+            ],
+          ],
+        )),
+        SizedBox(height: Ds.space.x24),
+        _card(Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const _SkeletonBox(height: 16, width: 140),
+            SizedBox(height: Ds.space.x16),
+            for (var i = 0; i < 4; i++) ...[
+              const _SkeletonBox(height: 10),
+              SizedBox(height: Ds.space.x12),
+            ],
+          ],
+        )),
+      ],
     );
   }
 }
@@ -874,26 +1194,39 @@ class _UniversalSearchSheetState extends State<UniversalSearchSheet> {
               decoration: InputDecoration(
                 hintText: widget.placeholder,
                 prefixIcon: const Icon(Icons.search),
-                suffixIcon: _loading
-                    ? Padding(
-                        padding: EdgeInsets.all(Ds.space.x12),
-                        child: const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2)),
-                      )
-                    : null,
+                // CHANGE #813 — no spinner anywhere on this surface. While a
+                // query is in flight the RESULT area shows skeleton rows, so
+                // the sheet never spins at the user.
+                suffixIcon: null,
               ),
             ),
             SizedBox(height: Ds.space.x12),
             Flexible(
               child: groups.isEmpty
-                  ? Padding(
-                      padding: EdgeInsets.all(Ds.space.x24),
-                      child: Text(hint.isNotEmpty ? hint : empty,
-                          key: const Key('c812_search_empty'),
-                          style: Ds.t.bodySecondary),
-                    )
+                  ? (_loading
+                      ? Padding(
+                          padding: EdgeInsets.symmetric(
+                              vertical: Ds.space.x16),
+                          child: Column(
+                            key: const Key('c813_search_skeleton'),
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              for (var i = 0; i < 3; i++) ...[
+                                const _SkeletonBox(height: 14),
+                                SizedBox(height: Ds.space.x8),
+                                const _SkeletonBox(height: 12, width: 180),
+                                SizedBox(height: Ds.space.x16),
+                              ],
+                            ],
+                          ),
+                        )
+                      : Padding(
+                          padding: EdgeInsets.all(Ds.space.x24),
+                          child: Text(hint.isNotEmpty ? hint : empty,
+                              key: const Key('c812_search_empty'),
+                              style: Ds.t.bodySecondary),
+                        ))
                   : ListView(
                       shrinkWrap: true,
                       children: [

@@ -1494,7 +1494,7 @@ insert into public.feature_registry (
 values (
   'admin.recon', 'Reconciliation', 'fact_check', 'recon', 870, 'medibo', false,
   'none', true, 'money', 'dashboard', array['admin','super_admin'],
-  '/admin/recon',
+  '/admin/go/recon',
   'recon reconcile reconciliation drift money audit paisa gst settlement margin payments bills tally',
   'Every night the money surfaces are compared against each other. A one-paisa difference is a finding.',
   'admin.recon')

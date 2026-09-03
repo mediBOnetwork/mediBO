@@ -8,6 +8,7 @@ import 'delivery/customer_track_sheet.dart';  // C629: PART F1 — live tracking
 import 'customer/order_edit_sheet.dart';  // CHANGE #408
 import 'customer/order_cancel_sheet.dart'; // CMD #452 — gaps #130
 import 'customer/order_help_sheet.dart';   // CMD #452 — gaps #132
+import 'order_thread_screen.dart';
 import 'customer/order_return_sheet.dart'; // CMD #452 — gaps #131
 import 'package:http/http.dart' as http;
 import 'package:pharma_b2b/utils/toast.dart';
@@ -840,6 +841,18 @@ class _CustomerActionsRow extends StatelessWidget {
         break;
       case 'help':
         changed = await showOrderHelpSheet(context, orderId);
+        break;
+      // CHANGE #713 — the order's own conversation. One thread per order, with
+      // the mediBO team on the other side: the customer's WhatsApp replies,
+      // their tickets and anything they type here are the same conversation,
+      // so there is no longer a right and a wrong place to ask.
+      //
+      // Reading it changes the unread counts this card's badge is drawn from,
+      // so the refresh is unconditional rather than gated on a boolean the
+      // screen would have had to guess at.
+      case 'thread':
+        await showOrderThread(context, orderId: orderId);
+        changed = true;
         break;
       // CHANGE #630 — the edit door arrives in this same list now, because
       // ONE gate decides both doors. It is present only while the window is

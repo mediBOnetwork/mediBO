@@ -36,6 +36,7 @@ import '../admin/admin_delivery_waves_screen.dart';
 import '../admin/admin_feedback_screen.dart';
 import '../admin/returns_refunds_screen.dart';
 import '../admin/surface_map_screen.dart';
+import '../admin/support_threads_screen.dart';
 import '../partner/partner_tasks_screen.dart';
 import '../worker/worker_tasks_screen.dart';
 import '../admin/kyc_review_screen.dart';
@@ -81,6 +82,14 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       // and answers `not_authorized` with its own sentence, so the door is
       // opened here and the authorisation stays in the RPC.
       'kyc_review' => const KycReviewScreen(),
+      // CHANGE #713 — the other end of every customer conversation: the
+      // messages waiting on an answer, and the calls somebody owes a customer.
+      //
+      // ONE door for the partner and for the office. thread_inbox() answers a
+      // partner with their own zone and the office with all of them and
+      // refuses anyone who is neither, so the door being open to a role
+      // decides nothing about what that role reads.
+      'order_threads' => const SupportThreadsScreen(),
       _ => null,
     };
 

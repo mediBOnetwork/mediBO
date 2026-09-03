@@ -38,6 +38,7 @@ import 'screens/home_shell.dart';
 import 'screens/public/inquiry_form_screen.dart';
 import 'screens/delivery/agency_dispatch_screen.dart'; // C704: /agency/dispatch
 import 'screens/public/stock_update_form_screen.dart'; // C639: /stock-update/<token>
+import 'screens/public/supplier_return_ack_screen.dart'; // C710: /return-ack/<token>
 import 'screens/public/kyc_upload_form_screen.dart'; // C705: /kyc-upload/<token>
 import 'screens/public/order_feedback_form_screen.dart'; // C697: /feedback/<token>
 import 'screens/public/substitute_ask_screen.dart'; // C698: /substitute-ask/<token>
@@ -748,6 +749,23 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                   return MaterialPageRoute(
                     settings: settings,
                     builder: (_) => KycUploadFormScreen(token: token),
+                  );
+                }
+              }
+              // CHANGE #710 — /return-ack/<token>: the debit note a supplier
+              // gets over WhatsApp when stock goes back to them. PUBLIC and
+              // anonymous, exactly like /stock-update/<token>: the token in the
+              // URL is the authorisation, and supplier_return_ack_form /
+              // supplier_return_ack_submit are anon-granted for it and nothing
+              // else. Declared above the trailing /:code guard so a bare token
+              // is never mistaken for a product code.
+              if (name.startsWith('/return-ack/')) {
+                final token =
+                    name.substring('/return-ack/'.length).split('?').first;
+                if (token.isNotEmpty) {
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => SupplierReturnAckScreen(token: token),
                   );
                 }
               }

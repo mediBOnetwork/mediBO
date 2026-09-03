@@ -26,6 +26,7 @@ import 'partner_tasks_screen.dart';
 import 'partner_workers_screen.dart';
 import '../worker/worker_tasks_screen.dart';
 import 'partner_supplier_payment_screen.dart';
+import 'partner_returns_screen.dart';
 
 /// Backend `icon_key` -> a glyph. The KEY is the backend's; only the glyph is
 /// local, because an IconData cannot travel in JSON. An unknown key renders the
@@ -79,6 +80,10 @@ Widget? partnerDestination(String routeKey, {List<dynamic>? tabs}) {
     // partner's door onto the same writer, zone-clamped, so the row it writes
     // is the row the office's own path writes.
     case 'supplier_payment': return const PartnerSupplierPaymentScreen();
+    // CHANGE #710 — stock going BACK to a supplier, and the debit note it
+    // raises. supplier_debits_list only ever listed money already taken off a
+    // bill; this is the door that puts it there.
+    case 'supplier_returns': return const PartnerReturnsScreen();
     // CHANGE #399 — the partner's own staff, and its own expenses.
     case 'partner_staff':    return const PartnerStaffScreen();
     case 'partner_expenses': return const PartnerExpenseScreen();

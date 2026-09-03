@@ -38,6 +38,7 @@ import '../admin/returns_refunds_screen.dart';
 import '../admin/surface_map_screen.dart';
 import '../admin/damage_report_screen.dart';
 import '../partner/zone_pnl_screen.dart';
+import '../admin/wa_assistant_screen.dart';
 import '../admin/search_synonyms_screen.dart';
 import '../admin/support_threads_screen.dart';
 import '../partner/partner_tasks_screen.dart';
@@ -108,6 +109,10 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       // zone, a partner only its own) and the screen renders its refusal,
       // the same story as damage_report above.
       'zone_pnl' => const ZonePnlScreen(),
+      // CHANGE #714 — the WhatsApp assistant console. wa_assistant_console()
+      // gates on get_my_role() and the screen renders its refusal, the same
+      // story as damage_report above.
+      'wa_assistant' => const WaAssistantScreen(),
       // CHANGE #790 — Admin → Search synonyms. search_synonyms_list() gates
       // itself on get_my_role() and the screen renders its refusal, the same
       // story as damage_report above.

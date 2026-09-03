@@ -138,6 +138,12 @@ class _DesktopHeader extends StatelessWidget {
             onTap: onOrders,
           ),
           const SizedBox(width: 8),
+          // CHANGE #745 — the customer's own app-bar actions (the wishlist
+          // heart today). #536's lesson, applied before it bites again: a
+          // customer entry point added to the mobile chrome and NOT to this
+          // one leaves a pharmacy on a laptop with fewer doors than it had.
+          const CustomerAppBarActions(),
+          const SizedBox(width: 4),
           // Cart
           PressEffect(
             child: InkWell(

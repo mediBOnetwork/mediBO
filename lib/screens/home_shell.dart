@@ -126,9 +126,10 @@ import 'admin/admin_demand_engine_screen.dart'; // CMD #427 — /admin/go/demand
 import 'profile_screen.dart';
 import 'storefront_screen.dart';
 import 'supplier/supplier_shell.dart';
-// CMD #409 — the scan and mic buttons that sit inside the search bar. The two
-// search bars are `part` files of this library, so their import lives here.
-import '../widgets/scan_mic_search_controls.dart';
+// CHANGE #745 — the customer's app-bar actions are drawn by `part` files of
+// this library (mobile and desktop chrome), so the import lives here.
+// (scan_mic_search_controls, same arrangement since #409, is imported above.)
+import '../widgets/customer_surface_widgets.dart';
 
 // CHANGE #327 · LAYER 1 — the shell is sharded.
 //
@@ -148,7 +149,6 @@ part 'shell/shell_header_chrome.dart';
 part 'shell/shell_admin_chrome.dart';
 part 'shell/shell_sidebar.dart';
 part 'shell/shell_view_as.dart';
-
 
 /// App shell: responsive — desktop gets a top nav + sidebar, mobile/tablet
 /// keeps the existing header + quick-nav chips + bottom nav layout.

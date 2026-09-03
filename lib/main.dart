@@ -27,6 +27,10 @@ import 'models/inquiry_lock_model.dart';
 import 'screens/auth/login_screen.dart';
 
 import 'screens/customer/customer_staff_screen.dart'; // CMD #438: /customer/staff
+import 'screens/wishlist_screen.dart'; // CHANGE #745: /wishlist
+import 'screens/customer/profile_edit_screen.dart'; // CHANGE #745: /customer/profile
+import 'screens/customer/address_book_screen.dart'; // CHANGE #745: /customer/addresses
+import 'screens/rewards_screen.dart'; // CHANGE #745: /rewards
 import 'screens/admin/admin_partner_console_screen.dart';
 import 'screens/admin/partner_audit_log_screen.dart';
 import 'screens/admin/settlement_screen.dart'; // /admin/settlement
@@ -1041,6 +1045,15 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // in the backend. The tappable way in is still Profile ▸ Staff
               // logins.
               '/customer/staff': (_) => const CustomerStaffScreen(),
+              // CHANGE #745 — the two features that left the profile dropdown
+              // get real addresses, so a registry deep_link is a URL and not a
+              // promise. Both screens ask the backend who the viewer is
+              // (wishlist_get / loyalty_my_rewards key on my_customer_id), so
+              // neither route guards anything of its own.
+              '/wishlist':     (_) => const WishlistScreen(),
+              '/rewards':      (_) => const RewardsScreen(),
+              '/customer/profile':   (_) => const ProfileEditScreen(),
+              '/customer/addresses': (_) => const AddressBookScreen(),
               '/register':     (_) => const LoginScreen(),
               // CHANGE #631 (PART A) — the delivery-partner registration form.
               // delivery_partner_register() stamps auth.uid() itself, so the

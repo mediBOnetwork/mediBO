@@ -25,6 +25,7 @@ import '../widgets/customer_order_item_card.dart'; // #641: the Items-tab card
 import '../widgets/order_card_lean.dart'; // #630: the lean card, its progress line and the change window
 import '../services/ui_copy.dart';
 import '../design_tokens.dart'; // #173: Ds tokens for the reorder entry points
+import '../widgets/customer_surface_widgets.dart'; // CHANGE #745 — Rewards section
 import 'reorder_screen.dart'; // #173: reorder suite (suggestions + smart diff)
 import '../widgets/substitute_choice.dart'; // #366 row 176: customer picks the substitute
 
@@ -570,6 +571,12 @@ class _OrdersScreenState extends State<OrdersScreen> {
             _fetch();
           },
         ),
+        // CHANGE #745 — Rewards belongs to purchases, so it sits on the Orders
+        // tab instead of the profile dropdown. It is a placement row
+        // ('orders_section'), not a line this file owns: points, slab and the
+        // referral code are loyalty_my_rewards()'s own strings, and the card
+        // is absent entirely when the backend placed nothing here.
+        const CustomerRewardsSection(),
         Expanded(child: _buildBody()),
       ],
     );

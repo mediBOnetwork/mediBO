@@ -64,29 +64,29 @@ on conflict (surface) do update
 -- customer_shop_home() ships), so a rename is an UPDATE.
 insert into public.feature_registry
   (feature_key, label, description, group_label, icon_key, route_key, sort_order,
-   surface, category, roles_allowed, owner, default_access, is_active)
+   surface, category, roles_allowed, owner, default_access, is_active, deep_link)
 values
   ('cust.profile_edit',    'Edit my details',        'Name, contact and business details',
      'Account',  'person',        'cust_profile_edit',  10, 'customer_menu', 'cust_account',
-     array['customer','super_admin'], 'medibo', 'none', true),
+     array['customer','super_admin'], 'medibo', 'none', true, '/customer/profile'),
   ('cust.address_book',    'Delivery addresses',     'Where your orders are delivered',
      'Account',  'map',           'cust_addresses',     20, 'customer_menu', 'cust_account',
-     array['customer','super_admin'], 'medibo', 'none', true),
+     array['customer','super_admin'], 'medibo', 'none', true, '/customer/addresses'),
   ('cust.staff_logins',    'Staff logins',           'Extra logins for your counter staff',
      'Account',  'badge',         'cust_staff_logins',  30, 'customer_menu', 'cust_account',
-     array['customer','super_admin'], 'medibo', 'none', true),
+     array['customer','super_admin'], 'medibo', 'none', true, '/customer/staff'),
   ('cust.logout',          'Logout',                 'Sign out of this device',
      'Account',  'logout',        'cust_logout',        80, 'customer_menu', 'cust_account',
-     array['customer','super_admin'], 'medibo', 'none', true),
+     array['customer','super_admin'], 'medibo', 'none', true, null),
   ('cust.delete_account',  'Delete account or data', 'Remove your data or close the account',
      'Account',  'person_remove', 'cust_delete_account',90, 'customer_menu', 'cust_account',
-     array['customer','super_admin'], 'medibo', 'none', true),
+     array['customer','super_admin'], 'medibo', 'none', true, null),
   ('cust.wishlist',        'My Wishlist',            'Products you saved to order later',
      'Shopping', 'favorite',      'cust_wishlist',      10, 'customer_menu', 'cust_shopping',
-     array['customer','super_admin'], 'medibo', 'none', true),
+     array['customer','super_admin'], 'medibo', 'none', true, '/wishlist'),
   ('cust.rewards',         'Rewards',                'Points, slab and your referral code',
      'Shopping', 'stars',         'cust_rewards',       20, 'customer_menu', 'cust_shopping',
-     array['customer','super_admin'], 'medibo', 'none', true)
+     array['customer','super_admin'], 'medibo', 'none', true, '/rewards')
 on conflict (feature_key) do update
   set label = excluded.label,
       description = excluded.description,
@@ -97,6 +97,7 @@ on conflict (feature_key) do update
       surface = excluded.surface,
       category = excluded.category,
       roles_allowed = excluded.roles_allowed,
+      deep_link = excluded.deep_link,
       is_active = excluded.is_active;
 
 -- Every live tile needs a declared door or surface_map_audit R1 calls it drift.

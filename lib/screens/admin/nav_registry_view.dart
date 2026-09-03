@@ -95,6 +95,8 @@ const Map<String, IconData> kNavIcons = <String, IconData>{
   'science':          Icons.science_outlined,
   'history':          Icons.history,
   'dashboard':        Icons.dashboard_outlined,
+  // CHANGE #745 — the customer's wishlist, now a registry row like the rest.
+  'favorite':         Icons.favorite_border_rounded,
   'tools':            Icons.handyman_outlined,
 };
 

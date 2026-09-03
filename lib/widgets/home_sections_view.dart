@@ -11,6 +11,7 @@ import '../utils/render_log.dart';
 import '../theme.dart';
 import 'animations.dart';
 import 'compact_product_card.dart';
+import 'customer_surface_widgets.dart'; // CHANGE #745 — the home chip strip
 import 'product_image.dart';
 
 /// CHANGE #637 — the sectioned customer home feed.
@@ -287,7 +288,15 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
     // products for it.
     final strip = _backInStock.show ? 1 : 0;
 
-    final lead = hero + strip;
+    // CHANGE #745 — the customer strip: the wishlist chip and the rewards
+    // badge, placed by customer_feature_placement rather than by this file.
+    // It rides as a feed row for the same reason the hero does (one
+    // scrollable), and it draws nothing at all — not even a gap — when the
+    // backend placed nothing on 'home_chip'/'home_badge' or when the caller
+    // has no pharmacy account.
+    const lane = 1;
+
+    final lead = hero + strip + lane;
 
     return RefreshIndicator(
       onRefresh: () => _load(),
@@ -321,6 +330,7 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
           if (strip == 1 && i == hero) {
             return _StripBlock(strip: _backInStock);
           }
+          if (i == hero + strip) return const CustomerHomeStrip();
           final si = i - lead;
           if (si >= d.sections.length) return widget.footer!;
           final section = d.sections[si];

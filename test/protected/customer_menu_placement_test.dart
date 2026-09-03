@@ -284,6 +284,31 @@ void main() {
     });
   });
 
+  group('the profile is reachable by URL, not only by tapping the avatar', () {
+    test('/admin/go/profile is self-gated so a pharmacy can open its own', () {
+      // CHANGE #745. The profile route existed and had a case in the shell,
+      // but it was missing from selfGatedRoutes — the same shape that parked
+      // 'refill' (#432/#440) and 'pharmacy_gst' for every pharmacy, who is not
+      // an admin, and landed the link on the storefront in silence. The screen
+      // resolves the caller through my_session()/my_profile_row() and prints
+      // the backend's own unregistered state for anyone else, so the entry
+      // grants a door and never a permission.
+      final src = File('lib/screens/home_shell.dart').readAsStringSync();
+      final start = src.indexOf('static const Set<String> selfGatedRoutes');
+      expect(start, greaterThan(0),
+          reason: 'selfGatedRoutes must stay on HomeShell where links read it');
+      final end = src.indexOf('};', start);
+      expect(end, greaterThan(start));
+      final set = src.substring(start, end);
+      expect(set.contains("'profile'"), isTrue,
+          reason: '/admin/go/profile is parked for a pharmacy again');
+      // And the route must actually open something.
+      expect(src.contains("case 'profile':"), isTrue,
+          reason: 'the shell no longer routes profile — the door opens onto '
+              'the backend-worded default branch');
+    });
+  });
+
   group('Deliver with mediBO left the customer app', () {
     test('the phrase exists nowhere under lib/', () {
       final offenders = <String>[];

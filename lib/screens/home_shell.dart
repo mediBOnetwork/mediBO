@@ -126,9 +126,7 @@ import 'admin/admin_demand_engine_screen.dart'; // CMD #427 — /admin/go/demand
 import 'profile_screen.dart';
 import 'storefront_screen.dart';
 import 'supplier/supplier_shell.dart';
-// CHANGE #745 — the customer's app-bar actions are drawn by `part` files of
-// this library (mobile and desktop chrome), so the import lives here.
-// (scan_mic_search_controls, same arrangement since #409, is imported above.)
+// #745 — drawn by this library's `part` files (mobile + desktop chrome).
 import '../widgets/customer_surface_widgets.dart';
 
 // CHANGE #327 · LAYER 1 — the shell is sharded.
@@ -205,6 +203,8 @@ class HomeShell extends StatefulWidget {
     // #440 each hit once already.
     'rx_scan', 'pharmacy_expiry', 'pharmacy_variance', 'pharmacy_parcel',
     'pharmacy_reorder', 'khata', 'px_exchange', 'pharmacy_owner',
+    // #745 — a pharmacy's OWN profile; ProfileScreen resolves the caller.
+    'profile',
     'pharmacy_radar', 'near_listing', 'my_shop',
     // 'refill' predates #536 and was never listed, so /admin/go/refill — the
     // deep link its own case comment says is the reason the case exists — was

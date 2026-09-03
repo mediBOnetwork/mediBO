@@ -7,6 +7,7 @@ import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
 import '../../widgets/backend_chip.dart';
 import '../../widgets/inquiry_v12.dart';
+import '../../widgets/response_deadline.dart';
 
 // CHANGE #607 — the six group-header colour constants are DELETED.
 //
@@ -67,6 +68,9 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
   /// CHANGE #607 — groups[]: the sections to draw, in the backend's display
   /// order, each with key/label/count/show/is_open and bg/fg/border.
   List<Map<String, dynamic>> _groups = const [];
+  // CHANGE #687 — the whole countdown, rendered verbatim from
+  // supplier_inquiry_screen().deadline. Empty map => nothing draws.
+  Map<String, dynamic> _deadline = const {};
 
   /// True once the supplier has toggled a section themselves. Until then the
   /// accordion follows the backend's is_open; after that it follows the user.
@@ -299,6 +303,8 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
             .whereType<Map>()
             .map((e) => e.cast<String, dynamic>())
             .toList();
+        _deadline =
+            (payload['deadline'] as Map?)?.cast<String, dynamic>() ?? const {};
         _firstLoad = false;
         _loading = false;
       });
@@ -602,6 +608,14 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
     return ListView(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 80),
       children: [
+        // ── CHANGE #687 (#68) — how long this supplier has left to answer,
+        // above everything he is being asked. The block is the backend's and
+        // so is the poll rate; has:false (nothing outstanding) draws nothing.
+        ResponseDeadline(
+          block: _deadline,
+          renderKey: 'c687_sup_tab_deadline',
+          onRefresh: () async => _fetch(source: 'deadline', silent: true),
+        ),
         if (_receipt.isNotEmpty) ...[
           _buildReceiptSection(),
           const SizedBox(height: 8),

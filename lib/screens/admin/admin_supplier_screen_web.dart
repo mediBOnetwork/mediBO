@@ -36,6 +36,7 @@ import '../../widgets/backend_table.dart'; // CHANGE #607
 import '../../widgets/code_field.dart';
 import '../../widgets/fullscreen_image.dart';
 import '../../widgets/inquiry_v12.dart';
+import '../../widgets/response_deadline.dart';
 import '../../widgets/order_item_card.dart';
 import '../../widgets/sup_pay_panel.dart';
 import '../../widgets/supplier_closure_control.dart'; // cmd #435
@@ -3399,6 +3400,18 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                       _formatExpIST(expiresAt),
                       style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
                     ),
+                  // CHANGE #687 (#68) — how long this supplier has left, and
+                  // how often he answers at all. Both chips are payload-only:
+                  // get_supplier_inquiry_overview() now returns `deadline`
+                  // (deadline_block) and `response` (supplier_response_stats),
+                  // so nothing here is derived from expires_at.
+                  ResponseDeadlineChip(
+                      block: (ov['deadline'] as Map?)?.cast<String, dynamic>() ??
+                          const {}),
+                  ResponseStatsChip(
+                      stats: (ov['response'] as Map?)?.cast<String, dynamic>() ??
+                          const {},
+                      showMedian: !narrow),
                 ]);
                 final copyBtn = GestureDetector(
                   onTap: () => _copyInquiryLink(supName),

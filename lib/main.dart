@@ -28,6 +28,7 @@ import 'screens/auth/login_screen.dart';
 
 import 'screens/customer/customer_staff_screen.dart'; // CMD #438: /customer/staff
 import 'screens/wishlist_screen.dart'; // CHANGE #745: /wishlist
+import 'screens/customer/my_account_screen.dart'; // CHANGE #840: /my-account
 import 'screens/customer/profile_edit_screen.dart'; // CHANGE #745: /customer/profile
 import 'screens/customer/address_book_screen.dart'; // CHANGE #745: /customer/addresses
 import 'screens/rewards_screen.dart'; // CHANGE #745: /rewards
@@ -742,6 +743,22 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // policy admits a write only into that token's own folder.
               // Declared above the trailing /:code guard so a bare token is
               // never mistaken for a product code.
+              // CHANGE #840 — /my-account[/<tab>]: the customer's own account
+              // page. It is reached from Profile in the app; the URL exists so
+              // a notification, a WhatsApp link or a support reply can land on
+              // the exact tab. The tab_key is the backend registry's, passed
+              // through untouched — one this build has never heard of is
+              // ignored by the page and the payload's own default wins.
+              if (name == '/my-account' || name.startsWith('/my-account/') ||
+                  name.startsWith('/my-account?')) {
+                final tab = name.startsWith('/my-account/')
+                    ? name.substring('/my-account/'.length).split('?').first
+                    : '';
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => MyAccountScreen(initialTab: tab),
+                );
+              }
               if (name.startsWith('/kyc-upload/')) {
                 final token =
                     name.substring('/kyc-upload/'.length).split('?').first;

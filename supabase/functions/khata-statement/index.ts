@@ -22,8 +22,9 @@ const json = (o: unknown, status = 200) =>
 
 const PW = 595, PH = 842, PM = 36
 
-// Same font story as pos-invoice: pdf-lib's standard fonts THROW on ₹ rather
-// than dropping it, and every money string the backend sends starts with one.
+// Same font story as pos-invoice: pdf-lib's standard fonts THROW on the rupee
+// sign rather than dropping it, and every money string the backend sends
+// starts with one.
 const FONT_REG_URL = 'https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf'
 const FONT_BOLD_URL = 'https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSans/NotoSans-Bold.ttf'
 let FONT_CACHE: { reg: Uint8Array; bold: Uint8Array } | null = null
@@ -180,18 +181,28 @@ async function renderStatement(doc: any): Promise<Uint8Array> {
   return await pdf.save()
 }
 
+// CHANGE #840 — the same three steps draw a second kind of statement. The
+// renderer is unchanged: only the pair of RPCs that hand it the finished
+// payload and take the result back differ, and the caller names the kind.
+const KINDS: Record<string, { input: string; report: string }> = {
+  khata:   { input: 'khata_statement_render_input',    report: 'khata_statement_report' },
+  account: { input: 'customer_statement_render_input', report: 'customer_statement_report' },
+}
+
 Deno.serve(async (req) => {
   let stId = ''
+  let rpcs = KINDS.khata
   try {
     const body = await req.json().catch(() => ({}))
     stId = String(body?.statement_id ?? '')
     if (!stId) return json({ error: 'statement_id required' }, 400)
+    rpcs = KINDS[String(body?.kind ?? 'khata')] ?? KINDS.khata
 
     const { data: input, error: inErr } = await supabase
-      .rpc('khata_statement_render_input', { p_statement_id: stId })
-    if (inErr) throw new Error('khata_statement_render_input: ' + inErr.message)
+      .rpc(rpcs.input, { p_statement_id: stId })
+    if (inErr) throw new Error(rpcs.input + ': ' + inErr.message)
     if (!input?.ok) {
-      await supabase.rpc('khata_statement_report', {
+      await supabase.rpc(rpcs.report, {
         p_statement_id: stId, p_ok: false,
         p_error: 'render_input: ' + (input?.error ?? 'unknown'),
       }).catch(() => {})
@@ -204,7 +215,7 @@ Deno.serve(async (req) => {
               { contentType: 'application/pdf', upsert: true })
     if (up.error) throw new Error('upload: ' + up.error.message)
 
-    const { data: rep } = await supabase.rpc('khata_statement_report', {
+    const { data: rep } = await supabase.rpc(rpcs.report, {
       p_statement_id: stId, p_ok: true, p_bucket: input.bucket,
       p_path: input.path, p_name: input.file_name, p_bytes: bytes.length,
     })
@@ -213,7 +224,7 @@ Deno.serve(async (req) => {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     if (stId) {
-      await supabase.rpc('khata_statement_report',
+      await supabase.rpc(rpcs.report,
         { p_statement_id: stId, p_ok: false, p_error: msg }).catch(() => {})
     }
     return json({ ok: false, error: msg }, 200)

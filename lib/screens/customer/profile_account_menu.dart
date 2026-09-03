@@ -8,10 +8,12 @@ import '../../user_state.dart';
 import '../../widgets/delete_account_section.dart';
 import '../admin/loyalty_admin_screen.dart';
 import '../admin/nav_registry_view.dart' show navIcon, navIconResolves;
+import '../orders_screen.dart';
 import '../rewards_screen.dart';
 import '../wishlist_screen.dart';
 import 'address_book_screen.dart';
 import 'customer_staff_screen.dart';
+import 'my_account_screen.dart';
 import 'profile_edit_screen.dart';
 
 /// CHANGE #745 — the screen a customer `route_key` opens.
@@ -23,6 +25,11 @@ import 'profile_edit_screen.dart';
 /// resolves to null, and the caller skips it in silence rather than throwing:
 /// a registry row that ships before its screen must not break the menu.
 Widget? customerMenuScreen(String routeKey) => switch (routeKey) {
+      // CHANGE #840 — the account page. Every other row below is also a tab
+      // INSIDE it; they stay routable because the registry, not this file,
+      // decides where a customer reaches them from.
+      'cust_account' => const MyAccountScreen(),
+      'cust_orders' => const OrdersScreen(),
       'cust_profile_edit' => const ProfileEditScreen(),
       'cust_addresses' => const AddressBookScreen(),
       'cust_staff_logins' => const CustomerStaffScreen(),

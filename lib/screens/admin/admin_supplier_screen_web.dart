@@ -13190,7 +13190,6 @@ class _ConsoleChip extends StatelessWidget {
       borderRadius: Ds.r.rChip,
       child: Container(
         constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
-        alignment: Alignment.center,
         padding: EdgeInsets.symmetric(
             horizontal: Ds.space.x12, vertical: Ds.space.x8),
         decoration: BoxDecoration(

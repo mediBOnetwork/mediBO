@@ -989,3 +989,102 @@ end $$;
 revoke all on function public.order_timeline_act(uuid, text, jsonb) from public;
 grant execute on function public.order_timeline_act(uuid, text, jsonb) to authenticated, service_role;
 grant execute on function public._otl_access(uuid) to authenticated, anon, service_role;
+-- ============================================================================
+-- CHANGE #689 — PART 7: the door.
+--
+-- feature_gaps #75 opens with a literal question — "where is
+-- CPO260726NIT123O1". So the timeline gets its own addressable screen with a
+-- search box, not only a row tap buried in the ops board. This RPC is that
+-- search: one order code (or the tail of one, or a pharmacy name) in, the
+-- matching orders out, gated by the SAME matrix key and zone-clamped the same
+-- way the timeline itself is.
+-- ============================================================================
+insert into public.ui_copy(key, value) values
+  ('order_timeline.screen_title',  to_jsonb('Where is this order'::text)),
+  ('order_timeline.search_hint',   to_jsonb('Order code, or the pharmacy name'::text)),
+  ('order_timeline.search_button', to_jsonb('Find'::text)),
+  ('order_timeline.search_empty',  to_jsonb('No order matches that.'::text)),
+  ('order_timeline.search_prompt', to_jsonb('Type an order code to see everything that has happened to it.'::text)),
+  ('order_timeline.recent_label',  to_jsonb('Most recent orders'::text)),
+  ('order_timeline.not_authorized_title', to_jsonb('Not available'::text))
+on conflict (key) do nothing;
+
+update public.feature_registry
+   set route_key = 'order_timeline', surface = 'dashboard', group_label = 'Fulfill',
+       label = 'Where is this order'
+ where feature_key = 'fulfill.order_timeline';
+
+create or replace function public.order_timeline_search(p_query text default '')
+returns jsonb
+language plpgsql stable security definer set search_path to 'public' as $$
+declare
+  v_role text := coalesce(public.get_my_role(), 'none');
+  v_partner bigint := public.my_partner_id();
+  v_access text := 'none';
+  v_q text := btrim(coalesce(p_query, ''));
+  v_rows jsonb;
+begin
+  if v_partner is not null then
+    v_access := case when 'write' in (coalesce(public.partner_access('partner.order_timeline', v_partner),'none'),
+                                      coalesce(public.partner_access('partner.ops_board', v_partner),'none'))
+                     then 'write'
+                     when 'read' in (coalesce(public.partner_access('partner.order_timeline', v_partner),'none'),
+                                     coalesce(public.partner_access('partner.ops_board', v_partner),'none'))
+                     then 'read' else 'none' end;
+  elsif v_role in ('admin','super_admin') then
+    v_access := case when 'write' in (coalesce(public.admin_access('fulfill.order_timeline'),'none'),
+                                      coalesce(public.admin_access('fulfill.ops_board'),'none'))
+                     then 'write'
+                     when 'read' in (coalesce(public.admin_access('fulfill.order_timeline'),'none'),
+                                     coalesce(public.admin_access('fulfill.ops_board'),'none'))
+                     then 'read' else 'none' end;
+  end if;
+
+  if v_access = 'none' then
+    return jsonb_build_object('ok', false, 'error','not_authorized',
+      'title',   public.uic('order_timeline.not_authorized_title','Not available'),
+      'message', public.uic('ops_board.not_authorized',''));
+  end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'order_id',   t.id::text,
+           'order_code', t.code,
+           'customer',   t.customer,
+           'amount_display', public.inr_money(coalesce(t.total_amount,0)),
+           'placed_label',   public.ist_fmt(t.created_at, 'dmy2_time12'),
+           'status_label',   t.status_label) order by t.created_at desc), '[]'::jsonb)
+    into v_rows
+    from (
+      select o.id, coalesce(nullif(btrim(o.order_code),''), '') as code,
+             coalesce(nullif(btrim(pp.pharmacy_name),''), nullif(btrim(o.pharmacy_name),''), '') as customer,
+             o.total_amount, o.created_at,
+             coalesce((select l.label from order_status_label l where l.status = o.status), coalesce(o.status,'')) as status_label
+        from orders o
+        left join pharmacy_profiles pp on pp.id = o.customer_id
+       where (v_partner is null
+              or coalesce(o.zone_id, pp.zone_id) is not distinct from public.partner_zone_id())
+         and (v_q = ''
+              or o.order_code ilike '%'||v_q||'%'
+              or coalesce(pp.pharmacy_name, o.pharmacy_name, '') ilike '%'||v_q||'%')
+       order by o.created_at desc
+       limit 25) t;
+
+  return jsonb_build_object(
+    'ok', true,
+    'access', v_access,
+    'title',        public.uic('order_timeline.screen_title','Where is this order'),
+    'hint',         public.uic('order_timeline.search_hint',''),
+    'button_label', public.uic('order_timeline.search_button','Find'),
+    'empty_label',  case when v_q = '' then public.uic('order_timeline.search_prompt','')
+                         else public.uic('order_timeline.search_empty','') end,
+    'list_label',   case when v_q = '' then public.uic('order_timeline.recent_label','') else '' end,
+    'rows', v_rows,
+    'row_count', jsonb_array_length(v_rows));
+end $$;
+
+revoke all on function public.order_timeline_search(text) from public;
+grant execute on function public.order_timeline_search(text) to authenticated, service_role;
+
+insert into public.partner_rpc_allow(proname, source, note) values
+  ('order_timeline_search', 'c689', 'Order timeline search — zone-clamped inside the RPC')
+on conflict (proname) do nothing;

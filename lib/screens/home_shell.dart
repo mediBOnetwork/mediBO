@@ -27,6 +27,7 @@ import '../services/push_service.dart'; // CHANGE #298
 import 'admin/admin_push_screen.dart'; // CHANGE #298
 import 'admin/catalogue_health_screen.dart'; // CHANGE #460
 import 'admin/admin_add_medicine_screen.dart';
+import 'admin/order_timeline_screen.dart';
 import 'admin/admin_manage_admins_screen.dart';
 import 'admin/admin_audit_screen.dart';
 import 'admin/admin_roles_screen.dart';
@@ -919,6 +920,16 @@ class _HomeShellState extends State<HomeShell> {
                 builder: (_) => AdminCustomer360Screen(customerId: id)));
         break;
         }
+      // CHANGE #689 (feature_gaps #75) — "where is CPO260726NIT123O1", asked as
+      // a question. The seed is the code a deep link carried; empty opens on
+      // the recent orders the backend returns for an empty query.
+      case 'order_timeline':
+        Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) =>
+                    OrderTimelineScreen(seed: (seed ?? '').trim())));
+        break;
       case 'stock_on_hand':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const AdminStockOnHandScreen()));

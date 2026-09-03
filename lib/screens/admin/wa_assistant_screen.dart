@@ -205,14 +205,18 @@ class WaAssistantView extends StatelessWidget {
                             'enabled': v,
                           }),
                   title: Text(_s(i, 'label'), style: Ds.t.body),
-                  // An intent another feature owns says so, in the payload's
-                  // own words, instead of pretending it is answerable here.
-                  subtitle: _s(i, 'defer_to').isNotEmpty
-                      ? Text(_s(i, 'defer_to'), style: Ds.t.caption)
-                      : (i['always_handoff'] == true
-                          ? Text(_s(payload, 'switch_off_note'),
-                              style: Ds.t.caption)
-                          : null),
+                  // CHANGE #714 (D) — whatever this row has to say about
+                  // itself is ONE backend string. The version that shipped
+                  // first chose between two sentences here and got both wrong:
+                  // it printed the raw defer_to key (`reorder_wa_inbound`) at
+                  // an admin, and it borrowed the MASTER switch's "Off — every
+                  // message goes straight to a person" for always_handoff
+                  // intents, so a row whose toggle was plainly ON read as off.
+                  // The screen no longer picks; `note` is empty when there is
+                  // nothing to say.
+                  subtitle: _s(i, 'note').isEmpty
+                      ? null
+                      : Text(_s(i, 'note'), style: Ds.t.caption),
                   contentPadding: EdgeInsets.zero,
                 ),
             ],

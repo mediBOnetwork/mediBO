@@ -11,8 +11,9 @@
 //   * the three switch families all speak ONE verb: the master switch sends
 //     {enabled}, an intent sends the backend's own {intent_key, enabled}, a
 //     zone sends {zone_id, enabled}. A toggle never invents a key;
-//   * an intent another feature owns prints the payload's defer_to instead of
-//     pretending it is answerable here;
+//   * whatever an intent row says about itself is ONE backend string (`note`)
+//     printed verbatim - never the internal defer_to key, never the master
+//     switch's sentence borrowed for an always_handoff row (CHANGE #714 D);
 //   * ok:false renders the backend's refusal and no switches at all — the
 //     console must not offer a control to someone it just refused.
 //
@@ -45,15 +46,30 @@ Map<String, dynamic> _payload({bool ok = true, bool enabled = true}) => ok
             'always_handoff': false,
             'defer_to': '',
             'needs_order': true,
+            // nothing to say about this one
+            'note': '',
           },
           {
             'key': 'reorder',
             'label': 'Reorder',
             'enabled': true,
             'always_handoff': false,
-            // another feature owns this one
+            // another feature owns this one. defer_to is still in the payload
+            // (the handler reads it); it is NOT what the admin is shown.
             'defer_to': 'reorder_wa_inbound',
             'needs_order': false,
+            'note': 'Already answered by an existing automatic reply.',
+          },
+          {
+            'key': 'complaint',
+            'label': 'Complaint',
+            // deliberately ON, so a screen that borrowed the master switch's
+            // "Off — ..." sentence for always_handoff rows contradicts itself.
+            'enabled': true,
+            'always_handoff': true,
+            'defer_to': '',
+            'needs_order': false,
+            'note': 'Always handed to a person.',
           },
         ],
         'zones': const [
@@ -173,16 +189,50 @@ void main() {
       await pump(t, _payload(), onSet: (p) async => sent = p);
       await t.pumpAndSettle();
 
-      // master (1) + two intents (2) => the zones start at index 3
-      await t.tap(find.byType(SwitchListTile).at(3));
+      // Anchored on the zone's own name rather than counted from the top:
+      // the index form silently moved every time an intent was added to the
+      // fixture, which is a test measuring the fixture, not the screen.
+      await t.tap(find.ancestor(
+          of: find.text('Raipur Zone'), matching: find.byType(SwitchListTile)));
       await t.pumpAndSettle();
       expect(sent, {'zone_id': 1, 'enabled': false});
     });
 
-    testWidgets('an intent another feature owns says so', (t) async {
+    // CHANGE #714 (D). The first live screenshot of this console showed
+    // `reorder_wa_inbound` under "Reorder" and "Off — every message goes
+    // straight to a person." under "Complaint" while Complaint's own toggle
+    // was on. Both were the SCREEN choosing a sentence. It no longer chooses.
+    testWidgets('an intent note is the backend sentence, verbatim', (t) async {
       await pump(t, _payload());
       await t.pumpAndSettle();
-      expect(find.text('reorder_wa_inbound'), findsOneWidget);
+      expect(find.text('Already answered by an existing automatic reply.'),
+          findsOneWidget);
+      expect(find.text('Always handed to a person.'), findsOneWidget);
+    });
+
+    testWidgets('no internal key is ever printed at an admin', (t) async {
+      await pump(t, _payload());
+      await t.pumpAndSettle();
+      expect(find.text('reorder_wa_inbound'), findsNothing);
+    });
+
+    testWidgets('an intent with an empty note gets no subtitle at all',
+        (t) async {
+      await pump(t, _payload());
+      await t.pumpAndSettle();
+      final tile = t.widget<SwitchListTile>(find.ancestor(
+          of: find.text('Where is my order'),
+          matching: find.byType(SwitchListTile)));
+      expect(tile.subtitle, isNull);
+    });
+
+    testWidgets('the master switch note never leaks onto an intent row',
+        (t) async {
+      // The payload is ON, so switch_off_note belongs nowhere on this screen.
+      await pump(t, _payload());
+      await t.pumpAndSettle();
+      expect(find.text('Off — every message goes straight to a person.'),
+          findsNothing);
     });
 
     testWidgets('off prints the backend note about what off means', (t) async {

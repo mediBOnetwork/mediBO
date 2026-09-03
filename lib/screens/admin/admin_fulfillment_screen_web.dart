@@ -8654,6 +8654,12 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   /// the payload arrives, and only if the payload actually contains it.
   String _pendingStage = '';
 
+  /// CHANGE #688 — has the first fulfill_tabs() payload landed, and has the
+  /// operator chosen a tab since? Together they keep the backend's landing
+  /// stage a FIRST-mount decision and never a tab that moves under someone.
+  bool _landed = false;
+  bool _stagePicked = false;
+
   int _disputeCount = 0; // #132C: open dispute count (now also proven server-side)
   int _shopCount = 0;      // CHANGE #473: Supplier Shop count
   int _warehouseCount = 0; // CHANGE #473: Warehouse count
@@ -8871,7 +8877,16 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   bool _stageAllowed(String key) {
     if (widget.allowedTabs == null) return true;
     final i = _legacyStages.indexOf(key);
-    return i >= 0 && _tabAllowed(i);
+    // CHANGE #688 — a stage the legacy INDEX scheme never knew about is not
+    // "denied", it is simply outside that scheme. `_legacyStages` freezes the
+    // six stages that once had numbers; allowedTabs bounds a login by those
+    // numbers. Returning false for anything newer silently deleted every stage
+    // added since (Ops board first) from exactly the bounded logins — a
+    // partner granted three tabs — while fulfill_tabs() had already decided
+    // they may see it. The backend's matrix is the gate; this list is only a
+    // translation table for the numbers.
+    if (i < 0) return true;
+    return _tabAllowed(i);
   }
 
   @override
@@ -9010,6 +9025,30 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
         if (payload.indexOfStage(_stage) < 0) {
           _stage = payload.firstStage;
         }
+        // CHANGE #688 — the BACKEND picks the landing stage.
+        //
+        // `_stage` is seeded in initState from `initialTab` (0), which is the
+        // legacy 'supplier_shop'. That is a Dart-side answer to a question the
+        // payload already answers: `firstStage` is documented as "the stage a
+        // fresh mount should land on: the first one the backend sent", and
+        // reordering the bar in Postgres was supposed to move that landing.
+        // So on the FIRST payload — and only when the caller named no stage,
+        // no legacy tab and no allow-list, and the operator has not picked one
+        // yet — the console lands where the backend put its first tab. Any
+        // later reload keeps the operator exactly where they are.
+        if (!_landed &&
+            !_stagePicked &&
+            _pendingStage.isEmpty &&
+            widget.initialStage == null &&
+            widget.initialTab == 0 &&
+            // partner_home_screen.dart routes 'collect' as initialTab:0 +
+            // allowedTabs, which is indistinguishable from the default here —
+            // so a bounded caller keeps the stage it asked for.
+            widget.allowedTabs == null &&
+            payload.firstStage.isNotEmpty) {
+          _stage = payload.firstStage;
+        }
+        _landed = true;
         if (_stage.isNotEmpty) _visited.add(_stage);
       });
       RenderLog.write('c537_pipeline_loaded',
@@ -9054,6 +9093,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     if (_stage != stageKey) {
       setState(() {
         _stage = stageKey;
+        _stagePicked = true;
         _visited.add(stageKey);
       });
     } else {

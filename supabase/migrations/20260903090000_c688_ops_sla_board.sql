@@ -678,6 +678,8 @@ declare
   v_zone smallint := nullif(p->>'zone_id', '')::smallint;
   v_who  text     := coalesce((select lower(btrim(u.email)) from auth.users u where u.id = auth.uid()), public._actor());
   v_n    int      := 0;
+  v_skip int      := 0;
+  v_min  int;
   r      jsonb;
 begin
   if coalesce(public.get_my_role(), 'none') <> 'super_admin' then
@@ -689,9 +691,17 @@ begin
     if coalesce(r->>'stage_key', '') = '' then continue; end if;
     if not exists (select 1 from sla_stage s where s.stage_key = r->>'stage_key') then continue; end if;
 
+    -- A nonsense minute count is IGNORED, not clamped. Clamping -5 to 1 would
+    -- quietly turn the whole zone red on a typo; skipping it leaves the SLA
+    -- that was already there and the panel simply shows the old number back.
+    v_min := nullif(btrim(coalesce(r->>'sla_minutes', '')), '')::int;
+    if v_min is null or v_min < 1 or v_min > 100000 then
+      v_skip := v_skip + 1;
+      continue;
+    end if;
+
     insert into sla_config (zone_id, stage_key, sla_minutes, amber_pct, updated_at, updated_by)
-    values (v_zone, r->>'stage_key',
-            greatest(least(coalesce((r->>'sla_minutes')::int, 60), 100000), 1),
+    values (v_zone, r->>'stage_key', v_min,
             greatest(least(coalesce((r->>'amber_pct')::int, 70), 100), 1),
             now(), v_who)
     on conflict (coalesce(zone_id, (-1)::smallint), stage_key) do update
@@ -703,7 +713,7 @@ begin
     v_n := v_n + 1;
   end loop;
 
-  return jsonb_build_object('ok', true, 'saved', v_n,
+  return jsonb_build_object('ok', true, 'saved', v_n, 'skipped', v_skip,
     'message', public.uic('ops_board.sla_saved', 'SLA saved'));
 end $$;
 
@@ -1051,3 +1061,41 @@ end
 $function$
 
 ;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 14. ADMIN VISIBILITY
+--
+-- feature_registry's trigger seeds role defaults from `default_access`, which
+-- left a plain admin at none/none — so only the super admin would ever see the
+-- board. Its sibling (partner.exceptions) gives an admin view+write; this is a
+-- READ-ONLY board, so an admin gets view and the SLA panel stays super-admin.
+-- access_effective resolves through the CANONICAL key, which is the partner
+-- twin, so this is the row that decides it.
+-- ─────────────────────────────────────────────────────────────────────────────
+update public.access_role_default
+   set can_view = true, can_write = false, updated_at = now()
+ where feature_key = 'partner.ops_board' and role = 'admin';
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 15. PARTNER VISIBILITY — the grant that actually decides it
+--
+-- partner_permissions is the legacy mirror; access_effective reads access_grant
+-- (subject_kind='partner'), and a partner USER additionally needs the
+-- role='partner' default, because its formula is
+-- `coalesce(org, own, base) AND coalesce(own, base)`. Both, or the tab is
+-- invisible to exactly the people the spec named.
+-- ─────────────────────────────────────────────────────────────────────────────
+update public.access_role_default
+   set can_view = true, can_write = false, updated_at = now()
+ where feature_key = 'partner.ops_board' and role = 'partner';
+
+insert into public.access_grant (subject_kind, subject_id, feature_key, can_view, can_write, updated_by)
+select 'partner', rp.id::text, 'partner.ops_board', true, false, 'CHANGE #688'
+  from public.region_partners rp
+ where coalesce(rp.is_active, true)
+on conflict (subject_kind, subject_id, feature_key) do update set can_view = true;
+
+-- partner_rpc_allow rows land with clamp_ok=false; the refresh re-runs the
+-- per-function clamp audit, and until it does a partner is refused at the
+-- fence no matter what the matrix says.
+select public.partner_rpc_allow_refresh();

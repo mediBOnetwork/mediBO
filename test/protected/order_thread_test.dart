@@ -267,6 +267,11 @@ Map<String, dynamic> tasksPayload() => {
 
 Widget host(Widget child) => MaterialApp(home: Scaffold(body: child));
 
+/// Any exception the framework caught during the pump. A screen that throws
+/// inside its own build is otherwise invisible to a widget test that only
+/// looks for text.
+Object? tester_takeException(WidgetTester t) => t.takeException();
+
 void main() {
   setUpAll(() {
     // The 800 ms debounce is a real Timer that would outlive the test and try
@@ -484,6 +489,38 @@ void main() {
       await t.tap(find.widgetWithText(ChoiceChip, 'Billing'));
       await t.pumpAndSettle();
       expect(asked.any((a) => a.endsWith('|billing')), isTrue);
+    });
+  });
+
+  group('the door', () {
+    // THE BUG THIS TEST EXISTS FOR. The shell pushes these screens as a BARE
+    // route — `Navigator.push(MaterialPageRoute(builder: (_) =>
+    // shellExtraRouteScreen(route)!))` — with no Scaffold around them. The
+    // first deploy of this change rendered an empty page for exactly that
+    // reason: a TabBar with no Material ancestor throws, and the screen's own
+    // catch turned the crash into a blank. Every case above pumped it inside a
+    // host Scaffold and passed regardless, which is why the widget test could
+    // not see it.
+    //
+    // So this one pumps it the way the SHELL does. It must render on its own.
+    testWidgets('renders as a bare pushed route, with no Scaffold around it',
+        (t) async {
+      OrderThreadApi.rpcFn = (fn, p) async =>
+          fn == 'thread_inbox' ? inboxPayload() : tasksPayload();
+      await t.pumpWidget(const MaterialApp(home: SupportThreadsScreen()));
+      await t.pumpAndSettle();
+
+      expect(tester_takeException(t), isNull);
+      expect(find.text('Customer messages'), findsWidgets);
+      expect(find.text('Order ZZZ999'), findsOneWidget);
+    });
+
+    testWidgets('the conversation screen is a bare route too', (t) async {
+      OrderThreadApi.rpcFn = (fn, p) async => customerThread();
+      await t.pumpWidget(const MaterialApp(home: OrderThreadScreen(orderId: 'O1')));
+      await t.pumpAndSettle();
+      expect(tester_takeException(t), isNull);
+      expect(find.text('Order CPO1234'), findsOneWidget);
     });
   });
 

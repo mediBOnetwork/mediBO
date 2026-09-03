@@ -30,6 +30,7 @@ import '../../utils/safe_parse.dart';
 import '../../services/admin_date_scope.dart'; // CHANGE #545
 import '../../services/admin_zone_scope.dart'; // CHANGE #609
 import '../../services/date_labels.dart'; // CHANGE #548
+import '../../fulfill/supplier_toggle_chips.dart';
 import '../../services/ui_copy.dart';
 import '../../widgets/backend_chip.dart'; // CHANGE #606
 import '../../widgets/backend_table.dart'; // CHANGE #607
@@ -468,9 +469,14 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   /// the per-feature View toggle both have to say yes, and the matrix is the
   /// backend's answer for whichever login is signed in — super admin, admin or
   /// partner. The screen decides nothing by role.
+  /// CHANGE #754 — an EMBEDDED instance IS a Fulfill stage. `fulfill_tabs()`
+  /// granted it, and the supplier/inquiry + supplier/orders rows are retired
+  /// precisely BECAUSE the stage owns them — so reading those rows here would
+  /// blank the Fulfill tab's own body.
   bool _tabAllowed(int i) =>
-      (widget.allowedTabs == null || widget.allowedTabs!.contains(i)) &&
-      _tabOn(_tabKeys[_tabOrder[i]] ?? '');
+      widget.embedded ||
+      ((widget.allowedTabs == null || widget.allowedTabs!.contains(i)) &&
+          _tabOn(_tabKeys[_tabOrder[i]] ?? ''));
 
   bool _filterAllowed(_SupFilter f) => _tabAllowed(_tabOrder.indexOf(f));
   _SupSortMode _sortMode = _SupSortMode.spnDesc;
@@ -629,6 +635,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   // ── Allocation mode toggle ────────────────────────────────────────────────
   String _allocationMode = 'first_available'; // 'first_available' | 'fewest_baskets'
+
+  /// CHANGE #754 — the AutoFlow / Bundle chips, exactly as
+  /// `supplier_toggle_chips()` sent them. Their labels, their ON/OFF words and
+  /// the toast each one shows are the backend's; this screen only knows which
+  /// setting RPC a key belongs to.
+  SupplierToggleChipSet _chipSet = SupplierToggleChipSet.empty;
   bool _allocationLoading = false;
 
   // ── Manual move overlay (per inquiry_id) ─────────────────────────────────
@@ -685,6 +697,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     AdminZoneScope.instance.ensureLoaded();
     _load();
     _loadAllocationMode();
+    _loadToggleChips();
     _subscribeRealtime();
     // CHANGE #446: re-check send-all readiness whenever order hours change.
     _orderHoursModel = OrderHoursState.read(context);
@@ -1251,12 +1264,28 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         child: SingleChildScrollView(
           primary: true,
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            _buildHeader(isDesktop),
+            // CHANGE #754 — the header row is skipped when it would be empty.
+            // Embedded in Fulfill the tab pills are the pipeline bar's, the
+            // inquiry tab has no refresh button (#503 B) and its two toggles
+            // are chips on the readiness line — which left a blank strip with
+            // a ⋮ floating in it.
+            if (_headerHasContent) _buildHeader(isDesktop),
             _buildContent(isDesktop),
           ]),
         ),
       );
     });
+  }
+
+  /// CHANGE #754 — is there anything left to draw on the header line?
+  ///
+  /// Not embedded, the tab pills are always there. Embedded, the row holds only
+  /// the per-tab controls, and on inquiry there are none any more.
+  bool get _headerHasContent {
+    if (!widget.embedded) return true;
+    if (_filter == _SupFilter.orders) return true;   // the AutoFlow chip
+    if (_filter == _SupFilter.suppliers) return true; // sort + map companies
+    return _filter != _SupFilter.inquiry;
   }
 
   Widget _buildHeader(bool isDesktop) {
@@ -1302,16 +1331,34 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               ]),
             ),
           ),
+          // ── CHANGE #754 — the AutoFlow chip, on the tab header line ────────
+          // Om: on the Supplier order tab the ⋮ sat alone on an otherwise empty
+          // row, and everything it held was this one toggle. So the toggle
+          // comes out as a chip and the ⋮ goes. It is the SAME chip on mobile
+          // and on desktop — a control that hides itself behind a menu at one
+          // width is how the empty row happened in the first place.
+          if (_filter == _SupFilter.orders) ...[
+            SizedBox(width: Ds.space.x8),
+            SupplierToggleChipRow(
+              chips: _chipSet.order,
+              busyKeys: _busyChipKeys,
+              onToggle: _onToggleChip,
+            ),
+          ],
           // ── MOBILE: 3-dot overflow menu holds all controls ─────────────────
+          // CHANGE #754 — only where it still holds something that is NOT a
+          // toggle. On inquiry and order it held toggles only, and both are
+          // chips now.
           if (isMobile) ...[
-            Builder(builder: (_) {
-              RenderLog.write('c251_overflow_built', 'filter=$_filter');
-              RenderLog.write('c252_dot_flush', 'mobile=true;filter=$_filter');
-              return SizedBox(
-                width: 36,
-                child: _buildOverflowMenu(),
-              );
-            }),
+            if (_filter == _SupFilter.suppliers)
+              Builder(builder: (_) {
+                RenderLog.write('c251_overflow_built', 'filter=$_filter');
+                RenderLog.write('c252_dot_flush', 'mobile=true;filter=$_filter');
+                return SizedBox(
+                  width: 36,
+                  child: _buildOverflowMenu(),
+                );
+              }),
           ]
           // ── WEB/WIDE: pinned controls inline (unchanged) ───────────────────
           else ...[
@@ -1350,75 +1397,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               }),
             // CHANGE #545 — the Supplier Orders date chip is DELETED. The one
             // admin date picker lives on the Dashboard, above ORDER HOURS.
-            ] else if (_filter == _SupFilter.inquiry) ...[
-              const SizedBox(width: 4),
-              // Meta toggle
-              Builder(builder: (_) {
-                RenderLog.write('toggle_in_header_slot', 'true');
-                RenderLog.write('send_all_removed', 'true');
-                RenderLog.write('c251_inline_built', 'toggle=auto_meta');
-                return _autoMetaLoading
-                    ? const SizedBox(width: 28, height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
-                    : Transform.scale(
-                        scale: 0.75,
-                        child: Switch(
-                          value: _autoMeta,
-                          onChanged: (v) => _saveAutoMeta(v),
-                          activeColor: const Color(0xFF1B7A43),
-                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                      );
-              }),
-              const SizedBox(width: 4),
-              // Allocation toggle
-              Builder(builder: (_) {
-                RenderLog.write('allocation_toggle_rendered', _allocationMode);
-                final isOn = _allocationMode == 'fewest_baskets';
-                return Row(mainAxisSize: MainAxisSize.min, children: [
-                  Text(c('admin_supplier.bundle'), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
-                  const SizedBox(width: 2),
-                  _allocationLoading
-                      ? const SizedBox(width: 28, height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
-                      : Transform.scale(
-                          scale: 0.75,
-                          child: Switch(
-                            value: isOn,
-                            onChanged: _allocationLoading ? null : (v) => _applyAllocationMode(v),
-                            activeColor: const Color(0xFF1B7A43),
-                            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          ),
-                        ),
-                  if (isOn && !_allocationLoading) ...[
-                    GestureDetector(
-                      onTap: _reoptimize,
-                      child: Tooltip(
-                        message: c('admin_supplier.re_optimize_bundles'),
-                        child: const Icon(Icons.auto_fix_high_outlined, size: 16, color: Color(0xFF1B7A43)),
-                      ),
-                    ),
-                  ],
-                ]);
-              }),
-            ] else if (_filter == _SupFilter.orders) ...[
-              const SizedBox(width: 4),
-              Builder(builder: (_) {
-                RenderLog.write('order_auto_meta_toggle_rendered', 'true');
-                RenderLog.write('c251_inline_built', 'toggle=order_auto_meta');
-                return _orderAutoMetaLoading
-                    ? const SizedBox(width: 28, height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
-                    : Transform.scale(
-                        scale: 0.75,
-                        child: Switch(
-                          value: _orderAutoMeta,
-                          onChanged: (v) => _saveOrderAutoMeta(v),
-                          activeColor: const Color(0xFF1B7A43),
-                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                      );
-              }),
+            // CHANGE #754 — the inquiry tab's AutoFlow and Bundle toggles
+            // moved to the SEND-ALL READINESS header line (readiness left,
+            // chips right), which is a line that already exists. Nothing is
+            // left for this row on inquiry, so it is not drawn at all.
             ],
             if (_filter == _SupFilter.suppliers) ...[
               IconButton(
@@ -1454,86 +1436,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       tooltip: c('admin_supplier.more'),
       itemBuilder: (ctx) {
         final items = <PopupMenuEntry<String>>[];
-        if (_filter == _SupFilter.inquiry) {
-          // Toggle 1: Auto Meta (unlabelled inline; labelled in menu)
-          items.add(PopupMenuItem<String>(
-            enabled: false,
-            child: StatefulBuilder(
-              builder: (_, setM) => Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(c('admin_supplier.autoflow'), style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
-                  Switch(
-                    value: _autoMeta,
-                    onChanged: _autoMetaLoading ? null : (v) {
-                      _saveAutoMeta(v);
-                      setState(() {});
-                      setM(() {});
-                      RenderLog.write('c251_toggle_menu', 'toggle=auto_meta;value=$v');
-                    },
-                    activeColor: const Color(0xFF1B7A43),
-                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                ],
-              ),
-            ),
-          ));
-          // Toggle 2: Bundle
-          items.add(PopupMenuItem<String>(
-            enabled: false,
-            child: StatefulBuilder(
-              builder: (_, setM) {
-                final isOn = _allocationMode == 'fewest_baskets';
-                return Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(c('admin_supplier.bundle'), style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
-                    Switch(
-                      value: isOn,
-                      onChanged: _allocationLoading ? null : (v) {
-                        _applyAllocationMode(v);
-                        setState(() {});
-                        setM(() {});
-                        RenderLog.write('c251_toggle_menu', 'toggle=bundle;value=$v');
-                      },
-                      activeColor: const Color(0xFF1B7A43),
-                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                  ],
-                );
-              },
-            ),
-          ));
-          items.add(const PopupMenuDivider());
-        } else if (_filter == _SupFilter.orders) {
-          // Toggle: Order Auto Meta
-          items.add(PopupMenuItem<String>(
-            enabled: false,
-            child: StatefulBuilder(
-              builder: (_, setM) => Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(c('admin_supplier.autoflow'), style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
-                  Switch(
-                    value: _orderAutoMeta,
-                    onChanged: _orderAutoMetaLoading ? null : (v) {
-                      _saveOrderAutoMeta(v);
-                      setState(() {});
-                      setM(() {});
-                      RenderLog.write('c251_toggle_menu', 'toggle=order_auto_meta;value=$v');
-                    },
-                    activeColor: const Color(0xFF1B7A43),
-                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                ],
-              ),
-            ),
-          ));
-          // CHANGE #545 — the 'pick_order_date' entry (the AutoFlow menu's
-          // mobile date picker) is DELETED along with every other per-tab
-          // picker. The one admin date picker lives on the Dashboard.
-          items.add(const PopupMenuDivider());
-        } else if (_filter == _SupFilter.suppliers) {
+        // CHANGE #754 — the inquiry and order entries are DELETED. They held
+        // toggles and nothing else, the toggles are inline chips now, and this
+        // menu is no longer built on either of those tabs.
+        if (_filter == _SupFilter.suppliers) {
           // CHANGE #252: sort options only; Refresh removed (realtime handles sync)
           for (final entry in [
             (_SupSortMode.spnDesc, 'Sort: SPN'),
@@ -1599,6 +1505,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   /// CHANGE #653 — see the Customer screen: a hidden tab must not stay open,
   /// because its button is gone and there is no way back to another one.
   void _redirectIfTabHidden() {
+    if (widget.embedded) return; // CHANGE #754 — see _tabAllowed.
     if (_tabOn(_tabKeys[_filter] ?? '')) return;
     for (final e in _tabKeys.entries) {
       if (_tabOn(e.value)) {
@@ -1747,8 +1654,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       });
       if (mounted) {
         setState(() => _autoMetaLoading = false);
-        showToast(context, val ? 'Automatic by Meta: ON' : 'Automatic by Meta: OFF');
+        // CHANGE #754 — the toast is `supplier_toggle_chips().toast_on/off`.
+        showToast(context, _chipSet.toast(val));
         RenderLog.write(val ? 'toggle_saved_on' : 'toggle_saved_off', 'autoMeta:$val');
+        _loadToggleChips();
         _fetchInquiryOverview(silent: true);
       }
     } catch (e) {
@@ -1795,6 +1704,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             'p_key': 'supplier_order_auto_meta',
             'p_value': false,
           });
+          _loadToggleChips();
           return;
         }
       }
@@ -1804,7 +1714,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       });
       if (mounted) {
         setState(() => _orderAutoMetaLoading = false);
-        showToast(context, val ? 'Automatic by Meta: ON' : 'Automatic by Meta: OFF');
+        showToast(context, _chipSet.toast(val));
+        _loadToggleChips();
       }
     } catch (e) {
       if (mounted) {
@@ -1815,6 +1726,43 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   // ── Allocation mode ──────────────────────────────────────────────────────
+
+  /// CHANGE #754 — one call for both tabs' chips. Re-read after every toggle
+  /// so the chip's word comes back from the SERVER rather than being flipped
+  /// locally: the order tab's AutoFlow can refuse to turn on (Meta not
+  /// configured) and the chip has to tell the truth about that.
+  Future<void> _loadToggleChips() async {
+    try {
+      final res = await Supabase.instance.client.rpc('supplier_toggle_chips');
+      if (!mounted) return;
+      setState(() => _chipSet =
+          SupplierToggleChipSet.fromJson((res as Map?)?.cast<String, dynamic>()));
+    } catch (_) {
+      // A failed read leaves the previous answer in place; it never invents one.
+    }
+  }
+
+  /// A chip tap routes to the setting RPC that already owned that toggle.
+  void _onToggleChip(SupplierToggleChip chip, bool next) {
+    switch (chip.key) {
+      case 'auto_meta':
+        _saveAutoMeta(next);
+        break;
+      case 'order_auto_meta':
+        _saveOrderAutoMeta(next);
+        break;
+      case 'bundle':
+        _applyAllocationMode(next);
+        break;
+    }
+    RenderLog.write('c754_toggle_chip', '${chip.key}=$next');
+  }
+
+  Set<String> get _busyChipKeys => {
+        if (_autoMetaLoading) 'auto_meta',
+        if (_orderAutoMetaLoading) 'order_auto_meta',
+        if (_allocationLoading) 'bundle',
+      };
 
   Future<void> _loadAllocationMode() async {
     try {
@@ -1847,6 +1795,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           showToast(context, c('admin_supplier.back_to_first_available'));
           RenderLog.write('allocation_mode_off', 'true');
         }
+        _loadToggleChips();
         _fetchInquiryOverview(silent: true);
         _fetchUnassignedItems(silent: true);
       } else {
@@ -2968,6 +2917,19 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                   Text(dateLabel,
                       style: const TextStyle(
                           fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF))),
+                // CHANGE #754 — AutoFlow and Bundle, on the line Om asked for:
+                // readiness on the left, the chips on the right. Each chip is
+                // its own tap target, so tapping one toggles the setting and
+                // never expands the readiness card underneath.
+                if (_chipSet.inquiry.isNotEmpty) ...[
+                  SizedBox(width: Ds.space.x8),
+                  SupplierToggleChipRow(
+                    chips: _chipSet.inquiry,
+                    busyKeys: _busyChipKeys,
+                    onToggle: _onToggleChip,
+                    onAction: (_) => _reoptimize(),
+                  ),
+                ],
               ]),
             ),
             // Expanding/collapsing is purely visual — no re-fetch — so it can

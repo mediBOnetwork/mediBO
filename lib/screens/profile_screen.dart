@@ -5,20 +5,12 @@ import '../models/account_registration.dart';
 import '../models/app_session.dart';
 import '../models/user_profile.dart';
 import '../services/ui_copy.dart';
-import '../user_state.dart';
 import '../utils/render_log.dart';
 import '../view_as_state.dart';
-import '../widgets/delete_account_section.dart';
-import '../design_tokens.dart';
 import 'auth/business_details_screen.dart';
 import 'admin/view_as_picker_dialog.dart';
-import 'admin/loyalty_admin_screen.dart';
-import 'delivery/delivery_register_screen.dart';
-import 'rewards_screen.dart';
-import 'customer/customer_staff_screen.dart';  // CHANGE #408
-import 'customer/profile_edit_screen.dart'; // CHANGE #460 — feature_gaps 164
-import 'customer/address_book_screen.dart'; // CHANGE #460 — feature_gaps 164
-import 'wishlist_screen.dart';
+import 'customer/profile_account_menu.dart'; // CHANGE #745 — the registry menu
+import '../services/customer_surfaces.dart'; // CHANGE #745
 // CHANGE #536 — the four pharmacy screens this file used to import are gone.
 // My Profile is profile things only now: the shop's details, its wishlist, its
 // rewards, its staff logins and Logout. Every counter, shelf, parcel and GST
@@ -64,6 +56,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   void initState() {
     super.initState();
+    // CHANGE #745 — the Account group and the Account setup values are one
+    // backend answer. Asking here as well as at shell boot is deliberate: a
+    // customer who signs in AFTER the shell booted must not open a profile
+    // whose menu was resolved for a signed-out visitor.
+    CustomerSurfaces.load();
     if (widget.viewAsUserId != null) {
       _fetchViewAsProfile();
     } else {
@@ -594,128 +591,49 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ],
                   ),
 
-                  // Account Setup
-                  _SectionCard(
-                    icon: Icons.manage_accounts_outlined,
-                    title: c('profile.sec_account_setup'),
-                    children: [
-                      _InfoRow(
-                        label: c('profile.row_payment_term'),
-                        value: profile?.paymentTerm,
-                        icon: Icons.payments_outlined,
-                      ),
-                      _InfoRow(
-                        label: c('profile.row_customer_code'),
-                        value: profile?.customerCode,
-                        icon: Icons.tag_outlined,
-                        isLast: true,
-                      ),
-                    ],
-                  ),
+                  // Account Setup — CHANGE #745. Payment term and Customer
+                  // code both printed an em-dash, because THIS screen wrote the
+                  // dash in Dart over columns that are NULL on a shop nobody has
+                  // filled in yet. customer_surfaces().account_setup resolves
+                  // both server-side (the platform default term; a customer code
+                  // that is now assigned on insert and backfilled) and hands
+                  // over finished strings with an explicit `has` flag.
+                  if (!isViewAs) const AccountSetupCard(),
                 ],
 
-                // My Wishlist — approved customers only (gated:true per backend decision)
-                if (!isViewAs && isRegistered)
-                  _WishlistEntryCard(),
+                // CHANGE #745 — the Account group, and ONLY the Account
+                // group. Om: the profile dropdown had become a dumping ground —
+                // My Wishlist, Rewards and "Deliver with mediBO" sat next to
+                // Edit my details and Logout, each one a hardcoded `if (...)`
+                // right here, which made the PLACEMENT of a customer feature a
+                // Dart decision.
+                //
+                // It is registry data now (feature_registry surface
+                // 'customer_menu' + customer_feature_placement, read through
+                // customer_surfaces()). The wishlist moved to the catalogue app
+                // bar and a home chip; rewards moved to the Orders tab and a
+                // home badge; rider signup left the customer app altogether and
+                // keeps its own door at /delivery-register for the public site.
+                // None of those three moves needed a line of Dart to be
+                // deleted twice — they are placement rows.
+                //
+                // Logout and the delete zone are entries too (render_kind
+                // 'action' / 'danger_zone'), so their ORDER inside Account is
+                // the backend's as well, and delete stays last.
+                if (isRegistered) ProfileAccountMenu(interactive: !isViewAs),
 
-                // Rewards (CHANGE #176) — tier, points, targets, streak and the
-                // referral code. The screen itself renders the backend's own
-                // "not running yet" state when every programme is switched off,
-                // so this entry does not need to know what is enabled.
-                if (!isViewAs && isRegistered)
-                  _RewardsEntryCard(),
-
-                // Deliver with mediBO (CMD #453, feature_gaps 95) — the rider
-                // signup was registered at /delivery-register and linked from
-                // NOWHERE: no button, no menu item, no card. A prospective
-                // rider could only reach it by typing the URL, which on a phone
-                // means it did not exist. It is shown to everyone signed in,
-                // because the screen behind it answers for every case itself —
-                // my_delivery_application() returns the form, the pending
-                // verdict, the rejection with its reason, or the invite row.
-                if (!isViewAs) _DeliverWithUsEntryCard(),
-                // Staff logins (CHANGE #408) — the pharmacy owner hands out
-                // extra logins instead of sharing their own. Shown to every
-                // registered customer because customer_staff_list() decides
-                // for itself whether the caller may manage anything: a staff
-                // member opening it gets their own row and can_manage:false,
-                // which is a real answer, not an error. The screen renders
-                // that refusal in the backend's own words.
-                // CHANGE #460 (feature_gaps 164) — the two things a customer
-                // could not do: edit their own details, and keep more than one
-                // delivery address. my_session().profile still carries the old
-                // "contact support" note for the fields that ARE support's to
-                // change; my_profile_edit() decides which those are, so this
-                // entry does not need to know.
-                if (!isViewAs && isRegistered) _EditProfileEntryCard(),
-                if (!isViewAs && isRegistered) _AddressBookEntryCard(),
-
-                if (!isViewAs && isRegistered)
-                  _StaffLoginsEntryCard(),
-
-                // Loyalty control panel (CHANGE #176) — super-admin only, and
-                // loyalty_config_get() re-checks the role server-side, so this
-                // mirrors the backend gate rather than being the only one.
-                if (!isViewAs && (session?.isSuperAdmin ?? false))
-                  _LoyaltyAdminEntryCard(),
+                // CHANGE #745 — the loyalty control panel used to be gated
+                // right here on `session.isSuperAdmin`, a second source of
+                // truth next to the registry. It is a registry row now
+                // (roles_allowed = {super_admin}), so a pharmacy's payload
+                // simply does not contain it and ProfileAccountMenu above
+                // draws whatever the backend sent. View As stays below because
+                // it is a compile-flag dev tool, not a nav entry.
 
                 // View As (Dev) — super-admin only, build-phase gated; hidden in viewAs mode
                 // RULE 1 — the role gating this comes from my_session() too.
                 if (!isViewAs && kEnableViewAs && (session?.isSuperAdmin ?? false))
                   _ViewAsCard(),
-
-                // Delete account / data — a logged-in registered customer only.
-                // request_account_deletion() itself refuses anyone who is not a
-                // customer, so this mirrors the backend gate rather than
-                // inventing one.
-                // Logout — a normal action, ABOVE the delete zone and styled
-                // neutral (not red) so it never reads as destructive. This is
-                // the tap target a leaving customer reaches for.
-                if (!isViewAs)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                    child: OutlinedButton.icon(
-                      onPressed: () async {
-                        await UserState.read(context).signOut();
-                        if (context.mounted) {
-                          Navigator.of(context).popUntil((r) => r.isFirst);
-                        }
-                      },
-                      icon: const Icon(Icons.logout,
-                          size: 18, color: Color(0xFF374151)),
-                      label: Text(c('profile.btn_logout')),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: const Color(0xFF374151),
-                        side: const BorderSide(
-                            color: Color(0xFFD1D5DB), width: 1.5),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10)),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        textStyle: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ),
-
-                // Delete account / data — the destructive danger zone, kept at
-                // the very bottom, below Logout and collapsed, so a tap meant
-                // for Logout can never land on it.
-                if (!isViewAs && isRegistered) ...[
-                  const SizedBox(height: 8),
-                  DeleteAccountSection(
-                    rpc: (scope, reason) async {
-                      final raw = await Supabase.instance.client.rpc(
-                        'request_account_deletion',
-                        params: {'p_scope': scope, 'p_reason': reason},
-                      );
-                      return Map<String, dynamic>.from(
-                          (raw is List ? raw.first : raw) as Map);
-                    },
-                  ),
-                  const SizedBox(height: 40),
-                ],
               ],
             ),
           ),
@@ -1044,163 +962,3 @@ class _ViewAsChip extends StatelessWidget {
 /// CHANGE #176 — one shape for both new profile rows, so a second entry cannot
 /// drift from the first. Modelled on [_WishlistEntryCard]; label text comes from
 /// ui_copy, never a Dart literal.
-class _MenuEntryCard extends StatelessWidget {
-  final IconData icon;
-  final String copyKey;
-  final Widget Function() destination;
-  const _MenuEntryCard({
-    required this.icon,
-    required this.copyKey,
-    required this.destination,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-          Ds.space.x16, Ds.space.x8, Ds.space.x16, 0),
-      child: GestureDetector(
-        onTap: () => Navigator.of(context).push(
-          MaterialPageRoute<void>(builder: (_) => destination()),
-        ),
-        child: Container(
-          padding: EdgeInsets.symmetric(
-              horizontal: Ds.space.x16, vertical: Ds.space.x16),
-          decoration: BoxDecoration(
-            color: Ds.c.surface,
-            borderRadius: Ds.r.rCard,
-            border: Border.all(color: Ds.c.divider),
-            boxShadow: Ds.elevation.e1,
-          ),
-          child: Row(
-            children: [
-              Icon(icon, size: 22, color: Ds.c.brand),
-              SizedBox(width: Ds.space.x12),
-              Expanded(
-                child: Text(
-                  c(copyKey),
-                  style: Ds.t.body.copyWith(fontWeight: FontWeight.w600),
-                ),
-              ),
-              Icon(Icons.chevron_right, size: 20, color: Ds.c.textSecondary),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// CMD #453 — the way into rider signup / the rider's own application status.
-class _DeliverWithUsEntryCard extends StatelessWidget {
-  const _DeliverWithUsEntryCard();
-
-  @override
-  Widget build(BuildContext context) => _MenuEntryCard(
-        icon: Icons.two_wheeler_outlined,
-        copyKey: 'profile.row_deliver_with_us',
-        destination: () => const DeliveryRegisterScreen(),
-      );
-}
-
-/// CHANGE #460 — the way into the customer's own profile editor.
-class _EditProfileEntryCard extends StatelessWidget {
-  const _EditProfileEntryCard();
-
-  @override
-  Widget build(BuildContext context) => _MenuEntryCard(
-        icon: Icons.edit_outlined,
-        copyKey: 'cust_profile.edit_entry',
-        destination: () => const ProfileEditScreen(),
-      );
-}
-
-/// CHANGE #460 — the way into the delivery address book.
-class _AddressBookEntryCard extends StatelessWidget {
-  const _AddressBookEntryCard();
-
-  @override
-  Widget build(BuildContext context) => _MenuEntryCard(
-        icon: Icons.location_on_outlined,
-        copyKey: 'cust_addr.entry',
-        destination: () => const AddressBookScreen(),
-      );
-}
-
-/// CHANGE #408 — the way into the pharmacy's staff logins.
-class _StaffLoginsEntryCard extends StatelessWidget {
-  const _StaffLoginsEntryCard();
-
-  @override
-  Widget build(BuildContext context) => _MenuEntryCard(
-        icon: Icons.badge_outlined,
-        copyKey: 'profile.row_staff_logins',
-        destination: () => const CustomerStaffScreen(),
-      );
-}
-
-class _RewardsEntryCard extends StatelessWidget {
-  const _RewardsEntryCard();
-
-  @override
-  Widget build(BuildContext context) => _MenuEntryCard(
-        icon: Icons.card_giftcard_outlined,
-        copyKey: 'profile.row_rewards',
-        destination: () => const RewardsScreen(),
-      );
-}
-
-class _LoyaltyAdminEntryCard extends StatelessWidget {
-  const _LoyaltyAdminEntryCard();
-
-  @override
-  Widget build(BuildContext context) => _MenuEntryCard(
-        icon: Icons.workspace_premium_outlined,
-        copyKey: 'profile.row_loyalty_admin',
-        destination: () => const LoyaltyAdminScreen(),
-      );
-}
-
-class _WishlistEntryCard extends StatelessWidget {
-  const _WishlistEntryCard();
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-          Ds.space.x16, Ds.space.x8, Ds.space.x16, 0),
-      child: GestureDetector(
-        onTap: () => Navigator.of(context).push(
-          MaterialPageRoute<void>(
-              builder: (_) => const WishlistScreen()),
-        ),
-        child: Container(
-          padding: EdgeInsets.symmetric(
-              horizontal: Ds.space.x16, vertical: Ds.space.x16),
-          decoration: BoxDecoration(
-            color: Ds.c.surface,
-            borderRadius: Ds.r.rCard,
-            border: Border.all(color: Ds.c.divider),
-            boxShadow: Ds.elevation.e1,
-          ),
-          child: Row(
-            children: [
-              Icon(Icons.favorite_border_rounded,
-                  size: 22, color: Ds.c.brand),
-              SizedBox(width: Ds.space.x12),
-              Expanded(
-                child: Text(
-                  c('profile.row_wishlist'),
-                  style: Ds.t.body
-                      .copyWith(fontWeight: FontWeight.w600),
-                ),
-              ),
-              Icon(Icons.chevron_right,
-                  size: 20, color: Ds.c.textSecondary),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}

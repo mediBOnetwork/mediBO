@@ -102,9 +102,13 @@ class _LocationHeader extends StatelessWidget {
                 ),
               ),
             ),
-            // RIGHT: the inbox bell (every signed-in role), then the cart
-            // (customers only). CHANGE #298 — the bell is what makes an event
-            // readable later whichever channel delivered it.
+            // RIGHT: the customer's own app-bar actions (CHANGE #745 — the
+            // wishlist heart lives here now, placed by
+            // customer_feature_placement rather than by this file), then the
+            // inbox bell (every signed-in role), then the cart (customers
+            // only). CHANGE #298 — the bell is what makes an event readable
+            // later whichever channel delivered it.
+            if (!isAdmin) const CustomerAppBarActions(),
             if (signedIn) NotificationBell(key: bellKey),
             if (!isAdmin) _MobileCartIcon(cartItems: cartItems, onCart: onCart),
           ],

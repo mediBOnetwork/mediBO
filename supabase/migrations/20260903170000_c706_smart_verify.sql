@@ -592,6 +592,11 @@ declare
   v_tier     text; v_verdict text; v_reasons text[] := '{}';
   v_needs_ocr boolean;
 begin
+  -- This takes a doc_id, so without a scope test any signed-in pharmacy could
+  -- read another account's licence number, trade name and address out of it.
+  if not public.kyc_verify_scope_ok(p_doc_id) then
+    return jsonb_build_object('ok', false, 'error', 'not_authorized');
+  end if;
   select * into d from kyc_documents where id = p_doc_id;
   if not found then return jsonb_build_object('ok', false, 'error', 'no_doc'); end if;
   select * into cfg from kyc_verify_config where id = 1;
@@ -617,7 +622,10 @@ begin
     null;                                    -- a shop photo has nothing to read
   elsif v_ocr_state = 'done' then
     v_checks := v_checks || public._kyc_chk('ocr_read','pass','ocr_ok');
-  elsif v_ocr_state = 'failed' then
+  elsif v_ocr_state in ('failed','skipped') then
+    -- 'skipped' means the reader declined this document while reading is ON.
+    -- Treating it as "nothing to check" let a document reach `clear` with no
+    -- OCR at all, which is a clean bill of health nobody earned.
     v_checks := v_checks || public._kyc_chk('ocr_read','warn','ocr_failed');
   elsif not cfg.ocr_enabled then
     v_checks := v_checks || public._kyc_chk('ocr_read','skip','ocr_off');
@@ -1225,6 +1233,10 @@ returns jsonb
 language plpgsql stable security definer set search_path to 'public' as $$
 declare r kyc_verify_run%rowtype; x kyc_doc_extract%rowtype; v_mis int;
 begin
+  if not public.kyc_verify_scope_ok(p_doc_id) then
+    return jsonb_build_object('has', false, 'title', _c('kyc_verify.title'),
+      'empty_note', _c('kyc_verify.err_not_authorized'), 'checks', '[]'::jsonb);
+  end if;
   select * into r from kyc_verify_run
    where doc_id = p_doc_id order by seq desc limit 1;
   select * into x from kyc_doc_extract where doc_id = p_doc_id;
@@ -1809,3 +1821,53 @@ create policy kyc_identity_claim_admin on public.kyc_identity_claim for select t
 drop policy if exists kyc_verify_config_admin on public.kyc_verify_config;
 create policy kyc_verify_config_admin on public.kyc_verify_config for select to authenticated
   using (public.get_my_role() = any (array['admin','super_admin']));
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 16. LOCKDOWN — the grants above ADD, they do not restrict (CHANGE #706, QA)
+--
+-- `create or replace function` leaves the default PUBLIC EXECUTE in place, and
+-- this project also grants every new function to anon and authenticated. So
+-- `grant execute … to service_role` on the privileged half of this feature
+-- restricted precisely nothing: hostile QA called kyc_ocr_ingest() straight off
+-- the public PostgREST endpoint with the shipped anon key, forged a clean OCR
+-- result on an unapproved pharmacy's licence, and walked out with
+-- doc.status='verified' and pharmacy.approved=true. It also pre-claimed a
+-- competitor's licence number through kyc_identity_claim_set(), which would
+-- have had the real pharmacy's upload refused as a duplicate.
+--
+-- The REVOKE is the mechanism, not an internal role check: a direct PostgREST
+-- call executes as anon/authenticated and is refused by the ACL, while every
+-- legitimate internal caller (the kyc_documents trigger, kyc_upload_register,
+-- kyc_verify_override, the cron sweep) reaches these from inside a SECURITY
+-- DEFINER function, where current_user is the owner. An auth.role() test could
+-- not tell those two apart — the applicant's own upload carries exactly the
+-- 'authenticated' claim an attacker would.
+revoke execute on function public.kyc_verify_doc(uuid, text)                from public, anon, authenticated;
+revoke execute on function public.kyc_ocr_claim(uuid)                       from public, anon, authenticated;
+revoke execute on function public.kyc_ocr_ingest(uuid, text, jsonb, jsonb, text, text, text)
+                                                                            from public, anon, authenticated;
+revoke execute on function public.kyc_ocr_sweep()                           from public, anon, authenticated;
+revoke execute on function public.kyc_identity_claim_set(text, text, text, text)
+                                                                            from public, anon, authenticated;
+
+-- The two READ functions stay callable by a signed-in user — both surfaces go
+-- through them — but they take a doc_id, so without a scope test any pharmacy
+-- could read any other account's licence number, trade name and address out of
+-- kyc_verify_evaluate(). They now answer only for a document the caller owns or
+-- is allowed to review; an internal or service_role caller (auth.uid() null)
+-- is unaffected.
+create or replace function public.kyc_verify_scope_ok(p_doc_id uuid)
+returns boolean
+language plpgsql stable security definer set search_path to 'public' as $$
+declare d kyc_documents%rowtype;
+begin
+  if auth.uid() is null then return true; end if;      -- cron / service_role
+  select * into d from kyc_documents where id = p_doc_id;
+  if not found then return true; end if;               -- "no such document" is not a leak
+  if public.kyc_can_review('read') then return true; end if;
+  if d.owner_kind = 'pharmacy' then
+    return exists (select 1 from pharmacy_profiles where id = d.owner_id and user_id = auth.uid());
+  end if;
+  return exists (select 1 from supplier_profiles where id = d.owner_id and user_id = auth.uid());
+end $$;
+grant execute on function public.kyc_verify_scope_ok(uuid) to authenticated;

@@ -77,6 +77,7 @@ class _SurfaceMapScreenState extends State<SurfaceMapScreen> {
       RenderLog.write('c570_surface_map_rows', _sections.fold<int>(
           0, (n, s) => n + _list(s['rows']).length));
       RenderLog.write('c570_surface_map_drift', _drift.length);
+      RenderLog.write('c902_surface_map_pending', _pending.length);
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -96,6 +97,7 @@ class _SurfaceMapScreenState extends State<SurfaceMapScreen> {
 
   List<Map<String, dynamic>> get _sections => _list(_data['sections']);
   List<Map<String, dynamic>> get _drift => _list(_data['drift']);
+  List<Map<String, dynamic>> get _pending => _list(_data['pending']);
   List<Map<String, dynamic>> get _summary => _list(_data['summary']);
 
   /// The row captions, from the payload's own `labels` block.
@@ -168,6 +170,10 @@ class _SurfaceMapScreenState extends State<SurfaceMapScreen> {
                       _summaryCard(),
                       SizedBox(height: Ds.space.x24),
                       _driftCard(),
+                      if (_pending.isNotEmpty) ...[
+                        SizedBox(height: Ds.space.x24),
+                        _pendingCard(),
+                      ],
                       SizedBox(height: Ds.space.x32),
                       for (final s in _sections) ...[
                         _sectionCard(s),
@@ -262,6 +268,48 @@ class _SurfaceMapScreenState extends State<SurfaceMapScreen> {
       ),
     );
   }
+
+  // ── the registrations the audit is deliberately not counting yet
+  //    (CHANGE #902). R1 always had this window and nothing drew it, so a
+  //    doorless tile was invisible until the moment it turned red. R5 and R6
+  //    now defer here too, which makes drawing it the difference between "the
+  //    guard waits" and "the guard hides" — the whole point is that Om reads
+  //    the problem WHILE it is still someone's build.
+  //
+  //    Absent is absent: no pending block, no card. Heading, hint, label and
+  //    detail are all the payload's sentences.
+  Widget _pendingCard() => _card(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(_s(_data, 'pending_heading'), style: Ds.t.subtitle),
+            SizedBox(height: Ds.space.x4),
+            Text(_s(_data, 'pending_hint'), style: Ds.t.caption),
+            SizedBox(height: Ds.space.x12),
+            for (final p in _pending) ...[
+              Container(
+                width: double.infinity,
+                padding: EdgeInsets.all(Ds.space.x12),
+                decoration: BoxDecoration(
+                  color: _toneBg(_s(p, 'tone')),
+                  borderRadius: Ds.r.rChip,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(_s(p, 'label'),
+                        style: Ds.t.bodyStrong
+                            .copyWith(color: _toneFg(_s(p, 'tone')))),
+                    SizedBox(height: Ds.space.x4),
+                    Text(_s(p, 'detail'), style: Ds.t.caption),
+                  ],
+                ),
+              ),
+              SizedBox(height: Ds.space.x12),
+            ],
+          ],
+        ),
+      );
 
   // ── one registry per section, one feature per row, in payload order. No
   //    client-side sort: the backend already ordered by surface and category,

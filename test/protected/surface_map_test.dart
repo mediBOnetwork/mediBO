@@ -27,6 +27,12 @@
 //      compatible.
 //   6. `ok:false` is the backend refusing the reader, and its own `message` is
 //      what appears. No Dart fallback wording, no exception.
+//   7. CHANGE #902 — the registrations the audit is deliberately NOT counting
+//      yet are DRAWN. The grace window exists so a command that registers a
+//      feature mid-build does not turn the guard red for every other worker;
+//      it only stays honest while the deferred item is visible, so an absent
+//      `pending` draws nothing and a present one prints the backend's heading,
+//      hint, label and detail — never a count or a sentence made here.
 //
 // No network, no Supabase, no goldens — the screen is pumped through its `rpc`
 // test seam against fixtures.
@@ -124,6 +130,39 @@ Map<String, dynamic> _dirty() {
   // backend's heading, never a count it derived itself.
   m['drift_heading'] = '1 mapping problem';
   m['drift_count'] = 2;
+  return m;
+}
+
+/// A green guard with work still landing: drift is empty, and two rows are
+/// inside surface_map_grace_min. This is the state the screen spent its whole
+/// life unable to show — the audit emitted `pending` from CHANGE #570 and no
+/// widget read it until #902.
+Map<String, dynamic> _pending() {
+  final m = _clean();
+  m['pending'] = const [
+    {
+      'code': 'door_pending',
+      'tone': 'warning',
+      'label': 'My tasks — door not landed yet',
+      'feature_key': 'worker.my_tasks',
+      'detail':
+          'registered 29 min ago with route_key "my_tasks" and no surface_route row. Counts as drift after 90 minutes.',
+    },
+    {
+      'code': 'surface_pending',
+      'tone': 'warning',
+      'label': 'My tasks — surface not settled yet',
+      'feature_key': 'worker.my_tasks',
+      'detail':
+          'registered 29 min ago on surface dashboard, which serves [admin, super_admin, partner] while the row admits [worker, admin, super_admin]. Counts as drift after 90 minutes.',
+    },
+  ];
+  // Deliberately disagreeing with the list length, for the same reason the
+  // drift heading does: the screen prints the backend's sentence.
+  m['pending_heading'] = '3 registrations still landing';
+  m['pending_hint'] =
+      'Registered less than 90 minutes ago. Reported, not counted — each one becomes drift on its own clock.';
+  m['pending_count'] = 2;
   return m;
 }
 
@@ -249,6 +288,60 @@ void main() {
       expect(find.text('133'), findsOneWidget);
       expect(find.text('Features'), findsOneWidget);
       expect(find.text('Drift'), findsOneWidget);
+    });
+  });
+
+  group('what the guard is waiting on is visible (CHANGE #902)', () {
+    testWidgets('a payload with no pending block draws no pending card',
+        (t) async {
+      await _pump(t, _clean());
+      expect(find.textContaining('still landing'), findsNothing);
+      expect(find.textContaining('Reported, not counted'), findsNothing);
+    });
+
+    testWidgets('heading and hint are the backend\'s, never a Dart count',
+        (t) async {
+      await _pump(t, _pending());
+      // Two rows in the list and the payload says three. The screen prints
+      // what it was given — the day those disagree, the backend changed.
+      expect(find.text('3 registrations still landing'), findsOneWidget);
+      expect(find.text('2 registrations still landing'), findsNothing);
+      expect(
+          find.text(
+              'Registered less than 90 minutes ago. Reported, not counted — each one becomes drift on its own clock.'),
+          findsOneWidget);
+    });
+
+    testWidgets('each deferred item prints its own label and detail',
+        (t) async {
+      await _pump(t, _pending());
+      expect(find.text('My tasks — door not landed yet'), findsOneWidget);
+      expect(find.text('My tasks — surface not settled yet'), findsOneWidget);
+      expect(
+          find.textContaining('Counts as drift after 90 minutes.'),
+          findsNWidgets(2));
+      expect(t.takeException(), isNull);
+    });
+
+    testWidgets('pending sits alongside a clean drift verdict, not instead of it',
+        (t) async {
+      // The whole point of the window: the guard is GREEN and there is still
+      // something to watch. Both sentences are on the screen at once.
+      await _pump(t, _pending());
+      expect(
+          find.text(
+              'No mapping drift — every feature reaches exactly its own audience.'),
+          findsOneWidget);
+      expect(find.text('3 registrations still landing'), findsOneWidget);
+    });
+
+    testWidgets('items render in payload order — the screen never re-sorts',
+        (t) async {
+      await _pump(t, _pending());
+      final door = t.getTopLeft(find.text('My tasks — door not landed yet')).dy;
+      final surface =
+          t.getTopLeft(find.text('My tasks — surface not settled yet')).dy;
+      expect(door < surface, isTrue);
     });
   });
 

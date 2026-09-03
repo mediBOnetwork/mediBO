@@ -133,6 +133,17 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
       _wishlisted = res.isWishlisted;
     });
 
+    // CMD #791 — REACHABILITY PROOF for the four depth blocks. Flutter renders
+    // to canvas, so no browser tool can read this page; the render log is how a
+    // live build proves the gallery, the fact table, the buyer's own overlay
+    // and the co-purchase rail actually reached a real device — and, for the
+    // overlay, that an ANONYMOUS visit reports has=false while the content
+    // blocks still report their counts.
+    RenderLog.write('c791_product_depth',
+        'gallery=${res.gallery.images.length};facts=${res.facts.rows.length};'
+        'purchase=${res.purchase.has};usual=${res.purchase.usualQty};'
+        'companions=${res.companions.items.length}');
+
     if (res.ok) unawaited(_loadReviews());
     // CMD #409 — one product open, recorded into the customer's recently-viewed
     // ring. Fire-and-forget by contract: a customer never waits on, and is

@@ -209,7 +209,17 @@ values
    -- admits 'medibo' or 'partner' only), not the audience. The worker list is
    -- a platform surface handed to a worker login; the audience lives in
    -- roles_allowed, which is what nav_registry actually gates on.
-   8, 'medibo', false, 'none', true, 'orders', 'dashboard',
+   -- SURFACE 'both', not 'dashboard'. surface_audience declares who each
+   -- surface serves and surface_map_audit() R5 fails any active row whose
+   -- roles_allowed is not a subset of it. 'dashboard' is {admin, super_admin,
+   -- partner} and has never served a worker; 'profile' would be right but its
+   -- check constraint reserves it for the two identity rows. 'both' is the
+   -- surface declared for every role including 'worker', and nav_registry()
+   -- serves it in the profile menu AND the dashboard tiles -- so the worker
+   -- reaches this from the only menu a worker login has, and the office still
+   -- sees it on the board. (Found by runner-2: the row turned rg_check red for
+   -- the whole box within minutes of landing.)
+   8, 'medibo', false, 'none', true, 'orders', 'both',
    '{worker,admin,super_admin}', '/admin/go/my_tasks',
    'my tasks worker today start finish',
    'The stages assigned to you today, in promised order.',

@@ -5,6 +5,7 @@ import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
 import 'dev_queue_common.dart';
+import 'dev_queue_health.dart';
 import 'restart_safety.dart';
 import 'dev_queue_service.dart';
 import 'dev_queue_workers.dart';
@@ -103,6 +104,11 @@ class _DevQueueControlState extends State<DevQueueControl> {
       (_snap['runner_status'] as Map?)?.cast<String, dynamic>() ?? const {};
   Map<String, dynamic> get _vm =>
       (_snap['vm'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  /// CHANGE #755 — the self-healing breaker's card, delivered on the same
+  /// dev_ctl_get poll as the toggles so it can never be a beat behind them.
+  Map<String, dynamic> get _health =>
+      (_snap['health'] as Map?)?.cast<String, dynamic>() ?? const {};
 
   bool _isOn(String k) => (_desired[k] ?? 'off') == 'on';
 
@@ -397,6 +403,10 @@ class _DevQueueControlState extends State<DevQueueControl> {
             service: widget.service,
             onChanged: _load,
           ),
+          if (_health.isNotEmpty) ...[
+            _divider(),
+            RunnerHealthCard(health: _health),
+          ],
           if ((_usage['has_usage'] ?? false) == true) ...[
             _divider(),
             _usageMeter(),
@@ -517,6 +527,7 @@ class _DevQueueControlState extends State<DevQueueControl> {
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontSize: 12, color: kTextLo)),
       ),
+      RunnerHealthChip(health: _health),
       if (first != null) ...[
         const SizedBox(width: 6),
         ToneChip(

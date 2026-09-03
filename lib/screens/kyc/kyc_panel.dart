@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../design_tokens.dart';
 import '../../utils/render_log.dart';
+import 'kyc_verify_block.dart';
 
 /// CHANGE #705 — the ONE licence-and-documents panel.
 ///
@@ -93,6 +94,15 @@ class _KycPanelState extends State<KycPanel> {
 
   String _s(Map<String, dynamic> m, String k) => (m[k] ?? '').toString();
 
+  /// A document the checks rejected asks for a corrected one, in the backend's
+  /// words (`reupload_label`). Every other state keeps the panel's own caption.
+  /// Both strings are payload; neither is composed here.
+  String _reuploadLabel(Map<String, dynamic> it) {
+    final v = KycVerifyBlock.of(it);
+    final re = (v?['reupload_label'] ?? '').toString();
+    return re.isNotEmpty ? re : _s(it, 'button_label');
+  }
+
   Future<void> _load() async {
     try {
       final map = _asMap(await KycPanel.rpc('kyc_my_panel'));
@@ -102,6 +112,8 @@ class _KycPanelState extends State<KycPanel> {
         _loading = false;
       });
       RenderLog.write('c705_kyc_panel', _items.length);
+      RenderLog.write('c706_kyc_checks',
+          _items.where((e) => (KycVerifyBlock.of(e)?['has'] ?? false) == true).length);
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
@@ -143,6 +155,9 @@ class _KycPanelState extends State<KycPanel> {
       if (!mounted) return;
       setState(() {
         _busyKind = '';
+        // A refusal (CHANGE #706: a duplicate licence or GSTIN) carries no
+        // panel — the old one is still the truth, and the message below is
+        // the backend's own sentence.
         final panel = _asMap(res?['panel']);
         if (panel != null) _payload = panel;
       });
@@ -295,13 +310,16 @@ class _KycPanelState extends State<KycPanel> {
             SizedBox(height: Ds.space.x8),
             Text(reason, style: Ds.t.caption.copyWith(color: Ds.c.danger)),
           ],
+          // CHANGE #706 — what the automatic checks made of this document. The
+          // block draws itself, or nothing, from the payload alone.
+          KycVerifyBlock(verify: KycVerifyBlock.of(it)),
           SizedBox(height: Ds.space.x12),
           SizedBox(
             width: double.infinity,
             height: Ds.touch.minTarget,
             child: OutlinedButton(
               onPressed: busy ? null : () => _pickAndUpload(it),
-              child: Text(_s(it, 'button_label')),
+              child: Text(_reuploadLabel(it)),
             ),
           ),
         ],

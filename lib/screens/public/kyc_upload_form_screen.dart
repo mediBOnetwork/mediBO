@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../design_tokens.dart';
 import '../../utils/render_log.dart';
+import '../kyc/kyc_verify_block.dart';
 
 /// CHANGE #705 — the public licence-upload page, reached from the WhatsApp
 /// link `/kyc-upload/[token]`. No auth: the token in the URL is the
@@ -58,6 +59,8 @@ class _KycUploadFormScreenState extends State<KycUploadFormScreen> {
   bool _busy = false;
 
   Map<String, dynamic> _payload = const {};
+  Map<String, dynamic>? _verify;
+  String _refusal = '';
   String _error = '';
   String _done = '';
 
@@ -141,6 +144,18 @@ class _KycUploadFormScreenState extends State<KycUploadFormScreen> {
     if (d != null && mounted) setState(() => _validTo = d);
   }
 
+  /// Test seam: the file picker is a platform channel, so a widget test seeds
+  /// the picked bytes and submits the same code path a tap does.
+  @visibleForTesting
+  Future<void> submitForTest({String ext = 'jpg', String name = 'dl.jpg'}) async {
+    setState(() {
+      _bytes = Uint8List.fromList(const [1, 2, 3]);
+      _fileName = name;
+      _ext = ext;
+    });
+    await _submit();
+  }
+
   Future<void> _submit() async {
     final bytes = _bytes;
     if (bytes == null) return;
@@ -165,8 +180,20 @@ class _KycUploadFormScreenState extends State<KycUploadFormScreen> {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _done = (res?['message'] ?? '').toString();
-        if (res?['ok'] != true) _error = (res?['error'] ?? '').toString();
+        if (res?['ok'] == true) {
+          _done = (res?['message'] ?? '').toString();
+          // CHANGE #706 — the checks that ran the moment it was written. It
+          // may already say "reading the document"; that sentence is the
+          // backend's too.
+          final v = res?['verify'];
+          _verify = v is Map ? Map<String, dynamic>.from(v) : null;
+        } else {
+          // CHANGE #706 — a refusal is NOT a thank-you. A duplicate licence
+          // used to land in _done and draw the green tick over the backend's
+          // own refusal; it now stays on the form with the sentence above it,
+          // so the applicant can correct the number and send again.
+          _refusal = (res?['message'] ?? '').toString();
+        }
       });
       RenderLog.write('c705_kyc_token_submit', 1);
     } catch (_) {
@@ -228,6 +255,7 @@ class _KycUploadFormScreenState extends State<KycUploadFormScreen> {
           Text(_s('done_title'), style: Ds.t.title),
           SizedBox(height: Ds.space.x8),
           Text(_done, style: Ds.t.body),
+          KycVerifyBlock(verify: _verify),
         ],
       );
     }
@@ -261,6 +289,17 @@ class _KycUploadFormScreenState extends State<KycUploadFormScreen> {
         Text(_s('title'), style: Ds.t.title),
         SizedBox(height: Ds.space.x4),
         Text(_s('for_line'), style: Ds.t.bodySecondary),
+        if (_refusal.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x12),
+          Container(
+            width: double.infinity,
+            padding: EdgeInsets.all(Ds.space.x12),
+            decoration: BoxDecoration(
+                color: Ds.c.dangerSoft, borderRadius: Ds.r.rCard),
+            child: Text(_refusal,
+                style: Ds.t.caption.copyWith(color: Ds.c.danger)),
+          ),
+        ],
         SizedBox(height: Ds.space.x12),
         Text(_s('subtitle'), style: Ds.t.body),
         if (_s('deadline_line').isNotEmpty) ...[

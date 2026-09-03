@@ -384,6 +384,9 @@ class _PartnerDocumentsScreenState extends State<PartnerDocumentsScreen> {
       final m = await _rpc('partner_kyc_upload_path', {
         'p_doc_key': docKey,
         'p_ext': (pf.extension ?? 'jpg').toLowerCase(),
+        // An admin uploading on a partner's behalf names the partner; a
+        // partner sends nothing and the backend resolves their own folder.
+        ..._arg(),
       });
       if (m['ok'] != true) {
         if (mounted) {

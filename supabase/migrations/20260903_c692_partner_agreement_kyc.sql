@@ -1595,3 +1595,36 @@ revoke execute on function public.partner_kyc_review_set(jsonb) from public, ano
 revoke execute on function public.partner_golive_state(bigint) from public, anon;
 revoke execute on function public.partner_documents_screen(bigint) from public, anon;
 revoke execute on function public.partner_kyc_reminder_sweep() from public, anon;
+
+-- ── 15. the office can upload on a partner's behalf ─────────────────────────
+-- partner_kyc_card() answers an admin with can_upload:true (the office often
+-- has the paper before the partner does), but the first version of this
+-- function resolved the folder from my_partner_id() alone — so an admin who
+-- tapped Upload got "You do not have access to partner documents" and the
+-- button was dead. An admin may now name the partner; a partner still cannot.
+create or replace function public.partner_kyc_upload_path(p_doc_key text, p_ext text,
+                                                          p_partner_id bigint default null)
+returns jsonb language plpgsql stable security definer set search_path to 'public' as $$
+declare v_pid bigint := public._c692_pid(p_partner_id); v_ext text;
+begin
+  if v_pid is null then
+    return jsonb_build_object('ok', false, 'error','not_partner',
+      'message', public._c('partner_kyc.err_not_authorized'));
+  end if;
+  if not exists (select 1 from partner_kyc_doc_type where doc_key = p_doc_key and is_active) then
+    return jsonb_build_object('ok', false, 'error','bad_doc',
+      'message', public._c('partner_kyc.err_bad_doc'));
+  end if;
+  v_ext := lower(regexp_replace(coalesce(nullif(p_ext,''),'jpg'), '[^a-z0-9]', '', 'g'));
+  if v_ext not in ('jpg','jpeg','png','webp','pdf') then v_ext := 'jpg'; end if;
+  return jsonb_build_object('ok', true,
+    'bucket', 'partner-receipts',
+    'path', 'p' || v_pid::text || '/kyc/' ||
+            regexp_replace(p_doc_key, '[^a-zA-Z0-9_-]', '', 'g') || '-' ||
+            to_char(now() at time zone 'Asia/Kolkata','YYYYMMDDHH24MISS') || '-' ||
+            substr(md5(random()::text), 1, 8) || '.' || v_ext);
+end $$;
+
+drop function if exists public.partner_kyc_upload_path(text, text);
+revoke execute on function public.partner_kyc_upload_path(text, text, bigint) from public, anon;
+grant  execute on function public.partner_kyc_upload_path(text, text, bigint) to authenticated;

@@ -44,7 +44,6 @@ import 'admin/admin_users_access_screen.dart'; // C653
 import 'catalogue_screen.dart'; // #747 — the Catalogue tab, page 12
 import 'admin/admin_nav_entries.dart';
 import 'admin/nav_registry_view.dart';
-import 'admin/recon_screen.dart';         // CHANGE #471
 import 'admin/reorder_admin_screen.dart';       // CHANGE #325
 import 'admin/pnl_screen.dart';                 // CHANGE #325
 import 'admin/loyalty_admin_screen.dart';       // CHANGE #325
@@ -880,14 +879,7 @@ class _HomeShellState extends State<HomeShell> {
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const AdminPricingScreen()));
         break;
-      // CHANGE #471 — the nightly money reconciliation. Not gated on
-      // _amISuper: recon_home()/recon_run_detail()/recon_run_now() all check
-      // is_admin() and the screen prints whatever they answer — the same
-      // story as gst and reviews below.
-      case 'recon':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const ReconScreen()));
-        break;
+      case 'recon': openRecon(context); break; // CHANGE #471
       // CHANGE #320 — GST (input credit, monthly position, GSTR exports).
       case 'gst':
         Navigator.push(context,

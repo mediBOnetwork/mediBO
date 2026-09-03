@@ -1,5 +1,8 @@
+import 'dart:async'; // CHANGE #813 — the 30-second refresh cadence
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart'; // CHANGE #813 — WhatsApp share
 
 import '../pharmacy/khata_screen.dart'; // CMD #415 — the khata book
 import '../pharmacy/pharmacy_refill_screen.dart'; // CMD #417 — refills & counter
@@ -55,6 +58,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   // Every string, number and tone in it is the backend's.
   Map<String, dynamic> _dash = const {};
 
+  // CHANGE #813 — the dashboard refreshes itself on the BACKEND's cadence
+  // (`refresh_ms`), and the header prints the payload's own "Updated 12:41"
+  // stamp so a stale screen is visible rather than silent.
+  Timer? _refresh;
+  int _refreshMs = 0;
+
   @override
   void initState() {
     super.initState();
@@ -62,6 +71,35 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     _loadNav();
     _loadOpsBoard();
     _loadDashboard();
+  }
+
+  @override
+  void dispose() {
+    _refresh?.cancel();
+    super.dispose();
+  }
+
+  /// Restart the timer only when the cadence itself changed, so a refresh
+  /// never resets its own clock.
+  void _armRefresh(int ms) {
+    if (ms <= 0 || ms == _refreshMs) return;
+    _refreshMs = ms;
+    _refresh?.cancel();
+    _refresh = Timer.periodic(
+        Duration(milliseconds: ms), (_) => _loadDashboard());
+  }
+
+  /// CHANGE #813 — a long press on a number opens the backend's own WhatsApp
+  /// share link. The sentence and the URL are both in the payload; nothing is
+  /// composed here.
+  Future<void> _shareMetric(Map<String, dynamic> share) async {
+    final url = (share['url'] ?? '').toString();
+    if (url.isEmpty) return;
+    try {
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    } catch (_) {
+      // A blocked pop-up leaves the dashboard exactly as it was.
+    }
   }
 
   /// CHANGE #812 — dashboard_v2(). A failure leaves the rest of the home
@@ -72,6 +110,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       final m = (raw is List ? raw.first : raw);
       if (mounted && m is Map) {
         setState(() => _dash = Map<String, dynamic>.from(m));
+        _armRefresh((m['refresh_ms'] as num?)?.toInt() ?? 0);
       }
     } catch (_) {
       // No card rather than a broken one.
@@ -376,7 +415,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             label: c('admin_dashboard.stat_pending_bills'),
             value: '$_pendingBills',
             icon: Icons.inbox_outlined,
-            color: _pendingBills > 0 ? const Color(0xFFDC2626) : const Color(0xFF6B7280),
+            color: _pendingBills > 0 ? Ds.c.danger : Ds.c.textSecondary,
           ),
           if (_unresolved.show)
             _StatCard(
@@ -393,14 +432,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     );
   }
 
+  // CHANGE #813 — tokens, not literals: a dark palette is an `ui_design_set`
+  // patch (CHANGE #66), and it can only reach a screen that holds no colours
+  // of its own.
   static Widget _sectionLabel(String text) => Padding(
-        padding: const EdgeInsets.only(bottom: 12),
+        padding: EdgeInsets.only(bottom: Ds.space.x12),
         child: Text(
           text,
-          style: const TextStyle(
-            fontSize: 10,
+          style: Ds.t.caption.copyWith(
             fontWeight: FontWeight.w700,
-            color: Color(0xFF9CA3AF),
+            color: Ds.c.textSecondary,
             letterSpacing: 1.0,
           ),
         ),
@@ -410,126 +451,249 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (ctx, box) {
       final isNarrow = box.maxWidth < 600;
-      final hpad = isNarrow ? 16.0 : 28.0;
+      final hpad = isNarrow ? 16.0 : Ds.space.x24;
+      final header = (_dash['header'] is Map)
+          ? Map<String, dynamic>.from(_dash['header'] as Map)
+          : const <String, dynamic>{};
 
-      return SingleChildScrollView(
-        padding: EdgeInsets.fromLTRB(hpad, 24, hpad, 32),
+      // CHANGE #813 — ONE sticky header: it says when and where you are
+      // ("Today · Raipur Zone"), it carries the date and zone pickers — the
+      // only copy of them in the console — and it collapses to a single line
+      // as the page scrolls. Under it, the universal search bar.
+      final slivers = <Widget>[
+        SliverPersistentHeader(
+          pinned: true,
+          delegate: _StickyDashHeader(
+            title: (header['title'] ?? '').toString(),
+            subLabel: (header['sub_label'] ?? '').toString(),
+            updatedLabel: (_dash['updated_label'] ?? '').toString(),
+            hpad: hpad,
+            onZoneChanged: _loadDashboard,
+          ),
+        ),
+        SliverPadding(
+          padding: EdgeInsets.fromLTRB(hpad, Ds.space.x16, hpad, Ds.space.x32),
+          sliver: SliverList(
+            delegate: SliverChildListDelegate([
+              Builder(builder: (_) {
+                RenderLog.write('titles_removed_dashboard', 'true');
+                return const SizedBox.shrink();
+              }),
+              // The entity door, full width, directly under the header: order
+              // code, phone, pharmacy, supplier or product. Its wording is
+              // universal_search()'s own hint, never a Dart literal.
+              _SearchBar(
+                key: const Key('c813_search_bar'),
+                label: (header['search_hint'] ?? '').toString().isNotEmpty
+                    ? (header['search_hint'] ?? '').toString()
+                    : c('usearch.placeholder'),
+                onTap: _openUniversalSearch,
+                paletteLabel: _label('search_button'),
+                onPalette: _openPalette,
+              ),
+              SizedBox(height: Ds.space.x24),
+              if (_loading && _dash.isEmpty)
+                // Loading is a shape, not a spinner.
+                const DashboardV2Skeleton()
+              else ...[
+                DashboardV2Card(
+                  payload: _dash,
+                  onOpen: _openTile,
+                  onAction: _runDashboardAction,
+                  onShare: _shareMetric,
+                ),
+                if (_dash.isNotEmpty) SizedBox(height: Ds.space.x24),
+                if (_ops.isNotEmpty) _OpsBoardCard(payload: _ops),
+                const OrderHoursCard(),
+                const NotificationsCard(),
+                const CrashesCard(),
+                _sectionLabel(_label('action_required')),
+                _buildActionRequired(),
+                SizedBox(height: Ds.space.x24),
+                _sectionLabel(c('admin_dashboard.section_overview')),
+                _buildOverview(),
+                SizedBox(height: Ds.space.x24),
+                _sectionLabel(_label('all_features')),
+                NavSections(
+                  sections: _list('sections'),
+                  pinned: _list('pinned'),
+                  pinnedLabel: _label('pinned'),
+                  pinHint: _label('pin_hint'),
+                  onOpen: _openTile,
+                  onPin: _togglePin,
+                ),
+                TextButton.icon(
+                  onPressed: _openUnusedReport,
+                  icon: const Icon(Icons.insights_outlined),
+                  label: Text(_label('unused_report')),
+                ),
+              ],
+            ]),
+          ),
+        ),
+      ];
+
+      return CustomScrollView(slivers: slivers);
+    });
+  }
+}
+
+// ── CHANGE #813: the sticky header ───────────────────────────────────────────
+//
+// "Today · Raipur Zone" is the BACKEND's sentence (dashboard_v2().header.title)
+// — this delegate only draws it, and shrinks: at full height it carries the
+// date, the zone pickers and the updated stamp; pinned at the top of a scrolled
+// page it keeps the title and the pickers, because a filter you cannot see is a
+// filter you forget you set.
+class _StickyDashHeader extends SliverPersistentHeaderDelegate {
+  final String title;
+  final String subLabel;
+  final String updatedLabel;
+  final double hpad;
+  final VoidCallback onZoneChanged;
+
+  const _StickyDashHeader({
+    required this.title,
+    required this.subLabel,
+    required this.updatedLabel,
+    required this.hpad,
+    required this.onZoneChanged,
+  });
+
+  @override
+  double get maxExtent => 132;
+
+  @override
+  double get minExtent => 72;
+
+  @override
+  Widget build(
+      BuildContext context, double shrinkOffset, bool overlapsContent) {
+    final t = ((maxExtent - shrinkOffset) / (maxExtent - minExtent))
+        .clamp(0.0, 1.0);
+    return Material(
+      color: Ds.c.bg,
+      elevation: shrinkOffset > 0 ? 1 : 0,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+            hpad, Ds.space.x12, hpad, Ds.space.x8),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Builder(builder: (_) {
-              RenderLog.write('titles_removed_dashboard', 'true');
-              return const SizedBox(height: 8);
-            }),
-
-            if (_loading)
-              const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(32),
-                  child: CircularProgressIndicator(
-                      color: Color(0xFF1B7A43), strokeWidth: 2.5),
-                ),
-              )
-            else
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // CHANGE #545 — THE admin date filter. One picker, here,
-                  // directly above ORDER HOURS; every date-scoped tab follows
-                  // it via AdminDateScope. No tab has one of its own.
-                  //
-                  // CHANGE #609 — the zone filter sits immediately beside it,
-                  // same treatment, and follows the same rule: the selection is
-                  // server-side state, so the tabs read it by refetching their
-                  // own RPC, not by being handed a zone. AdminZonePicker
-                  // renders nothing at all when zone_picker() says show:false,
-                  // so the Wrap collapses to just the date control.
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: const [
-                        AdminDatePicker(bare: true),
-                        AdminZonePicker(),
-                      ],
-                    ),
-                  ),
-                  // CHANGE #325 — the command palette. One search box above
-                  // everything else: it jumps to any screen, order, customer,
-                  // supplier or medicine, so nothing needs to be hunted for.
-                  _PaletteButton(
-                      label: _label('search_button'), onTap: _openPalette),
-                  SizedBox(height: Ds.space.x4),
-                  // CHANGE #812 — the entity door. Deliberately NOT a second
-                  // full-width box: two identical search bars stacked read as a
-                  // duplicate, not as two tools. The screen jumper above stays
-                  // the focal control; this is its quieter sibling, and its
-                  // wording is universal_search()'s own placeholder rather than
-                  // a Dart literal.
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(minHeight: 44),
-                      child: TextButton.icon(
-                        key: const Key('c812_search_button'),
-                        onPressed: _openUniversalSearch,
-                        icon: const Icon(Icons.travel_explore_outlined,
-                            size: 18),
-                        label: Text(c('usearch.placeholder')),
-                      ),
-                    ),
-                  ),
-                  SizedBox(height: Ds.space.x12),
-                  // CHANGE #812 — the dashboard itself: one RPC, printed.
-                  DashboardV2Card(
-                    payload: _dash,
-                    onOpen: _openTile,
-                    onAction: _runDashboardAction,
-                  ),
-                  if (_dash.isNotEmpty) SizedBox(height: Ds.space.x24),
-                  // #58 — "what is stuck right now", first thing on the
-                  // admin home and one tap from the full board.
-                  if (_ops.isNotEmpty) _OpsBoardCard(payload: _ops),
-                  const OrderHoursCard(),
-                  const NotificationsCard(),
-                  // CHANGE #473 — client crashes, last 24h by release. It sits
-                  // with the other two health cards because that is what it is:
-                  // the shipped app's health, next to the platform's. It draws
-                  // nothing at all unless crash_admin_card() says visible.
-                  const CrashesCard(),
-                  _sectionLabel(_label('action_required')),
-                  _buildActionRequired(),
-                  const SizedBox(height: 28),
-                  _sectionLabel(c('admin_dashboard.section_overview')),
-                  _buildOverview(),
-                  const SizedBox(height: 28),
-                  _sectionLabel(_label('all_features')),
-                  // CHANGE #325 — "Quick Navigation" was eight hand-written
-                  // tiles while thirty features hid in the profile dropdown.
-                  // It is now every registered feature, categorised, ordered
-                  // and role-composed by the backend.
-                  NavSections(
-                    sections: _list('sections'),
-                    pinned: _list('pinned'),
-                    pinnedLabel: _label('pinned'),
-                    pinHint: _label('pin_hint'),
-                    onOpen: _openTile,
-                    onPin: _togglePin,
-                  ),
-                  TextButton.icon(
-                    onPressed: _openUnusedReport,
-                    icon: const Icon(Icons.insights_outlined),
-                    label: Text(_label('unused_report')),
-                  ),
-                ],
+            Row(children: [
+              Expanded(
+                child: Text(title,
+                    key: const Key('c813_header_title'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Ds.t.title),
               ),
+              if (updatedLabel.isNotEmpty)
+                Text(updatedLabel,
+                    key: const Key('c813_updated'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Ds.t.caption),
+            ]),
+            // The date line fades out as the header collapses; the pickers
+            // never do.
+            if (t > 0.35 && subLabel.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x4),
+              Opacity(
+                opacity: t,
+                child: Text(subLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Ds.t.caption),
+              ),
+            ],
+            SizedBox(height: Ds.space.x8),
+            Wrap(
+              spacing: Ds.space.x8,
+              runSpacing: Ds.space.x8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                const AdminDatePicker(bare: true),
+                AdminZonePicker(onChanged: onZoneChanged),
+              ],
+            ),
           ],
         ),
-      );
-    });
+      ),
+    );
+  }
+
+  @override
+  bool shouldRebuild(_StickyDashHeader old) =>
+      old.title != title ||
+      old.subLabel != subLabel ||
+      old.updatedLabel != updatedLabel ||
+      old.hpad != hpad;
+}
+
+// ── CHANGE #813: the one search bar ──────────────────────────────────────────
+//
+// #812 put the entity search behind a quiet text button so it would not read as
+// a second identical box. The spec asks for ONE bar under the header, so this
+// is that bar — the entity door — with the screen jumper kept as its trailing
+// icon rather than a second full-width control.
+class _SearchBar extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  final String paletteLabel;
+  final VoidCallback onPalette;
+
+  const _SearchBar({
+    super.key,
+    required this.label,
+    required this.onTap,
+    required this.paletteLabel,
+    required this.onPalette,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    RenderLog.write('c325_palette_button', 1);
+    return Row(children: [
+      Expanded(
+        child: InkWell(
+          key: const Key('c812_search_button'),
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(Ds.r.button),
+          child: Container(
+            height: Ds.space.x48,
+            padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+            decoration: BoxDecoration(
+              color: Ds.c.bg,
+              borderRadius: BorderRadius.circular(Ds.r.button),
+              border: Border.all(color: Ds.c.divider),
+            ),
+            child: Row(children: [
+              Icon(Icons.search,
+                  size: Ds.space.x24, color: Ds.c.textSecondary),
+              SizedBox(width: Ds.space.x12),
+              Expanded(
+                  child: Text(label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Ds.t.bodySecondary)),
+            ]),
+          ),
+        ),
+      ),
+      SizedBox(width: Ds.space.x8),
+      Tooltip(
+        message: paletteLabel,
+        child: IconButton(
+          key: const Key('c813_palette_button'),
+          onPressed: onPalette,
+          iconSize: Ds.space.x24,
+          constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+          icon: Icon(Icons.bolt_outlined, color: Ds.c.textSecondary),
+        ),
+      ),
+    ]);
   }
 }
 
@@ -645,37 +809,28 @@ class _StatCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: 200,
-      padding: const EdgeInsets.all(20),
+      padding: EdgeInsets.all(Ds.space.x16),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFF3F4F6)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.06),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        border: Border.all(color: Ds.c.divider),
+        boxShadow: Ds.elevation.e1,
       ),
       child: Row(children: [
         Container(
-          width: 44,
-          height: 44,
+          width: Ds.space.x48,
+          height: Ds.space.x48,
           decoration: BoxDecoration(
             color: color.withValues(alpha: 0.10),
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: Ds.r.rChip,
           ),
-          child: Icon(icon, size: 22, color: color),
+          child: Icon(icon, size: Ds.space.x24, color: color),
         ),
-        const SizedBox(width: 14),
+        SizedBox(width: Ds.space.x12),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(value,
-              style: const TextStyle(
-                  fontSize: 26, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
-          const SizedBox(height: 2),
-          Text(label,
-              style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+          Text(value, style: Ds.t.title),
+          SizedBox(height: Ds.space.x4),
+          Text(label, style: Ds.t.caption),
         ])),
       ]),
     );
@@ -710,34 +865,6 @@ class QuickLinkNavigator extends InheritedWidget {
 
 
 
-// ── CHANGE #325: the command-palette entry point ─────────────────────────────
-
-class _PaletteButton extends StatelessWidget {
-  final String label;
-  final VoidCallback onTap;
-
-  const _PaletteButton({required this.label, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    RenderLog.write('c325_palette_button', 1);
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(Ds.r.button),
-      child: Container(
-        height: Ds.space.x48,
-        padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-        decoration: BoxDecoration(
-          color: Ds.c.bg,
-          borderRadius: BorderRadius.circular(Ds.r.button),
-          border: Border.all(color: Ds.c.divider),
-        ),
-        child: Row(children: [
-          Icon(Icons.search, size: Ds.space.x24, color: Ds.c.textSecondary),
-          SizedBox(width: Ds.space.x12),
-          Expanded(child: Text(label, style: Ds.t.bodySecondary)),
-        ]),
-      ),
-    );
-  }
-}
+// CHANGE #813 — _PaletteButton is gone: the screen jumper now lives as the
+// trailing icon on the ONE search bar (_SearchBar above), so the dashboard has
+// a single search control instead of two stacked boxes.

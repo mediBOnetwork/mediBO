@@ -390,8 +390,11 @@ begin
   return v_out;
 end $fn$;
 
-revoke all on function public._dashboard_strip(smallint, date, text, text) from public, anon;
-grant execute on function public._dashboard_strip(smallint, date, text, text) to authenticated;
+-- The helper stays CLOSED: dashboard_v2 is security definer and calls it
+-- itself, so nothing signed-in ever needs execute on it. The rg behaviour
+-- `dashboard_strip_helper_is_closed` fails the guard if this is ever granted.
+revoke all on function public._dashboard_strip(smallint, date, text, text)
+  from public, anon, authenticated;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 6. dashboard_v2 — plus the sticky header's own sentence, a 30-second cadence

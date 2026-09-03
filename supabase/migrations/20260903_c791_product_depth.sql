@@ -699,10 +699,12 @@ begin
 
   -- CMD #791 — the co-purchase strip, built from the ids actually in the
   -- basket. Empty basket => has:false and no strip.
+  -- cart_items.product_id is TEXT and not every row holds a catalogue id, so
+  -- the same numeric guard the pricing/margin/Rx blocks now carry applies here.
   select coalesce(array_agg(distinct (e->>'product_id')::bigint), '{}')
     into ids
     from jsonb_array_elements(coalesce(v->'items','[]'::jsonb)) e
-   where nullif(e->>'product_id','') is not null;
+   where (e->>'product_id') ~ '^[0-9]+$';
 
   if coalesce(array_length(bad,1),0) = 0 or v is null or jsonb_typeof(v) <> 'object' then
     return coalesce(v,'{}'::jsonb)
@@ -730,3 +732,481 @@ begin
       || case when coalesce(array_length(bad,1),0) = 1 then '' else 's' end || ' not available',
     'companions', public.cart_companions(ids));
 end $function$;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 7. HARDENING — found by this command's own live reachability check.
+--
+-- The admin's product page came back as the not-found state on medibo.in while
+-- every block was correct in SQL. Cause: `cart_items.product_id` is TEXT, that
+-- account holds five preview rows ('prev1'..'prev5'), and
+-- `cart_pricing_block()` cast the id to bigint unguarded — so
+-- `my_cart_discount_pct()` RAISED, and every caller of it died with it.
+--
+-- That was already breaking `storefront_page()` for the same account (the whole
+-- catalogue, not just this page) before CMD #791 existed; the co-purchase rail
+-- simply made it visible on a second surface. Both halves are fixed here:
+--
+--   a) a cart row whose id is not a catalogue id is an UNPRICED line — the exact
+--      branch the function already had for a null id — instead of an exception,
+--   b) and no depth block may take the product page down with it. Each of the
+--      four is wrapped, so a failure inside one renders that block absent and
+--      the product still renders. Same rule as main.dart's boot guard: a
+--      feature crash must never take the surface with it.
+-- ─────────────────────────────────────────────────────────────────────────────
+set local lock_timeout = '60s';
+
+CREATE OR REPLACE FUNCTION public.cart_pricing_block(p_items jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_lines jsonb := '[]'::jsonb;
+  v_taxable numeric := 0; v_gst numeric := 0; v_cgst numeric := 0; v_sgst numeric := 0;
+  v_net numeric := 0; v_mrp numeric := 0;
+  v_priced int := 0; v_unpriced int := 0; v_est int := 0;
+  v_rate numeric; v_rates numeric[] := '{}';
+  it jsonb; v_tp jsonb; v_qty numeric; v_pid bigint;
+  v_tax_lines jsonb := '[]'::jsonb;
+  v_lbl_taxable text := coalesce((select value from storefront_ui_label where key='cart_taxable_total_label'), 'Taxable value');
+  v_lbl_gst     text := coalesce((select value from storefront_ui_label where key='cart_gst_total_label'), 'GST');
+  v_lbl_net     text := coalesce((select value from storefront_ui_label where key='cart_net_payable_label'), 'Net payable');
+  v_lbl_mrp     text := coalesce((select value from storefront_ui_label where key='cart_mrp_worth_label'), 'MRP worth (reference only)');
+  v_lbl_title   text := coalesce((select value from storefront_ui_label where key='cart_totals_title'), 'Order summary');
+  v_lbl_unpriced text := coalesce((select value from storefront_ui_label where key='cart_unpriced_total_note'), 'not priced yet');
+  v_lbl_none    text := coalesce((select value from storefront_ui_label where key='cart_no_price_yet'), 'Awaiting supplier rates');
+  v_lbl_est     text := coalesce((select value from storefront_ui_label where key='cart_gst_estimated_note'), '');
+begin
+  for it in select value from jsonb_array_elements(coalesce(p_items, '[]'::jsonb)) loop
+    -- CMD #791 — cart_items.product_id is TEXT. A row that does not hold a
+    -- catalogue id (the 'prev1'..'prev5' preview rows one account holds) is
+    -- NOT priceable, and that is a normal outcome, not an error: it falls
+    -- into the `v_pid is null` branch immediately below, which this
+    -- function already had. The bare cast raised 22P02 and took
+    -- my_cart_discount_pct() — and with it storefront_page(), the whole
+    -- catalogue — down for that viewer.
+    v_pid := case when (it->>'product_id') ~ '^[0-9]+$'
+                  then (it->>'product_id')::bigint end;
+    v_qty := coalesce((it->>'quantity')::numeric, 0);
+    v_mrp := v_mrp + round(v_qty * coalesce((it->>'mrp')::numeric, 0), 2);
+
+    if v_pid is null then
+      v_unpriced := v_unpriced + 1;
+      v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+        'product_id', it->>'product_id', 'has_trade_rate', false));
+      continue;
+    end if;
+
+    v_tp := public.trade_price_line(v_pid, v_qty);
+    v_lines := v_lines || jsonb_build_array(v_tp);
+
+    if (v_tp->>'has_trade_rate')::boolean then
+      v_priced  := v_priced + 1;
+      v_taxable := v_taxable + (v_tp->>'line_taxable')::numeric;
+      v_gst     := v_gst     + (v_tp->>'line_gst')::numeric;
+      v_cgst    := v_cgst    + (v_tp->>'line_cgst')::numeric;
+      v_sgst    := v_sgst    + (v_tp->>'line_sgst')::numeric;
+      v_net     := v_net     + (v_tp->>'line_net')::numeric;
+      v_rate    := (v_tp->>'gst_pct')::numeric;
+      if v_rate is not null and not (v_rate = any(v_rates)) then
+        v_rates := v_rates || v_rate;
+      end if;
+      if not coalesce((v_tp->>'gst_confirmed')::boolean, false) then v_est := v_est + 1; end if;
+    else
+      v_unpriced := v_unpriced + 1;
+    end if;
+  end loop;
+
+  v_taxable := round(v_taxable, 2); v_gst := round(v_gst, 2);
+  v_cgst := round(v_cgst, 2); v_sgst := round(v_sgst, 2); v_net := round(v_net, 2);
+
+  -- CGST/SGST — intra-state is the operating case (Chhattisgarh operator,
+  -- Chhattisgarh pharmacies). IGST becomes a branch here the day the seller and
+  -- the buyer GSTIN states differ; gst_split() already knows how to decide it.
+  if v_priced > 0 then
+    v_tax_lines := jsonb_build_array(
+      jsonb_build_object('label', v_lbl_taxable, 'value', public.inr_money(v_taxable)),
+      jsonb_build_object('label', 'CGST', 'value', public.inr_money(v_cgst)),
+      jsonb_build_object('label', 'SGST', 'value', public.inr_money(v_sgst)),
+      jsonb_build_object('label', v_lbl_gst, 'value', public.inr_money(v_gst)));
+  end if;
+
+  return jsonb_build_object(
+    'title',            v_lbl_title,
+    'lines',            v_lines,
+    'priced_count',     v_priced,
+    'unpriced_count',   v_unpriced,
+    'has_priced',       (v_priced > 0),
+    'has_unpriced',     (v_unpriced > 0),
+    'has_tax',          (v_priced > 0),
+    'taxable',          v_taxable,
+    'taxable_display',  public.inr_money(v_taxable),
+    'taxable_label',    v_lbl_taxable,
+    'cgst',             v_cgst, 'cgst_display', public.inr_money(v_cgst),
+    'sgst',             v_sgst, 'sgst_display', public.inr_money(v_sgst),
+    'gst_total',        v_gst,  'gst_total_display', public.inr_money(v_gst),
+    'gst_total_label',  v_lbl_gst,
+    'gst_rates',        to_jsonb(v_rates),
+    'gst_estimated_count', v_est,
+    'gst_note',         case when v_est > 0 then v_lbl_est else '' end,
+    'net_payable',      v_net,
+    'net_payable_label',v_lbl_net,
+    -- The payable NEVER falls back to MRP. With nothing priced it is ₹0.00 and
+    -- the backend says why, in its own words.
+    'net_payable_display', case when v_priced > 0 then public.inr_money(v_net) else v_lbl_none end,
+    'mrp_worth',        round(v_mrp, 2),
+    'mrp_worth_label',  v_lbl_mrp,
+    'mrp_worth_display',public.inr_money(round(v_mrp, 2)),
+    'tax_lines',        v_tax_lines,
+    'unpriced_note',    case when v_unpriced > 0
+                             then v_unpriced::text || ' item'
+                                  || case when v_unpriced = 1 then '' else 's' end
+                                  || ' ' || v_lbl_unpriced
+                             else '' end);
+end;
+$function$;
+
+-- The discount a companion tile is priced with. Never allowed to raise: the
+-- co-purchase rail is an ADDITION to the product page, so a cart the viewer
+-- happens to hold must not be able to blank the product they are looking at.
+create or replace function public._c791_safe_discount_pct()
+returns numeric
+language plpgsql
+stable
+security definer
+set search_path to 'public'
+as $$
+begin
+  return public.my_cart_discount_pct();
+exception when others then
+  return null;
+end;
+$$;
+
+grant execute on function public._c791_safe_discount_pct() to anon, authenticated;
+
+-- The two companion readers now price through the safe wrapper, and resolve the
+-- discount ONCE per call rather than once per tile.
+create or replace function public.product_companions(p_product_id bigint, p_exclude bigint[] default '{}')
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path to 'public'
+as $$
+declare
+  v_zone  smallint;
+  v_show  int;
+  v_use   smallint;
+  v_disc  numeric;
+  v_items jsonb;
+begin
+  v_show := coalesce((select (value #>> '{}')::int from app_settings where key = 'copurchase_show_top_n'), 6);
+  v_zone := coalesce(public._viewer_zone_or_null(), public.my_zone_id());
+  v_disc := public._c791_safe_discount_pct();
+
+  -- Prefer the viewer's own zone; fall back to the platform roll-up (0).
+  if v_zone is not null and exists (
+       select 1 from product_copurchase
+        where product_id = p_product_id and zone_id = v_zone) then
+    v_use := v_zone;
+  else
+    v_use := 0;
+  end if;
+
+  select coalesce(jsonb_agg(x order by x_rank), '[]'::jsonb) into v_items
+  from (
+    select c.rank as x_rank,
+           jsonb_build_object(
+             'id',            m.id,
+             'name',          coalesce(m.product_name, ''),
+             'company',       coalesce(m.marketer, ''),
+             'pack_label',    coalesce(nullif(btrim(coalesce(m.pack_type, '')), ''),
+                                       nullif(btrim(coalesce(m.pack_size, '')), ''), ''),
+             'form_chip',     coalesce(nullif(btrim(coalesce(m.pack_qty, '')), ''),
+                                       nullif(btrim(coalesce(m.pack_size, '')), ''), ''),
+             'image',         coalesce(m.image_url_1, ''),
+             'support_label', c.support::text || ' orders',
+             'pricing',       public.storefront_pricing(
+                                nullif(regexp_replace(coalesce(m.mrp::text, ''), '[^0-9.]', '', 'g'), '')::numeric,
+                                v_disc, m.id),
+             'availability',  public.storefront_cta(
+                                public.storefront_effective_count(m.id, m.supplier_count),
+                                true, m.status)) as x
+      from product_copurchase c
+      join "MEDICINE" m on m.id = c.companion_id
+     where c.product_id = p_product_id
+       and c.zone_id = v_use
+       and m.buyable is true
+       and public.med_status_sellable(m.status)
+       and not (m.id = any (coalesce(p_exclude, '{}'::bigint[])))
+     order by c.rank
+     limit greatest(v_show, 1)
+  ) s;
+
+  return jsonb_build_object(
+    'has',   jsonb_array_length(v_items) > 0,
+    'title', coalesce((select value from storefront_ui_label where key = 'pdp_companions_title'), ''),
+    'note',  coalesce((select value from storefront_ui_label where key = 'pdp_companions_note'), ''),
+    'zone_id', v_use,
+    'items', v_items);
+end;
+$$;
+
+create or replace function public.cart_companions(p_ids bigint[])
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path to 'public'
+as $$
+declare
+  v_zone  smallint;
+  v_show  int;
+  v_use   smallint;
+  v_disc  numeric;
+  v_items jsonb;
+begin
+  if p_ids is null or array_length(p_ids, 1) is null then
+    return jsonb_build_object('has', false, 'title', '', 'note', '', 'items', '[]'::jsonb);
+  end if;
+
+  v_show := coalesce((select (value #>> '{}')::int from app_settings where key = 'copurchase_show_top_n'), 6);
+  v_zone := coalesce(public._viewer_zone_or_null(), public.my_zone_id());
+  v_disc := public._c791_safe_discount_pct();
+
+  if v_zone is not null and exists (
+       select 1 from product_copurchase
+        where product_id = any (p_ids) and zone_id = v_zone) then
+    v_use := v_zone;
+  else
+    v_use := 0;
+  end if;
+
+  select coalesce(jsonb_agg(x order by x_support desc, x_id), '[]'::jsonb) into v_items
+  from (
+    select m.id as x_id, sum(c.support)::int as x_support,
+           jsonb_build_object(
+             'id',            m.id,
+             'name',          coalesce(m.product_name, ''),
+             'company',       coalesce(m.marketer, ''),
+             'pack_label',    coalesce(nullif(btrim(coalesce(m.pack_type, '')), ''),
+                                       nullif(btrim(coalesce(m.pack_size, '')), ''), ''),
+             'form_chip',     coalesce(nullif(btrim(coalesce(m.pack_qty, '')), ''),
+                                       nullif(btrim(coalesce(m.pack_size, '')), ''), ''),
+             'image',         coalesce(m.image_url_1, ''),
+             'support_label', sum(c.support)::text || ' orders',
+             'pricing',       public.storefront_pricing(
+                                nullif(regexp_replace(coalesce(m.mrp::text, ''), '[^0-9.]', '', 'g'), '')::numeric,
+                                v_disc, m.id),
+             'availability',  public.storefront_cta(
+                                public.storefront_effective_count(m.id, m.supplier_count),
+                                true, m.status)) as x
+      from product_copurchase c
+      join "MEDICINE" m on m.id = c.companion_id
+     where c.product_id = any (p_ids)
+       and c.zone_id = v_use
+       and not (c.companion_id = any (p_ids))
+       and m.buyable is true
+       and public.med_status_sellable(m.status)
+     group by m.id, m.product_name, m.marketer, m.pack_type, m.pack_size,
+              m.pack_qty, m.image_url_1, m.mrp, m.supplier_count, m.status
+     order by 2 desc, 1
+     limit greatest(v_show, 1)
+  ) s;
+
+  return jsonb_build_object(
+    'has',   jsonb_array_length(v_items) > 0,
+    'title', coalesce((select value from storefront_ui_label where key = 'cart_companions_title'), ''),
+    'note',  coalesce((select value from storefront_ui_label where key = 'cart_companions_note'), ''),
+    'zone_id', v_use,
+    'items', v_items);
+end;
+$$;
+
+-- And the page itself: each depth block is wrapped, so a failure inside one
+-- renders that block ABSENT and the product still renders. The four blocks are
+-- additions to the product page; none of them is allowed to become the reason
+-- there is no product page.
+create or replace function public.product_detail(p_product_id bigint)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path to 'public'
+as $function$
+declare
+  v jsonb; v_rx text;
+  v_gallery jsonb; v_facts jsonb; v_purchase jsonb; v_companions jsonb;
+begin
+  v := public._product_detail_core(p_product_id);
+  if coalesce((v->>'ok')::boolean, false) = false then
+    return v;
+  end if;
+  select m.rx_required into v_rx from "MEDICINE" m where m.id = p_product_id;
+
+  begin v_gallery := public.product_gallery(p_product_id);
+  exception when others then v_gallery := jsonb_build_object('has', false, 'count', 0, 'images', '[]'::jsonb); end;
+
+  begin v_facts := public.product_facts(p_product_id);
+  exception when others then v_facts := jsonb_build_object('has', false, 'title', '', 'rows', '[]'::jsonb); end;
+
+  begin v_purchase := public.purchase_overlay(p_product_id);
+  exception when others then v_purchase := jsonb_build_object('has', false); end;
+
+  begin v_companions := public.product_companions(p_product_id, array[p_product_id]);
+  exception when others then v_companions := jsonb_build_object('has', false, 'title', '', 'note', '', 'items', '[]'::jsonb); end;
+
+  -- CHANGE #461/#170: the prescription class, and (for a signed-in pharmacy)
+  -- whether their drug licence is on file for it.
+  return v
+    || jsonb_build_object('header',
+         coalesce(v->'header','{}'::jsonb)
+         || jsonb_build_object('rx_required',
+              (upper(btrim(coalesce(v_rx,''))) = 'RX')))
+    || jsonb_build_object(
+    'rx',         public.rx_badge(v_rx),
+    'rx_licence', case when upper(btrim(coalesce(v_rx,''))) = 'RX'
+                            and public.my_customer_id() is not null
+                       then public.rx_licence_state(public.my_customer_id())
+                       else jsonb_build_object('has', true, 'reason', 'n/a') end)
+    -- CMD #791 — depth: the gallery, the fact table, this buyer's own history
+    -- with the pack, and what it is bought with.
+    || jsonb_build_object(
+    'gallery',    v_gallery,
+    'facts',      v_facts,
+    'purchase',   v_purchase,
+    'companions', v_companions);
+end $function$;
+
+-- The cart's margin block carried the identical cast, so the CART was still
+-- 500-ing for the same account after the pricing block was fixed.
+CREATE OR REPLACE FUNCTION public.cart_margin_block(p_items jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_net numeric := 0; v_margin numeric := 0;
+  v_ready int := 0; v_pending int := 0;
+  v_label text := coalesce((select value from storefront_ui_label where key = 'cart_margin_label'), 'You earn on this order');
+  v_net_label text := coalesce((select value from storefront_ui_label where key = 'cart_net_label'), 'Net payable (trade)');
+begin
+  select
+    coalesce(sum(case when mp.pricing_ready then l.qty * (x.c->>'net_payable')::numeric end), 0),
+    coalesce(sum(case when mp.pricing_ready and l.mrp > 0
+                      then l.qty * (x.c->>'margin_amount')::numeric end), 0),
+    count(*) filter (where coalesce(mp.pricing_ready, false)),
+    count(*) filter (where not coalesce(mp.pricing_ready, false))
+    into v_net, v_margin, v_ready, v_pending
+  from (
+    -- CMD #791 — the same unguarded cast cart_pricing_block carried. A cart
+    -- row whose id is not a catalogue id ('prev3') is skipped by the WHERE
+    -- below; the cast is guarded too, because nothing in SQL promises the
+    -- select list is evaluated after the filter.
+    select case when (it->>'product_id') ~ '^[0-9]+$'
+                then (it->>'product_id')::bigint end as pid,
+           coalesce((it->>'quantity')::numeric, 0) as qty,
+           coalesce((it->>'mrp')::numeric, 0) as mrp
+      from jsonb_array_elements(coalesce(p_items, '[]'::jsonb)) it
+     where (it->>'product_id') ~ '^[0-9]+$') l
+  left join public.medicine_pricing mp on mp.product_id = l.pid
+  left join lateral (
+    select public._pricing_compute(l.mrp, mp.ptr, mp.gst_pct,
+             coalesce(mp.discount_pct, 0), mp.scheme_buy_qty, mp.scheme_free_qty, false) as c) x on true;
+
+  return jsonb_build_object(
+    'has',            (v_ready > 0),
+    'label',          v_label,
+    'total',          round(v_margin, 2),
+    'total_display',  public.inr_money(round(v_margin, 2)),
+    'net_label',      v_net_label,
+    'net_total',      round(v_net, 2),
+    'net_total_display', public.inr_money(round(v_net, 2)),
+    'ready_count',    v_ready,
+    'pending_count',  v_pending,
+    'note', case when v_pending > 0 and v_ready > 0
+                 then v_pending::text || ' item' || case when v_pending = 1 then '' else 's' end
+                      || ' not priced yet - not counted above'
+                 else '' end);
+end;
+$function$;
+
+-- And the cart's Rx gate, the third copy of it — the cart still 500-ed after
+-- the first two were fixed.
+CREATE OR REPLACE FUNCTION public.cart_rx_gate(p_customer uuid, p_items jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_rx   int := 0;
+  v_lic  jsonb := public.rx_licence_state(p_customer);
+  v_block boolean;
+  v_title text := ''; v_msg text := '';
+  v_kyc  jsonb;                                   -- CHANGE #705
+  v_kyc_block boolean := false;
+begin
+  select count(*) into v_rx
+    from jsonb_array_elements(coalesce(p_items,'[]'::jsonb)) it
+    -- CMD #791 — third instance of the same unguarded cast on a TEXT
+    -- cart_items.product_id. A row that is not a catalogue id is not an Rx
+    -- product either, so it simply does not join.
+    join "MEDICINE" m on m.id = (case when (it->>'product_id') ~ '^[0-9]+$'
+                                    then (it->>'product_id')::bigint end)
+   where upper(btrim(coalesce(m.rx_required,''))) = 'RX';
+
+  if v_rx > 0 and not coalesce((v_lic->>'has')::boolean, false) then
+    if (v_lic->>'reason') = 'expired' then
+      v_title := public._c('rx.licence_expired_title');
+      v_msg   := public._cf('rx.licence_expired_msg',
+                   jsonb_build_object('date', to_char((v_lic->>'expiry')::date, 'DD Mon YYYY')));
+    else
+      v_title := public._c('rx.licence_missing_title');
+      v_msg   := case when v_rx = 1
+                      then public._c('rx.licence_missing_msg_one')
+                      else public._cf('rx.licence_missing_msg_many',
+                             jsonb_build_object('count', v_rx::text)) end;
+    end if;
+  end if;
+
+  v_block := (v_rx > 0)
+             and not coalesce((v_lic->>'has')::boolean, false)
+             and coalesce((v_lic->>'enforced')::boolean, false);
+
+  -- CHANGE #705 — KYC parity. The Rx gate above asks "is there a licence
+  -- NUMBER on file, and does this basket contain Schedule H stock?"; this asks
+  -- "has a human VERIFIED the licence document?", and it applies to the whole
+  -- basket, not only to Rx lines. Existing approved pharmacies keep ordering
+  -- through their grace window; kyc_gate decides, this only renders it.
+  v_kyc := public.kyc_gate('pharmacy', p_customer, 'trade');
+  v_kyc_block := coalesce((v_kyc->>'blocked')::boolean, false);
+  if v_kyc_block then
+    v_title := coalesce(nullif(v_kyc->>'title',''), v_title);
+    v_msg   := coalesce(nullif(v_kyc->>'message',''), v_msg);
+  elsif v_msg = '' and coalesce(v_kyc->>'grace_note','') <> '' then
+    v_msg := v_kyc->>'grace_note';                -- a warning, never a block
+  end if;
+
+  return jsonb_build_object(
+    'has',        (v_rx > 0),
+    'rx_count',   v_rx,
+    'rx_note',    case when v_rx = 0 then ''
+                       when v_rx = 1 then public._c('rx.cart_rx_note_one')
+                       else public._cf('rx.cart_rx_note_many',
+                              jsonb_build_object('count', v_rx::text)) end,
+    'licence',    v_lic,
+    'kyc',        v_kyc,
+    'can_order',  not (v_block or v_kyc_block),
+    'blocked',    (v_block or v_kyc_block),
+    'is_warning', (v_msg <> '' and not (v_block or v_kyc_block)),
+    'title',      v_title,
+    'message',    v_msg,
+    'tone',       case when (v_block or v_kyc_block) then jsonb_build_object('bg','#FEE2E2','fg','#991B1B')
+                       when v_msg <> '' then jsonb_build_object('bg','#FEF3C7','fg','#92400E')
+                       else jsonb_build_object('bg','#D1FAE5','fg','#065F46') end);
+end
+$function$;

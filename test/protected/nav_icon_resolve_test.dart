@@ -36,24 +36,49 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pharma_b2b/screens/admin/nav_registry_view.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 
-/// The icon_key list the migration seeds into `ui_icon`, read from the
-/// migration itself. If someone adds a key to Postgres and forgets Dart (the
-/// exact shape of the #349 defect), this test goes red on the next deploy.
+/// The icon_key list the MIGRATIONS seed into `ui_icon`, read from the
+/// migrations themselves. If someone adds a key to Postgres and forgets Dart
+/// (the exact shape of the #349 defect), this test goes red on the next
+/// deploy.
+///
+/// CHANGE #745 widened this from the one #349 seed file to every migration
+/// that writes `ui_icon`. #745 added the heart the customer wishlist wears and
+/// found the catalogue could only grow by EDITING a migration that had already
+/// shipped — which is worse than the drift this test exists to catch. The
+/// invariant is unchanged and still exact in both directions; only where it
+/// reads the SQL side moved, so a new icon is a normal INSERT in a new file.
 Set<String> _catalogueFromMigration() {
-  final file = File(
-      'supabase/migrations/20260831190000_c349_icon_catalogue_and_dev_tools.sql');
-  expect(file.existsSync(), isTrue,
-      reason: 'the ui_icon catalogue migration must stay in the repo');
-  final sql = file.readAsStringSync();
-  final start = sql.indexOf('insert into public.ui_icon');
-  final end = sql.indexOf('on conflict (icon_key)', start);
-  expect(start >= 0 && end > start, isTrue,
-      reason: 'the ui_icon seed block must stay recognisable');
-  final block = sql.substring(start, end);
-  return RegExp(r"\('([a-z0-9_]+)',")
-      .allMatches(block)
-      .map((m) => m.group(1)!)
-      .toSet();
+  final dir = Directory('supabase/migrations');
+  expect(dir.existsSync(), isTrue,
+      reason: 'run this from the package root — supabase/migrations must exist');
+
+  final keys = <String>{};
+  var blocks = 0;
+  final files = dir.listSync().whereType<File>().toList()
+    ..sort((a, b) => a.path.compareTo(b.path));
+  for (final file in files) {
+    if (!file.path.endsWith('.sql')) continue;
+    final sql = file.readAsStringSync();
+    var start = sql.indexOf('insert into public.ui_icon');
+    while (start >= 0) {
+      // Every ui_icon seed ends at its own `on conflict (icon_key)`; a block
+      // without one would silently swallow the rest of the file, so it is a
+      // failure rather than a best-effort read.
+      final end = sql.indexOf('on conflict (icon_key)', start);
+      expect(end > start, isTrue,
+          reason: '${file.path} inserts into ui_icon without an '
+              '"on conflict (icon_key)" terminator — the seed block is '
+              'unreadable and its keys would go unaudited');
+      blocks++;
+      keys.addAll(RegExp(r"\('([a-z0-9_]+)',")
+          .allMatches(sql.substring(start, end))
+          .map((m) => m.group(1)!));
+      start = sql.indexOf('insert into public.ui_icon', end);
+    }
+  }
+  expect(blocks, greaterThan(0),
+      reason: 'no ui_icon seed block was found — the scan stopped auditing');
+  return keys;
 }
 
 Widget _host(Widget child) => MaterialApp(home: Scaffold(body: Center(child: child)));

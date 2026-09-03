@@ -482,3 +482,26 @@ class _DoneBlock extends StatelessWidget {
     );
   }
 }
+
+/// CHANGE #697 — ask once, on app open, and let the BACKEND decide whether
+/// there is anything to ask about. `order_feedback_pending()` names the closed,
+/// unrated order for this pharmacy and returns show:false when there is none,
+/// so the shell never works out that an order deserves a card.
+///
+/// Lives here rather than in home_shell.dart because the shell is held to one
+/// concern and under 2,000 lines by its own protected guard (#340 / #327
+/// layer 1) — a feature that needs a hook there gets a one-line call and keeps
+/// its logic in its own file.
+///
+/// Every failure is swallowed: a prompt that cannot load must not be visible.
+Future<void> maybeAskOrderFeedback(BuildContext context) async {
+  try {
+    final raw = await OrderFeedbackSheet.rpc('order_feedback_pending');
+    final data = raw is List ? (raw.isEmpty ? null : raw.first) : raw;
+    if (!context.mounted || data is! Map) return;
+    final payload = data.cast<String, dynamic>();
+    if (payload['show'] != true) return;
+    RenderLog.write('c697_feedback_prompt', 1);
+    await showOrderFeedbackCardSheet(context, payload);
+  } catch (_) {}
+}

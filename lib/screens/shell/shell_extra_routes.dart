@@ -32,6 +32,7 @@ import '../../utils/render_log.dart';
 import '../admin/admin_delivery_extras_screen.dart';
 import '../admin/admin_fulfillment_screen.dart';
 import '../admin/admin_delivery_waves_screen.dart';
+import '../admin/admin_feedback_screen.dart';
 import '../admin/returns_refunds_screen.dart';
 import '../admin/surface_map_screen.dart';
 
@@ -43,6 +44,10 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       'delivery_waves' => const AdminDeliveryWavesScreen(),
       'returns_refunds' => const ReturnsRefundsScreen(),
       'surface_map' => const SurfaceMapScreen(),
+      // CHANGE #697 — the Feedback desk. order_feedback_screen() pins a
+      // partner to their own zone and refuses anyone else, so the door is
+      // opened here and the authorisation stays in the RPC.
+      'feedback' => const AdminFeedbackScreen(),
       _ => null,
     };
 

@@ -64,6 +64,8 @@ import 'admin/admin_scope_audit_screen.dart'; // CHANGE #227
 import 'admin/admin_order_closure_screen.dart'; // CHANGE #229
 import 'admin/admin_gst_screen.dart'; // CHANGE #320
 import 'admin/admin_reviews_screen.dart'; // CMD #410: review & Q&A moderation
+import 'admin/admin_feedback_screen.dart'; // CHANGE #697: order feedback desk
+import 'customer/order_feedback_sheet.dart'; // CHANGE #697: the feedback card
 import 'admin/admin_customer_360_screen.dart'; // CMD #421: the customer_360 link
 import 'admin/admin_stock_on_hand_screen.dart'; // CMD #421: the stock_on_hand link
 import '../features/whatsapp/ui/wa_home_screen.dart';
@@ -345,6 +347,13 @@ class _HomeShellState extends State<HomeShell> {
     // CMD #411 — after the first frame, same reason as push: a counter entry
     // that fails to resolve must never sit in front of the shell's own build.
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadPosEntry());
+    // CHANGE #697 — the whole-order feedback card. Asked once, after the first
+    // frame (same reason as push and the counter entry: a prompt must never
+    // sit in front of the shell's own build). WHETHER to ask is entirely
+    // `order_feedback_pending()`'s answer — it names the closed, unrated order
+    // and returns show:false when there is none, so this file never decides
+    // that an order deserves a card.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAskFeedback());
     // CHANGE #440: type-anywhere-to-search, desktop web only.
     if (kIsWeb) HardwareKeyboard.instance.addHandler(_globalKeyHandler);
     RenderLog.write('c440_typeanywhere', 'web=$kIsWeb min3=on');
@@ -713,6 +722,21 @@ class _HomeShellState extends State<HomeShell> {
 
   /// CHANGE #497: cache-first, parallel, retrying category fetch for the
   /// homepage chip row (`_MobileCategoryChips`, fed by `_desktopMeta`). This
+  /// CHANGE #697 — one card per closed order, and the backend decides both
+  /// halves of that sentence. Every failure is swallowed: a feedback prompt
+  /// that cannot load must never be visible to the customer at all.
+  Future<void> _maybeAskFeedback() async {
+    try {
+      final raw = await OrderFeedbackSheet.rpc('order_feedback_pending');
+      final data = raw is List ? (raw.isEmpty ? null : raw.first) : raw;
+      if (!mounted || data is! Map) return;
+      final payload = data.cast<String, dynamic>();
+      if (payload['show'] != true) return;
+      RenderLog.write('c697_feedback_prompt', 1);
+      await showOrderFeedbackCardSheet(context, payload);
+    } catch (_) {}
+  }
+
   /// fires from `initState()` — i.e. immediately on home load, racing
   /// auth/session resolution rather than waiting for it — because the old
   /// path only fetched categories once `StorefrontScreen` mounted, which the
@@ -893,6 +917,14 @@ class _HomeShellState extends State<HomeShell> {
       case 'reviews':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const AdminReviewsScreen()));
+        break;
+      // CHANGE #697 — the Feedback desk (NPS trend, dimension averages, the
+      // orders that need a callback). order_feedback_screen() pins a partner
+      // to their own zone and refuses anyone else, so there is no role test
+      // here — same story as reviews, wa_ops and notify_center.
+      case 'feedback':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminFeedbackScreen()));
         break;
       // CMD #421 — the two screens CHANGE #865 (#396) shipped. They were
       // reachable from the dashboard tile, the palette and the payment panel,

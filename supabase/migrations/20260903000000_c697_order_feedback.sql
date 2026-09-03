@@ -160,6 +160,7 @@ insert into public.ui_copy (key, value) values
   ('feedback.chips_hint',       to_jsonb('What went wrong?'::text)),
   ('feedback.submit',           to_jsonb('Send feedback'::text)),
   ('feedback.skip',             to_jsonb('Not now'::text)),
+  ('feedback.close',            to_jsonb('Done'::text)),
   ('feedback.thanks',           to_jsonb('Thank you — this is read every morning.'::text)),
   ('feedback.thanks_ticket',    to_jsonb('Thank you. We have opened a ticket and your zone partner will call you back.'::text)),
   ('feedback.already',          to_jsonb('You have already rated this order.'::text)),
@@ -204,6 +205,7 @@ insert into public.ui_copy (key, value) values
   ('feedback.responses_noun',   to_jsonb('responses'::text)),
   ('feedback.open_order',       to_jsonb('Open order'::text)),
   ('feedback.zone_all',         to_jsonb('All zones'::text)),
+  ('feedback.err_not_authorized', to_jsonb('This desk is for admins and zone partners.'::text)),
   ('orders.action_feedback',    to_jsonb('Rate this order'::text))
 on conflict (key) do nothing;
 
@@ -307,6 +309,7 @@ begin
     'chips_hint',    public._c('feedback.chips_hint'),
     'submit_label',  public._c('feedback.submit'),
     'skip_label',    public._c('feedback.skip'),
+    'close_label',   public._c('feedback.close'),
     'dimensions',
       coalesce((select jsonb_agg(jsonb_build_object(
                   'key',      d.dim_key,
@@ -796,7 +799,8 @@ begin
     v_locked := true;
   elsif v_role not in ('admin','super_admin') then
     return jsonb_build_object('ok', false, 'error','not_authorized',
-      'title', public._c('feedback.screen_title'));
+      'title', public._c('feedback.screen_title'),
+      'message', public._c('feedback.err_not_authorized'));
   end if;
 
   select coalesce(jsonb_agg(jsonb_build_object(
@@ -864,7 +868,8 @@ begin
            'has_reason',  (nullif(btrim(coalesce(f.reason,'')),'') is not null),
            'ticket',      (f.ticket_id is not null),
            'tone',        'danger',
-           'open_label',  public._c('feedback.open_order'))
+           'open_label',  public._c('feedback.open_order'),
+           'open_link',   '/admin/fulfill/customer_order?order=' || f.order_id::text)
            order by f.created_at desc), '[]'::jsonb)
     into v_worst
     from public.order_feedback f

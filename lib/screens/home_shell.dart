@@ -41,6 +41,7 @@ import 'admin/admin_mr_screen.dart';
 import 'admin/admin_alert_overlay.dart';
 import '../services/access.dart'; // C653: the ONE View/Write matrix
 import 'admin/admin_users_access_screen.dart'; // C653
+import 'catalogue_screen.dart'; // #747 — the Catalogue tab, page 12
 import 'admin/admin_nav_entries.dart';
 import 'admin/nav_registry_view.dart';          // CHANGE #325
 import 'admin/reorder_admin_screen.dart';       // CHANGE #325
@@ -215,13 +216,9 @@ class HomeShell extends StatefulWidget {
     // the spec names Purchase reports in Money and the screen was built, but
     // it was reachable only from a button buried inside Orders.
     'purchases',
-    // CHANGE #536 QA round 3 — the three cshop_buying routes another command
-    // registered onto surface='customer_shop' at 15:56 UTC while this one was
-    // still open. Their screens already existed (they were reachable only from
-    // buttons inside Orders), but no case here meant every one of the three
-    // tiles the My Shop tab now draws was a tap that did nothing. Each screen
-    // resolves the caller's own account and prints the backend's refusal for
-    // anyone else, so the key is a door and never a permission.
+    // CHANGE #536 QA round 3 — the three cshop_buying routes registered onto
+    // surface='customer_shop' while #536 was still open: the screens existed,
+    // no case here did, so all three My Shop tiles were taps that did nothing.
     // CHANGE #630 — the four shop tools that left the Orders tab. Caught by
     // my_shop_reachability_test the moment they were registered, which is what
     // that test is for: a route case alone is not reachability. Each screen
@@ -510,6 +507,7 @@ class _HomeShellState extends State<HomeShell> {
   String _urlForState() {
     if (_index == 1) return '/orders';
     if (_index == 2) return '/bulk-upload';
+    if (_index == 12) return '/catalogue';
     if (_category != 'All') return '/c/${_catToSlug(_category)}';
     return '/';
   }
@@ -551,6 +549,8 @@ class _HomeShellState extends State<HomeShell> {
       _index = 1;
     } else if (path == '/bulk-upload') {
       _index = 2;
+    } else if (CatalogueRoute.matches(path)) {
+      _index = 12; // #747 — the screen parses its own query string
     }
   }
 
@@ -1635,21 +1635,14 @@ class _HomeShellState extends State<HomeShell> {
         void onLogoTap() => _goHome();
 
         // CMD #633 — the shell decides whether the admin pages EXIST, not each
-        // admin screen individually.
-        //
-        // The bug this closes: an IndexedStack builds every child, so all eight
-        // admin screens were constructed for an anonymous visitor on any route,
-        // each one firing its admin_* RPC on boot. Eight refusals per stranger,
-        // and one of them (admin_customer_screen_data) toasted its failure onto
-        // the public storefront — the red "Failed to load: {e}" banner. Gating
-        // each screen's own initState fixes the screen that was gated; gating
-        // the LIST fixes the class, including every admin screen written after
-        // this one.
-        //
-        // The placeholders keep the list length and every index identical,
-        // because indices 3–10 are addressed by NUMBER from _handleAdminNav.
-        // When auth resolves to an admin this rebuilds with the real screens,
-        // and their initState runs then — which is the moment it should.
+        // admin screen individually. An IndexedStack builds every child, so all
+        // eight admin screens were constructed for an anonymous visitor on any
+        // route, each firing its admin_* RPC on boot — and one of them
+        // (admin_customer_screen_data) toasted its refusal onto the public
+        // storefront as the red "Failed to load: {e}" banner. Gating the LIST
+        // fixes the class, including every admin screen written after this one.
+        // The placeholders keep every index identical (3–10 are addressed by
+        // NUMBER); the real screens, and their initState, arrive with auth.
         final isAdmin = UserState.of(context).isAdmin;
         Widget adminPage(Widget Function() build) =>
             isAdmin ? build() : const SizedBox.shrink();
@@ -1724,6 +1717,9 @@ class _HomeShellState extends State<HomeShell> {
           // addressed by number from _handleAdminNav; inserting would have
           // silently renumbered every admin section.
           MyShopScreen(navigate: _handleAdminNav, active: _index == 11),
+          // #747 — index 12, the CATALOGUE. Appended for My Shop's reason (3–10
+          // are addressed by number); `active` keeps it from fetching unseen.
+          CatalogueScreen(active: _index == 12),
         ];
 
         // Customer ViewAs: force customer shell (header + nav), never admin chrome

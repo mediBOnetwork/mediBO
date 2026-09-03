@@ -216,18 +216,40 @@ class _DesktopSearchRowState extends State<_DesktopSearchRow> {
   Timer? _debounce;
   bool _hasText = false;
 
+  // CHANGE #790 — the typeahead. The controller owns the debounce and the
+  // round trip; the panel below prints what search_suggest() returned and
+  // nothing else.
+  final SearchSuggestController _suggest = SearchSuggestController();
+
   @override
   void initState() {
     super.initState();
     widget.controller.addListener(_onControllerChange);
     _hasText = widget.controller.text.isNotEmpty;
+    _suggest.addListener(_onSuggest);
+  }
+
+  void _onSuggest() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
     widget.controller.removeListener(_onControllerChange);
+    _suggest.removeListener(_onSuggest);
+    _suggest.dispose();
     _debounce?.cancel();
     super.dispose();
+  }
+
+  /// A tapped suggestion carries the BACKEND's own query for it — for a Hindi
+  /// word that is the salt, not the word — so the field is filled with that
+  /// and the search runs on it.
+  void _pickSuggestion(String query) {
+    _suggest.close();
+    if (query.isEmpty) return;
+    widget.controller.text = query;
+    _submitNow();
   }
 
   void _onControllerChange() {
@@ -236,6 +258,7 @@ class _DesktopSearchRowState extends State<_DesktopSearchRow> {
   }
 
   void _onChanged(String v) {
+    _suggest.onQueryChanged(v);
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 150), () {
       widget.onSearch(v);
@@ -244,6 +267,7 @@ class _DesktopSearchRowState extends State<_DesktopSearchRow> {
 
   void _submitNow() {
     _debounce?.cancel();
+    _suggest.close();
     final text = widget.controller.text;
     widget.onSearch(text);
     if (text.trim().length >= 2) widget.onScrollToResults();
@@ -252,6 +276,7 @@ class _DesktopSearchRowState extends State<_DesktopSearchRow> {
 
   void _clearSearch() {
     _debounce?.cancel();
+    _suggest.close();
     widget.controller.clear();
     widget.onSearch('');
     FocusManager.instance.primaryFocus?.unfocus();
@@ -268,7 +293,11 @@ class _DesktopSearchRowState extends State<_DesktopSearchRow> {
       color: Ds.c.brand,
       padding: EdgeInsets.symmetric(
           horizontal: Ds.space.x24, vertical: Ds.space.x12),
-      child: Container(
+      // CHANGE #790 — the field and its suggestion panel are one column, so
+      // the panel sits directly under the bar at every width instead of being
+      // positioned against a guess.
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+      Container(
         height: 46,
         clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
@@ -355,6 +384,11 @@ class _DesktopSearchRowState extends State<_DesktopSearchRow> {
           ],
         ),
       ),
+      if (_suggest.isOpen) ...[
+        SizedBox(height: Ds.space.x8),
+        SearchSuggestions(payload: _suggest.payload, onPick: _pickSuggestion),
+      ],
+      ]),
     );
   }
 }

@@ -18,6 +18,7 @@ import '../util.dart';
 import '../utils/render_log.dart';
 import '../widgets/animations.dart';
 import '../widgets/compact_product_card.dart';
+import '../widgets/search_family_card.dart';
 import '../widgets/recently_viewed_rail.dart';
 import '../widgets/home_sections_view.dart'; // C637
 
@@ -129,6 +130,12 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   /// or nothing priced yet); [_sort] is the key of the chip currently active,
   /// which is only ever a key the backend itself put on a chip.
   List<Map<String, dynamic>> _sortOptions = const [];
+
+  /// CHANGE #790 — the SEARCH grid's render order, already folded into brand
+  /// families by `storefront_search_page()`. Empty on browse, and empty on
+  /// the outage path, and then the grid falls back to the flat item list —
+  /// so a page that never sent blocks looks exactly as it always did.
+  List<Map<String, dynamic>> _blocks = const [];
   String _sort = 'default';
   String? _emptyLabel;
 
@@ -403,6 +410,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       _showingLabel = null;
       _emptyLabel = null;
       _sortOptions = const [];
+      _blocks = const [];
       _moreLabel = '';
       _endLabel = '';
     });
@@ -532,6 +540,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         _moreLabel = pageResult.moreLabel ?? '';
         _endLabel = pageResult.endLabel ?? '';
         _sortOptions = pageResult.sortOptions;
+        _blocks = pageResult.blocks;
         _loadingFirst = false;
         // #677 — end-of-feed is the backend's word, not a short page. A
         // fallback response carries no plan, and then hasMore is false only
@@ -633,6 +642,9 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         if (pageResult.moreLabel != null) _moreLabel = pageResult.moreLabel!;
         if (pageResult.endLabel != null) _endLabel = pageResult.endLabel!;
         if (pageResult.sortOptions.isNotEmpty) _sortOptions = pageResult.sortOptions;
+        if (pageResult.blocks.isNotEmpty) {
+          _blocks = [..._blocks, ...pageResult.blocks];
+        }
         _loadingMore = false;
         _hasMore = pageResult.hasMore;
         _nextOffset = pageResult.nextOffset ?? (offset + page.length);
@@ -759,6 +771,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
                 showingLabel: _showingLabel,
                 emptyLabel: _emptyLabel,
                 sortOptions: _sortOptions,
+                blocks: _blocks,
                 onSortSelected: _onSortSelected,
                 query: widget.query,
                 category: widget.category,
@@ -1163,6 +1176,11 @@ class _ProductsSection extends StatelessWidget {
   /// control at all: a storefront with no trade pricing looks exactly as it
   /// did before #174 shipped.
   final List<Map<String, dynamic>> sortOptions;
+
+  /// CHANGE #790 — the backend's own render order for a SEARCH page, one
+  /// entry per card with families already folded. Empty means "no blocks in
+  /// this payload", and the grid draws the flat [items] list instead.
+  final List<Map<String, dynamic>> blocks;
   final ValueChanged<String> onSortSelected;
   final String query;
   final String category;
@@ -1192,6 +1210,7 @@ class _ProductsSection extends StatelessWidget {
     required this.showingLabel,
     required this.emptyLabel,
     required this.sortOptions,
+    this.blocks = const [],
     required this.onSortSelected,
     required this.query,
     required this.category,
@@ -1431,7 +1450,10 @@ class _ProductsSection extends StatelessWidget {
             crossAxisSpacing: 12,
             mainAxisSpacing: 14,
           ),
-          itemCount: items.length,
+          // CHANGE #790 — when the payload sent blocks, the grid draws THEM:
+          // one card per block, families already folded by the backend. The
+          // flat item list stays the browse path and the outage path.
+          itemCount: blocks.isNotEmpty ? blocks.length : items.length,
           // CHANGE #678a — no entrance animation.
           //
           // The first page used to fade-and-slide in on a 30ms-per-card
@@ -1441,12 +1463,20 @@ class _ProductsSection extends StatelessWidget {
           // CHANGE #746 — the card, and nothing on top of it. CMD #410's
           // compare tick used to ride here in a Stack; a grid of 250 cards is
           // not where a comparison starts.
-          itemBuilder: (context, i) => CompactProductCard(
-            key: ValueKey(items[i].id),
-            product: items[i],
-            onTap: () =>
-                Navigator.of(context).pushNamed('/product/${items[i].id}'),
-          ),
+          itemBuilder: (context, i) => blocks.isNotEmpty
+              ? SearchResultBlock(
+                  key: ValueKey(
+                      'b${blocks[i]['family_key'] ?? blocks[i]['kind']}$i'),
+                  block: blocks[i],
+                  onOpenProduct: (id) =>
+                      Navigator.of(context).pushNamed('/product/$id'),
+                )
+              : CompactProductCard(
+                  key: ValueKey(items[i].id),
+                  product: items[i],
+                  onTap: () =>
+                      Navigator.of(context).pushNamed('/product/${items[i].id}'),
+                ),
         );
       },
     );

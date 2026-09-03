@@ -23,6 +23,8 @@ library;
 const kRegisteredAdminRoutes = <String>[
   // Orders & Fulfilment
   'fulfillment', 'order_alerts', 'order_closure', 'bags', 'reorder',
+  // CHANGE #689 — "where is this order": the order timeline, addressable.
+  'order_timeline',
   // Customers & Suppliers
   'customers', 'suppliers', 'add_customer', 'add_supplier', 'mr', 'companies',
   'unmapped_companies', 'deletion_requests',

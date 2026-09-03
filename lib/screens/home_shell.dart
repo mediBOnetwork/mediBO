@@ -919,6 +919,7 @@ class _HomeShellState extends State<HomeShell> {
                 builder: (_) => AdminCustomer360Screen(customerId: id)));
         break;
         }
+      case 'order_timeline': shellOpenOrderTimeline(context, seed); break;
       case 'stock_on_hand':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const AdminStockOnHandScreen()));

@@ -25,6 +25,8 @@ import '../../utils/render_log.dart';
 import 'delivery_tracking_view.dart';
 import 'reschedule_sheet.dart';
 import '../../design_tokens.dart';
+import '../../models/order_timeline_view.dart';
+import '../../widgets/order_event_timeline.dart';
 
 String _ui(String k) => FulfillLookups.instance.ui(k);
 
@@ -95,6 +97,8 @@ class _CustomerTrackSheetState extends State<_CustomerTrackSheet> {
         });
         RenderLog.write('c452_track_timeline',
             (_timeline['steps'] as List?)?.length ?? 0);
+        RenderLog.write('c689_cust_timeline',
+            'access=${_timeline['access'] ?? ''};events=${_timeline['event_count'] ?? 0}');
         await _loadRatePrompt();
         return;
       }
@@ -267,6 +271,16 @@ class _CustomerTrackSheetState extends State<_CustomerTrackSheet> {
             // sentence. Which step is current is the payload's `state`, never
             // a comparison this sheet makes.
             if (!_loading) OrderTimelineCard(timeline: _timeline),
+            // CHANGE #689 (feature_gaps #75) — the same payload's full event
+            // list, filtered by the BACKEND for a buyer: no supplier name, no
+            // phone number, no ops chatter, no action buttons. This sheet does
+            // not remove any of that; it never receives it.
+            if (!_loading)
+              Padding(
+                padding: EdgeInsets.only(top: Ds.space.x24),
+                child: OrderEventTimeline(
+                    view: OrderTimelineView.from(_timeline)),
+              ),
             if (!_loading)
               RescheduleCard(
                 key_: widget.orderId,

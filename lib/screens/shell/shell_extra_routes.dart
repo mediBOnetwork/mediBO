@@ -30,6 +30,7 @@ import 'dart:async';
 import '../../services/access.dart';
 import '../../utils/render_log.dart';
 import '../admin/admin_delivery_extras_screen.dart';
+import '../admin/order_timeline_screen.dart';
 import '../admin/admin_fulfillment_screen.dart';
 import '../admin/admin_delivery_waves_screen.dart';
 import '../admin/admin_feedback_screen.dart';
@@ -124,4 +125,22 @@ void shellWhenAccessResolved(void Function() then,
   };
   Access.instance.addListener(listener);
   Timer(timeout, () => run('timeout'));
+}
+
+
+/// CHANGE #689 (feature_gaps #75) — "where is CPO260726NIT123O1", asked as a
+/// question. Lives here for the same reason the four routes above do:
+/// home_shell.dart is held under 2,000 lines by its own guard, so a route's
+/// SCREEN and its import belong in the shard and only the `case` stays in the
+/// switch — which is what test/protected/admin_nav_reachability_test.dart
+/// reads to prove the tile is not a dead tap.
+///
+/// [seed] is the order code a deep link carried (/admin/go/order_timeline/CPO…).
+/// Empty is not a missing argument: the backend answers an empty query with the
+/// most recent orders, so the screen opens on something useful either way.
+void shellOpenOrderTimeline(BuildContext context, String? seed) {
+  Navigator.push(
+      context,
+      MaterialPageRoute(
+          builder: (_) => OrderTimelineScreen(seed: (seed ?? '').trim())));
 }

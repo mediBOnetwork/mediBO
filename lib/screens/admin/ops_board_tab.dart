@@ -23,6 +23,7 @@ import '../../design_tokens.dart';
 import '../../fulfill/fulfill_lookups.dart';
 import '../../services/admin_zone_scope.dart';
 import '../../services/fulfill_realtime.dart';
+import '../../models/order_timeline_view.dart';
 import '../../utils/render_log.dart';
 import 'ops_board_view.dart';
 
@@ -124,8 +125,23 @@ class OpsBoardTabState extends State<OpsBoardTab>
       RenderLog.write('c688_ops_detail_err', e.toString());
       return;
     }
+    // CHANGE #689 (feature_gaps #75) — the second half of the answer. The
+    // stage grid says which SLA is breaching; order_timeline() says what
+    // happened, who did it and what one tap would do about it. It is fetched
+    // beside the detail (not inside it) so an ops_order_detail that the ops
+    // board already trusts is never held hostage by a timeline that fails.
+    Map<String, dynamic> timeline = const {};
+    try {
+      final res = await Supabase.instance.client
+          .rpc('order_timeline', params: {'p_order_id': id});
+      timeline = res is Map ? Map<String, dynamic>.from(res) : const {};
+    } catch (e) {
+      RenderLog.write('c689_timeline_err', e.toString());
+    }
     if (!mounted) return;
     RenderLog.write('c688_ops_detail', 'ok=${detail['ok']};order=$id');
+    RenderLog.write('c689_timeline',
+        'access=${timeline['access'] ?? ''};events=${timeline['event_count'] ?? 0};can_act=${timeline['can_act'] == true}');
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -135,7 +151,7 @@ class OpsBoardTabState extends State<OpsBoardTab>
         child: ConstrainedBox(
           constraints: BoxConstraints(
               maxHeight: MediaQuery.of(context).size.height * 0.8),
-          child: OpsOrderDetailView(payload: detail),
+          child: _TimelineHost(detail: detail, timeline: timeline, orderId: id),
         ),
       ),
     );
@@ -375,4 +391,60 @@ class _SlaSheetState extends State<_SlaSheet> {
       ),
     );
   }
+}
+
+
+/// Holds the timeline payload for the open sheet so an action's own reply — the
+/// backend hands the whole fresh timeline back — repaints it without a second
+/// round trip, and without the board behind it reloading.
+class _TimelineHost extends StatefulWidget {
+  final Map<String, dynamic> detail;
+  final Map<String, dynamic> timeline;
+  final String orderId;
+
+  const _TimelineHost({
+    required this.detail,
+    required this.timeline,
+    required this.orderId,
+  });
+
+  @override
+  State<_TimelineHost> createState() => _TimelineHostState();
+}
+
+class _TimelineHostState extends State<_TimelineHost> {
+  late Map<String, dynamic> _timeline = widget.timeline;
+
+  Future<TimelineActionResult> _act(
+      TimelineAction action, Map<String, dynamic> extra) async {
+    // The event named the rpc and carried the args. Dart adds only what the
+    // backend ASKED for by name (a picked rider), and chooses nothing.
+    final args = Map<String, dynamic>.from(action.args);
+    if (extra.isNotEmpty) {
+      final inner = args['p_args'] is Map
+          ? Map<String, dynamic>.from(args['p_args'] as Map)
+          : <String, dynamic>{};
+      inner.addAll(extra);
+      args['p_args'] = inner;
+    }
+    try {
+      final res =
+          await Supabase.instance.client.rpc(action.rpc, params: args);
+      RenderLog.write('c689_timeline_act',
+          'kind=${action.kind};ok=${res is Map ? res['ok'] : null}');
+      return TimelineActionResult.from(res);
+    } catch (e) {
+      RenderLog.write('c689_timeline_act_err', e.toString());
+      return TimelineActionResult.from(
+          {'ok': false, 'message': e.toString(), 'choices': const []});
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => OpsOrderDetailView(
+        payload: widget.detail,
+        timeline: _timeline,
+        onTimelineAct: _act,
+        onTimelineRefreshed: (t) => setState(() => _timeline = t),
+      );
 }

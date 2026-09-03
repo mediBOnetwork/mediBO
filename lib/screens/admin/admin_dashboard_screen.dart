@@ -560,11 +560,15 @@ class _StickyDashHeader extends SliverPersistentHeaderDelegate {
     required this.onZoneChanged,
   });
 
+  // The two extents are measured, not guessed: 12 top pad + a 20px title line
+  // + 8 + a 44px picker rail + 8 bottom = 96 collapsed, plus the 4+17 date line
+  // = 120 expanded. A sliver header that overflows its own extent paints the
+  // yellow stripes, so these are deliberately a few pixels loose.
   @override
-  double get maxExtent => 132;
+  double get maxExtent => 128;
 
   @override
-  double get minExtent => 72;
+  double get minExtent => 100;
 
   @override
   Widget build(
@@ -609,14 +613,22 @@ class _StickyDashHeader extends SliverPersistentHeaderDelegate {
               ),
             ],
             SizedBox(height: Ds.space.x8),
-            Wrap(
-              spacing: Ds.space.x8,
-              runSpacing: Ds.space.x8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                const AdminDatePicker(bare: true),
-                AdminZonePicker(onChanged: onZoneChanged),
-              ],
+            // A rail, not a Wrap: a second line of chips on a 360px phone
+            // would push the header past its own extent. It scrolls sideways
+            // instead, and the pickers never leave the header.
+            SizedBox(
+              height: 44,
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    const AdminDatePicker(bare: true),
+                    SizedBox(width: Ds.space.x8),
+                    AdminZonePicker(onChanged: onZoneChanged),
+                  ],
+                ),
+              ),
             ),
           ],
         ),

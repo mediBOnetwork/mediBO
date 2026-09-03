@@ -43,19 +43,10 @@ class _CustomerAppBarActionsState extends _SurfaceState<CustomerAppBarActions> {
       builder: (context, payload, _) {
         final items = CustomerSurfaces.itemsFor(payload, 'catalogue_appbar');
         if (items.isEmpty) return const SizedBox.shrink();
-        final wishlist = CustomerSurfaces.block(payload, 'wishlist');
         RenderLog.write('c745_appbar_actions', items.length);
         return Row(
           mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final e in items)
-              _AppBarAction(
-                entry: e,
-                badge: (e['feature_key'] == 'cust.wishlist')
-                    ? (wishlist['count_label'] ?? '').toString()
-                    : '',
-              ),
-          ],
+          children: [for (final e in items) _AppBarAction(entry: e)],
         );
       },
     );
@@ -64,11 +55,15 @@ class _CustomerAppBarActionsState extends _SurfaceState<CustomerAppBarActions> {
 
 class _AppBarAction extends StatelessWidget {
   final Map<String, dynamic> entry;
-  final String badge;
-  const _AppBarAction({required this.entry, required this.badge});
+  const _AppBarAction({required this.entry});
 
   @override
   Widget build(BuildContext context) {
+    // The trailing text is the ENTRY's own `badge`. Round 1 QA: this used to be
+    // `feature_key == 'cust.wishlist' ? …` — a Dart feature list, which is the
+    // exact thing this change deletes. Move the wishlist to another placement
+    // now and it takes its own number with it.
+    final badge = (entry['badge'] ?? '').toString();
     final route = (entry['route_key'] ?? '').toString();
     final screen = customerMenuScreen(route);
     if (screen == null) return const SizedBox.shrink();
@@ -131,13 +126,13 @@ class _CustomerHomeStripState extends _SurfaceState<CustomerHomeStrip> {
     return ValueListenableBuilder<Map<String, dynamic>>(
       valueListenable: CustomerSurfaces.value,
       builder: (context, payload, _) {
-        final chips = [
-          ...CustomerSurfaces.itemsFor(payload, 'home_chip'),
-          ...CustomerSurfaces.itemsFor(payload, 'home_badge'),
-        ];
+        // ONE ordered list, not two concatenated in Dart: round 1 QA pointed
+        // out that a chip row built from `home_chip` + `home_badge` let
+        // sort_order order only WITHIN a placement, so putting the badge first
+        // was impossible without a deploy. `home_strip` is the backend's own
+        // merge of both, already ordered.
+        final chips = CustomerSurfaces.itemsFor(payload, 'home_strip');
         if (chips.isEmpty) return const SizedBox.shrink();
-        final wishlist = CustomerSurfaces.block(payload, 'wishlist');
-        final rewards = CustomerSurfaces.block(payload, 'rewards');
         RenderLog.write('c745_home_strip', chips.length);
         return Padding(
           padding: EdgeInsets.fromLTRB(
@@ -146,18 +141,7 @@ class _CustomerHomeStripState extends _SurfaceState<CustomerHomeStrip> {
             spacing: Ds.space.x8,
             runSpacing: Ds.space.x8,
             children: [
-              for (final e in chips)
-                _HomeChip(
-                  entry: e,
-                  trailing: switch ((e['feature_key'] ?? '').toString()) {
-                    'cust.wishlist' => (wishlist['count_label'] ?? '').toString(),
-                    'cust.rewards' =>
-                      rewards['has'] == true
-                          ? (rewards['badge_label'] ?? '').toString()
-                          : '',
-                    _ => '',
-                  },
-                ),
+              for (final e in chips) _HomeChip(entry: e),
             ],
           ),
         );
@@ -168,11 +152,11 @@ class _CustomerHomeStripState extends _SurfaceState<CustomerHomeStrip> {
 
 class _HomeChip extends StatelessWidget {
   final Map<String, dynamic> entry;
-  final String trailing;
-  const _HomeChip({required this.entry, required this.trailing});
+  const _HomeChip({required this.entry});
 
   @override
   Widget build(BuildContext context) {
+    final trailing = (entry['badge'] ?? '').toString();
     final screen = customerMenuScreen((entry['route_key'] ?? '').toString());
     if (screen == null) return const SizedBox.shrink();
     return InkWell(
@@ -231,17 +215,17 @@ class _CustomerRewardsSectionState
         final entry = items.first;
         final screen =
             customerMenuScreen((entry['route_key'] ?? '').toString());
-        final r = CustomerSurfaces.block(payload, 'rewards');
-        final on = r['has'] == true;
-        RenderLog.write('c745_orders_rewards', on ? 'on' : 'off');
-
-        final lines = <String>[
-          if (on && r['points_on'] == true) (r['points_label'] ?? '').toString(),
-          if (on && r['tier_on'] == true) (r['tier_label'] ?? '').toString(),
-          if (on && r['referral_on'] == true)
-            '${(r['referral_label'] ?? '')} ${(r['referral_code'] ?? '')}'.trim(),
-          if (!on) (r['off_note'] ?? '').toString(),
-        ].where((s) => s.isNotEmpty).toList();
+        // The card's body is the ENTRY's own `lines`, already composed and
+        // already ordered. Round 1 QA: Dart used to pick three fields out of
+        // the rewards block and join two of them with a space — a display
+        // string written in Dart, and a feature-key switch besides. When no
+        // programme is running the backend sends its own off-note as the only
+        // line, so the card never has to know what "off" means.
+        final lines = ((entry['lines'] as List?) ?? const [])
+            .map((e) => (e ?? '').toString())
+            .where((s) => s.isNotEmpty)
+            .toList(growable: false);
+        RenderLog.write('c745_orders_rewards', lines.length);
 
         return Padding(
           padding: EdgeInsets.fromLTRB(

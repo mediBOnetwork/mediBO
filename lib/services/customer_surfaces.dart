@@ -1,4 +1,8 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../utils/render_log.dart';
@@ -30,6 +34,17 @@ class CustomerSurfaces {
   static bool _bound = false;
   static bool _started = false;
 
+  /// The offline rule, and hostile QA round 1's second blocker.
+  ///
+  /// The whole Account group — Logout and the delete zone included — is now
+  /// payload-driven, so ONE failed RPC used to leave a signed-in pharmacy on a
+  /// profile with no way out and no retry. The last good answer is kept on the
+  /// device and rendered instantly on the next boot; the refetch happens behind
+  /// it and only ever REPLACES a good answer with another good one. The cache
+  /// is a render fallback, never an authority — every write still goes to the
+  /// backend, which re-checks the caller.
+  static const String _cacheKey = 'c745_customer_surfaces';
+
   /// Fetch once per session, then keep the answer in step with the login.
   ///
   /// Every surface that draws a customer entry calls this from its own
@@ -50,7 +65,34 @@ class CustomerSurfaces {
       // Boot resilience rule: a listener that cannot attach must never sit in
       // front of the surface that asked for it.
     }
+    _restore();
     load();
+  }
+
+  /// Paint the last good answer before the network has said anything.
+  static Future<void> _restore() async {
+    if (value.value.isNotEmpty) return;
+    try {
+      final raw = (await SharedPreferences.getInstance()).getString(_cacheKey);
+      if (raw == null || raw.isEmpty) return;
+      if (value.value.isNotEmpty) return; // a live answer already won
+      final p = jsonDecode(raw);
+      if (p is Map && p['ok'] == true) {
+        value.value = Map<String, dynamic>.from(p);
+        RenderLog.write('c745_surfaces_cache', 'restored');
+      }
+    } catch (_) {
+      // A cache that cannot be read is simply not there.
+    }
+  }
+
+  static Future<void> _persist(Map<String, dynamic> p) async {
+    try {
+      await (await SharedPreferences.getInstance())
+          .setString(_cacheKey, jsonEncode(p));
+    } catch (_) {
+      // Persisting is a convenience; failing to must never fail the fetch.
+    }
   }
 
   /// The entries the backend placed on [placement], in the backend's order.
@@ -83,6 +125,7 @@ class CustomerSurfaces {
       _boundUid = Supabase.instance.client.auth.currentUser?.id;
       _bound = true;
       value.value = p;
+      unawaited(_persist(p));
       RenderLog.write(
           'c745_customer_surfaces',
           'account:${p['has_account']} '

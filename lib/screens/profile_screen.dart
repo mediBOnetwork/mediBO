@@ -620,7 +620,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 // Logout and the delete zone are entries too (render_kind
                 // 'action' / 'danger_zone'), so their ORDER inside Account is
                 // the backend's as well, and delete stays last.
-                if (isRegistered) ProfileAccountMenu(interactive: !isViewAs),
+                // Round 1 QA blocker: this used to be gated on `isRegistered`,
+                // which took Logout away from exactly the account that needs it
+                // most — someone who signed in with the wrong login, landed on
+                // the registration form and wanted back out. The menu itself
+                // decides what a caller is offered (the backend's payload, plus
+                // a guaranteed sign-out), so the gate belongs there, not here.
+                ProfileAccountMenu(interactive: !isViewAs),
 
                 // CHANGE #745 — the loyalty control panel used to be gated
                 // right here on `session.isSuperAdmin`, a second source of

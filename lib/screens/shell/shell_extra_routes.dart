@@ -38,6 +38,7 @@ import '../admin/returns_refunds_screen.dart';
 import '../admin/surface_map_screen.dart';
 import '../partner/partner_tasks_screen.dart';
 import '../worker/worker_tasks_screen.dart';
+import '../admin/kyc_review_screen.dart';
 
 /// CHANGE #697 — the whole-order feedback card's one hook into the shell.
 /// `home_shell.dart` sits under a 2,000-line guard (#340 / #327 layer 1) and
@@ -75,6 +76,11 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       // that role may read or write.
       'fulfil_tasks' => const PartnerTasksScreen(),
       'my_tasks' => const WorkerTasksScreen(),
+      // CHANGE #705 — the KYC review console. kyc_review_queue() gates it
+      // itself (an admin, or a partner holding partner.kyc_review, zone-scoped)
+      // and answers `not_authorized` with its own sentence, so the door is
+      // opened here and the authorisation stays in the RPC.
+      'kyc_review' => const KycReviewScreen(),
       _ => null,
     };
 

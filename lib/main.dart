@@ -38,6 +38,7 @@ import 'screens/home_shell.dart';
 import 'screens/public/inquiry_form_screen.dart';
 import 'screens/delivery/agency_dispatch_screen.dart'; // C704: /agency/dispatch
 import 'screens/public/stock_update_form_screen.dart'; // C639: /stock-update/<token>
+import 'screens/public/kyc_upload_form_screen.dart'; // C705: /kyc-upload/<token>
 import 'screens/public/order_feedback_form_screen.dart'; // C697: /feedback/<token>
 import 'screens/public/substitute_ask_screen.dart'; // C698: /substitute-ask/<token>
 import 'screens/public/supplier_signup_screen.dart'; // C465 row 63: /supplier-signup
@@ -729,6 +730,24 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                   return MaterialPageRoute(
                     settings: settings,
                     builder: (_) => OrderFeedbackFormScreen(token: token),
+                  );
+                }
+              }
+              // CHANGE #705 — /kyc-upload/<token>: the licence-upload link a
+              // pharmacy or supplier gets over WhatsApp in the backfill drive.
+              // PUBLIC and anonymous, exactly like /stock-update/<token>: the
+              // token in the URL is the authorisation, kyc_token_form and
+              // kyc_token_submit are anon-granted for it, and the anon storage
+              // policy admits a write only into that token's own folder.
+              // Declared above the trailing /:code guard so a bare token is
+              // never mistaken for a product code.
+              if (name.startsWith('/kyc-upload/')) {
+                final token =
+                    name.substring('/kyc-upload/'.length).split('?').first;
+                if (token.isNotEmpty) {
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => KycUploadFormScreen(token: token),
                   );
                 }
               }

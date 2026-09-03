@@ -15,6 +15,7 @@ import '../../widgets/bill_actions_row.dart' show BillActionButton;
 import '../../widgets/bill_viewer.dart';
 import '../../widgets/order_item_card.dart';
 import '../../widgets/po_pricing.dart';
+import '../../widgets/response_deadline.dart';
 import '../../widgets/sup_pay_panel.dart';
 import '../../widgets/supplier_po_ack.dart';
 
@@ -708,6 +709,17 @@ class _OrderCardState extends State<_OrderCard> {
               ),
             ]),
           ),
+
+          // ── CHANGE #687 (#68) — the clock the supplier is racing. It sits
+          // directly above the Accept / Decline buttons because that is the
+          // decision it bounds. has:false (already answered, or an order from
+          // before this change and therefore without a clock) renders nothing.
+          if (widget.order['accept'] is Map)
+            ResponseDeadline(
+              block: deadlineOf(widget.order['accept']),
+              renderKey: 'c687_po_deadline',
+              onRefresh: () async => widget.onReload(),
+            ),
 
           // ── CHANGE #527 (#50) — accept / part-accept / decline, and (#61)
           // the batch, expiry and HSN he acknowledges with it. Both blocks are

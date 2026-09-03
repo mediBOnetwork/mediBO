@@ -6,6 +6,7 @@ import '../../design_tokens.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import '../../widgets/inquiry_v12.dart';
+import '../../widgets/response_deadline.dart';
 
 const _kGreen = Color(0xFF1B7A43);
 
@@ -74,6 +75,8 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
   // inquiry_rate_capture(); nothing here is worded in Dart.
   final Map<int, TextEditingController> _rateCtl = {};
   Map<String, dynamic> _rateCapture = const {};
+  // CHANGE #687 — get_inquiry_form().deadline, printed by ResponseDeadline.
+  Map<String, dynamic> _deadline = const {};
   String? _submitError;
   bool _submitting = false;
   bool _newItemsAdded = false;
@@ -208,6 +211,9 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
 
       setState(() {
         _supplierName = data['supplier_name'] as String?;
+        // CHANGE #687 — the deadline this link is under, verbatim.
+        _deadline =
+            (data['deadline'] as Map?)?.cast<String, dynamic>() ?? const {};
         _rateCapture = capture;
         _items = items;
         // CHANGE #639 — an item the backend pre-ticked (prestate) is shown
@@ -734,6 +740,16 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
             ]),
           ),
           const SizedBox(height: 20),
+
+          // ── CHANGE #687 (#68) — the countdown this link is running against,
+          // immediately under the header so it is the first thing read. Every
+          // string, the tone and the poll interval come from the same
+          // deadline_block() the supplier tab and the admin tab render.
+          ResponseDeadline(
+            block: _deadline,
+            renderKey: 'c687_link_deadline',
+            onRefresh: () async => _load(silent: true),
+          ),
 
           // ── Receipt (CHANGE #464): read-only summary of what was already
           // submitted this cycle. Purely additive — does not replace the

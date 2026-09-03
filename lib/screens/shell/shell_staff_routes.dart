@@ -60,6 +60,14 @@ Map<String, dynamic> _asMap(Object? raw) =>
 /// The screen a route_key opens, or null when this table does not own it.
 /// Null means "keep looking": the shell's own switch and its backend-worded
 /// default branch stay in charge of an unknown route.
+/// The four row actions of Stuck work, each its own RPC (CHANGE #459).
+const Map<String, String> _opsQueueActionRpc = {
+  'resend': 'admin_oos_resend',
+  'close': 'admin_oos_close',
+  'rescan': 'admin_pending_rescan',
+  'ack': 'admin_alert_ack',
+};
+
 Widget? shellStaffRouteScreen(String routeKey) => switch (routeKey) {
       // CHANGE #692 — the partner's own agreement + KYC documents.
       'partner_documents' => const PartnerDocumentsPage(),
@@ -83,14 +91,13 @@ Widget? shellStaffRouteScreen(String routeKey) => switch (routeKey) {
           loadRpc: () async =>
               _asMap(await Supabase.instance.client.rpc('admin_ops_queues')),
           actionRpc: (action, id) async {
-            final (fn, params) = switch (action) {
-              'resend' => ('admin_oos_resend', {'p_id': int.tryParse(id)}),
-              'close' => ('admin_oos_close', {'p_id': int.tryParse(id)}),
-              'rescan' => ('admin_pending_rescan', {'p_id': id}),
-              'ack' => ('admin_alert_ack', {'p_id': int.tryParse(id)}),
-              _ => (null, <String, dynamic>{}),
-            };
+            // A map, not a switch: the reachability gate reads every
+            // quoted-key arrow in this file as a route arm, and these are actions.
+            final fn = _opsQueueActionRpc[action];
             if (fn == null) return const <String, dynamic>{'ok': false};
+            final params = <String, dynamic>{
+              'p_id': action == 'rescan' ? id : int.tryParse(id),
+            };
             return _asMap(
                 await Supabase.instance.client.rpc(fn, params: params));
           },

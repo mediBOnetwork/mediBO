@@ -48,9 +48,11 @@ class AccessMatrix {
     this.readonlyBadge = '',
     Map<String, FeatureAccess> features = const {},
     Map<String, String> routeFeature = const {},
+    Map<String, String> routeStage = const {},
     Map<String, List<AccessTab>> tabs = const {},
   })  : _features = features,
         _routeFeature = routeFeature,
+        _routeStage = routeStage,
         _tabs = tabs;
 
   /// Nothing has been fetched yet.
@@ -81,6 +83,11 @@ class AccessMatrix {
 
   final Map<String, FeatureAccess> _features;
   final Map<String, String> _routeFeature;
+
+  /// CHANGE #754 — routeKey -> the Fulfill stage that route now opens, when
+  /// the screen behind it moved into the Fulfill pipeline. Empty for every
+  /// route that is still its own destination.
+  final Map<String, String> _routeStage;
   final Map<String, List<AccessTab>> _tabs;
 
   factory AccessMatrix.fromJson(Map<String, dynamic>? json) {
@@ -95,11 +102,14 @@ class AccessMatrix {
     });
 
     final routeFeature = <String, String>{};
+    final routeStage = <String, String>{};
     final rawRoutes = (json['routes'] as Map?) ?? const {};
     rawRoutes.forEach((k, v) {
       final m = (v as Map?)?.cast<String, dynamic>() ?? const {};
       final feature = (m['feature'] ?? '').toString();
       if (feature.isNotEmpty) routeFeature[k.toString()] = feature;
+      final stage = (m['stage'] ?? '').toString();
+      if (stage.isNotEmpty) routeStage[k.toString()] = stage;
     });
 
     final tabs = <String, List<AccessTab>>{};
@@ -123,6 +133,7 @@ class AccessMatrix {
       readonlyBadge: s('readonly_badge'),
       features: features,
       routeFeature: routeFeature,
+      routeStage: routeStage,
       tabs: tabs,
     );
   }
@@ -162,6 +173,16 @@ class AccessMatrix {
 
   String featureForRoute(String routeKey) => _routeFeature[routeKey] ?? '';
 
+  /// CHANGE #754 — the Fulfill stage a route opens, or '' when the route is
+  /// still its own screen.
+  ///
+  /// Customer orders, Supplier inquiry and Supplier orders all moved into the
+  /// Fulfill pipeline, and their old entry points kept opening the screens
+  /// they used to live on. The redirect is DATA: the backend pairs each route
+  /// with the fulfill_tab feature that shares its canonical key, so the next
+  /// screen that moves needs no Dart change at all.
+  String fulfillStageForRoute(String routeKey) => _routeStage[routeKey] ?? '';
+
   /// The tabs of one screen, in payload order, each already carrying its own
   /// two booleans. The screen renders these — it never sorts or filters by a
   /// rule of its own.
@@ -200,11 +221,20 @@ class AccessMatrix {
 
   /// A tab the payload never mentioned stays visible: the tab registry is data
   /// and may lag a new tab by one deploy. A tab it DID mention obeys its flag.
+  ///
+  /// CHANGE #754 — which is exactly why a RETIRED tab keeps its row rather
+  /// than being deleted. Deleting the Customer Orders row would have made the
+  /// payload silent about it, and silence here means "show it".
   bool tabCanView(String screen, String tabKey) {
     if (!resolved) return true;
     final t = tab(screen, tabKey);
     return t == null ? true : t.canView;
   }
+
+  /// CHANGE #754 — where a tab went when it left this screen, as a route key
+  /// ('supplier_inquiry', …), or '' for a tab that is still here.
+  String tabMovedTo(String screen, String tabKey) =>
+      tab(screen, tabKey)?.movedTo ?? '';
 
   bool tabCanWrite(String screen, String tabKey) {
     if (!resolved) return true;
@@ -223,6 +253,8 @@ class AccessTab {
     required this.canView,
     required this.canWrite,
     this.index = -1,
+    this.active = true,
+    this.movedTo = '',
   });
 
   final String tabKey;
@@ -230,6 +262,13 @@ class AccessTab {
   final String featureKey;
   final bool canView;
   final bool canWrite;
+
+  /// CHANGE #754 — false when this tab has moved to another screen. The
+  /// backend already forces canView/canWrite false with it; this is the reason.
+  final bool active;
+
+  /// CHANGE #754 — the route key that owns the screen now ('' while active).
+  final String movedTo;
 
   /// CHANGE #657 — `partner_screen_tab.tab_index`, the BACKEND's own position
   /// for this tab. The screens that take an `allowedTabs` set are addressed by
@@ -245,6 +284,10 @@ class AccessTab {
         canView: json['v'] == true,
         canWrite: json['w'] == true,
         index: (json['index'] is num) ? (json['index'] as num).toInt() : -1,
+        // Absence is "still here": a payload from before #754 carries neither
+        // field and every tab it lists is a live one.
+        active: json['active'] != false,
+        movedTo: (json['moved_to'] ?? '').toString(),
       );
 }
 
@@ -306,6 +349,12 @@ class Access extends ChangeNotifier {
       _matrix.tabCanView(screen, tabKey);
   bool tabCanWrite(String screen, String tabKey) =>
       _matrix.tabCanWrite(screen, tabKey);
+
+  /// CHANGE #754 — see [AccessMatrix.fulfillStageForRoute] / [tabMovedTo].
+  String fulfillStageForRoute(String routeKey) =>
+      _matrix.fulfillStageForRoute(routeKey);
+  String tabMovedTo(String screen, String tabKey) =>
+      _matrix.tabMovedTo(screen, tabKey);
   Set<int>? allowedTabIndexes(String screen) =>
       _matrix.allowedTabIndexes(screen);
   String get deniedViewMessage => _matrix.deniedViewMessage;

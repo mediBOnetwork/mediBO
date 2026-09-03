@@ -42,6 +42,7 @@ import '../admin/support_threads_screen.dart';
 import '../partner/partner_tasks_screen.dart';
 import '../worker/worker_tasks_screen.dart';
 import '../admin/kyc_review_screen.dart';
+import '../admin/settlement_invoices_screen.dart'; // CHANGE #695 — tax invoices
 
 /// CHANGE #697 — the whole-order feedback card's one hook into the shell.
 /// `home_shell.dart` sits under a 2,000-line guard (#340 / #327 layer 1) and
@@ -106,6 +107,19 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       // itself on get_my_role() and the screen renders its refusal, the same
       // story as damage_report above.
       'search_synonyms' => const SearchSynonymsScreen(),
+      // CHANGE #695 — the GST tax invoice raised on every settled period, its
+      // credit notes and the monthly GSTR-1 register.
+      //
+      // Declared here and NOT in partnerDestination(), which is the mistake
+      // #710 shipped to live change #1074 hours before this: that resolver has
+      // had no caller since #653 merged the partner surface into this shell, so
+      // a route wired only there is a registry tile that does nothing on tap.
+      //
+      // Authorisation is not the door. settlement_invoices() clamps a partner
+      // to their own id - the p_partner_id parameter is a filter for the office
+      // and never a way in - and refuses anyone who is neither office nor
+      // partner with its own sentence.
+      'settlement_invoices' => const SettlementInvoicesScreen(),
       _ => null,
     };
 

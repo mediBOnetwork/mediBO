@@ -35,6 +35,7 @@ const kRegisteredAdminRoutes = <String>[
   'pharmacy_vault', 'pnl', 'pos', 'pos_upi', 'price_check', 'pricing',
   'pricing_backfill', 'profile', 'purchases', 'reorder', 'returns_refunds',
   'reviews', 'scope_audit', 'search', 'search_synonyms', 'settlement',
+  'settlement_invoices',
   'supplier_accounts',
   'suppliers', 'surface_map', 'test_mode', 'unmapped_companies',
   'users_access', 'wa_campaigns', 'wa_diagnosis', 'wa_drips', 'wa_ops',

@@ -258,6 +258,7 @@ class _SettlementInvoicesScreenState extends State<SettlementInvoicesScreen> {
                   ],
                 ),
               ),
+              SizedBox(width: Ds.space.x8),
               Text(_s(r, 'total_value'), style: Ds.t.body),
             ],
           ),
@@ -266,7 +267,14 @@ class _SettlementInvoicesScreenState extends State<SettlementInvoicesScreen> {
           SizedBox(height: Ds.space.x4),
           Text(_s(r, 'tax_label'), style: Ds.t.caption),
           SizedBox(height: Ds.space.x12),
-          Row(
+          // A Wrap, not a Row. Three backend-labelled actions beside the status
+          // chip overflow a 360px phone by ~53px, and a label's length is the
+          // BACKEND's to choose - a Row would turn a re-worded button into a
+          // rendering overflow on a screen nobody re-tested.
+          Wrap(
+            spacing: Ds.space.x8,
+            runSpacing: Ds.space.x8,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               Container(
                 padding: EdgeInsets.symmetric(
@@ -276,7 +284,6 @@ class _SettlementInvoicesScreenState extends State<SettlementInvoicesScreen> {
                 child: Text(_s(r, 'status_label'),
                     style: Ds.t.caption.copyWith(color: _tone(tone))),
               ),
-              const Spacer(),
               if (r['can_download'] == true)
                 _action(_s(r, 'download_label'), () => _download(r)),
               if (r['can_wa'] == true)
@@ -298,15 +305,12 @@ class _SettlementInvoicesScreenState extends State<SettlementInvoicesScreen> {
     );
   }
 
-  Widget _action(String label, VoidCallback onTap) => Padding(
-        padding: EdgeInsets.only(left: Ds.space.x8),
-        child: SizedBox(
-          height: Ds.space.x48,
-          child: TextButton(
-            onPressed: _busy ? null : onTap,
-            child: Text(label,
-                style: Ds.t.caption.copyWith(color: Ds.c.brand)),
-          ),
+  /// 48px tall so every action clears the 44x44 touch target on a phone.
+  Widget _action(String label, VoidCallback onTap) => SizedBox(
+        height: Ds.space.x48,
+        child: TextButton(
+          onPressed: _busy ? null : onTap,
+          child: Text(label, style: Ds.t.caption.copyWith(color: Ds.c.brand)),
         ),
       );
 }

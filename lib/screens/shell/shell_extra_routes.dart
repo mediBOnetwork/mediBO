@@ -39,6 +39,7 @@ import '../admin/surface_map_screen.dart';
 import '../admin/damage_report_screen.dart';
 import '../admin/search_synonyms_screen.dart';
 import '../admin/support_threads_screen.dart';
+import '../partner/partner_documents_screen.dart' show PartnerDocumentsPage;
 import '../partner/partner_tasks_screen.dart';
 import '../worker/worker_tasks_screen.dart';
 import '../admin/kyc_review_screen.dart';
@@ -106,6 +107,19 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       // itself on get_my_role() and the screen renders its refusal, the same
       // story as damage_report above.
       'search_synonyms' => const SearchSynonymsScreen(),
+      // CHANGE #692 — the partner's own agreement and KYC documents.
+      //
+      // The door is open to anyone the access matrix let see the tile;
+      // partner_documents_screen() resolves the caller's OWN partner id (an
+      // admin may name one, a partner never can) and answers anyone who is
+      // neither with its own refusal — so opening the route decides nothing
+      // about what the caller may read, upload, sign or verify.
+      //
+      // It lives here rather than in home_shell's switch because the shell is
+      // at its 2,000-line guard: a twelfth case there took it to 2,010 and
+      // turned god_file_guard_test red, which is exactly the growth that guard
+      // exists to stop (#340 / CHANGE #327 layer 1).
+      'partner_documents' => const PartnerDocumentsPage(),
       _ => null,
     };
 

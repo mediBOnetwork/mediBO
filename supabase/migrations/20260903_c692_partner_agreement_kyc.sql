@@ -1460,7 +1460,7 @@ on conflict (feature_key) do update
 
 insert into public.surface_route(route_key, feature_key, kind, handled_by, note, is_active)
 values ('partner_documents','partner.documents','feature','home_shell',
-        'CHANGE #692 - the partner''s own agreement + KYC documents; opened by home_shell''s own route switch (case ''partner_documents'') in lib/screens/home_shell.dart, which builds PartnerDocumentsPage.',
+        'CHANGE #692 - the partner''s own agreement + KYC documents; opened by shellExtraRouteScreen() in lib/screens/shell/shell_extra_routes.dart, which home_shell reaches through its one shellExtraRouteScreen(route) lookup.',
         true)
 on conflict (route_key, feature_key) do update
   set kind = excluded.kind, handled_by = excluded.handled_by,

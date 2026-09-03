@@ -2120,3 +2120,148 @@ begin
          updated_at = now()
    where section = 'protected_tests';
 end $m$;
+
+-- ── 16. The credit split must not depend on WHO is looking ──────────────────
+--
+-- _c710_credit_book first asked sup_order_bill_panel() for the room left on the
+-- bill. That panel carries an OWNERSHIP GATE (#25) and returns
+-- {found:false, error:'forbidden'} to anyone who is neither platform staff nor
+-- that supplier — and the caller that matters most here is ANON, from the
+-- public /return-ack/<token> page. The room came back null, every debit applied
+-- in full, and a bill that was already paid never carried a rupee.
+--
+-- So the split reads the numbers itself, with the panel's own rules (imported
+-- bills only, the strict same-IST-day match, excess-kept adjustments, payments,
+-- other debit notes and carry already consumed) and no gate. The panel keeps
+-- its gate; this is the arithmetic underneath it.
+create or replace function public._c710_bill_room(p_supplier_order_id uuid, p_exclude_return uuid default null)
+returns numeric language plpgsql stable security definer set search_path to 'public' as $fn$
+declare so record; v_sid uuid; v_day date;
+        v_bills numeric := 0; v_any boolean := false; v_adj numeric := 0;
+        v_paid numeric := 0; v_deb numeric := 0; v_carry numeric := 0;
+begin
+  select id, supplier_id, supplier_name, created_at into so
+    from public.supplier_orders where id = p_supplier_order_id;
+  if not found then return null; end if;
+
+  v_day := (so.created_at at time zone 'Asia/Kolkata')::date;
+  v_sid := coalesce(so.supplier_id,
+             (select sp.id from public.supplier_profiles sp
+               where lower(sp.supplier_name) = lower(so.supplier_name) limit 1));
+
+  select coalesce(sum(nullif(regexp_replace(coalesce(pb.scan_result->>'total',''),'[^0-9.]','','g'),'')::numeric)
+           filter (where pb.imported_at is not null or lower(coalesce(pb.status,'')) = 'imported'), 0),
+         coalesce(bool_or(pb.imported_at is not null or lower(coalesce(pb.status,'')) = 'imported'), false)
+    into v_bills, v_any
+    from public.pending_bills pb
+   where ((v_sid is not null and pb.supplier_id = v_sid::text)
+       or (pb.supplier_id is null and pb.supplier_name is not null
+           and lower(pb.supplier_name) = lower(so.supplier_name)))
+     and lower(coalesce(pb.verdict,'')) <> 'fake'
+     and (pb.received_at at time zone 'Asia/Kolkata')::date = v_day;
+
+  -- No bill imported yet: the room is unknown, not zero. The caller decides.
+  if not v_any then return null; end if;
+
+  select coalesce(sum(d.adj_amount),0) into v_adj
+    from public.supplier_disputes d
+   where d.adj_supplier_order_id = so.id and d.resolution_outcome = 'excess_kept'
+     and coalesce(d.adj_amount,0) > 0;
+
+  select coalesce(sum(sp.amount),0) into v_paid
+    from public.supplier_payments sp where sp.supplier_order_id = so.id;
+
+  select coalesce(sum(r.grand_total),0) into v_deb
+    from public.supplier_return r
+   where r.supplier_order_id = so.id
+     and r.status in ('sent','acknowledged','credited')
+     and (p_exclude_return is null or r.id <> p_exclude_return);
+
+  select coalesce(sum(l.amount),0) into v_carry
+    from public.supplier_return_credit_ledger l
+   where l.supplier_order_id = so.id and l.kind = 'carry_use';
+
+  return round(greatest(v_bills + v_adj - v_paid - v_deb - v_carry, 0), 2);
+end $fn$;
+
+create or replace function public._c710_credit_book(p_return_id uuid)
+returns void language plpgsql security definer set search_path to 'public' as $fn$
+declare r public.supplier_return%rowtype; v_room numeric; v_apply numeric; v_carry numeric;
+begin
+  select * into r from public.supplier_return where id = p_return_id for update;
+  if not found or r.status not in ('sent','acknowledged') then return; end if;
+
+  -- The room this bill had BEFORE this debit note. NULL means no bill has been
+  -- imported yet, in which case the debit applies in full against the bill when
+  -- it arrives — there is nothing to carry.
+  v_room := case when r.supplier_order_id is null then null
+                 else public._c710_bill_room(r.supplier_order_id, r.id) end;
+
+  v_apply := least(coalesce(r.grand_total,0),
+                   greatest(coalesce(v_room, r.grand_total), 0));
+  v_carry := greatest(coalesce(r.grand_total,0) - v_apply, 0);
+
+  update public.supplier_return
+     set applied_amount = round(v_apply,2), carried_amount = round(v_carry,2),
+         status = 'credited', credited_at = now()
+   where id = r.id;
+
+  delete from public.supplier_return_credit_ledger where return_id = r.id and kind in ('applied','carry');
+  if v_apply > 0 then
+    insert into public.supplier_return_credit_ledger
+      (supplier_id, supplier_name, return_id, supplier_order_id, kind, amount, note)
+    values (r.supplier_id, r.supplier_name, r.id, r.supplier_order_id, 'applied', round(v_apply,2),
+            coalesce(r.debit_no,''));
+  end if;
+  if v_carry > 0 then
+    insert into public.supplier_return_credit_ledger
+      (supplier_id, supplier_name, return_id, supplier_order_id, kind, amount, note)
+    values (r.supplier_id, r.supplier_name, r.id, null, 'carry', round(v_carry,2),
+            coalesce(r.debit_no,''));
+  end if;
+end $fn$;
+
+-- partner_return_carry_apply must not read the gated panel either.
+create or replace function public.partner_return_carry_apply(p_supplier_order_id uuid)
+returns jsonb language plpgsql security definer set search_path to 'public' as $fn$
+declare v_acc text := public._c710_access(); so public.supplier_orders%rowtype;
+        v_sid uuid; v_open numeric; v_room numeric; v_use numeric;
+begin
+  if v_acc <> 'write' then return public._c710_denied(); end if;
+  select * into so from public.supplier_orders where id = p_supplier_order_id;
+  if not found then
+    return public._c710_err('no_order','sup_return.err_no_order','That supplier collection no longer exists.');
+  end if;
+  v_sid := coalesce(so.supplier_id,
+            (select sp.id from public.supplier_profiles sp
+              where lower(sp.supplier_name) = lower(so.supplier_name) limit 1));
+  v_open := public.supplier_return_credit_open(v_sid);
+  if coalesce(v_open,0) <= 0 then
+    return public._c710_err('no_credit','sup_return.credit_none','No credit available for this supplier.');
+  end if;
+
+  v_room := public._c710_bill_room(p_supplier_order_id);
+  v_use  := least(v_open, greatest(coalesce(v_room, 0), 0));
+  if v_use <= 0 then
+    return public._c710_err('no_credit','sup_return.credit_none','No credit available for this supplier.');
+  end if;
+
+  insert into public.supplier_return_credit_ledger
+    (supplier_id, supplier_name, return_id, supplier_order_id, kind, amount, note, created_by)
+  values (v_sid, coalesce(so.supplier_name,''), null, p_supplier_order_id, 'carry_use',
+          round(v_use,2), coalesce(so.order_code,''), auth.uid());
+
+  perform public.partner_audit('partner.supplier_returns','carry_apply',
+    jsonb_build_object('supplier_order_id', p_supplier_order_id, 'amount', v_use));
+
+  return jsonb_build_object('ok', true, 'amount', round(v_use,2),
+    'toast', public._c710_fmt('sup_return.credit_applied','{amount} credit applied to this bill.',
+               jsonb_build_object('amount', public.inr_money(v_use))));
+end $fn$;
+
+revoke all on function public._c710_bill_room(uuid, uuid) from public, anon;
+grant execute on function public._c710_bill_room(uuid, uuid) to authenticated, service_role;
+revoke all on function public._c710_credit_book(uuid) from public, anon;
+grant execute on function public._c710_credit_book(uuid) to authenticated, service_role;
+revoke all on function public.partner_return_carry_apply(uuid) from public, anon;
+grant execute on function public.partner_return_carry_apply(uuid) to authenticated, service_role;

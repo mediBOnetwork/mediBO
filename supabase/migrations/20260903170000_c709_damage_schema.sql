@@ -32,7 +32,7 @@ create table if not exists public.handling_damage (
   photo_path     text,
   status         text not null default 'pending'
                    check (status in ('pending','confirmed','rejected','void')),
-  worker_id      uuid,
+  worker_id      bigint,          -- my_fulfil_worker_id(), the #707 identity
   worker_label   text,
   task_id        bigint,
   zone_id        smallint,
@@ -46,6 +46,13 @@ create table if not exists public.handling_damage (
   created_at     timestamptz not null default now(),
   updated_at     timestamptz not null default now()
 );
+
+-- A resumed worker may meet a table that already exists with an older shape.
+alter table public.handling_damage add column if not exists worker_id bigint;
+alter table public.handling_damage add column if not exists worker_label text;
+alter table public.handling_damage add column if not exists task_id bigint;
+alter table public.handling_damage add column if not exists amount numeric;
+alter table public.handling_damage add column if not exists applied_at timestamptz;
 
 comment on table public.handling_damage is
   'CHANGE #709 — one row per quantity destroyed while mediBO was handling it. '
@@ -178,6 +185,30 @@ insert into public.ui_copy (key, value) values
   ('damage.cost_type_label',    to_jsonb('Handling damage'::text)),
   ('damage.none_label',         to_jsonb('—'::text))
 on conflict (key) do nothing;
+
+-- ── the photo store ───────────────────────────────────────────────────────
+-- Private. A damage photo is evidence about our own handling, not something a
+-- link can hand out: it is read through a signed URL by the people who may see
+-- the order at all.
+insert into storage.buckets (id, name, public)
+select 'damage-photos', 'damage-photos', false
+where not exists (select 1 from storage.buckets where id = 'damage-photos');
+
+drop policy if exists damage_photos_write on storage.objects;
+create policy damage_photos_write on storage.objects
+  for insert to authenticated
+  with check (bucket_id = 'damage-photos'
+              and (public.get_my_role() in ('admin','super_admin')
+                   or public.my_fulfil_worker_id() is not null
+                   or public.my_partner_id() is not null));
+
+drop policy if exists damage_photos_read on storage.objects;
+create policy damage_photos_read on storage.objects
+  for select to authenticated
+  using (bucket_id = 'damage-photos'
+         and (public.get_my_role() in ('admin','super_admin')
+              or public.my_fulfil_worker_id() is not null
+              or public.my_partner_id() is not null));
 
 -- The settlement's own cost type, so a damage line lands where every other
 -- cost on an order already lands (order_costs -> partner settlement).

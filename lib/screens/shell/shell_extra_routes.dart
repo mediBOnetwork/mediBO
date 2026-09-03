@@ -36,6 +36,8 @@ import '../admin/admin_delivery_waves_screen.dart';
 import '../admin/admin_feedback_screen.dart';
 import '../admin/returns_refunds_screen.dart';
 import '../admin/surface_map_screen.dart';
+import '../partner/partner_tasks_screen.dart';
+import '../worker/worker_tasks_screen.dart';
 
 /// CHANGE #697 — the whole-order feedback card's one hook into the shell.
 /// `home_shell.dart` sits under a 2,000-line guard (#340 / #327 layer 1) and
@@ -56,6 +58,23 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       // partner to their own zone and refuses anyone else, so the door is
       // opened here and the authorisation stays in the RPC.
       'feedback' => const AdminFeedbackScreen(),
+      // CHANGE #707 — the fulfilment stage's owner, from both ends.
+      //
+      // These two were written against partnerDestination(), the resolver in
+      // partner_home_screen.dart — and #653 removed the last thing that CALLED
+      // that resolver when it retired the partner surface. So both screens
+      // compiled, both RPCs answered, and both tiles fell through the shell's
+      // switch into "route unavailable": the exact shape this file was created
+      // for in #570, one more time. The door is here, where the shell already
+      // looks, and surface_route declares it so rg_check can see it.
+      //
+      // Authorisation is NOT here. fulfil_task_board() answers a caller who is
+      // neither office nor a partner with can_write:false and its own refusal
+      // sentence, and fulfil_my_tasks() refuses anyone who is not a worker —
+      // so the door being open to a role is never the thing that decides what
+      // that role may read or write.
+      'fulfil_tasks' => const PartnerTasksScreen(),
+      'my_tasks' => const WorkerTasksScreen(),
       _ => null,
     };
 

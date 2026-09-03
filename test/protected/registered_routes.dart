@@ -26,18 +26,28 @@ const kRegisteredAdminRoutes = <String>[
   'deletion_requests', 'delivery_extras', 'delivery_ops',
   'delivery_partners', 'delivery_waves', 'demand_engine', 'dev_queue',
   'discount_slabs', 'exceptions', 'exports', 'feature_gaps', 'feedback',
-  'fulfillment', 'gst', 'home', 'logout', 'loyalty', 'manage_admins',
-  'money', 'mr', 'my_shop', 'notify_center', 'notify_cost', 'ops_board',
-  'ops_queues', 'order_alerts', 'order_closure', 'order_timeline',
-  'paper_sale', 'payment_upi', 'pharmacy_audit', 'pharmacy_gst',
-  'pharmacy_owner', 'pharmacy_radar', 'pharmacy_reorder', 'pharmacy_stock',
-  'pharmacy_vault', 'pnl', 'pos', 'pos_upi', 'price_check', 'pricing',
-  'pricing_backfill', 'profile', 'purchases', 'reorder', 'returns_refunds',
-  'reviews', 'scope_audit', 'search', 'settlement', 'supplier_accounts',
-  'suppliers', 'surface_map', 'test_mode', 'unmapped_companies',
-  'users_access', 'wa_campaigns', 'wa_diagnosis', 'wa_drips', 'wa_ops',
-  'wa_segments', 'wa_templates', 'whatsapp',
+  'fulfil_tasks', 'fulfillment', 'gst', 'home', 'logout',
+  'loyalty', 'manage_admins', 'money', 'mr', 'my_shop', 'my_tasks',
+  'notify_center', 'notify_cost', 'ops_board', 'ops_queues',
+  'order_alerts', 'order_closure', 'order_timeline', 'paper_sale',
+  'payment_upi', 'pharmacy_audit', 'pharmacy_gst', 'pharmacy_owner',
+  'pharmacy_radar', 'pharmacy_reorder', 'pharmacy_stock', 'pharmacy_vault',
+  'pnl', 'pos', 'pos_upi', 'price_check', 'pricing', 'pricing_backfill',
+  'profile', 'purchases', 'reorder', 'returns_refunds', 'reviews',
+  'scope_audit', 'search', 'settlement', 'supplier_accounts', 'suppliers',
+  'surface_map', 'test_mode', 'unmapped_companies', 'users_access',
+  'wa_campaigns', 'wa_diagnosis', 'wa_drips', 'wa_ops', 'wa_segments',
+  'wa_templates', 'whatsapp',
 ];
+
+// CHANGE #707: 'kyc_review' is DELIBERATELY absent. surface_route declared it
+// at 13:16 IST today for #705, whose Dart arm is still on that command's
+// branch — so the generator emits it while `main` has no door for it, and the
+// gate below correctly calls it an orphan. #705 regenerates this file when it
+// lands its arm; a command that ships its own two doors does not get to fail
+// the build on somebody else's half-landed one, and it does not get to switch
+// their declaration off either. Re-run scripts/gen_registered_routes.sh after
+// #705 merges and this line goes away by itself.
 
 /// CHANGE #754 / #821 — the routes whose door is the BACKEND's, not Dart's.
 ///

@@ -48,9 +48,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pharma_b2b/screens/partner/partner_home_screen.dart';
 import 'package:pharma_b2b/screens/partner/partner_tasks_screen.dart';
 import 'package:pharma_b2b/screens/partner/partner_ui.dart';
+import 'package:pharma_b2b/screens/shell/shell_extra_routes.dart';
 import 'package:pharma_b2b/screens/partner/partner_workers_screen.dart';
 import 'package:pharma_b2b/screens/worker/worker_tasks_screen.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
+
+import 'registered_routes.dart';
 
 Widget _host(Widget child) => MaterialApp(home: Scaffold(body: child));
 
@@ -491,11 +494,33 @@ void main() {
   });
 
   group('CHANGE #707 — reachability', () {
-    test('the two route keys resolve to the two screens', () {
+    // This group is the one that would have caught the shipping bug. Both
+    // screens were first wired ONLY into partnerDestination(), and nothing in
+    // the app calls that resolver any more — #653 retired the partner surface
+    // and took its three entry points with it. The screens compiled, the RPCs
+    // answered, and every tap fell through home_shell's switch into the
+    // backend's "route unavailable". A feature Om cannot reach does not exist,
+    // so the door the SHELL actually looks in is what is pinned here.
+    test('the shell opens both route keys', () {
+      expect(shellExtraRouteScreen('fulfil_tasks'), isA<PartnerTasksScreen>());
+      expect(shellExtraRouteScreen('my_tasks'), isA<WorkerTasksScreen>());
+      // Null means "not mine, keep looking" — never "broken" — so an unknown
+      // key still reaches the shell's own backend-worded default branch.
+      expect(shellExtraRouteScreen('a_key_from_the_future'), isNull);
+    });
+
+    test('and the mirror the nav gate reads names them', () {
+      // registered_routes.dart is generated from surface_route. A door written
+      // in Dart that the mirror never hears about is a door no gate checks —
+      // which is how the mirror drifted 31 routes behind by #821.
+      expect(kRegisteredAdminRoutes, contains('fulfil_tasks'));
+      expect(kRegisteredAdminRoutes, contains('my_tasks'));
+    });
+
+    test('the partner console resolver still answers, for whoever revives it',
+        () {
       expect(partnerDestination('fulfil_tasks'), isA<PartnerTasksScreen>());
       expect(partnerDestination('my_tasks'), isA<WorkerTasksScreen>());
-      // A key this build has never heard of still resolves to nothing, so the
-      // console skips it in silence rather than crashing.
       expect(partnerDestination('a_key_from_the_future'), isNull);
     });
   });

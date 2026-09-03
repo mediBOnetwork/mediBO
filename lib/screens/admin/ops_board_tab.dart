@@ -24,6 +24,7 @@ import '../../fulfill/fulfill_lookups.dart';
 import '../../services/admin_zone_scope.dart';
 import '../../services/fulfill_realtime.dart';
 import '../../models/order_timeline_view.dart';
+import '../orders/order_hold_sheet.dart';
 import '../../utils/render_log.dart';
 import 'ops_board_view.dart';
 
@@ -414,6 +415,47 @@ class _TimelineHost extends StatefulWidget {
 
 class _TimelineHostState extends State<_TimelineHost> {
   late Map<String, dynamic> _timeline = widget.timeline;
+  late Map<String, dynamic> _detail = widget.detail;
+
+  /// CHANGE #708 — the hold door on the ops card. The sheet is the SAME one
+  /// the pharmacy uses; who may write is decided inside order_hold() by role,
+  /// zone and the stage gate, so there is no admin-only copy of it here.
+  Future<void> _openHold() async {
+    final changed = await showOrderHoldSheet(context, widget.orderId);
+    if (changed) await _refreshDetail();
+  }
+
+  Future<void> _releaseStock(String reason) async {
+    try {
+      final res = await Supabase.instance.client.rpc('order_hold_stock_release',
+          params: {'p_order_id': widget.orderId, 'p_reason': reason});
+      final m = res is Map ? Map<String, dynamic>.from(res) : const {};
+      RenderLog.write('c708_stock_release', 'ok=${m['ok']}');
+      final msg = (m['message'] ?? '').toString();
+      if (msg.isNotEmpty && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(msg),
+          backgroundColor:
+              m['ok'] == true ? Ds.c.brand : Ds.c.danger,
+        ));
+      }
+    } catch (e) {
+      RenderLog.write('c708_stock_release_err', e.toString());
+    }
+    await _refreshDetail();
+  }
+
+  Future<void> _refreshDetail() async {
+    try {
+      final res = await Supabase.instance.client
+          .rpc('ops_order_detail', params: {'p_order_id': widget.orderId});
+      if (!mounted) return;
+      setState(() =>
+          _detail = res is Map ? Map<String, dynamic>.from(res) : _detail);
+    } catch (e) {
+      RenderLog.write('c688_ops_detail_err', e.toString());
+    }
+  }
 
   Future<TimelineActionResult> _act(
       TimelineAction action, Map<String, dynamic> extra) async {
@@ -442,9 +484,14 @@ class _TimelineHostState extends State<_TimelineHost> {
 
   @override
   Widget build(BuildContext context) => OpsOrderDetailView(
-        payload: widget.detail,
+        payload: _detail,
         timeline: _timeline,
         onTimelineAct: _act,
         onTimelineRefreshed: (t) => setState(() => _timeline = t),
+        onHold: _openHold,
+        onReleaseStock:
+            (((_detail['hold_stock'] as Map?)?['can_release'] == true))
+                ? _releaseStock
+                : null,
       );
 }

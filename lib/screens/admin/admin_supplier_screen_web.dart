@@ -1293,7 +1293,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 if (_tabAllowed(4)) const SizedBox(width: 4),
                 if (_tabAllowed(4)) _tab(_SupFilter.leads,      'Leads (${_leads.length})'),
                 if (_tabAllowed(5)) const SizedBox(width: 4),
-                if (_tabAllowed(5)) _tab(_SupFilter.staging,    'Staging (${_stagingCompanies.length + _stagingMedicines.length})'),
+                // CHANGE #1016 — the word is the backend's (ui_copy
+                // admin_supplier.tab_staging); "Staging" is not a shopkeeper word.
+                if (_tabAllowed(5)) _tab(_SupFilter.staging, cf('admin_supplier.tab_staging',
+                    {'count': '${_stagingCompanies.length + _stagingMedicines.length}'})),
               ]),
             ),
           ),

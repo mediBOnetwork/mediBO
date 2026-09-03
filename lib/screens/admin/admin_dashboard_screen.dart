@@ -19,6 +19,7 @@ import '../../models/c529_admin_gaps.dart';
 import '../../widgets/crashes_card.dart'; // CHANGE #473
 import '../../widgets/dashboard_v2_card.dart'; // CHANGE #812
 import '../../services/ui_copy.dart';
+import '../../services/staff_nav.dart'; // CHANGE #1016 — the layout flag
 import 'admin_ops_board_screen.dart';
 import 'command_palette.dart';   // CHANGE #325
 import 'nav_registry_view.dart'; // CHANGE #325
@@ -347,7 +348,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   /// CHANGE #325 (spec 5) — the dead-feature report. Sits under the feature
   /// list because that is the question it answers about the list above it.
-  Future<void> _openUnusedReport() async {
+  /// CHANGE #1016 — under the v2 layout it is offered at the foot of the More
+  /// grid instead ([openUnusedReport]); the sheet and its RPC are unchanged.
+  Future<void> _openUnusedReport() => openUnusedReport(context);
+
+  static Future<void> openUnusedReport(BuildContext context) async {
     Map<String, dynamic> report = const {};
     try {
       final raw = await Supabase.instance.client.rpc('nav_unused_report');
@@ -355,7 +360,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     } catch (_) {
       return;
     }
-    if (!mounted) return;
+    if (!context.mounted) return;
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -449,6 +454,22 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // CHANGE #1016 — the dashboard is the SEE tab: today's strip, needs-you,
+    // the funnel, the alerts and the universal search. Every registry entry
+    // that used to sit under them (the categorised feature grid, the action
+    // tiles, the overview counts, the unused-feature report) has a home of its
+    // own now — Customers / Suppliers / Fulfill / Money / More — and is drawn
+    // there by staff_home(). The old body stays reachable behind the
+    // staff_layout_v1 app_settings flag for seven days; which layout to draw
+    // is staff_nav().layout, never a Dart rule.
+    return ValueListenableBuilder<StaffNavPayload>(
+      valueListenable: StaffNav.value,
+      builder: (_, nav, _) => _buildBody(context, legacy: nav.isLegacy),
+    );
+  }
+
+  Widget _buildBody(BuildContext context, {required bool legacy}) {
+    RenderLog.write('c1016_dashboard_layout', legacy ? 'v1' : 'v2');
     return LayoutBuilder(builder: (ctx, box) {
       final isNarrow = box.maxWidth < 600;
       final hpad = isNarrow ? 16.0 : Ds.space.x24;
@@ -507,26 +528,32 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 const OrderHoursCard(),
                 const NotificationsCard(),
                 const CrashesCard(),
-                _sectionLabel(_label('action_required')),
-                _buildActionRequired(),
-                SizedBox(height: Ds.space.x24),
-                _sectionLabel(c('admin_dashboard.section_overview')),
-                _buildOverview(),
-                SizedBox(height: Ds.space.x24),
-                _sectionLabel(_label('all_features')),
-                NavSections(
-                  sections: _list('sections'),
-                  pinned: _list('pinned'),
-                  pinnedLabel: _label('pinned'),
-                  pinHint: _label('pin_hint'),
-                  onOpen: _openTile,
-                  onPin: _togglePin,
-                ),
-                TextButton.icon(
-                  onPressed: _openUnusedReport,
-                  icon: const Icon(Icons.insights_outlined),
-                  label: Text(_label('unused_report')),
-                ),
+                // CHANGE #1016 — the pre-#1016 body, only while the
+                // staff_layout_v1 flag is on. Under v2 these entries live on
+                // their own tabs; drawing them here again would be the second
+                // surface the change removes.
+                if (legacy) ...[
+                  _sectionLabel(_label('action_required')),
+                  _buildActionRequired(),
+                  SizedBox(height: Ds.space.x24),
+                  _sectionLabel(c('admin_dashboard.section_overview')),
+                  _buildOverview(),
+                  SizedBox(height: Ds.space.x24),
+                  _sectionLabel(_label('all_features')),
+                  NavSections(
+                    sections: _list('sections'),
+                    pinned: _list('pinned'),
+                    pinnedLabel: _label('pinned'),
+                    pinHint: _label('pin_hint'),
+                    onOpen: _openTile,
+                    onPin: _togglePin,
+                  ),
+                  TextButton.icon(
+                    onPressed: _openUnusedReport,
+                    icon: const Icon(Icons.insights_outlined),
+                    label: Text(_label('unused_report')),
+                  ),
+                ],
               ],
             ]),
           ),

@@ -12,7 +12,11 @@
 //     the RPC is ever reached);
 //   * the report renders tabs, rates and tones VERBATIM: no percentage is
 //     computed and no threshold is applied on this side, and the queue offers
-//     confirm/reject only while a decider is wired.
+//     confirm/reject only while a decider is wired;
+//   * CHANGE #956 — damage the backend could not price yet is NOT ₹0.00. The
+//     unvalued sentence is a backend string rendered verbatim, and an empty
+//     one draws nothing at all — the screen never counts the rows itself and
+//     never invents the wording.
 //
 // No network, no Supabase: every RPC is a mocked payload.
 import 'dart:typed_data';
@@ -246,6 +250,74 @@ void main() {
       expect(find.text('0.2% of what was handled'), findsOneWidget);
       expect(find.text('To confirm (1)'), findsOneWidget);
       expect(find.text('By worker (2)'), findsOneWidget);
+    });
+
+    // CHANGE #956 — damage_apply writes an honest NULL amount when the line
+    // has no trade rate yet. The report used to sum that as zero, so damage
+    // nobody had priced read "₹0.00" with nothing to say the money was simply
+    // unknown. The sentence is the BACKEND's; this side only prints it.
+    testWidgets('the unvalued sentence is printed, never computed here',
+        (t) async {
+      final p = _report();
+      p['unvalued'] = 4;
+      p['unvalued_label'] = '4 not valued yet — no trade rate on the line';
+      final workers = [
+        {
+          ...(p['worker'] as List).first as Map<String, dynamic>,
+          'unvalued': 4,
+          'unvalued_label': '4 not valued yet',
+        },
+        (p['worker'] as List).last as Map<String, dynamic>,
+      ];
+      p['worker'] = workers;
+
+      await t.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: DamageReportView(
+            payload: p,
+            tab: 'worker',
+            onTab: (_) {},
+            rows: (key) => ((p[key] as List<dynamic>?) ?? const [])
+                .whereType<Map>()
+                .map((e) => Map<String, dynamic>.from(e))
+                .toList(),
+          ),
+        ),
+      ));
+      await t.pumpAndSettle();
+
+      // the money line stays the money line
+      expect(find.text('₹540.00'), findsWidgets);
+      // and the unknown is stated separately, in the backend's own words
+      expect(find.text('4 not valued yet — no trade rate on the line'),
+          findsOneWidget);
+      expect(find.text('4 not valued yet'), findsOneWidget);
+      // the count is never re-derived on this side
+      expect(find.text('4'), findsNothing);
+    });
+
+    testWidgets('nothing unvalued draws no row at all', (t) async {
+      final p = _report();
+      p['unvalued'] = 0;
+      p['unvalued_label'] = '';
+
+      await t.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: DamageReportView(
+            payload: p,
+            tab: 'worker',
+            onTab: (_) {},
+            rows: (key) => ((p[key] as List<dynamic>?) ?? const [])
+                .whereType<Map>()
+                .map((e) => Map<String, dynamic>.from(e))
+                .toList(),
+          ),
+        ),
+      ));
+      await t.pumpAndSettle();
+
+      expect(find.textContaining('not valued yet'), findsNothing);
+      expect(find.text('₹540.00'), findsWidgets);
     });
 
     testWidgets('the queue offers confirm and reject with the payload words',

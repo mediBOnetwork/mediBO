@@ -132,7 +132,7 @@
   "lib/widgets/report_issue_section.dart": 39,
   "lib/widgets/route_google_map_panel.dart": 5,
   "lib/widgets/sup_pay_panel.dart": 119,
-  "lib/widgets/supplier_map_groups_panel.dart": 38,
+  "lib/widgets/supplier_map_groups_panel.dart": 2,
   "lib/widgets/upi_pay_sheet.dart": 22,
   "lib/widgets/zone_picker_view.dart": 20
 }

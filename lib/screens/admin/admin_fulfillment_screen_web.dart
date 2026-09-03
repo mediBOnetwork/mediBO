@@ -35,6 +35,7 @@ import '../../services/date_labels.dart'; // C546: backend-owned date strings
 import '../../supabase_config.dart' show SupabaseConfig;
 import 'voice_receive.dart';
 import 'admin_delivery_tab.dart'; // CHANGE #629: Delivery tab (zone + date scoped)
+import 'ops_board_tab.dart'; // CHANGE #688: Ops board (SLA clocks, breach-sorted)
 import 'admin_customer_screen.dart'; // CHANGE #537: pipeline stage 1 reuses this screen
 import 'admin_supplier_screen.dart'; // CHANGE #537: pipeline stages 2 and 3 reuse this screen
 import '../../fulfill/fulfill_pipeline_tabs.dart'; // CHANGE #537: the 9-stage bar
@@ -8661,6 +8662,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   final _packTabKey   = GlobalKey<_PackTabState>();
   final _bagTabKey    = GlobalKey<_BagTabState>();
   final _deliveryKey  = GlobalKey<AdminDeliveryTabState>(); // CHANGE #629
+  final _opsBoardKey  = GlobalKey<OpsBoardTabState>();      // CHANGE #688
   // CHANGE #537 — stages 1-3 reuse the existing consoles. Their own keys (not
   // the screens' static ones) are what let an embedded instance coexist with
   // the shell's.
@@ -9082,6 +9084,9 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
         case 'exceptions':
           _exceptionsKey.currentState?.reload();
           break;
+        case 'ops_board':
+          _opsBoardKey.currentState?.reload();
+          break;
       }
     });
   }
@@ -9116,6 +9121,10 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
         return _BagTab(key: _bagTabKey);
       case 'pack':
         return _PackTab(key: _packTabKey);
+      case 'ops_board':
+        // CHANGE #688 — the SLA board. First stage in the bar because a
+        // breach nobody sees is the gap this closed.
+        return OpsBoardTab(key: _opsBoardKey);
       case 'delivery':
         return AdminDeliveryTab(key: _deliveryKey);
       case 'dispute':

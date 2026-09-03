@@ -450,6 +450,14 @@ begin
       v_action := 'paused';
     end if;
     v_target := coalesce((cfg->>'sem_black')::int, 0);
+    -- Write the black band even when we could not trip (Workflow already off).
+    -- The stored semaphore must never claim a concurrency the score has ruled
+    -- out — the card reads worker_pool, not this row.
+    if v_target <> v_cur then
+      update public.dev_runner_config
+         set value = jsonb_set(value, '{build_semaphore}', to_jsonb(v_target))
+       where key = 'worker_pool';
+    end if;
     v_streak := 0;
     v_tripped := true;
 

@@ -23,6 +23,7 @@ import '../widgets/bill_viewer.dart';
 import '../widgets/cust_pay_panel.dart';
 import '../widgets/customer_order_item_card.dart'; // #641: the Items-tab card
 import '../widgets/order_card_lean.dart'; // #630: the lean card, its progress line and the change window
+import '../widgets/substitute_ask_card.dart'; // #698: the substitute offer
 import '../services/ui_copy.dart';
 import '../design_tokens.dart'; // #173: Ds tokens for the reorder entry points
 import '../widgets/delivery_proof_card.dart'; // #691: arrival window + proof of delivery
@@ -249,6 +250,38 @@ class _OrdersScreenState extends State<OrdersScreen> {
   // tap.
   List<CustomerOrderCard> _cards = [];
 
+  /// CHANGE #698 — the raw `orders[]` rows, kept beside the parsed cards for
+  /// the ONE block that is not part of the lean card: `substitute`, the offer
+  /// the backend opened when a line could not be sourced. Nothing is derived
+  /// from them here; the block is handed to [SubstituteAskCard] whole.
+  List<Map<String, dynamic>> _rawRows = const [];
+
+  /// The open asks on row [i], exactly as `substitute_ask_for_order()` sent
+  /// them. Absent or closed => an empty list, and the card renders alone.
+  List<Map<String, dynamic>> _asksFor(int i) {
+    if (i < 0 || i >= _rawRows.length) return const [];
+    final sub = _rawRows[i]['substitute'];
+    if (sub is! Map) return const [];
+    return ((sub['asks'] as List<dynamic>?) ?? const [])
+        .whereType<Map>()
+        .map((e) => e.cast<String, dynamic>())
+        .toList();
+  }
+
+  /// The pair, once an offer is over: what was ordered and what was supplied
+  /// instead. `label` is the backend's whole sentence — this never assembles
+  /// "X instead of Y" in Dart.
+  List<String> _pairsFor(int i) {
+    if (i < 0 || i >= _rawRows.length) return const [];
+    final sub = _rawRows[i]['substitute'];
+    if (sub is! Map) return const [];
+    return ((sub['pairs'] as List<dynamic>?) ?? const [])
+        .whereType<Map>()
+        .map((e) => (e['label'] ?? '').toString())
+        .where((e) => e.isNotEmpty)
+        .toList();
+  }
+
   /// The filter row, as the backend sent it: key, label, count and which one
   /// is selected. The screen does not decide the default, does not count the
   /// buckets and does not word the chips.
@@ -410,6 +443,10 @@ class _OrdersScreenState extends State<OrdersScreen> {
 
       setState(() {
         _cards = parsed;
+        _rawRows = ((payload['orders'] as List<dynamic>?) ?? const [])
+            .whereType<Map>()
+            .map((r) => r.cast<String, dynamic>())
+            .toList();
         _filters = ((payload['filters'] as List<dynamic>?) ?? const [])
             .whereType<Map>()
             .map((f) => Map<String, dynamic>.from(f))
@@ -617,11 +654,33 @@ class _OrdersScreenState extends State<OrdersScreen> {
         itemBuilder: (context, i) {
           final o = _cards[i];
           final focused = _focusCode != null && o.orderCode == _focusCode;
-          return OrderCardLean(
+          final card = OrderCardLean(
             key: focused ? _focusKey : null,
             card: o,
             onOpen: () => _openOrder(o),
             onAction: (key) => _runCardAction(o, key),
+          );
+          // CHANGE #698 — an item nobody could source gets ASKED about before
+          // the order ships without it. The offer sits directly under the
+          // order it belongs to, because that is where the customer already
+          // is. `asks` arrives empty on every other order, so this costs
+          // nothing when there is nothing to ask.
+          final asks = _asksFor(i);
+          final pairs = _pairsFor(i);
+          if (asks.isEmpty && pairs.isEmpty) return card;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              card,
+              for (final a in asks) ...[
+                SizedBox(height: Ds.space.x8),
+                SubstituteAskCard(ask: a, onAnswered: (_) => _fetch()),
+              ],
+              for (final label in pairs) ...[
+                SizedBox(height: Ds.space.x8),
+                _SubstitutePairStrip(label: label),
+              ],
+            ],
           );
         },
       ),
@@ -2164,4 +2223,30 @@ class _WaNumberPickerState extends State<_WaNumberPicker> {
   }
 }
 
+/// CHANGE #698 — the pair, after the fact: one backend sentence saying what
+/// was supplied instead of what was ordered. It is a label, not a layout
+/// decision: the whole string arrives in `substitute.pairs[].label`.
+class _SubstitutePairStrip extends StatelessWidget {
+  final String label;
+  const _SubstitutePairStrip({required this.label});
 
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: EdgeInsets.symmetric(
+            horizontal: Ds.space.x12, vertical: Ds.space.x8),
+        decoration: BoxDecoration(
+          color: Ds.c.brandSoft,
+          borderRadius: Ds.r.rButton,
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.swap_horiz, size: Ds.space.x16, color: Ds.c.brand),
+            SizedBox(width: Ds.space.x8),
+            Expanded(
+              child: Text(label,
+                  style: Ds.t.caption.copyWith(color: Ds.c.brand)),
+            ),
+          ],
+        ),
+      );
+}

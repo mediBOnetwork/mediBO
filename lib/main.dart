@@ -36,6 +36,7 @@ import 'screens/admin/partner_audit_log_screen.dart';
 import 'screens/admin/settlement_screen.dart'; // /admin/settlement
 import 'screens/home_shell.dart';
 import 'screens/public/inquiry_form_screen.dart';
+import 'screens/delivery/agency_dispatch_screen.dart'; // C704: /agency/dispatch
 import 'screens/public/stock_update_form_screen.dart'; // C639: /stock-update/<token>
 import 'screens/public/order_feedback_form_screen.dart'; // C697: /feedback/<token>
 import 'screens/public/substitute_ask_screen.dart'; // C698: /substitute-ask/<token>
@@ -953,6 +954,19 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // the screen is provable on the live site (and linkable from a
               // report) without a tap path; the RPC behind it refuses anyone
               // who is not a mediBO admin, exactly as the console does.
+              // CHANGE #704 — the agency dispatcher's board. Its own route for
+              // the same reason /admin/partner-audit has one: Flutter canvas
+              // cannot be clicked headlessly, so without a URL the post-deploy
+              // verifier can never prove the screen painted. Authorisation is
+              // the backend's — agency_dispatch_board() answers not_an_agency
+              // itself and the screen renders that refusal. Still reachable by
+              // tapping: Deliveries -> My riders -> Open dispatch board.
+              if (name.split('?').first == '/agency/dispatch') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const AgencyDispatchScreen(),
+                );
+              }
               if (name.startsWith('/admin/partner-audit')) {
                 final tail = name
                     .substring('/admin/partner-audit'.length)

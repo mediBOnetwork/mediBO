@@ -681,7 +681,14 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
             _statusChip(delivery),
             const SizedBox(width: 8),
             Expanded(
-              child: Text(delivery['partner_name']?.toString() ?? '',
+              // C704 — an agency stop has no rider yet, so the queue prints the
+              // backend's chain sentence ("<agency> -> picking a rider", then
+              // "<agency> -> <rider>") when one was sent. Composed in SQL; this
+              // only chooses which of the two strings the payload carries.
+              child: Text(
+                  (delivery['chain_label']?.toString() ?? '').trim().isNotEmpty
+                      ? delivery['chain_label'].toString()
+                      : (delivery['partner_name']?.toString() ?? ''),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(fontSize: 12.5, color: _kSub)),

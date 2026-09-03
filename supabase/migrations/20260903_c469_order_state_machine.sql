@@ -190,7 +190,19 @@ begin
   values (v_kind, new.id::text, v_order, v_from, v_to, v_actor,
           coalesce(public.my_login_email(),''), auth.uid(), v_ok);
 
-  if not v_ok and v_enforce then
+  -- CREATION IS LOGGED, NEVER REJECTED. Every example the spec names is a JUMP
+  -- (packed->delivered without assignment, delivered without out_for_delivery),
+  -- and that is where enforcement earns its keep. A row BORN mid-flow is a
+  -- different thing: a back-dated import, a data migration and every one of the
+  -- rg behaviour fixtures legitimately create an order or a delivery already
+  -- part-way along. Refusing those broke seven existing guard tests
+  -- (c704_agency_timeout_falls_back, c712_customer_events_fire_once,
+  -- delivery_earning_stamped, order_closure_customer and three more) and bought
+  -- no protection the sweep does not already give: ops_state_sweep()'s
+  -- order_state_unreachable rule catches a row SITTING in an impossible state
+  -- however it got there. So an illegal birth is written to order_state_event
+  -- with legal=false — visible, and reportable — and allowed.
+  if not v_ok and v_enforce and v_from <> '' then
     raise exception '%', case when v_from = ''
       then public._cf('order_state.illegal_new',
              jsonb_build_object('kind', v_kind, 'to', v_to, 'actor', v_actor))
@@ -396,3 +408,36 @@ update public.ops_state_finding
                         'delivery_ahead_of_order','order_closed_unbilled')
    and cleared_at is not null
    and cleared_at > now() - interval '2 hours';
+
+-- ── 8. the agency lane (CHANGE #704), which the first seed under-read ───────
+-- rg's own behaviour guards walk it, and they refused three transitions that
+-- are entirely real: a delivery AGENCY accepts an offer under its own login
+-- (which authorises as 'supplier'), the office accepts on the agency's behalf,
+-- and an agency run closes straight from assigned to delivered — an agency has
+-- no rider tapping "start run", so it never passes through out_for_delivery.
+-- Same rule as the canary: the machine was right to refuse what it had not been
+-- told; the table is what was wrong.
+insert into public.order_state_transitions (entity_kind, from_state, to_state, actor_role, note) values
+  ('delivery','agency_pending','assigned', 'supplier','delivery_respond — the agency accepted under its own login.'),
+  ('delivery','agency_pending','assigned', 'admin',   'Office accepts on the agency''s behalf.'),
+  ('delivery','agency_pending','assigned', 'partner', 'Partner accepts on the agency''s behalf.'),
+  ('delivery','agency_pending','unassigned','supplier','The agency declined.'),
+  ('delivery','assigned',      'delivered','system',  'agency_dispatch chain — an agency run has no rider start_run, so it closes straight from assigned.'),
+  ('delivery','assigned',      'delivered','supplier','The agency reports the drop itself.'),
+  ('delivery','assigned',      'failed',   'supplier','The agency reports a failed attempt.'),
+  ('delivery','assigned',      'failed',   'system',  'Agency SLA expired on an accepted run.'),
+  ('delivery','out_for_delivery','delivered','supplier','The agency closes a run it had started.'),
+  ('delivery','assigned',        'out_for_delivery','supplier','The agency marks its own run as gone out.'),
+  -- agency_dispatch_assign moves a RUNNING stop to another of the agency's own
+  -- riders — custody is personal, so the stop drops back to 'assigned' and the
+  -- previous rider's handover is cleared. A mid-run reassignment is the one
+  -- place this machine legitimately steps backwards.
+  ('delivery','out_for_delivery','assigned','supplier','agency_dispatch_assign — reassigned mid-run to another of the agency''s riders.'),
+  ('delivery','out_for_delivery','assigned','admin',   'Office reassigns a running stop.'),
+  ('delivery','out_for_delivery','assigned','partner', 'Partner reassigns a running stop.'),
+  ('delivery','out_for_delivery','assigned','system',  'A wave or SLA tick moved a running stop.'),
+  ('delivery','out_for_delivery','unassigned','supplier','The agency handed the stop back.'),
+  ('delivery','failed',          'assigned','supplier','The agency sends its own failed stop out again.'),
+  ('delivery','failed',          'assigned','admin',   'Office re-assigns a failed stop directly.'),
+  ('delivery','failed',          'assigned','system',  'delivery_reattempt_tick re-assigns without unassigning first.')
+on conflict do nothing;

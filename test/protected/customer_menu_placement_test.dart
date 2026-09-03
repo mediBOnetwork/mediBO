@@ -397,6 +397,9 @@ void main() {
       for (final path in const [
         'lib/widgets/customer_surface_widgets.dart',
         'lib/screens/profile_screen.dart',
+        // Round 2 QA, NEW-3: the file that actually renders the Account group
+        // and holds the sign-out fallback was the one file this scan skipped.
+        'lib/screens/customer/profile_account_menu.dart',
       ]) {
         final src = File(path).readAsStringSync();
         final code = src
@@ -423,6 +426,51 @@ void main() {
               reason: '$path names $key — the payload decides, not Dart');
         }
       }
+    });
+  });
+
+  group('the device cache belongs to ONE account', () {
+    // HOSTILE QA ROUND 2, NEW-1 — the leak the offline fix introduced.
+    //
+    // The menu is cached on the device so a failed refresh cannot empty the
+    // Account group. That cache is account data: a customer code, a payment
+    // term, a points balance, a referral code, a wishlist count. Keyed on a
+    // constant and validated only on ok:true, it survived a sign-out in
+    // localStorage and was painted to the NEXT login — on a shared pharmacy
+    // counter, which is the machine this app ships "Staff logins" for.
+    //
+    // Two properties, both scanned in the source because SharedPreferences
+    // needs a platform channel this suite deliberately does not have: the
+    // stored payload carries its owner and is dropped on a mismatch, and the
+    // sign-out path drops it with the rest of the account state.
+
+    test('the cached payload is stamped with, and checked against, its owner',
+        () {
+      final src =
+          File('lib/services/customer_surfaces.dart').readAsStringSync();
+      expect(src.contains('_ownerKey'), isTrue,
+          reason: 'the cache no longer records whose menu it is');
+      expect(src.contains('currentUser?.id'), isTrue,
+          reason: 'the cache is no longer compared against the signed-in uid');
+      expect(RegExp(r'static\s+Future<void>\s+clear\(').hasMatch(src), isTrue,
+          reason: 'CustomerSurfaces.clear() is the only way to forget a menu');
+      expect(src.contains('remove(_cacheKey)'), isTrue,
+          reason: 'clear() must delete the stored payload, not just the '
+              'in-memory notifier');
+    });
+
+    test('signing out drops it with the rest of the account state', () {
+      final src = File('lib/user_state.dart').readAsStringSync();
+      final start = src.indexOf('void _clearAccountState()');
+      expect(start, greaterThan(0),
+          reason: 'the hard reset must stay in one place');
+      final end = src.indexOf('\n  }', start);
+      expect(end, greaterThan(start));
+      expect(src.substring(start, end).contains('CustomerSurfaces.clear()'),
+          isTrue,
+          reason: 'the customer menu cache outlives the credential that owns '
+              'it — the exact half-cleared session this method exists to '
+              'prevent');
     });
   });
 

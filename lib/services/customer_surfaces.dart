@@ -34,6 +34,11 @@ class CustomerSurfaces {
   static bool _bound = false;
   static bool _started = false;
 
+  /// True once THIS session's fetch has landed. False while the notifier is
+  /// showing the device cache, which is what `offline_note` is worded for.
+  static bool get isLive => _live;
+  static bool _live = false;
+
   /// The offline rule, and hostile QA round 1's second blocker.
   ///
   /// The whole Account group — Logout and the delete zone included — is now
@@ -44,6 +49,18 @@ class CustomerSurfaces {
   /// is a render fallback, never an authority — every write still goes to the
   /// backend, which re-checks the caller.
   static const String _cacheKey = 'c745_customer_surfaces';
+
+  /// The uid the cached payload was fetched FOR.
+  ///
+  /// Hostile QA round 2, NEW-1: the cache was keyed on a constant and validated
+  /// only on `ok:true`, so account A's customer code, payment term, loyalty
+  /// balance, referral code and wishlist count survived a sign-out in
+  /// localStorage and were painted to account B on the next boot — indefinitely
+  /// if B was offline. A shared pharmacy counter is exactly the machine this
+  /// app ships "Staff logins" for, so that is a realistic switch, not a
+  /// theoretical one. The stored payload carries its owner and is dropped the
+  /// moment it does not match the signed-in uid.
+  static const String _ownerKey = '_c745_owner_uid';
 
   /// Fetch once per session, then keep the answer in step with the login.
   ///
@@ -77,10 +94,17 @@ class CustomerSurfaces {
       if (raw == null || raw.isEmpty) return;
       if (value.value.isNotEmpty) return; // a live answer already won
       final p = jsonDecode(raw);
-      if (p is Map && p['ok'] == true) {
-        value.value = Map<String, dynamic>.from(p);
-        RenderLog.write('c745_surfaces_cache', 'restored');
+      if (p is! Map || p['ok'] != true) return;
+      final uid = Supabase.instance.client.auth.currentUser?.id;
+      if ((p[_ownerKey] ?? '') != (uid ?? '')) {
+        // Somebody else's menu, or nobody's. Drop it rather than draw it.
+        await clear();
+        RenderLog.write('c745_surfaces_cache', 'dropped_other_account');
+        return;
       }
+      value.value = Map<String, dynamic>.from(p);
+      _live = false;
+      RenderLog.write('c745_surfaces_cache', 'restored');
     } catch (_) {
       // A cache that cannot be read is simply not there.
     }
@@ -88,8 +112,10 @@ class CustomerSurfaces {
 
   static Future<void> _persist(Map<String, dynamic> p) async {
     try {
+      final stamped = Map<String, dynamic>.from(p)
+        ..[_ownerKey] = Supabase.instance.client.auth.currentUser?.id ?? '';
       await (await SharedPreferences.getInstance())
-          .setString(_cacheKey, jsonEncode(p));
+          .setString(_cacheKey, jsonEncode(stamped));
     } catch (_) {
       // Persisting is a convenience; failing to must never fail the fetch.
     }
@@ -124,6 +150,7 @@ class CustomerSurfaces {
       if (p['ok'] != true) return;
       _boundUid = Supabase.instance.client.auth.currentUser?.id;
       _bound = true;
+      _live = true;
       value.value = p;
       unawaited(_persist(p));
       RenderLog.write(
@@ -145,5 +172,26 @@ class CustomerSurfaces {
     if (uid == _boundUid) return;
     _boundUid = uid;
     load();
+  }
+
+  /// The credential that owned this menu has gone. Drop it NOW — in memory and
+  /// on the device — rather than waiting for a refetch that may never land.
+  ///
+  /// UserState._clearAccountState() calls this with the rest of the account
+  /// state, for the reason its own comment gives: a half-cleared session is
+  /// exactly the state that leaks one account's data into another's screen.
+  /// Sign-out is synchronous and the refetch is not, so without this the
+  /// storefront kept drawing the previous login's rewards badge, and a tab
+  /// closed right after Logout left that payload on disk for the next login.
+  static Future<void> clear() async {
+    value.value = const {};
+    _boundUid = null;
+    _bound = false;
+    _live = false;
+    try {
+      await (await SharedPreferences.getInstance()).remove(_cacheKey);
+    } catch (_) {
+      // A device that cannot forget still has an empty notifier above.
+    }
   }
 }

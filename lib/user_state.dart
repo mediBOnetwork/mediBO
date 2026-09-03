@@ -12,6 +12,7 @@ import 'services/force_logout_realtime.dart'; // WhatsApp "Log Out" -> live INSE
 import 'services/fulfill_realtime.dart'; // C355: app-level realtime auth + subscription
 import 'services/access.dart';
 import 'services/map_config.dart'; // C634: one backend-owned map config, session-cached
+import 'services/customer_surfaces.dart'; // C745: the customer menu's device cache
 import 'utils/render_log.dart';
 
 /// CHANGE #571 — ONE question, ONE answer.
@@ -498,6 +499,11 @@ class AuthNotifier extends ChangeNotifier {
     // that just went away. The next login must never render through the
     // previous login's toggles.
     Access.instance.clear();
+    // CHANGE #745 (QA round 2): the customer's menu is cached ON THE DEVICE so
+    // a failed refresh cannot empty the Account group. That cache is account
+    // data — a code, a payment term, a points balance, a referral code — so it
+    // goes out with everything else here, not on the next successful fetch.
+    unawaited(CustomerSurfaces.clear());
     RenderLog.write('auth_email', 'signed_out');
     RenderLog.write('auth_role', 'none');
   }

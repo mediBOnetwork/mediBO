@@ -37,6 +37,7 @@ class _NotifRow {
   final String editLabel;
   final bool hasPendingChange;
   final bool autoManage;
+  final List<_NotifChannel> channels;
 
   _NotifRow.fromMap(Map<String, dynamic> m)
       : audience = (m['audience'] ?? '').toString(),
@@ -56,7 +57,33 @@ class _NotifRow {
         canGenerate = m['can_generate'] == true,
         editLabel = (m['edit_label'] ?? '').toString(),
         hasPendingChange = m['has_pending_change'] == true,
-        autoManage = m['auto_manage'] == true;
+        autoManage = m['auto_manage'] == true,
+        channels = (m['channels'] is List)
+            ? (m['channels'] as List)
+                .whereType<Map>()
+                .map((e) => _NotifChannel.fromMap(Map<String, dynamic>.from(e)))
+                .toList()
+            : const <_NotifChannel>[];
+}
+
+/// CHANGE #712 · one channel a message can travel on. Everything here is the
+/// payload's: this class computes nothing, and a channel key this build has
+/// never seen still renders, because the label and the hint arrived with it.
+class _NotifChannel {
+  final String key;
+  final String label;
+  final String blockedLabel;
+  final String hint;
+  bool enabled;
+  final bool blocked;
+
+  _NotifChannel.fromMap(Map<String, dynamic> m)
+      : key = (m['key'] ?? '').toString(),
+        label = (m['label'] ?? '').toString(),
+        blockedLabel = (m['blocked_label'] ?? '').toString(),
+        hint = (m['hint'] ?? '').toString(),
+        enabled = m['enabled'] == true,
+        blocked = m['blocked'] == true;
 }
 
 // CHANGE #506: build-time test numbers — a number on this list always
@@ -257,6 +284,41 @@ class _NotificationsCardState extends State<NotificationsCard> {
       }
     } finally {
       if (mounted) setState(() => _busyKeys.remove(row.actionKey));
+    }
+  }
+
+  /// CHANGE #712 · one channel, one RPC. The card had a single switch per
+  /// message while the route already carried three independent flags, so an
+  /// admin could not turn the PAID channel off and keep the free one on.
+  /// Optimistic with a rollback, exactly like the master switch above.
+  Future<void> _toggleChannel(
+      _NotifRow row, _NotifChannel ch, bool value) async {
+    final busyKey = '${row.actionKey}:${ch.key}';
+    final prev = ch.enabled;
+    setState(() {
+      ch.enabled = value;
+      _busyKeys.add(busyKey);
+    });
+    try {
+      final res = await _rpc('notification_channel_set', {
+        'p_audience': row.audience,
+        'p_action_key': row.actionKey,
+        'p_channel': ch.key,
+        'p_on': value,
+      });
+      final map = res is Map ? Map<String, dynamic>.from(res) : const {};
+      if (map['ok'] != true) {
+        // The backend wrote the refusal; the card prints it and puts the
+        // switch back where the server says it still is.
+        _showMessage((map['message'] ?? '').toString());
+        throw Exception('refused');
+      }
+      RenderLog.write('c712_notif_channel_saved',
+          '${row.audience}:${row.actionKey}:${ch.key}:$value');
+    } catch (_) {
+      if (mounted) setState(() => ch.enabled = prev);
+    } finally {
+      if (mounted) setState(() => _busyKeys.remove(busyKey));
     }
   }
 
@@ -476,7 +538,10 @@ class _NotificationsCardState extends State<NotificationsCard> {
     final busy = _busyKeys.contains(row.actionKey);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+      Row(
         children: [
           Expanded(
             child: Column(
@@ -533,6 +598,87 @@ class _NotificationsCardState extends State<NotificationsCard> {
                   onChanged: (v) => _toggle(row, v),
                 ),
         ],
+      ),
+      if (row.channels.isNotEmpty) _channelRow(row),
+        ],
+      ),
+    );
+  }
+
+  // ── CHANGE #712 · the channels this message can travel on ─────────────────
+  // One chip per channel, drawn from the payload in payload order. The chip
+  // computes nothing: its word, its hint and the reason it is dark all arrived
+  // with it, so a fourth channel is a backend change and not a deploy.
+  Widget _channelRow(_NotifRow row) {
+    return Padding(
+      padding: EdgeInsets.only(top: Ds.space.x4, bottom: Ds.space.x4),
+      // The hint is a whole sentence on some rows ("needs an approved
+      // template"), so a chip is capped at the width it actually has and the
+      // hint gives way first. The full sentence stays reachable in the tooltip.
+      child: LayoutBuilder(
+        builder: (context, box) => Wrap(
+          spacing: Ds.space.x8,
+          runSpacing: Ds.space.x4,
+          children: [
+            for (final ch in row.channels) _channelChip(row, ch, box.maxWidth)
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _channelChip(_NotifRow row, _NotifChannel ch, double maxWidth) {
+    final busy = _busyKeys.contains('${row.actionKey}:${ch.key}');
+    final on = ch.enabled && !ch.blocked;
+    // The master switch being off is the backend's own sentence, not a guess
+    // made here — and it is what the chip says when it is dark for that reason.
+    final hint = ch.blocked ? ch.blockedLabel : ch.hint;
+    return Tooltip(
+      message: hint,
+      child: InkWell(
+        borderRadius: Ds.r.rChip,
+        onTap: busy ? null : () => _toggleChannel(row, ch, !ch.enabled),
+        child: Container(
+          constraints: BoxConstraints(
+              minHeight: Ds.touch.minTarget,
+              maxWidth: maxWidth.isFinite ? maxWidth : double.infinity),
+          padding: EdgeInsets.symmetric(
+              horizontal: Ds.space.x12, vertical: Ds.space.x8),
+          decoration: BoxDecoration(
+            color: on ? Ds.c.successSoft : Ds.c.bg,
+            borderRadius: Ds.r.rChip,
+            border: Border.all(color: on ? Ds.c.success : Ds.c.divider),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (busy)
+                SizedBox(
+                  width: Ds.space.x12,
+                  height: Ds.space.x12,
+                  child: const CircularProgressIndicator(strokeWidth: 2),
+                )
+              else
+                Icon(on ? Icons.check_circle : Icons.circle_outlined,
+                    size: Ds.space.x16,
+                    color: on ? Ds.c.success : Ds.c.textSecondary),
+              SizedBox(width: Ds.space.x8),
+              Flexible(
+                child: Text(ch.label,
+                    overflow: TextOverflow.ellipsis,
+                    style: Ds.t.caption.copyWith(
+                        color: on ? Ds.c.success : Ds.c.textSecondary)),
+              ),
+              if (hint.isNotEmpty) ...[
+                SizedBox(width: Ds.space.x4),
+                Flexible(
+                  child: Text(hint,
+                      overflow: TextOverflow.ellipsis, style: Ds.t.caption),
+                ),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }

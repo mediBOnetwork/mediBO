@@ -492,7 +492,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   /// filters/sort only so it can hand them straight back on the next call.
   Map<String, dynamic> _console = const {};
   final Set<String> _consoleFilters = <String>{};
-  String _consoleSort = 'spn';
+
+  /// Empty until the admin picks one from the sort sheet, so the BACKEND's own
+  /// default order (A-Z) is what the list opens on. Hard-coding 'spn' here is
+  /// what made the first build open on SPN rank against Om's spec.
+  String _consoleSort = '';
   bool _consoleLoading = false;
 
   List<Map<String, dynamic>> _consoleList(String key) {
@@ -509,7 +513,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         'admin_suppliers_console',
         params: {
           'p_filters': _consoleFilters.toList(),
-          'p_sort': _consoleSort,
+          if (_consoleSort.isNotEmpty) 'p_sort': _consoleSort,
           'p_search': _supplierQuery,
         },
       );
@@ -1324,39 +1328,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           ]
           // ── WEB/WIDE: pinned controls inline (unchanged) ───────────────────
           else ...[
+            // CHANGE #753 — the Suppliers tab's SPN/N sort control is gone.
+            // Sorting is the console payload's now and lives behind the filter
+            // icon beside the chips, with A-Z as the opening order (Om, 3 Sep:
+            // "No Sort block; default A-Z"). The empty branch stays so the
+            // chain of per-tab header slots below it is untouched.
             if (_filter == _SupFilter.suppliers) ...[
-              const SizedBox(width: 8),
-              Builder(builder: (_) {
-                RenderLog.write('sort_in_header_slot', 'true');
-                RenderLog.write('supplier_sort_compact_spn_n', 'true');
-                return Container(
-                  height: 28,
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: const Color(0xFFE5E7EB)),
-                  ),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<_SupSortMode>(
-                      value: _sortMode,
-                      isDense: true,
-                      icon: const Icon(Icons.unfold_more, size: 13, color: Color(0xFF6B7280)),
-                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-                      items: [
-                        DropdownMenuItem(value: _SupSortMode.spnDesc, child: Text(c('admin_supplier.spn'))),
-                        const DropdownMenuItem(value: _SupSortMode.nameAsc, child: Text('N')),
-                      ],
-                      onChanged: (mode) {
-                        if (mode == null || mode == _sortMode) return;
-                        setState(() { _sortMode = mode; _applySort(); });
-                        RenderLog.write('supplier_sort_mode',
-                            mode == _SupSortMode.spnDesc ? 'spn_desc' : 'name_asc');
-                      },
-                    ),
-                  ),
-                );
-              }),
             // CHANGE #545 — the Supplier Orders date chip is DELETED. The one
             // admin date picker lives on the Dashboard, above ORDER HOURS.
             // CHANGE #754 — the inquiry tab's AutoFlow and Bundle toggles

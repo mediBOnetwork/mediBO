@@ -568,3 +568,267 @@ begin
 end $function$;
 
 revoke all on function public.wa_assistant_handle(uuid, jsonb) from public, anon;
+
+-- ── 8. the door the assistant listens at ───────────────────────────────────
+-- An AFTER INSERT trigger beside the ones #713, #425 and the reorder handler
+-- already use. It NEVER raises: an assistant that breaks an inbound webhook
+-- would cost the business every message, not just the ones it cannot answer.
+--
+-- The classification round trip is an HTTP call, which must not happen inside
+-- the webhook's transaction — so the trigger records the message as pending
+-- and the cron dispatcher classifies and answers it a moment later. A customer
+-- waiting two seconds longer is nothing; a webhook held open on Vertex is an
+-- outage.
+create table if not exists public.wa_assistant_queue (
+  message_id   uuid primary key,
+  phone        text not null,
+  text_body    text not null,
+  queued_at    timestamptz not null default now(),
+  started_at   timestamptz,
+  done_at      timestamptz,
+  attempts     int not null default 0,
+  last_error   text
+);
+
+create index if not exists idx_wa_asst_queue_pending
+  on public.wa_assistant_queue (queued_at) where done_at is null;
+
+create or replace function public.trg_c714_wa_assistant()
+returns trigger
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+declare v_body text; v_on boolean;
+begin
+  if coalesce(new.direction,'') <> 'in' then return new; end if;
+  if coalesce(new.is_synthetic, false) then return new; end if;
+  if coalesce(new.msg_type,'') not in ('text','button','interactive') then return new; end if;
+
+  v_body := coalesce(nullif(btrim(new.text_body),''), nullif(btrim(new.caption),''), '');
+  if v_body = '' then return new; end if;
+
+  -- Nothing is queued while every switch is off, so a disabled assistant costs
+  -- the inbound path one boolean read.
+  select bool_or(enabled) into v_on from public.wa_assistant_config;
+  if not coalesce(v_on, false) then return new; end if;
+
+  insert into public.wa_assistant_queue (message_id, phone, text_body)
+  values (new.id, coalesce(new.sender_phone,''), left(v_body, 1000))
+  on conflict (message_id) do nothing;
+
+  return new;
+exception when others then
+  return new;
+end $function$;
+
+drop trigger if exists c714_wa_assistant_trg on public.whatsapp_messages;
+create trigger c714_wa_assistant_trg
+  after insert on public.whatsapp_messages
+  for each row execute function public.trg_c714_wa_assistant();
+
+-- The worker the dispatcher runs: classify, then answer. It is deliberately
+-- one message per tick — a burst of inbound must not become a burst of Vertex
+-- calls on a 1 GB box.
+create or replace function public.wa_assistant_tick()
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+declare q record; v_cls jsonb; v_res jsonb; v_resp jsonb;
+begin
+  select * into q from public.wa_assistant_queue
+   where done_at is null and attempts < 3
+   order by queued_at
+   limit 1 for update skip locked;
+  if not found then return jsonb_build_object('ok', true, 'idle', true); end if;
+
+  update public.wa_assistant_queue
+     set started_at = now(), attempts = attempts + 1 where message_id = q.message_id;
+
+  begin
+    select content::jsonb into v_resp from net.http_post(
+      url     := 'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/wa-assistant',
+      headers := jsonb_build_object('Content-Type','application/json',
+                                    'Authorization','Bearer ' || public._service_key()),
+      body    := jsonb_build_object('text', q.text_body),
+      timeout_milliseconds := 20000) as t(content text);
+    v_cls := coalesce(v_resp, jsonb_build_object('ok', false, 'reason','no_response'));
+  exception when others then
+    v_cls := jsonb_build_object('ok', false, 'reason','http_error');
+  end;
+
+  v_res := public.wa_assistant_handle(q.message_id, v_cls);
+
+  update public.wa_assistant_queue
+     set done_at = now(), last_error = nullif(v_res->>'reason','')
+   where message_id = q.message_id;
+
+  return jsonb_build_object('ok', true, 'message_id', q.message_id, 'result', v_res);
+end $function$;
+
+comment on function public.wa_assistant_tick() is
+  'CHANGE #714 — one queued inbound message per tick: classify, then answer or '
+  'hand off. The HTTP call is here and never inside the inbound webhook.';
+
+insert into public.cron_task (name, ord, mode, gate_sql, work_sql, enabled, note,
+                              base_interval_s, dml)
+values ('wa_assistant_tick', 640, 'poll',
+        'select exists (select 1 from public.wa_assistant_queue where done_at is null and attempts < 3)',
+        'select public.wa_assistant_tick()', true,
+        'CHANGE #714 — answers one queued inbound WhatsApp question.', 60, true)
+on conflict (name) do update
+  set work_sql = excluded.work_sql, gate_sql = excluded.gate_sql,
+      note = excluded.note, enabled = true;
+
+revoke all on function public.wa_assistant_tick() from public, anon;
+
+-- ── 9. the console ─────────────────────────────────────────────────────────
+create or replace function public.wa_assistant_console(p_limit integer default 50)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path to 'public'
+as $function$
+declare v_rows jsonb; v_intents jsonb; v_zones jsonb; v_global record;
+begin
+  if coalesce(public.get_my_role(),'none') not in ('admin','super_admin') then
+    return jsonb_build_object('ok', false, 'error','not_authorized',
+      'title', public.uic('wa_asst.console_title','WhatsApp assistant'),
+      'message', public.uic('wa_asst.console_denied',''));
+  end if;
+
+  select * into v_global from public.wa_assistant_config where zone_id = 0;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'key', r.id::text,
+           'phone', r.phone,
+           'inbound', coalesce(r.inbound_text,''),
+           'intent', coalesce(i.label, coalesce(r.intent,'—')),
+           'intent_key', coalesce(r.intent,''),
+           'confidence', r.confidence,
+           'confidence_label', case when r.confidence is null then '—'
+                                    else to_char(round(r.confidence*100), 'FM990') || '%' end,
+           'sentiment', coalesce(r.sentiment,''),
+           'outcome', r.outcome,
+           'outcome_label', case r.outcome
+                              when 'answered' then public.uic('wa_asst.outcome_answered','')
+                              when 'handoff'  then public.uic('wa_asst.outcome_handoff','')
+                              else public.uic('wa_asst.outcome_skipped','') end,
+           'outcome_tone', case r.outcome when 'answered' then 'success'
+                                          when 'handoff' then 'warning' else 'neutral' end,
+           'reason', coalesce(r.reason,''),
+           'reply', coalesce(r.reply_text,''),
+           'at', public._ist_stamp(r.created_at))
+         order by r.created_at desc), '[]'::jsonb)
+    into v_rows
+    from (select * from public.wa_assistant_reply
+           order by created_at desc
+           limit greatest(coalesce(p_limit,50),1)) r
+    left join public.wa_assistant_intent i on i.key = r.intent;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'key', t.key, 'label', t.label, 'enabled', t.enabled,
+           'always_handoff', t.always_handoff,
+           'defer_to', coalesce(t.defer_to,''),
+           'needs_order', t.needs_order)
+         order by t.sort_order), '[]'::jsonb)
+    into v_intents from public.wa_assistant_intent t;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'zone_id', z.id, 'zone_name', z.name,
+           'enabled', coalesce(c.enabled, false))
+         order by z.id), '[]'::jsonb)
+    into v_zones
+    from public.zones z
+    left join public.wa_assistant_config c on c.zone_id = z.id
+   where z.is_active and not coalesce(z.is_synthetic, false);
+
+  return jsonb_build_object('ok', true,
+    'title', public.uic('wa_asst.console_title',''),
+    'subtitle', public.uic('wa_asst.console_subtitle',''),
+    'empty_note', public.uic('wa_asst.console_empty',''),
+    'switch_label', public.uic('wa_asst.switch_label',''),
+    'switch_off_note', public.uic('wa_asst.switch_off_note',''),
+    'intents_heading', public.uic('wa_asst.intents_heading',''),
+    'replies_heading', public.uic('wa_asst.replies_heading',''),
+    'zone_heading', public.uic('wa_asst.zone_heading',''),
+    'enabled', coalesce(v_global.enabled, false),
+    'min_confidence', coalesce(v_global.min_confidence, 0.75),
+    'intents', v_intents,
+    'zones', v_zones,
+    'rows', v_rows);
+end $function$;
+
+create or replace function public.wa_assistant_set(p_patch jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+begin
+  if coalesce(public.get_my_role(),'none') not in ('admin','super_admin') then
+    return jsonb_build_object('ok', false, 'error','not_authorized',
+      'message', public.uic('wa_asst.console_denied',''));
+  end if;
+
+  -- One verb for all three switches, so the screen never learns three shapes.
+  if p_patch ? 'intent_key' then
+    update public.wa_assistant_intent
+       set enabled = coalesce((p_patch->>'enabled')::boolean, enabled)
+     where key = p_patch->>'intent_key';
+  elsif p_patch ? 'zone_id' then
+    insert into public.wa_assistant_config (zone_id, enabled, updated_at, updated_by)
+    values ((p_patch->>'zone_id')::smallint,
+            coalesce((p_patch->>'enabled')::boolean, false), now(), auth.uid())
+    on conflict (zone_id) do update
+      set enabled = excluded.enabled, updated_at = now(), updated_by = auth.uid();
+  else
+    update public.wa_assistant_config
+       set enabled = coalesce((p_patch->>'enabled')::boolean, enabled),
+           min_confidence = coalesce((p_patch->>'min_confidence')::numeric, min_confidence),
+           max_unanswered = coalesce((p_patch->>'max_unanswered')::int, max_unanswered),
+           updated_at = now(), updated_by = auth.uid()
+     where zone_id = 0;
+  end if;
+
+  return jsonb_build_object('ok', true, 'tone','success',
+    'message', public.uic('wa_asst.saved',''),
+    'state', public.wa_assistant_console(50));
+end $function$;
+
+revoke all on function public.wa_assistant_console(integer) from public, anon;
+revoke all on function public.wa_assistant_set(jsonb) from public, anon;
+grant execute on function public.wa_assistant_console(integer) to authenticated;
+grant execute on function public.wa_assistant_set(jsonb) to authenticated;
+
+-- ── 10. the door — all THREE rows ──────────────────────────────────────────
+insert into public.feature_registry
+  (feature_key, label, group_label, icon_key, route_key, sort_order, owner,
+   partner_eligible, default_access, is_active, category, surface,
+   roles_allowed, description)
+values ('admin.wa_assistant', 'WhatsApp assistant', 'WhatsApp', 'forum',
+        'wa_assistant', 61, 'medibo', false, 'none', true, 'comms', 'dashboard',
+        array['admin','super_admin'],
+        'CHANGE #714 — what the assistant answered, what it handed to a person, and the switches that govern it.')
+on conflict (feature_key) do update
+  set label = excluded.label, group_label = excluded.group_label,
+      route_key = excluded.route_key, roles_allowed = excluded.roles_allowed,
+      surface = excluded.surface, description = excluded.description, is_active = true;
+
+insert into public.surface_route (route_key, feature_key, kind, handled_by, note, is_active)
+values ('wa_assistant', 'admin.wa_assistant', 'feature', 'home_shell',
+        'CHANGE #714 — opened by shellExtraRouteScreen() in lib/screens/shell/shell_extra_routes.dart.', true)
+on conflict (route_key, feature_key) do update
+  set kind = excluded.kind, handled_by = excluded.handled_by,
+      note = excluded.note, is_active = true;
+
+-- The row every migration forgets: without it #653 refuses the route while the
+-- tile still renders (the #713 trap).
+insert into public.access_role_default (role, feature_key, can_view, can_write) values
+  ('admin',       'admin.wa_assistant', true, false),
+  ('super_admin', 'admin.wa_assistant', true, true)
+on conflict (role, feature_key) do update
+  set can_view = excluded.can_view, can_write = excluded.can_write;

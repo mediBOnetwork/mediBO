@@ -603,3 +603,39 @@ end $function$;
 
 revoke all on function public.delivery_share_track_link(uuid) from public, anon;
 grant execute on function public.delivery_share_track_link(uuid) to authenticated, service_role;
+-- CHANGE #701 fix — gen_random_bytes lives in the `extensions` schema (pgcrypto)
+-- and this trigger pins `search_path to 'public'`, so every INSERT/UPDATE on
+-- deliveries raised "function gen_random_bytes(integer) does not exist". Four
+-- delivery behaviour guards caught it within a minute. gen_random_uuid() is
+-- CORE Postgres (13+), is already this table's own id default, and needs no
+-- extension on the path.
+create or replace function public._c701_track_token_trg()
+ returns trigger
+ language plpgsql
+ security definer
+ set search_path to 'public'
+as $function$
+declare v_new text;
+begin
+  v_new := replace(gen_random_uuid()::text, '-', '')
+        || substr(replace(gen_random_uuid()::text, '-', ''), 1, 8);
+
+  if tg_op = 'INSERT'
+     or new.partner_id is distinct from old.partner_id
+     or new.run_id     is distinct from old.run_id then
+    new.track_token := v_new;
+    new.track_token_expires_at := null;
+  end if;
+
+  if new.status in ('delivered','failed','rto')
+     and (tg_op = 'INSERT' or new.status is distinct from old.status) then
+    new.track_token_expires_at := now() + interval '2 hours';
+  elsif new.status not in ('delivered','failed','rto') then
+    new.track_token_expires_at := null;
+  end if;
+
+  if new.track_token is null then
+    new.track_token := v_new;
+  end if;
+  return new;
+end $function$;

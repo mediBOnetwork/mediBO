@@ -19,6 +19,7 @@ import '../../design_tokens.dart';
 import '../../services/partner_state.dart';
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
+import 'partner_scorecard_card.dart';
 import 'settlement_ack_card.dart';
 import '../admin/settlement_screen.dart';
 
@@ -42,6 +43,13 @@ class _PartnerStatementScreenState extends State<PartnerStatementScreen> {
   // bucket + path all arrive from the backend.
   bool _docBusy = false;
 
+  // CHANGE #693 — the partner's own scorecard, on the screen the partner
+  // already opens to see what it is owed. The card is the SAME widget the
+  // admin ranking draws, so the score a partner reads and the score it is
+  // ranked on are one payload. An empty map (a build that predates the RPC,
+  // or a login with no partner) renders nothing at all.
+  Map<String, dynamic> _scorecard = const <String, dynamic>{};
+
   PartnerRpc get _rpc => widget.rpc ?? PartnerApi.call;
 
   Map<String, dynamic> _asMap(dynamic v) =>
@@ -62,12 +70,21 @@ class _PartnerStatementScreenState extends State<PartnerStatementScreen> {
     } catch (_) {
       p = const <String, dynamic>{};
     }
+    Map<String, dynamic> sc;
+    try {
+      sc = _asMap(await _rpc('partner_scorecard', const {}));
+    } catch (_) {
+      sc = const <String, dynamic>{};
+    }
     if (!mounted) return;
     setState(() {
       _payload = p;
+      _scorecard = sc['ok'] == true ? sc : const <String, dynamic>{};
       _loading = false;
     });
     RenderLog.write('c323_partner_statement', 'painted');
+    RenderLog.write('c693_partner_scorecard',
+        _scorecard.isEmpty ? 'absent' : 'painted');
     RenderLog.write('c323_partner_periods',
         '${((_asMap(p['periods'])['rows']) as List?)?.length ?? 0}');
   }
@@ -194,6 +211,10 @@ class _PartnerStatementScreenState extends State<PartnerStatementScreen> {
         children: [
           Text((p?['subtitle'] ?? '').toString(), style: Ds.t.bodySecondary),
           SizedBox(height: Ds.space.x24),
+          if (_scorecard.isNotEmpty) ...[
+            PartnerScorecardCard(payload: _scorecard),
+            SizedBox(height: Ds.space.x24),
+          ],
           settlementSection(
             heading: (periods['heading'] ?? '').toString(),
             rows: rows,

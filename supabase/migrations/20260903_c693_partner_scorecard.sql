@@ -528,6 +528,9 @@ begin
     'has_score',      v_overall is not null,
     'score',          v_overall,
     'score_label',    coalesce(public._partner_metric_label(v_overall, '', 0), ''),
+    -- A partner with nothing to score yet says so where its score would be;
+    -- a blank cell on a ranking reads as a zero, which is a different claim.
+    'no_score_label', public._c('pscore.no_data'),
     'score_caption',  public._c('pscore.score_caption'),
     'score_tone',     case when v_overall is null then 'muted'
                            when v_overall >= 95 then 'success'
@@ -1464,7 +1467,19 @@ values
   ('partner_scorecard', 'partner.scorecard', 'feature', 'home_shell',
    'CHANGE #693 — same lookup; the partner sees its own card, admin sees the ranked list.')
 on conflict (route_key, feature_key) do update set
-  handled_by = excluded.handled_by, note = excluded.note, is_active = true;
+  handled_by = excluded.handled_by, note = excluded.note;
+
+-- …and so does the ROUTE row. scripts/gen_registered_routes.sh mirrors every
+-- ACTIVE surface_route into test/protected/registered_routes.dart, and
+-- admin_nav_reachability_test then demands a Dart door for each one. Declaring
+-- a route whose door has not shipped turns the next mirror regeneration —
+-- anybody's — into a red build. Activated with the tiles, in one step, once
+-- shellExtraRouteScreen() knows both keys.
+update public.surface_route set is_active = false
+ where route_key in ('partner_scorecards','partner_scorecard')
+   and not exists (select 1 from public.app_settings
+                    where key = 'c693_scorecard_tiles_live'
+                      and value::text = 'true');
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 18. THE NIGHTLY SNAPSHOT. The payout side already rides

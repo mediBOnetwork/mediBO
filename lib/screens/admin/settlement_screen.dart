@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/design_tokens.dart';
 import 'package:pharma_b2b/services/ui_copy.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
+import 'package:pharma_b2b/screens/admin/admin_partner_scorecards_screen.dart';
 import 'package:pharma_b2b/screens/partner/settlement_ack_card.dart';
 
 /// CHANGE #323 — Partner settlement.
@@ -428,6 +429,17 @@ class _SettlementScreenState extends State<SettlementScreen> {
             tooltip: (asMap(d?['route'])['heading'] ?? '').toString(),
             onPressed: _loading || refused ? null : _openRoute,
             icon: const Icon(Icons.tune),
+          ),
+          // CHANGE #693 — the way in to the partner scorecards. It sits on
+          // Settlement because that is where the score is spent: a partner's
+          // incentive bonus is a line on the very statement this screen pays.
+          // The label is the scorecard payload's own title (ui_copy), never a
+          // Dart word.
+          IconButton(
+            tooltip: c('pscore.admin_title'),
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => const AdminPartnerScorecardsScreen())),
+            icon: const Icon(Icons.leaderboard_outlined),
           ),
           IconButton(
             tooltip: (d?['recalculate_label'] ?? '').toString(),

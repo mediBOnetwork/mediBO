@@ -876,6 +876,27 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                   );
                 }
               }
+              // CHANGE #1016 — the registry's older deep-link shape for a
+              // Fulfill stage, /admin/fulfill/<stage>, had no handler at all:
+              // the fulfill_tab rows had carried it since #537 and every such
+              // link opened the storefront. It parks exactly like
+              // /admin/go/<stage> — the stage key IS the route key, and the
+              // shell's backend stage pairing (#754) opens Fulfill on it.
+              if (name.startsWith('/admin/fulfill/')) {
+                final link = AdminGoLink.parse(
+                    '/admin/go/${name.substring('/admin/fulfill/'.length)}');
+                final key = link?.route ?? '';
+                if (key.isNotEmpty) {
+                  PendingAdminNav.park(key, link?.seed);
+                  try {
+                    RenderLog.write('c1016_fulfill_link', key);
+                  } catch (_) {}
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => _AppRoot(auth: _auth),
+                  );
+                }
+              }
               // CMD #407 — the delivery programme gets a real URL of its own,
               // the same shape as /admin/cron-health: a direct route, so the
               // screen is reachable from a link without waiting on the shell's

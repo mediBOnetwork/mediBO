@@ -98,6 +98,8 @@ const Map<String, IconData> kNavIcons = <String, IconData>{
   // CHANGE #745 — the customer's wishlist, now a registry row like the rest.
   'favorite':         Icons.favorite_border_rounded,
   'tools':            Icons.handyman_outlined,
+  // CHANGE #1016 — the More tab of the staff bar.
+  'apps':             Icons.apps,
 };
 
 /// Does the backend's key name a glyph this build can actually draw?

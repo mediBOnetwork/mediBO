@@ -31,6 +31,8 @@ import 'admin/admin_manage_admins_screen.dart';
 import 'admin/admin_audit_screen.dart';
 import 'admin/admin_roles_screen.dart';
 import 'shell/shell_extra_routes.dart';             // CHANGE #570 — four doors
+import 'shell/shell_staff_routes.dart';             // CHANGE #1016 — six verbs
+import '../services/staff_nav.dart';                 // CHANGE #1016
 import 'admin/admin_customer_screen.dart';
 import 'admin/admin_company_screen.dart';
 import 'admin/admin_dashboard_screen.dart';
@@ -334,6 +336,7 @@ class _HomeShellState extends State<HomeShell> {
     // answers.
     DeliveryRoleState.instance.addListener(_onDeliveryRoleChanged);
     Access.instance.addListener(_onAccessChanged); // C653
+    StaffNav.value.addListener(_onAccessChanged); // CHANGE #1016 — the bar
     // CHANGE #497: categories are public data — fetch them immediately, in
     // parallel with auth/session resolution below, never behind it. Renders
     // instantly from cache when one exists; refreshes in the background with
@@ -341,6 +344,7 @@ class _HomeShellState extends State<HomeShell> {
     _bootstrapHomeCategories();
     // CHANGE #630 — the bottom bar's slots, their order and their audience.
     CustomerNav.load();
+    StaffNav.load(); // CHANGE #1016 — staff_nav(): tabs, redirects, layout
     // CMD #411 — after the first frame, same reason as push: a counter entry
     // that fails to resolve must never sit in front of the shell's own build.
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadPosEntry());
@@ -487,6 +491,7 @@ class _HomeShellState extends State<HomeShell> {
     // resolves each slot's audience against the CALLER, so signing in is what
     // turns the My Shop slot on.
     CustomerNav.syncIdentity();
+    StaffNav.syncIdentity(); // CHANGE #1016
     final viewAs = ViewAsState.of(context);
     final key = viewAs.isActive
         ? '${viewAs.role!.name}:${viewAs.identity!.id}'
@@ -797,6 +802,7 @@ class _HomeShellState extends State<HomeShell> {
   /// destination by themselves.
   void _handleAdminNav(String route, [String? seed]) {
     if (!mounted) return;
+    route = shellResolveStaffRoute(route, seed); // CHANGE #1016 — nav_redirect
     // CHANGE #653 — ONE interface: super admin, admin and partner share these
     // routes, and the per-feature View toggle is the only differentiator. A
     // route the matrix says View=off is refused HERE too, so a deep link or a
@@ -1331,34 +1337,13 @@ class _HomeShellState extends State<HomeShell> {
       // actions share one dispatcher, so the screen never learns which queue a
       // row came from. admin_ops_queues() gates itself and the screen renders
       // its refusal, same story as the screens above.
-      case 'ops_queues':
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => AdminOpsQueuesScreen(
-              loadRpc: () async {
-                final raw =
-                    await Supabase.instance.client.rpc('admin_ops_queues');
-                return Map<String, dynamic>.from(
-                    (raw is List ? raw.first : raw) as Map);
-              },
-              actionRpc: (action, id) async {
-                final (fn, params) = switch (action) {
-                  'resend' => ('admin_oos_resend', {'p_id': int.tryParse(id)}),
-                  'close' => ('admin_oos_close', {'p_id': int.tryParse(id)}),
-                  'rescan' => ('admin_pending_rescan', {'p_id': id}),
-                  'ack' => ('admin_alert_ack', {'p_id': int.tryParse(id)}),
-                  _ => (null, <String, dynamic>{}),
-                };
-                if (fn == null) return const <String, dynamic>{'ok': false};
-                final raw =
-                    await Supabase.instance.client.rpc(fn, params: params);
-                return Map<String, dynamic>.from(
-                    (raw is List ? raw.first : raw) as Map);
-              },
-            ),
-          ),
-        );
+      // CHANGE #1016 — the Money and More homes (staff_home), and the staff
+      // shard: the partner doors + Stuck work (ops_queues) moved there.
+      case 'money_home': setState(() { _index = 13; _cartOpen = false; }); break;
+      case 'more': setState(() { _index = 14; _cartOpen = false; }); break;
+      case _ when shellStaffRouteScreen(route) != null:
+        Navigator.push(context, MaterialPageRoute(
+            builder: (_) => shellStaffRouteScreen(route)!));
         break;
       case 'logout':
         UserState.read(context).signOut(); break;
@@ -1390,6 +1375,7 @@ class _HomeShellState extends State<HomeShell> {
     if (kIsWeb) HardwareKeyboard.instance.removeHandler(_globalKeyHandler);
     DeliveryRoleState.instance.removeListener(_onDeliveryRoleChanged); // C629
     Access.instance.removeListener(_onAccessChanged); // C653
+    StaffNav.value.removeListener(_onAccessChanged); // CHANGE #1016
     _searchFocus.dispose();
     _searchCtrl.dispose();
     super.dispose();
@@ -1697,8 +1683,9 @@ class _HomeShellState extends State<HomeShell> {
                 child: const AdminDashboardScreen(),
               )),
           adminPage(() => const AdminAddMedicineScreen()),
-          adminPage(() => AdminSupplierScreen()),
-          adminPage(() => AdminCustomerScreen()),
+          // CHANGE #1016 — the home's extra doors ride above the page's own tabs.
+          adminPage(() => shellWithStaffStrip('suppliers', AdminSupplierScreen(), _handleAdminNav)),
+          adminPage(() => shellWithStaffStrip('customers', AdminCustomerScreen(), _handleAdminNav)),
           adminPage(() => const AdminMrScreen()),
           adminPage(() => const AdminCompanyScreen()),
           adminPage(() => const AdminDeliveryPartnerScreen()),
@@ -1711,11 +1698,11 @@ class _HomeShellState extends State<HomeShell> {
           // unbounded and unchanged.
           // CHANGE #690 — wrapped like the dashboard: an exception's next
           // action points out of the pipeline, and .of(context) must resolve.
-          adminPage(() => QuickLinkNavigator(
+          adminPage(() => shellWithStaffStrip('fulfill', QuickLinkNavigator(
                 navigate: _handleAdminNav,
                 child: AdminFulfillmentScreen(
                     allowedTabs:
-                        Access.instance.allowedTabIndexes('fulfillment')))),
+                        Access.instance.allowedTabIndexes('fulfillment'))), _handleAdminNav)),
           // CHANGE #536 — index 11, MY SHOP. It is appended rather than slotted
           // in beside the customer's other three pages because indices 3–10 are
           // addressed by number from _handleAdminNav; inserting would have
@@ -1724,6 +1711,9 @@ class _HomeShellState extends State<HomeShell> {
           // #747 — index 12, the CATALOGUE. Appended for My Shop's reason (3–10
           // are addressed by number); `active` keeps it from fetching unseen.
           CatalogueScreen(active: _index == 12),
+          // CHANGE #1016 — index 13 Money, index 14 More: staff_home() rendered.
+          adminPage(() => shellStaffHomePage('money', _index == 13, _handleAdminNav)),
+          adminPage(() => shellStaffHomePage('more', _index == 14, _handleAdminNav)),
         ];
 
         // Customer ViewAs: force customer shell (header + nav), never admin chrome
@@ -1772,7 +1762,7 @@ class _HomeShellState extends State<HomeShell> {
               // visible, and each tap carries that entry's OWN route key, so
               // hiding one can never shift another tab's destination.
               entries: visibleNavEntries(
-                  kAdminBottomNav, Access.instance.routeCanView),
+                  shellStaffBarEntries(kAdminBottomNav), Access.instance.routeCanView),
               onRoute: _handleAdminNav,
             )
           : (_cartOpen
@@ -1907,7 +1897,7 @@ class _HomeShellState extends State<HomeShell> {
                   // fixed five: it renders what survived the View toggles and
                   // hands back each entry's own route key.
                   entries: visibleNavEntries(
-                      kAdminTopNav, Access.instance.routeCanView),
+                      shellStaffBarEntries(kAdminTopNav), Access.instance.routeCanView),
                   onAdminNav: _handleAdminNav,
                   isSuperAdmin: _amISuper,
                   deletionCount: _deletionCount,

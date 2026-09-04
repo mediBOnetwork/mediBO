@@ -145,7 +145,11 @@ class _AdminMobileBottomBar extends StatelessWidget {
       case 3: return 'dashboard';
       case 6: return 'customers';
       case 5: return 'suppliers';
-      case 11: return 'fulfillment';
+      // CHANGE #1016 — Fulfill is page 10 (11 is My Shop; the old mapping
+      // never highlighted the Fulfill tab), and the two new homes.
+      case 10: return 'fulfillment';
+      case 13: return 'money_home';
+      case 14: return 'more';
       default: return '';
     }
   }

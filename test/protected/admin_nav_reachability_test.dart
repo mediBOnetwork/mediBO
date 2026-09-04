@@ -40,6 +40,10 @@ void main() {
   final navSrc = _read('lib/screens/admin/admin_nav_entries.dart');
   final shellSrc = _read('lib/screens/home_shell.dart');
   final shardSrc = _read('lib/screens/shell/shell_extra_routes.dart');
+  // CHANGE #1016 — the second shard: the partner-only doors the shared shell
+  // had been promising since #653 (My documents, My staff, Workers, Expenses,
+  // Supplier payments, Returns to supplier, the partner statement).
+  final staffSrc = _read('lib/screens/shell/shell_staff_routes.dart');
 
   /// Every `case 'x':` the router handles directly.
   final shellCases = RegExp(r"case\s+'([a-z0-9_]+)'\s*:")
@@ -63,7 +67,10 @@ void main() {
   final shardArms = RegExp(r"'([a-z0-9_]+)'\s*=>")
       .allMatches(shardSrc)
       .map((m) => m.group(1)!)
-      .toSet();
+      .toSet()
+    ..addAll(RegExp(r"'([a-z0-9_]+)'\s*=>")
+        .allMatches(staffSrc)
+        .map((m) => m.group(1)!));
 
   /// ...and the routes whose door is DATA, not Dart: `shellOpenFulfillStage`
   /// sends them to AdminFulfillmentScreen on the stage the backend pairs them
@@ -106,6 +113,23 @@ void main() {
     // in the shard becomes a dead tap at once.
     expect(shellSrc, contains('shellExtraRouteScreen(route) != null'),
         reason: 'the shell must keep its one lookup into the route shard');
+  });
+
+  test('CHANGE #1016 — the partner doors are in the shared shell', () {
+    // Seven partner screens were opened only by partnerDestination(), the
+    // resolver #653/#657 retired. Each was a registry tile that fell through
+    // to "route unavailable". They are arms of shell_staff_routes.dart now,
+    // and the shell reaches that shard through one lookup of its own.
+    for (final route in const [
+      'partner_documents', 'partner_staff', 'partner_workers',
+      'partner_expenses', 'supplier_payment', 'supplier_returns',
+      'partner_settlement',
+    ]) {
+      expect(handled, contains(route),
+          reason: '$route is registered but the shared shell cannot open it');
+    }
+    expect(shellSrc, contains('shellStaffRouteScreen(route) != null'),
+        reason: 'the shell must keep its one lookup into the staff shard');
   });
 
   test('CHANGE #821 — every shard arm and shell case is in the mirror', () {

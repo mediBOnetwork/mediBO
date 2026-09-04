@@ -62,6 +62,7 @@ import 'screens/public/wa_link_redirect_page.dart'; // /r/:code — campaign lin
 import 'screens/admin/wa_campaigns_screen.dart'; // /admin/wa-campaigns
 import 'screens/admin/admin_scope_audit_screen.dart'; // /admin/scope-audit
 import 'screens/admin/dev_queue/cron_health_screen.dart'; // /admin/cron-health
+import 'screens/admin/dev_queue/dev_queue_screen.dart'; // /admin/dev-queue
 import 'screens/admin/test_mode_screen.dart';  // /admin/test-mode (#573)
 import 'screens/admin/admin_delivery_extras_screen.dart'; // /admin/delivery-programme
 import 'screens/pharmacy/pharmacy_owner_screen.dart';
@@ -1210,6 +1211,16 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // for anyone who is not an admin. The tappable way in is still
               // Admin ▸ More ▸ Feature gaps.
               '/admin/feature-gaps': (_) => buildFeatureGapsScreen(),
+              // CHANGE #1197 — the Dev Queue gets a real URL.
+              //
+              // It was reachable ONLY by tapping a tile in the admin shell, so
+              // no headless verifier could ever open it: every Dev Queue change
+              // shipped without a screenshot of the screen it changed, and the
+              // browser journeys that need it stayed PENDING. The screen keeps
+              // its own super-admin gate (and every RPC it calls is gated
+              // server-side by _dev_guard), so this adds a way in, not a way
+              // around.
+              '/admin/dev-queue': (_) => const _SuperOnly(child: DevQueueScreen()),
               // CHANGE #657 — '/partner' is GONE from this map on purpose.
               // MaterialApp checks `routes:` BEFORE `onGenerateRoute:`, so the
               // #653 redirect below could never fire while this entry existed:
@@ -1450,5 +1461,26 @@ class _SplashScreen extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// CHANGE #1197 — the super-admin gate for URL-reachable admin routes.
+///
+/// The Dev Queue's gate used to live only in the admin shell's tile handler,
+/// so giving the screen a URL would have been a way around it rather than a
+/// way in. This re-applies the SAME check the tile does, from the same
+/// UserState, and renders the shell instead of the screen for everyone else —
+/// no toast, no flash of a screen they may not see. Every RPC behind the
+/// screen is independently gated server-side by _dev_guard(); this is the UI
+/// half of that contract.
+class _SuperOnly extends StatelessWidget {
+  const _SuperOnly({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!UserState.of(context).isSuperAdmin) return HomeShell();
+    return child;
   }
 }

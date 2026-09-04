@@ -50,6 +50,22 @@ if [ ${#pending[@]} -gt "${REPLAY_MAX_FILES:-15}" ]; then
   log "refusing: ${#pending[@]} pending files is not one batch's worth — seed the ledger (migration_replay_seed) first"; exit 1
 fi
 
+# WHICH MODE — the backend decides (migration_replay_mode). While no runner
+# has built on a Supabase branch, the files were applied to live by the
+# runners that wrote them (today's behaviour): record them, apply nothing.
+mode_resp=$("$DEVCMD" rpc migration_replay_mode '{}' 2>/dev/null)
+mode=$(jq -r '.mode // empty' <<<"$mode_resp")
+log "mode=${mode:-unknown}: $(jq -r '.reason // "no answer from migration_replay_mode"' <<<"$mode_resp")"
+if [ "$mode" = "record" ]; then
+  for f in "${pending[@]}"; do
+    b=$(basename "$f" .sql); v="${b%%_*}"; n="${b#*_}"
+    "$DEVCMD" rpc migration_replay_record "$(jq -nc --arg v "$v" --arg n "$n" '{p_version:$v,p_name:$n}')" >/dev/null 2>&1 && log "recorded $b (applied to live by its runner)"
+  done
+  exit 0
+elif [ "$mode" != "replay" ]; then
+  log "mode unknown — refusing to touch live"; exit 1
+fi
+
 # The DB lane: DDL is exclusive. Wait politely, never hammer.
 token=""; for try in $(seq 1 20); do
   r=$("$DEVCMD" dblock merge-worker exclusive "migration replay ($(basename "$REPO"))" 10 2>/dev/null || true)

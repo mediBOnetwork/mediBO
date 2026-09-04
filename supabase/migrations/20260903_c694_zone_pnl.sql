@@ -946,3 +946,80 @@ comment on function public.partner_doc_request(text, text) is
   'Partner documents: agreement (CHANGE #692), settlement statement (CMD #466) '
   'and the zone P&L (CHANGE #694). Every kind files a partner_document row and '
   'hands bill-render the same envelope.';
+
+-- ── 12. the screen had never actually loaded ───────────────────────────────
+-- Proven, not guessed: driving the deployed admin session to /admin/go/zone_pnl
+-- and photographing it gave a skeleton at 5 s and a BLANK page at 25 s. The
+-- reason is in pg_roles, not in the SQL: `authenticated` carries
+-- statement_timeout=8s, and zone_pnl() takes ~1.8 s warm but ~21 s on a cold
+-- cache, because pnl_order_v aggregates pnl_line_v, notification_log and two
+-- payment tables with no date pruning and this RPC walks it three times (one
+-- slice per zone, plus the trend). Over PostgREST that is a cancelled
+-- statement, so the screen sat on `_loading` and then rendered nothing at all.
+--
+-- Two fixes, and the screen's own error state is the third (in Dart, because
+-- a cancelled statement returns no payload to render).
+
+-- A function-level SET is the declarative form of "this report is allowed to
+-- take longer than a tap". It applies for the duration of the call only and
+-- cannot leak into the caller's session, so a slow report can never widen the
+-- 8 s guard for anything else PostgREST runs.
+alter function public.zone_pnl(smallint, text)      set statement_timeout = '25s';
+alter function public._c694_doc_payload(smallint, text) set statement_timeout = '25s';
+alter function public._c694_zone_slice(smallint, date, date, boolean)
+                                                    set statement_timeout = '25s';
+alter function public.zone_pnl_scan(text)           set statement_timeout = '55s';
+
+-- And headroom is not a fix on its own — 21 s of cold cache is 21 s the admin
+-- watches a skeleton. The dispatcher keeps the pages hot: one cheap call per
+-- active zone, on the ONE cron dispatcher (never a bare */N), so the first
+-- human visit of the day lands on a warm cache and answers in ~2 s.
+insert into public.cron_task (name, ord, mode, gate_sql, work_sql, enabled, note,
+                              base_interval_s, max_interval_s, dml)
+values ('zone_pnl_warm', 951, 'poll',
+        null, 'select public.zone_pnl_warm()', true,
+        'CHANGE #694 — keeps pnl_order_v hot for the Zone P&L so the first '
+        'visit is not a 21-second cold scan against an 8s PostgREST timeout.',
+        900, 900, false)
+on conflict (name) do update
+  set work_sql = excluded.work_sql, note = excluded.note,
+      base_interval_s = excluded.base_interval_s,
+      max_interval_s = excluded.max_interval_s, enabled = true;
+
+create or replace function public.zone_pnl_warm()
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path to 'public'
+set statement_timeout = '55s'
+as $function$
+declare
+  v_p jsonb := public._c694_period('month');
+  v_z smallint; v_n int := 0;
+begin
+  for v_z in
+    select z.id from public.zones z
+     where z.is_active and not coalesce(z.is_synthetic, false)
+     order by z.id
+  loop
+    perform public._c694_zone_slice(v_z, (v_p->>'from')::date, (v_p->>'to')::date, false);
+    v_n := v_n + 1;
+  end loop;
+  return jsonb_build_object('ok', true, 'zones_warmed', v_n,
+                            'period', v_p->>'key');
+end $function$;
+
+comment on function public.zone_pnl_warm() is
+  'CHANGE #694 — touches the current month for every active zone so the Zone '
+  'P&L answers warm. Reads only; it writes nothing and takes no lock.';
+
+revoke all on function public.zone_pnl_warm() from public, anon, authenticated;
+
+-- The screen's error copy. A cancelled or refused RPC returns no payload, so
+-- there is nothing in it to print: these keys are what the screen shows
+-- instead, and changing that wording stays an UPDATE rather than a deploy.
+insert into public.ui_copy (key, value) values
+  ('zone_pnl.load_failed', to_jsonb('Could not load the Zone P&L just now.'::text)),
+  ('zone_pnl.retry',       to_jsonb('Retry'::text))
+on conflict (key) do update set value = excluded.value;

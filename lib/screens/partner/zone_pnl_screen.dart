@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../design_tokens.dart';
+import '../../services/ui_copy.dart';
 import '../../utils/toast.dart';
 
 /// CHANGE #694 — Zone P&L (feature_gaps #157).
@@ -35,6 +36,10 @@ class ZonePnlScreen extends StatefulWidget {
 
 class _ZonePnlScreenState extends State<ZonePnlScreen> {
   Map<String, dynamic> _p = const {};
+  /// The RPC did not answer at all — a cancelled statement, an offline tab, a
+  /// refusal with no body. There is no payload to render, so the screen says
+  /// so in the backend's words instead of painting an empty page.
+  bool _failed = false;
   bool _loading = true;
   bool _docBusy = false;
   String _period = 'month';
@@ -49,13 +54,22 @@ class _ZonePnlScreenState extends State<ZonePnlScreen> {
     try {
       final res = await ZonePnlScreen.rpc('zone_pnl', {'p_period': _period});
       if (!mounted) return;
+      final map = res is Map ? Map<String, dynamic>.from(res) : null;
       setState(() {
-        _p = res is Map ? Map<String, dynamic>.from(res) : const {};
+        _p = map ?? const {};
+        // An empty answer is a FAILED answer. It used to be indistinguishable
+        // from a refusal, and a refusal renders its own `message` — so a
+        // cancelled statement painted a blank page with nothing on it.
+        _failed = map == null || map.isEmpty;
         _loading = false;
       });
     } catch (_) {
       if (!mounted) return;
-      setState(() => _loading = false);
+      setState(() {
+        _p = const {};
+        _failed = true;
+        _loading = false;
+      });
     }
   }
 
@@ -124,6 +138,8 @@ class _ZonePnlScreenState extends State<ZonePnlScreen> {
       body: SafeArea(
         child: _loading
             ? ZonePnlView.skeleton()
+            : _failed
+            ? ZonePnlView.loadFailed(onRetry: _load)
             : RefreshIndicator(
                 onRefresh: _load,
                 child: ZonePnlView(
@@ -161,6 +177,29 @@ class ZonePnlView extends StatelessWidget {
           .whereType<Map>()
           .map((e) => Map<String, dynamic>.from(e))
           .toList(growable: false);
+
+  /// The load itself failed, so there is no payload: the copy is `ui_copy`'s
+  /// and the only action is to ask again.
+  static Widget loadFailed({required VoidCallback onRetry}) => Center(
+        child: Padding(
+          padding: EdgeInsets.all(Ds.space.x24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(c('zone_pnl.load_failed'),
+                  textAlign: TextAlign.center, style: Ds.t.body),
+              SizedBox(height: Ds.space.x16),
+              SizedBox(
+                height: Ds.touch.minTarget,
+                child: OutlinedButton(
+                  onPressed: onRetry,
+                  child: Text(c('zone_pnl.retry')),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
 
   static Widget skeleton() => Padding(
         padding: EdgeInsets.all(Ds.space.x16),

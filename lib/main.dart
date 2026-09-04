@@ -61,7 +61,8 @@ import 'screens/code_resolver_page.dart';
 import 'screens/public/wa_link_redirect_page.dart'; // /r/:code — campaign links
 import 'screens/admin/wa_campaigns_screen.dart'; // /admin/wa-campaigns
 import 'screens/admin/admin_scope_audit_screen.dart'; // /admin/scope-audit
-import 'screens/admin/dev_queue/cron_health_screen.dart'; // /admin/cron-health
+import 'screens/admin/dev_queue/cron_health_screen.dart';
+import 'screens/supplier/supplier_account_page.dart';
 import 'screens/admin/dev_queue/dev_queue_screen.dart'; // /admin/dev-queue
 import 'screens/admin/test_mode_screen.dart';  // /admin/test-mode (#573)
 import 'screens/admin/admin_delivery_extras_screen.dart'; // /admin/delivery-programme
@@ -1009,6 +1010,23 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                 return MaterialPageRoute(
                   settings: settings,
                   builder: (_) => const CronHealthScreen(),
+                );
+              }
+              // CHANGE #850 — the supplier's own account page, at a real URL for
+              // the same reason /admin/cron-health has one: Flutter renders to
+              // canvas, so without a URL no headless verifier can ever prove
+              // this screen painted. It is still reached by tapping the
+              // supplier menu -> My Account; the URL adds no privilege of its
+              // own — supplier_account_page() answers for the CALLER's own
+              // supplier and nobody else's, and the screen renders that reply.
+              // ?tab=<tab_key> opens one tab; an unknown key is ignored and the
+              // payload's own default_tab wins.
+              if (name.split('?').first == '/supplier/account') {
+                final tab =
+                    Uri.parse(name).queryParameters['tab']?.trim() ?? '';
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => SupplierAccountPage(initialTab: tab),
                 );
               }
               // CHANGE #573 — the synthetic lane's console, at a real URL for

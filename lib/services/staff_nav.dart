@@ -10,8 +10,11 @@
 // Same shape as CustomerNav (#630): a ValueNotifier the shell listens to, so
 // home_shell.dart does not grow a fetch, a cache and an auth listener for one
 // more registry it draws.
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../screens/admin/admin_nav_entries.dart';
@@ -44,13 +47,13 @@ class StaffTab {
   final bool visible;
 
   factory StaffTab.fromJson(Map<String, dynamic> m) => StaffTab(
-        key: (m['key'] ?? '').toString(),
-        label: (m['label'] ?? '').toString(),
-        iconKey: (m['icon_key'] ?? '').toString(),
-        routeKey: (m['route_key'] ?? '').toString(),
-        badgeKey: (m['badge_key'] ?? '').toString(),
-        visible: m['visible'] != false,
-      );
+    key: (m['key'] ?? '').toString(),
+    label: (m['label'] ?? '').toString(),
+    iconKey: (m['icon_key'] ?? '').toString(),
+    routeKey: (m['route_key'] ?? '').toString(),
+    badgeKey: (m['badge_key'] ?? '').toString(),
+    visible: m['visible'] != false,
+  );
 }
 
 /// One redirect: an old route key and where it lands now.
@@ -103,8 +106,10 @@ class StaffNavPayload {
       final m = (v as Map?)?.cast<String, dynamic>() ?? const {};
       final to = (m['to'] ?? '').toString();
       if (to.isEmpty) return;
-      redirects[k.toString()] =
-          StaffRedirect(to: to, whenNoSeed: m['when_no_seed'] == true);
+      redirects[k.toString()] = StaffRedirect(
+        to: to,
+        whenNoSeed: m['when_no_seed'] == true,
+      );
     });
     return StaffNavPayload(
       ok: true,
@@ -138,9 +143,9 @@ class StaffNavPayload {
 /// key verbatim, the glyph resolved through the same `kNavIcons` map every
 /// registry tile uses. Pure, so a widget test hands a payload straight in.
 List<AdminNavEntry> staffNavEntries(StaffNavPayload payload) => [
-      for (final t in payload.visibleTabs)
-        AdminNavEntry(t.label, navIcon(t.iconKey), route: t.routeKey),
-    ];
+  for (final t in payload.visibleTabs)
+    AdminNavEntry(t.label, navIcon(t.iconKey), route: t.routeKey),
+];
 
 /// The app-wide holder. One `staff_nav()` per signed-in staff session.
 class StaffNav {
@@ -157,14 +162,79 @@ class StaffNav {
   @visibleForTesting
   static void debugSet(StaffNavPayload p) => value.value = p;
 
+  // CHANGE #1016 (N) — the last good answer, on disk. Until staff_nav()
+  // answers the shell draws the pre-#1016 bar, and on a slow morning that was
+  // a whole second of the wrong five tabs before the six arrived. Offline
+  // rule: render the cached payload instantly, refetch, re-render. The cache
+  // is stamped with the login it belongs to and is a render fallback only —
+  // a live answer always replaces it and a refusal never comes from it.
+  static const String _cacheKey = 'staff_nav.cache.v1';
+  static const String _ownerKey = '_owner_uid';
+
+  /// Whose device this is. A seam so the cache can be tested on the Dart VM
+  /// with no Supabase; production reads the live session.
+  @visibleForTesting
+  static String? Function() currentUid = () =>
+      Supabase.instance.client.auth.currentUser?.id;
+
+  /// Test seam: the disk→notifier half of [load], alone.
+  @visibleForTesting
+  static Future<void> debugRestore() => _restore();
+
+  static Future<void> _restore() async {
+    if (value.value.ok) return;
+    try {
+      final raw = (await SharedPreferences.getInstance()).getString(_cacheKey);
+      if (raw == null || raw.isEmpty) return;
+      if (value.value.ok) return; // a live answer already won
+      final p = jsonDecode(raw);
+      if (p is! Map || p['ok'] != true) return;
+      final uid = currentUid();
+      if ((p[_ownerKey] ?? '') != (uid ?? '')) {
+        await _forget();
+        RenderLog.write('c1016_nav_cache', 'dropped_other_account');
+        return;
+      }
+      final cached = StaffNavPayload.fromJson(p.cast<String, dynamic>());
+      if (!cached.ok) return;
+      value.value = cached;
+      RenderLog.write('c1016_nav_cache', 'restored');
+    } catch (_) {
+      // A device that cannot read its cache boots exactly as before.
+    }
+  }
+
+  static Future<void> _persist(Map<String, dynamic> p) async {
+    try {
+      final stamped = Map<String, dynamic>.from(p)
+        ..[_ownerKey] = currentUid() ?? '';
+      await (await SharedPreferences.getInstance()).setString(
+        _cacheKey,
+        jsonEncode(stamped),
+      );
+    } catch (_) {
+      // Persisting is a convenience; failing to must never fail the fetch.
+    }
+  }
+
+  static Future<void> _forget() async {
+    try {
+      await (await SharedPreferences.getInstance()).remove(_cacheKey);
+    } catch (_) {
+      // nothing to forget
+    }
+  }
+
   static Future<void> load() async {
     if (_loading) return;
     _loading = true;
     try {
+      await _restore();
       final raw = await Supabase.instance.client.rpc('staff_nav');
       final map = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
       if (map is! Map) return;
-      final next = StaffNavPayload.fromJson(map.cast<String, dynamic>());
+      final json = map.cast<String, dynamic>();
+      final next = StaffNavPayload.fromJson(json);
       // A refusal (signed out, a customer) blanks nothing: the shell only
       // draws this bar for admin-surface logins, and a failed refresh keeps
       // the last good answer — boot resilience rule.
@@ -172,8 +242,11 @@ class StaffNav {
       _boundUid = Supabase.instance.client.auth.currentUser?.id;
       _bound = true;
       value.value = next;
-      RenderLog.write('c1016_staff_tabs',
-          next.visibleTabs.map((t) => t.key).join('>'));
+      await _persist(json);
+      RenderLog.write(
+        'c1016_staff_tabs',
+        next.visibleTabs.map((t) => t.key).join('>'),
+      );
       RenderLog.write('c1016_staff_layout', next.layout);
     } catch (_) {
       // keep whatever is drawn
@@ -195,6 +268,7 @@ class StaffNav {
     if (uid == null) {
       value.value = StaffNavPayload.empty;
       _bound = false;
+      _forget(); // signed out: nobody's bar stays on this device
       return;
     }
     load();

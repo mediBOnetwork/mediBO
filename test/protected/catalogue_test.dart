@@ -47,7 +47,7 @@ import 'package:pharma_b2b/models/cart_model.dart';
 import 'package:pharma_b2b/models/catalogue.dart';
 import 'package:pharma_b2b/screens/catalogue_screen.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
-import 'package:pharma_b2b/widgets/compact_product_card.dart';
+import 'package:pharma_b2b/widgets/catalogue_product_card.dart';
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
@@ -270,14 +270,18 @@ void main() {
       // Wide, because the tab strip and the filter row are horizontal lists: a
       // 420pt phone leaves the later chips off-screen and unbuilt, which would
       // read as "the label was wrong" rather than "the label was not on screen".
+      //
+      // CHANGE #799 rewrote WHICH tabs are chips. Browse / Companies / Salts
+      // are now the three doors (their own labels and counts, pinned in
+      // catalogue_visual_test.dart); the chip strip carries only the tabs the
+      // doors do not cover. What this test still holds down is unchanged and
+      // is the point of it: whatever IS drawn prints the payload's own words.
       await _pump(tester, size: const Size(1400, 900), queued: {
         'catalogue_home': [_home()],
         'catalogue_tree': [_treeRoot()],
       });
-      expect(find.text('Browse'), findsOneWidget);
-      expect(find.text('Companies'), findsOneWidget);
-      expect(find.text('18,563 companies'), findsOneWidget);
-      expect(find.text('Cold chain'), findsOneWidget);
+      expect(find.text('Cold chain'), findsWidgets);
+      expect(find.textContaining('4,413 products'), findsWidgets);
     });
   });
 
@@ -291,7 +295,9 @@ void main() {
       expect(find.text('Bundles'), findsNothing,
           reason: 'kind carousel_v9 is unknown — draw nothing, do not guess');
       expect(tester.takeException(), isNull);
-      expect(find.text('Browse'), findsOneWidget,
+      // #799: the known tabs are still drawn beside the unknown one — the
+      // chip strip's are the `list`/`recent` kinds, the rest are doors.
+      expect(find.text('Cold chain'), findsWidgets,
           reason: 'the known tabs must still be drawn beside the unknown one');
     });
   });
@@ -392,7 +398,7 @@ void main() {
       expect(find.text('Paracetamol (500mg)'), findsOneWidget);
       expect(find.text('Every brand for this salt'), findsOneWidget);
       expect(find.text('15 products'), findsOneWidget);
-      expect(find.byType(CompactProductCard), findsOneWidget);
+      expect(find.byType(CatalogueProductCard), findsOneWidget);
     });
 
     testWidgets('an empty list prints the backend empty state, never a Dart one',
@@ -403,7 +409,7 @@ void main() {
       }, route: const CatalogueRoute(
           tab: 'cold_chain', listKind: 'tab', listKey: 'cold_chain'));
       expect(find.text('Nothing here in this view.'), findsOneWidget);
-      expect(find.byType(CompactProductCard), findsNothing);
+      expect(find.byType(CatalogueProductCard), findsNothing);
     });
 
     testWidgets('the end label is the backend\'s, and only when it says so',

@@ -10,6 +10,9 @@ import 'catalogue_screen.dart';
 
 typedef CompanyPageLoader = Future<CompanyPage> Function(String key, int offset);
 
+/// Test seam for the header's salt cloud (#799) — its own call, its own seam.
+typedef CompanySaltCloudLoader = Future<CompanySaltCloud> Function(String key);
+
 /// CHANGE #638 — a company's full catalogue at `/company/<key>`.
 ///
 /// Header and count come from the payload verbatim; the grid is the same
@@ -23,10 +26,14 @@ class CompanyScreen extends StatefulWidget {
   /// Test seam: supply pages instead of calling the RPC.
   final CompanyPageLoader? loader;
 
+  /// Test seam for the salt cloud.
+  final CompanySaltCloudLoader? cloudLoader;
+
   const CompanyScreen({
     super.key,
     required this.companyKey,
     this.loader,
+    this.cloudLoader,
   });
 
   @override
@@ -39,6 +46,7 @@ class _CompanyScreenState extends State<CompanyScreen> {
   final Set<String> _seenIds = <String>{};
 
   CompanyPage? _first;
+  CompanySaltCloud _cloud = CompanySaltCloud.none;
   bool _loading = true;
   bool _loadingMore = false;
   bool _hasMore = false;
@@ -80,6 +88,20 @@ class _CompanyScreenState extends State<CompanyScreen> {
       _hasMore = page.hasMore;
       _nextOffset = page.offset + page.items.length;
     });
+    // The cloud lands into a header that is already on screen. It is
+    // best-effort in the strongest sense: a failure here must never be able to
+    // touch the products, so even constructing the repository is inside the
+    // try (it reaches for Supabase, which a widget test does not have).
+    if (!page.ok) return;
+    try {
+      final load = widget.cloudLoader ??
+          (String k) => MedicineRepository().fetchCompanySaltCloud(k);
+      final cloud = await load(widget.companyKey);
+      if (mounted) setState(() => _cloud = cloud);
+    } catch (_) {
+      // No cloud. The header simply draws name + count, which is what a
+      // company with no salt data draws anyway.
+    }
   }
 
   Future<void> _loadMore() async {
@@ -131,6 +153,7 @@ class _CompanyScreenState extends State<CompanyScreen> {
               ? _NotFound(page: first)
               : _Body(
                   page: first,
+                  cloud: _cloud,
                   items: _items,
                   scroll: _scroll,
                   loadingMore: _loadingMore,
@@ -143,7 +166,8 @@ class _CompanyScreenState extends State<CompanyScreen> {
 /// payload's; the only thing decided here is how tall it is when open.
 class _CompanyHeader extends StatelessWidget {
   final CompanyPage page;
-  const _CompanyHeader({required this.page});
+  final CompanySaltCloud cloud;
+  const _CompanyHeader({required this.page, required this.cloud});
 
   static const double _expanded = 188;
   static const double _logo = 44;
@@ -156,7 +180,7 @@ class _CompanyHeader extends StatelessWidget {
         surfaceTintColor: Ds.c.surface,
         foregroundColor: Ds.c.text,
         elevation: 0,
-        expandedHeight: page.saltCloudHas ? _expanded : _expanded - _cloud * 2,
+        expandedHeight: cloud.has ? _expanded : _expanded - _cloud * 2,
         leading: IconButton(
           tooltip: page.backLabel,
           icon: const Icon(Icons.arrow_back),
@@ -166,8 +190,15 @@ class _CompanyHeader extends StatelessWidget {
             maxLines: 1, overflow: TextOverflow.ellipsis, style: Ds.t.subtitle),
         flexibleSpace: FlexibleSpaceBar(
           collapseMode: CollapseMode.pin,
+          // The background is laid out at the EXPANDED height and then
+          // squeezed as the bar collapses, so it must be allowed to be too
+          // tall for a frame. A non-scrolling scroll view clips instead of
+          // throwing — the alternative is a 4px overflow stripe every time
+          // somebody scrolls a company page.
           background: SafeArea(
-            child: Padding(
+            child: SingleChildScrollView(
+              physics: const NeverScrollableScrollPhysics(),
+              child: Padding(
               padding: EdgeInsets.fromLTRB(
                   Ds.space.x16, Ds.space.x48, Ds.space.x16, Ds.space.x8),
               child: Column(
@@ -207,15 +238,15 @@ class _CompanyHeader extends StatelessWidget {
                       ),
                     ],
                   ),
-                  if (page.saltCloudHas) ...[
+                  if (cloud.has) ...[
                     SizedBox(height: Ds.space.x12),
-                    Text(page.saltCloudTitle, style: Ds.t.caption),
+                    Text(cloud.title, style: Ds.t.caption),
                     SizedBox(height: Ds.space.x8),
                     SizedBox(
                       height: _cloud,
                       child: ListView.separated(
                         scrollDirection: Axis.horizontal,
-                        itemCount: page.saltCloud.length,
+                        itemCount: cloud.items.length,
                         separatorBuilder: (_, _) => SizedBox(width: Ds.space.x8),
                         itemBuilder: (context, i) => InkWell(
                           // A salt in the cloud opens the catalogue's own salt
@@ -227,11 +258,11 @@ class _CompanyHeader extends StatelessWidget {
                           onTap: () => Navigator.of(context).push(
                             MaterialPageRoute<void>(
                               builder: (_) => _SaltListing(
-                                title: page.saltCloud[i].label,
+                                title: cloud.items[i].label,
                                 backLabel: page.backLabel,
                                 route: CatalogueRoute(
                                     listKind: 'salt',
-                                    listKey: page.saltCloud[i].key),
+                                    listKey: cloud.items[i].key),
                               ),
                             ),
                           ),
@@ -244,7 +275,7 @@ class _CompanyHeader extends StatelessWidget {
                               borderRadius: Ds.r.rChip,
                               border: Border.all(color: Ds.c.divider),
                             ),
-                            child: Text(page.saltCloud[i].label,
+                            child: Text(cloud.items[i].label,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: Ds.t.caption.copyWith(color: Ds.c.text)),
@@ -258,17 +289,20 @@ class _CompanyHeader extends StatelessWidget {
             ),
           ),
         ),
+        ),
       );
 }
 
 class _Body extends StatelessWidget {
   final CompanyPage page;
+  final CompanySaltCloud cloud;
   final List<Product> items;
   final ScrollController scroll;
   final bool loadingMore;
 
   const _Body({
     required this.page,
+    required this.cloud,
     required this.items,
     required this.scroll,
     required this.loadingMore,
@@ -282,7 +316,7 @@ class _Body extends StatelessWidget {
         return CustomScrollView(
           controller: scroll,
           slivers: [
-            _CompanyHeader(page: page),
+            _CompanyHeader(page: page, cloud: cloud),
             SliverPadding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               sliver: SliverGrid(

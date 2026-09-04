@@ -426,7 +426,11 @@ declare
   v_ids  bigint[];
   v_last_id bigint; v_last_name text;
   v_total bigint;
-  v_filtered boolean := public._cat_filtered(coalesce(p_filters,'{}'::jsonb));
+  -- CHANGE #799 — coalesced. `_cat_filtered('{}')` answers NULL, and the new
+  -- empty-state block asks `not v_filtered` for whether to offer "Request this
+  -- product": NULL there is neither true nor false, so an unfiltered empty
+  -- scope silently lost its only way out.
+  v_filtered boolean := coalesce(public._cat_filtered(coalesce(p_filters,'{}'::jsonb)), false);
   v_head text;
   v_zname text;
   v_empty text;
@@ -546,10 +550,34 @@ insert into public.ui_copy(key, value) values
 on conflict (key) do nothing;
 
 -- ── the company page: a salt cloud and a header that collapses ────────────
+-- The cloud is its OWN call, for the same reason the pack variants are: the
+-- group-by over a big marketer's 2,510 rows costs a second, and a header must
+-- not hold the products behind it. The page paints name + count immediately
+-- and the cloud lands into it.
+create or replace function public.company_salt_cloud(p_key text)
+returns jsonb language sql stable security definer set search_path to public as $function$
+  with s as (
+    select nullif(btrim(m.salt_composition),'') as salt, count(*)::bigint as n
+      from public."MEDICINE" m
+     where m.marketer_canonical = p_key
+       and lower(coalesce(m.buyable::text,'')) in ('true','t')
+       and nullif(btrim(m.salt_composition),'') is not null
+     group by 1 order by 2 desc, 1 limit 12)
+  select jsonb_build_object(
+    'ok', true,
+    'has', exists (select 1 from s),
+    'title', public.uic('catalogue.company_salts_title','Salts this company makes'),
+    'items', coalesce((select jsonb_agg(jsonb_build_object(
+                'key', s.salt, 'label', s.salt,
+                'count_label', public.cat_count_label(s.n)) order by s.n desc, s.salt)
+                from s), '[]'::jsonb));
+$function$;
+grant execute on function public.company_salt_cloud(text) to anon, authenticated;
+
 create or replace function public.storefront_company_page(
   p_key text, p_offset integer default 0, p_limit integer default 24)
 returns jsonb language plpgsql stable security definer set search_path to public as $function$
-declare c record; v_ids bigint[]; v_total int; v_salts jsonb;
+declare c record; v_ids bigint[]; v_total int;
 begin
   select display, canon, buyable_count into c from medicine_company where canon = p_key;
   if c.canon is null then return jsonb_build_object('ok', false, 'error', 'company_not_found'); end if;
@@ -560,38 +588,20 @@ begin
     offset greatest(p_offset,0) limit least(greatest(p_limit,1),50)) t;
   v_total := coalesce(c.buyable_count, 0);
 
-  -- CHANGE #799 — the salt cloud under the company name. Bounded by
-  -- idx_medicine_company_rank and computed once, on the FIRST page only: it is
-  -- header furniture and must never ride along on every "load more".
-  if greatest(p_offset,0) = 0 then
-    select coalesce(jsonb_agg(jsonb_build_object(
-             'key', s.salt, 'label', s.salt,
-             'count_label', public.cat_count_label(s.n)) order by s.n desc, s.salt), '[]'::jsonb)
-      into v_salts
-      from (select nullif(btrim(m.salt_composition),'') as salt, count(*)::bigint as n
-              from "MEDICINE" m
-             where m.marketer_canonical = p_key
-               and lower(coalesce(m.buyable::text,'')) in ('true','t')
-               and nullif(btrim(m.salt_composition),'') is not null
-             group by 1 order by 2 desc, 1 limit 12) s;
-  end if;
-
   return jsonb_build_object(
     'ok', true,
     'company', jsonb_build_object('label', c.display, 'key', c.canon,
+      -- CHANGE #799 — the logo box's fallback mark. There is no company
+      -- artwork in the catalogue, so the entity's own initial is the honest
+      -- one, composed here because it is a display string.
       'icon_letter', upper(left(btrim(coalesce(c.display,'?')), 1)),
       'sub_label', to_char(v_total,'FM999,999')||' products',
       'count_label', to_char(v_total,'FM999,999')||' products'),
-    'salt_cloud', jsonb_build_object(
-      'has', coalesce(jsonb_array_length(v_salts), 0) > 0,
-      'title', public.uic('catalogue.company_salts_title','Salts this company makes'),
-      'items', coalesce(v_salts, '[]'::jsonb)),
     'back_label', public.uic('catalogue.company_back','Back'),
     'items', public._sf_cards(coalesce(v_ids, '{}'::bigint[])),
     'offset', greatest(p_offset,0),
     'has_more', (greatest(p_offset,0) + coalesce(array_length(v_ids,1),0)) < v_total);
 end $function$;
-
 
 -- ── the extras block gains the motion copy ────────────────────────────────
 -- The add toast, its undo word and the quick-peek headings. Dart shows a

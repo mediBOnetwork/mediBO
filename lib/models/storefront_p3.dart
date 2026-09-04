@@ -18,6 +18,10 @@ class CompanyPage {
   /// back to, and the salts this company actually makes. `saltCloudHas` is the
   /// backend's flag, so a company with none draws no section at all rather
   /// than an empty heading.
+  ///
+  /// The cloud arrives from its OWN call (`company_salt_cloud`), after the
+  /// first page of products is already on screen: the group-by behind it costs
+  /// a second on a big marketer and a header must not hold the grid.
   final String iconLetter;
   final bool saltCloudHas;
   final String saltCloudTitle;
@@ -84,7 +88,6 @@ class CompanyPage {
       );
     }
     final c = (m['company'] as Map?)?.cast<String, dynamic>() ?? const {};
-    final cloud = (m['salt_cloud'] as Map?)?.cast<String, dynamic>() ?? const {};
     return CompanyPage(
       ok: true,
       error: '',
@@ -92,16 +95,9 @@ class CompanyPage {
       key: c['key']?.toString() ?? '',
       countLabel: c['count_label']?.toString() ?? '',
       iconLetter: c['icon_letter']?.toString() ?? '',
-      saltCloudHas: cloud['has'] == true,
-      saltCloudTitle: cloud['title']?.toString() ?? '',
-      saltCloud: ((cloud['items'] as List?) ?? const [])
-          .whereType<Map>()
-          .map((e) => (
-                key: (e['key'] ?? '').toString(),
-                label: (e['label'] ?? '').toString(),
-                countLabel: (e['count_label'] ?? '').toString(),
-              ))
-          .toList(growable: false),
+      saltCloudHas: false,
+      saltCloudTitle: '',
+      saltCloud: const [],
       backLabel: m['back_label']?.toString() ?? '',
       items: ((m['items'] as List?) ?? const [])
           .whereType<Map>()
@@ -204,6 +200,40 @@ class BackInStock {
         items: ((m['items'] as List?) ?? const [])
             .whereType<Map>()
             .map((e) => Product.fromHomeCard(Map<String, dynamic>.from(e)))
+            .toList(growable: false),
+      );
+}
+
+
+/// CHANGE #799 — `company_salt_cloud(p_key)`, the company header's salt list.
+///
+/// Its own payload because it is its own call. `has` is the backend's verdict,
+/// so a company with no salt data draws no section rather than a heading over
+/// nothing.
+class CompanySaltCloud {
+  final bool has;
+  final String title;
+  final List<({String key, String label, String countLabel})> items;
+
+  const CompanySaltCloud({
+    required this.has,
+    required this.title,
+    required this.items,
+  });
+
+  static const CompanySaltCloud none =
+      CompanySaltCloud(has: false, title: '', items: []);
+
+  factory CompanySaltCloud.fromMap(Map<String, dynamic> m) => CompanySaltCloud(
+        has: m['has'] == true,
+        title: (m['title'] ?? '').toString(),
+        items: ((m['items'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((e) => (
+                  key: (e['key'] ?? '').toString(),
+                  label: (e['label'] ?? '').toString(),
+                  countLabel: (e['count_label'] ?? '').toString(),
+                ))
             .toList(growable: false),
       );
 }

@@ -653,6 +653,19 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
             ),
           ),
         if (_isHome) SliverToBoxAdapter(child: _tabStrip()),
+        // The zone control keeps a place of its own on the front page. The
+        // sentence chip above is the quick toggle; this is the SETTING, and
+        // only it carries the backend's sentence explaining what the switch
+        // does — a chip cannot say "Showing what suppliers in your zone can
+        // send." and stay a chip.
+        if (_isHome && (_home?.zone.has ?? false))
+          SliverToBoxAdapter(
+            child: _ZoneSwitch(
+              zone: _home!.zone,
+              on: _route.zoneOn,
+              onChanged: (on) => _go(_route.copy(zoneOn: on)),
+            ),
+          ),
         if (searchable && _route.tab == 'salts')
           SliverToBoxAdapter(
             child: Padding(
@@ -763,10 +776,11 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
           itemCount: tabs.length,
           separatorBuilder: (_, _) => SizedBox(width: Ds.space.x8),
           itemBuilder: (context, i) => Center(
+            // Label and count are two payload strings and stay two Texts.
+            // Joining them into one is the app writing a sentence.
             child: _Chip(
-              label: tabs[i].countLabel.isEmpty
-                  ? tabs[i].label
-                  : '${tabs[i].label}  ${tabs[i].countLabel}',
+              label: tabs[i].label,
+              count: tabs[i].countLabel,
               selected: tabs[i].key == _route.tab,
               onTap: () => _tapTab(tabs[i]),
             ),
@@ -996,6 +1010,36 @@ class _SentenceRow extends StatelessWidget {
   }
 }
 
+/// The zone switch. Drawn only when the backend said this viewer HAS one, and
+/// worded entirely by it — including the sentence under it, which changes with
+/// the switch because the backend changed it, not because this widget did.
+class _ZoneSwitch extends StatelessWidget {
+  final CatZone zone;
+  final bool on;
+  final ValueChanged<bool> onChanged;
+  const _ZoneSwitch({required this.zone, required this.on, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: EdgeInsets.fromLTRB(
+            Ds.space.x16, Ds.space.x24, Ds.space.x8, 0),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(zone.label, style: Ds.t.body),
+                  if (zone.note.isNotEmpty) Text(zone.note, style: Ds.t.caption),
+                ],
+              ),
+            ),
+            Switch(value: on, activeThumbColor: Ds.c.brand, onChanged: onChanged),
+          ],
+        ),
+      );
+}
+
 /// CHANGE #799 — three doors, large and calm: a glyph, a name, a count in
 /// grey. Nothing else on the tile, which is the whole instruction.
 class _Doors extends StatelessWidget {
@@ -1200,9 +1244,18 @@ class _ListToolbar extends StatelessWidget {
 
 class _Chip extends StatelessWidget {
   final String label;
+
+  /// A second payload string beside the label — a tab's count. Two strings,
+  /// two Texts: joining them here would be the app writing a sentence.
+  final String count;
   final bool selected;
   final VoidCallback onTap;
-  const _Chip({required this.label, required this.selected, required this.onTap});
+  const _Chip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.count = '',
+  });
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -1219,8 +1272,15 @@ class _Chip extends StatelessWidget {
                 borderRadius: Ds.r.rChip,
                 border: Border.all(color: selected ? Ds.c.brand : Ds.c.divider),
               ),
-              child: Text(label,
-                  style: Ds.t.caption.copyWith(color: selected ? Ds.c.brand : Ds.c.text)),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Text(label,
+                    style: Ds.t.caption
+                        .copyWith(color: selected ? Ds.c.brand : Ds.c.text)),
+                if (count.isNotEmpty) ...[
+                  SizedBox(width: Ds.space.x8),
+                  Text(count, style: Ds.t.caption),
+                ],
+              ]),
             ),
           ),
         ),

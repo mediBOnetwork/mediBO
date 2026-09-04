@@ -5,6 +5,7 @@ import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
 import 'dev_queue_common.dart';
+import 'dev_queue_context.dart';
 import 'dev_queue_health.dart';
 import 'restart_safety.dart';
 import 'dev_queue_service.dart';
@@ -411,6 +412,10 @@ class _DevQueueControlState extends State<DevQueueControl> {
             _divider(),
             _usageMeter(),
           ],
+          if ((_context['has'] ?? false) == true) ...[
+            _divider(),
+            ContextEconomyCard(payload: _context),
+          ],
         ],
       ]),
     );
@@ -424,6 +429,11 @@ class _DevQueueControlState extends State<DevQueueControl> {
   /// can render it against a real payload.
   Widget _breakerBadge() => BreakerBanner(
       breaker: (_snap['breaker'] as Map?)?.cast<String, dynamic>() ?? const {});
+
+  /// CHANGE #1197 — `dev_ctl_get().context` is `dev_context_metrics()`
+  /// verbatim; ContextEconomyCard prints it and computes nothing.
+  Map<String, dynamic> get _context =>
+      (_snap['context'] as Map?)?.cast<String, dynamic>() ?? const {};
 
   Widget _expandedHeader() => Row(children: [
         Text(c('dev_queue.ctl_section'),

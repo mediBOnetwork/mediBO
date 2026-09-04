@@ -908,7 +908,7 @@ NEVER flip `bugloop.enforce=true` until the full chain (preview → journeys →
 
 
 
-## PROJECT · protected_tests  (priority 90, v8)
+## PROJECT · protected_tests  (priority 90, v9)
 
 ## PROTECTED TEST SUITE (CHANGE #635 — never remove)
 Before EVERY deploy, run `flutter test test/protected/` in addition to the
@@ -1006,6 +1006,13 @@ Current files and what they hold down:
   the backend's refusal instead of throwing, and the partner editor's Send /
   Remove / PDF buttons are can_send / can_edit / can_doc.
 
+- `context_economy_test.dart` — the Context economy panel is a PRINTER: title,
+  threshold chip, since-line, every row label/value/sub-line and the footnote are
+  dev_context_metrics() strings (the fixture's before/after deliberately disagree
+  with its own Change row, so a card that recomputed the percentage fails), has:false
+  draws nothing at all, an absent sub-line is omitted rather than dashed, tone is one
+  lookup with an unknown tone staying neutral, and rows render in payload order.
+
 The suite runs on the Dart VM in ~2s. Keep it that way: no network, no goldens,
 no Supabase, no camera — mock RPC payloads inline. If a widget resists mocking,
 extract its decisions into a pure class and test that.
@@ -1083,6 +1090,13 @@ What each file holds down:
   render in payload order, ok:false and an unknown /return-ack/<token> print
   the backend's refusal instead of throwing, and the partner editor's Send /
   Remove / PDF buttons are can_send / can_edit / can_doc.
+
+- `context_economy_test.dart` — the Context economy panel is a PRINTER: title,
+  threshold chip, since-line, every row label/value/sub-line and the footnote are
+  dev_context_metrics() strings (the fixture's before/after deliberately disagree
+  with its own Change row, so a card that recomputed the percentage fails), has:false
+  draws nothing at all, an absent sub-line is omitted rather than dashed, tone is one
+  lookup with an unknown tone staying neutral, and rows render in payload order.
 
 The suite runs on the Dart VM in ~2s. Keep it that way: no network, no goldens, no Supabase, no camera — mock RPC payloads inline. If a widget resists mocking, extract its decisions into a pure class and test that. Set `RenderLog.flushEnabled = false` in setUpAll for any test rendering a widget that calls RenderLog.write — its 800 ms debounce is a real Timer that would otherwise outlive the test and try to reach Supabase.
 

@@ -347,6 +347,14 @@ Current files and what they hold down:
   partner doors resolve through shell_staff_routes.dart while an unknown route
   resolves to null.
 
+- `context_economy_test.dart` — the Context economy panel is a PRINTER: title,
+  threshold chip, since-line, every row label/value/sub-line and the footnote are
+  dev_context_metrics() strings (the fixture's before/after deliberately disagree
+  with its own Change row, so a card that recomputed the percentage fails),
+  has:false draws nothing at all, an absent sub-line is omitted rather than
+  dashed, tone is one lookup with an unknown tone staying neutral, and rows
+  render in payload order.
+
 The suite runs on the Dart VM in ~2s. Keep it that way: no network, no goldens,
 no Supabase, no camera — mock RPC payloads inline. If a widget resists mocking,
 extract its decisions into a pure class and test that.

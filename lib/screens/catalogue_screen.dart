@@ -1048,7 +1048,12 @@ class _Doors extends StatelessWidget {
   final ValueChanged<CatDoor> onTap;
   const _Doors({required this.title, required this.doors, required this.onTap});
 
-  static const double _tileH = 104;
+  // 120, not 104: the count is a SENTENCE the backend wrote ("1,06,571
+  // salts", "3,35,273 products"), and at three tiles across a 390pt phone one
+  // line of it ellipsised to "18,563 comp…". A tile that hides the number it
+  // exists to show is the truncation the design contract forbids, so the tile
+  // grew and the count wraps to two lines instead.
+  static const double _tileH = 120;
   static const double _glyphBox = 32;
   static const double _glyph = 20;
 
@@ -1097,7 +1102,7 @@ class _Doors extends StatelessWidget {
                                     overflow: TextOverflow.ellipsis,
                                     style: Ds.t.bodyStrong),
                                 Text(doors[i].countLabel,
-                                    maxLines: 1,
+                                    maxLines: 2,
                                     overflow: TextOverflow.ellipsis,
                                     style: Ds.t.caption),
                               ],

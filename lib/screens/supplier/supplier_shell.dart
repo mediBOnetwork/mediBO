@@ -7,6 +7,7 @@ import '../../services/supplier_account_state.dart';
 import '../../services/ui_copy.dart';
 import '../../user_state.dart';
 import '../../utils/render_log.dart';
+import 'supplier_account_page.dart';
 import 'supplier_add_medicine_screen.dart';
 import 'supplier_home_screen.dart';
 import 'supplier_inquiry_screen.dart';
@@ -192,6 +193,17 @@ class _SupplierShellState extends State<SupplierShell> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // CHANGE #850 — My Account: the supplier's own page, with every
+            // tab the backend registry offers this login. The rows below it
+            // stay where they were; each is also a tab inside it.
+            ListTile(
+              leading: Icon(Icons.account_circle_outlined, color: Ds.c.text),
+              title: Text(c('sup_acct.title'), style: Ds.t.body),
+              onTap: () {
+                Navigator.pop(sheetCtx);
+                openSupplierAccountPage(context);
+              },
+            ),
             if (_canRead('supplier.staff'))
               ListTile(
                 leading: Icon(Icons.people_outline, color: Ds.c.text),

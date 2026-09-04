@@ -40,7 +40,26 @@ class MyAccountScreen extends StatefulWidget {
   /// Test seam for opening a stored document, which this page does not own.
   static Future<void> Function(String bucket, String path)? openDoc;
 
-  const MyAccountScreen({super.key, this.initialTab = ''});
+  /// CHANGE #850 — the page RPC is a parameter, not a literal. The customer's
+  /// own page keeps `my_account_page`; the supplier's My Account passes
+  /// `supplier_account_page` and gets the same renderer, because both answer in
+  /// the same block grammar. Nothing else about this file knows which one it is.
+  final String pageRpc;
+
+  /// The RenderLog key prefix, so the two pages prove themselves separately.
+  final String logPrefix;
+
+  /// A `nav` block names a route_key; this turns one into a screen. Null keeps
+  /// the customer menu's own resolver.
+  final Widget? Function(String route)? navResolver;
+
+  const MyAccountScreen({
+    super.key,
+    this.initialTab = '',
+    this.pageRpc = 'my_account_page',
+    this.logPrefix = 'c840_account',
+    this.navResolver,
+  });
 
   @override
   State<MyAccountScreen> createState() => _MyAccountScreenState();
@@ -87,7 +106,7 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
       _error = '';
     });
     try {
-      final m = _asMap(await _rpc('my_account_page', const {}));
+      final m = _asMap(await _rpc(widget.pageRpc, const {}));
       if (m['ok'] != true) {
         setState(() {
           _loadingPage = false;
@@ -107,7 +126,7 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
                 ? _s(m['default_tab'])
                 : (tabs.isEmpty ? '' : _s(tabs.first['key'])));
       });
-      RenderLog.write('c840_account_page', '${tabs.length}');
+      RenderLog.write('${widget.logPrefix}_page', '${tabs.length}');
       await _loadTab();
     } catch (e) {
       setState(() {
@@ -139,8 +158,8 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
         _tab = _asMap(res);
         _loadingTab = false;
       });
-      RenderLog.write(
-          'c840_account_tab_$_tabKey', '${_asList(_asMap(res)['blocks']).length}');
+      RenderLog.write('${widget.logPrefix}_tab_$_tabKey',
+          '${_asList(_asMap(res)['blocks']).length}');
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -444,7 +463,8 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
 
   Widget _listRow(Map<String, dynamic> it) {
     final chip = backendChipOf(it, 'chip');
-    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    final actions = _asList(it['actions']);
+    final row = Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Expanded(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(_s(it['title']), style: Ds.t.bodyStrong),
@@ -471,6 +491,29 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
           BackendChip(chip: chip),
         ],
       ]),
+    ]);
+    // CHANGE #850 — a row may carry its own buttons. Each is one RPC the
+    // payload described, exactly like the `actions` block; a row that sent
+    // none draws none, so the customer's page is unchanged.
+    if (actions.isEmpty) return row;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      row,
+      SizedBox(height: Ds.space.x8),
+      Wrap(
+        spacing: Ds.space.x8,
+        runSpacing: Ds.space.x8,
+        children: [
+          for (final a in actions)
+            if (a['enabled'] != false)
+              _ActionButton(
+                label: _s(a['label']),
+                color: _toneColor(_s(a['tone'])),
+                soft: _toneSoft(_s(a['tone'])),
+                selected: a['selected'] == true,
+                onTap: () => _runAction(a),
+              ),
+        ],
+      ),
     ]);
   }
 
@@ -568,9 +611,12 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
   /// this build has never heard of resolves to nothing and is skipped in
   /// silence, so a registry row that ships before its screen cannot break the
   /// page.
+  Widget? _navScreen(String route) =>
+      (widget.navResolver ?? customerMenuScreen)(route);
+
   Widget _navBlock(Map<String, dynamic> b) {
     final items = _asList(b['items'])
-        .where((e) => customerMenuScreen(_s(e['route'])) != null)
+        .where((e) => _navScreen(_s(e['route'])) != null)
         .toList();
     if (items.isEmpty) return const SizedBox.shrink();
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -581,7 +627,7 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
             if (i > 0) Divider(height: Ds.space.x24, color: Ds.c.divider),
             InkWell(
               onTap: () {
-                final screen = customerMenuScreen(_s(items[i]['route']));
+                final screen = _navScreen(_s(items[i]['route']));
                 if (screen == null) return;
                 Navigator.of(context).push(
                     MaterialPageRoute<void>(builder: (_) => screen));
@@ -1029,12 +1075,17 @@ class _ActionButton extends StatelessWidget {
   final String label;
   final Color color;
   final Color soft;
+
+  /// CHANGE #850 — whether this is the state the row is ALREADY in. It is the
+  /// payload's own flag, never inferred here from the label or the args.
+  final bool selected;
   final VoidCallback onTap;
   const _ActionButton(
       {required this.label,
       required this.color,
       required this.soft,
-      required this.onTap});
+      required this.onTap,
+      this.selected = false});
 
   @override
   Widget build(BuildContext context) {
@@ -1046,11 +1097,13 @@ class _ActionButton extends StatelessWidget {
         alignment: Alignment.center,
         padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
         decoration: BoxDecoration(
-          color: soft,
+          color: selected ? color : soft,
           borderRadius: Ds.r.rButton,
           border: Border.all(color: color),
         ),
-        child: Text(label, style: Ds.t.caption.copyWith(color: color)),
+        child: Text(label,
+            style: Ds.t.caption
+                .copyWith(color: selected ? Ds.c.surface : color)),
       ),
     );
   }

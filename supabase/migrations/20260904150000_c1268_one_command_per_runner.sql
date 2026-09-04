@@ -332,3 +332,9 @@ grant execute on function public.dev_agent_release(text,text) to service_role;
 grant execute on function public.dev_agent_beat(text,bigint) to service_role;
 grant execute on function public.dev_agent_incident_log(text,text,text,bigint,text) to service_role;
 grant execute on function public.dev_agent_sessions_status() to service_role, authenticated;
+
+-- Same shape as dev_commands: RLS on, no policies. Nothing reaches these tables
+-- except the security-definer RPCs above and service_role, which bypasses RLS.
+-- Without this the registry would be world-readable through PostgREST.
+alter table public.dev_agent_session  enable row level security;
+alter table public.dev_agent_incident enable row level security;

@@ -323,7 +323,7 @@ do $x$
 declare v_bad text; v_on boolean;
 begin
   select enabled into v_on from public.build_branch_config where id;
-  if not coalesce(v_on, false) then return; end if;   -- feature off: nothing to guard
+  if not coalesce(v_on, false) then raise exception 'RG_ROLLBACK'; end if;   -- feature off: nothing to guard
   -- A runner whose session was reported on the PRODUCTION ref while it holds a
   -- building row. The merge worker (agent merge-worker) is exempt: its deploy
   -- step is the one place production is meant to be touched.
@@ -337,6 +337,7 @@ begin
   if v_bad is not null then
     raise exception 'RG_FAIL: runner building on LIVE while a build branch is on: %', v_bad;
   end if;
+  raise exception 'RG_ROLLBACK';
 end $x$;
 $body$, true, 'CHANGE #1149 — builds happen on the Supabase branch, production only takes the batch replay')
 on conflict (name) do update set body = excluded.body, enabled = true, note = excluded.note;

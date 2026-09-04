@@ -24,9 +24,17 @@ log() { printf '[%s] replay: %s\n' "$(date -u +%FT%TZ)" "$*"; }
 mapfile -t FILES < <(ls supabase/migrations/*.sql 2>/dev/null | sort)
 [ ${#FILES[@]} -eq 0 ] && { log "no migration files"; exit 0; }
 
-# version = leading digits of the filename, the same key the CLI uses
-versions_json=$(for f in "${FILES[@]}"; do b=$(basename "$f" .sql); printf '%s\n' "${b%%_*}"; done | jq -R . | jq -sc .)
-applied=$("$DEVCMD" rpc migration_replay_applied "$(jq -nc --argjson v "$versions_json" '{p_versions:$v}')" 2>/dev/null | jq -c '.applied // []')
+# Keyed by the full file basename (CHANGE #1149 D): bare-date prefixes such
+# as 20260904_ are shared by several files, so a version alone is ambiguous.
+files_json=$(for f in "${FILES[@]}"; do basename "$f" .sql; done | jq -R . | jq -sc .)
+resp=$("$DEVCMD" rpc migration_replay_applied "$(jq -nc --argjson v "$files_json" '{p_files:$v}')" 2>/dev/null)
+applied=$(jq -c '.applied_files // empty' <<<"$resp")
+# A ledger that answers nothing (RPC missing, empty table, network) is NOT
+# "nothing applied": replaying the whole tree on live is the one outcome this
+# script exists to prevent. Refuse instead.
+if [ -z "$applied" ] || [ "$(jq -r 'length' <<<"$applied")" -eq 0 ]; then
+  log "ledger unreadable or empty (resp: ${resp:0:200}) — refusing to replay anything"; exit 1
+fi
 
 pending=()
 for f in "${FILES[@]}"; do
@@ -34,10 +42,13 @@ for f in "${FILES[@]}"; do
   # Files with no leading version (legacy names) are applied by the runner that
   # wrote them and never replayed: nothing to key them on.
   [[ "$v" =~ ^[0-9]{8,}$ ]] || continue
-  if ! jq -e --arg v "$v" 'index($v) != null' <<<"$applied" >/dev/null; then pending+=("$f"); fi
+  if ! jq -e --arg b "$b" 'index($b) != null' <<<"$applied" >/dev/null; then pending+=("$f"); fi
 done
 [ ${#pending[@]} -eq 0 ] && { log "nothing pending (${#FILES[@]} files, all in the ledger)"; exit 0; }
 log "${#pending[@]} pending file(s) to replay on live"
+if [ ${#pending[@]} -gt "${REPLAY_MAX_FILES:-15}" ]; then
+  log "refusing: ${#pending[@]} pending files is not one batch's worth — seed the ledger (migration_replay_seed) first"; exit 1
+fi
 
 # The DB lane: DDL is exclusive. Wait politely, never hammer.
 token=""; for try in $(seq 1 20); do

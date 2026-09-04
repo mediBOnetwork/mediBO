@@ -176,6 +176,36 @@ NEVER say "please check the site", "please open medibo.in", or "let me know if i
 The only time Om's eyes are needed is for subjective UI review (layout, colours) — not for
 proving the app boots or a feature works. That proof comes from render-log.
 
+## ZONE + DATE SCOPING (CHANGE #1094 — permanent, gated)
+
+Every staff-facing list, count, report, feed or RPC (admin/partner) reads
+`admin_active_zone()` and `admin_active_date()` — via `zone_effective()` /
+`admin_active_date()`, or their canonical wrappers `scope_zone()` /
+`scope_date()`. Partner is zone-locked; super admin may see all zones.
+**Zone and date are chosen ONLY in the header picker, never per screen.**
+Customer and supplier surfaces scope to their own zone. New tables that hold
+orders / deliveries / inquiries / bills carry `zone_id` and inherit it by
+trigger. Use the wrapper pattern (rename to `_core`, wrap + filter) when
+touching large RPCs.
+
+This is a GATE, not advice. `c1094_staff_rpcs_are_zone_scoped` runs on every
+`rg_check` and turns the guard RED, naming the function, when a staff RPC that
+reads rows of orders / deliveries / inquiries / supplier_orders / pending_bills
+has no scoping.
+
+It is a RATCHET, so it can never stop the fleet: the 112 functions that were
+already unscoped when the gate was built are grandfathered in
+`zone_scope_baseline` by a hash of their body. Touch one and it is judged as
+new work; fix one and it leaves the baseline for good. Only `new_unscoped` and
+`changed_still_unscoped` block.
+
+- Audit it: `bash scripts/c1094_zone_scope_audit.sh` (or `select public.zone_scope_audit('violations')`)
+- Genuinely global on purpose (the catalogue, MEDICINE, the zone plumbing):
+  add a row to `public.zone_scope_allow` with a written reason. `dimension`
+  is `both` for a full exemption, or `date` when the surface is correctly
+  zone-scoped but has no date to scope by — a live backlog is a queue, not a
+  day's ledger.
+
 ## DEFENSIVE IMPORT RULE (prevents dart2js static-init crashes)
 NEVER add `import 'dart:html'`, `import 'dart:js'`, or any `dart:*` web-only library to files
 that are imported by the widget tree (e.g. view_as_state.dart, app_state.dart, user_state.dart,

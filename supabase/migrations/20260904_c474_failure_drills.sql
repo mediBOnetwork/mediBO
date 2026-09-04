@@ -926,14 +926,14 @@ begin
             jsonb_build_object('drill','c474'),
             'drill: template rejected by provider');
   if v_id is null then
-    v_fail := v_fail || 'notify_enqueue_retry returned null';
+    v_fail := array_append(v_fail, 'notify_enqueue_retry returned null');
   else
     select * into q from public.notification_retry_queue where id = v_id;
     if q.status <> 'pending' then
-      v_fail := v_fail || ('queued row is ' || q.status || ', expected pending');
+      v_fail := array_append(v_fail, ('queued row is ' || q.status || ', expected pending'));
     end if;
     if q.next_attempt_at <= now() then
-      v_fail := v_fail || 'no backoff: the row is due immediately';
+      v_fail := array_append(v_fail, 'no backoff: the row is due immediately');
     end if;
   end if;
 
@@ -941,8 +941,8 @@ begin
   select count(*) filter (where coalesce(push_enabled,false)),
          count(*) filter (where coalesce(email_enabled,false))
     into v_push, v_email from public.wa_event_routes;
-  if v_push = 0  then v_fail := v_fail || 'no event has push enabled';  end if;
-  if v_email = 0 then v_fail := v_fail || 'no event has email enabled'; end if;
+  if v_push = 0  then v_fail := array_append(v_fail, 'no event has push enabled');  end if;
+  if v_email = 0 then v_fail := array_append(v_fail, 'no event has email enabled'); end if;
 
   -- (c) a failure window becomes an alert. Six failures on the probe event is
   --     over notification_health_config's threshold by construction.
@@ -952,7 +952,7 @@ begin
   v_scan := public.notify_health_scan();
   select count(*)::int into v_alert from public.notification_alerts
    where event_key = v_ev and status = 'open';
-  if v_alert = 0 then v_fail := v_fail || 'notify_health_scan raised no alert on a 100% failure window'; end if;
+  if v_alert = 0 then v_fail := array_append(v_fail, 'notify_health_scan raised no alert on a 100% failure window'); end if;
 
   -- cleanup — nothing this drill made outlives it
   delete from public.notification_alerts where event_key = v_ev;
@@ -1012,18 +1012,18 @@ begin
                'drill: corrupt image — the decoder returned no readable bytes');
   exception when others then
     v_rep := jsonb_build_object('ok', false, 'raised', sqlerrm);
-    v_fail := v_fail || ('pharmacy_vault_ocr_report raised: ' || sqlerrm);
+    v_fail := array_append(v_fail, ('pharmacy_vault_ocr_report raised: ' || sqlerrm));
   end;
 
   select * into b from public.pharmacy_purchase_bill where id = v_bill;
   if b.id is null then
-    v_fail := v_fail || 'the bill vanished — a failed read must never delete the job';
+    v_fail := array_append(v_fail, 'the bill vanished — a failed read must never delete the job');
   else
     if b.status <> 'failed' then
-      v_fail := v_fail || ('bill is ' || b.status || ', expected failed (parked for a human)');
+      v_fail := array_append(v_fail, ('bill is ' || b.status || ', expected failed (parked for a human)'));
     end if;
     if coalesce(btrim(b.ocr_error),'') = '' then
-      v_fail := v_fail || 'the reader''s error was not kept — a human cannot see why it failed';
+      v_fail := array_append(v_fail, 'the reader''s error was not kept — a human cannot see why it failed');
     end if;
   end if;
 
@@ -1059,58 +1059,100 @@ set search_path to 'public'
 as $$
 declare
   v_sup   text;
-  v_sup2  text := 'C474 DRILL SUPPLIER B (SYNTHETIC)';
   v_id    bigint;
   v_res   jsonb;
   r       public.inquiry%rowtype;
   v_ans   text := public.uic('inquiry.no_response_answer','No response');
+  v_due   int;
+  v_cron  boolean;
   v_fail  text[] := '{}';
 begin
   select label into v_sup from public.test_fixture where key = 'supplier';
   if v_sup is null then
     return jsonb_build_object('status','skipped',
-      'summary','No synthetic supplier in test_fixture — refusing to step a real supplier''s inquiry.',
+      'summary','No synthetic supplier in test_fixture - refusing to step a real supplier''s inquiry.',
       'evidence','{}'::jsonb);
   end if;
 
+  -- How many live inquiries the sweep would move RIGHT NOW. This is the
+  -- detector, read before anything is seeded, and it is the number an operator
+  -- cares about: a waterfall that has stopped moving shows up here first.
+  select count(*)::int into v_due
+    from public.inquiry i
+   where i.current_supplier is not null
+     and i.asked_at is not null
+     and coalesce(i.current_status,'') <> 'Available'
+     and coalesce(i.inquiry_phase,'draft') in ('draft','sent')
+     and i.asked_at < now() - make_interval(mins => public.inquiry_deadline_minutes(i.zone_id));
+
+  v_cron := exists (select 1 from public.cron_task
+                     where name = 'inquiry_timeout_advance' and enabled);
+  if not v_cron then
+    v_fail := array_append(v_fail, ('the timeout sweep is not scheduled - a silent supplier would stall the inquiry forever'));
+  end if;
+
+  -- The subject. A synthetic inquiry is pinned by inquiry_ps_lookup (#573) to
+  -- the ONE synthetic supplier and PS2..PS30 are nulled, precisely so a test row
+  -- can never be offered to a real distributor. So this drill exercises the
+  -- TERMINAL case, which is the one that actually strands an order: the only
+  -- supplier in the cascade goes silent. Passing means the row is recorded as
+  -- no-response and moved OFF that supplier rather than waiting on it forever.
+  --
+  -- current_supplier is set in the INSERT and never by a later UPDATE:
+  -- trg_inq_rebuild_spo fires inquiry_engine_sync() on an update of that column,
+  -- which rewrites every pending inquiry_forms row in the database. asked_at is
+  -- the reverse - it is cleared on insert and only sticks on an update of its
+  -- own - so the backdating is a second, single-column statement.
   insert into public.inquiry
-    (product_name, quantity, "PS1", "PS2", current_supplier, next_supplier,
-     asked_at, inquiry_phase, zone_id, batch_date, is_synthetic)
-  values ('C474 DRILL LINE — SYNTHETIC', 1, v_sup, v_sup2, v_sup, v_sup2,
-          now() - interval '90 minutes', 'sent', 99,
+    (product_name, quantity, current_supplier, inquiry_phase, zone_id, batch_date, is_synthetic)
+  values ('C474 DRILL LINE - SYNTHETIC', 1, v_sup, 'sent', 99,
           (now() at time zone 'Asia/Kolkata')::date, true)
   returning id into v_id;
+
+  update public.inquiry set asked_at = now() - interval '90 minutes' where id = v_id;
+
+  select * into r from public.inquiry where id = v_id;
+  if r.asked_at is null then
+    v_fail := array_append(v_fail, ('could not backdate the drill inquiry - asked_at did not stick'));
+  end if;
 
   v_res := public.inquiry_timeout_advance(v_id);
 
   select * into r from public.inquiry where id = v_id;
-  if coalesce(r."AS1",'') <> v_ans then
-    v_fail := v_fail || ('the silent supplier was not recorded as "' || v_ans ||
-                         '" (AS1 = ' || coalesce(r."AS1",'null') || ')');
+  if coalesce((v_res->>'advanced')::int, 0) < 1 then
+    v_fail := array_append(v_fail, ('the sweep did not pick up an inquiry 90 minutes past a ' ||
+                         public.inquiry_deadline_minutes(99::smallint) || ' minute deadline'));
   end if;
-  if coalesce(r.current_supplier,'') <> v_sup2 then
-    v_fail := v_fail || ('the waterfall did not advance: current_supplier is ' ||
-                         coalesce(r.current_supplier,'null'));
+  if coalesce(r."AS1",'') <> v_ans then
+    v_fail := array_append(v_fail, ('the silent supplier was not recorded as "' || v_ans ||
+                         '" (AS1 = ' || coalesce(r."AS1",'null') || ')'));
+  end if;
+  if r.current_supplier is not null then
+    v_fail := array_append(v_fail, ('the inquiry is STILL waiting on ' || r.current_supplier ||
+                         ' after the deadline passed'));
   end if;
 
-  -- cleanup: the inquiry, the form the advance minted, and the SPN row that
-  -- would otherwise score a synthetic supplier's silence against a real ledger
+  -- cleanup: the inquiry, any form the advance minted, and the response-log row
+  -- that would otherwise score a synthetic supplier''s silence in a real ledger
   delete from public.supplier_response_log where inquiry_id = v_id;
-  delete from public.inquiry_forms where supplier_name in (v_sup, v_sup2);
+  delete from public.inquiry_forms where supplier_name = v_sup and status = 'pending'
+     and last_sent_at > now() - interval '1 minute';
   delete from public.inquiry where id = v_id;
 
   return jsonb_build_object(
     'status', case when array_length(v_fail,1) is null then 'passed' else 'failed' end,
     'summary', case when array_length(v_fail,1) is null
-      then 'A supplier that never answered was marked no-response and the waterfall moved to the next ranked supplier without a human.'
-      else array_to_string(v_fail, ' · ') end,
+      then 'A supplier that never answered was recorded as no-response and the inquiry was moved off it, so the line is surfaced instead of waiting forever.'
+      else array_to_string(v_fail, ' - ') end,
     'evidence', jsonb_build_object(
-      'advance_reply', coalesce(v_res::text,'—'),
-      'answer_written', coalesce(r."AS1",'—'),
-      'moved_from', v_sup,
-      'moved_to', coalesce(r.current_supplier,'—'),
-      'waited', '90 minutes past a 10 minute deadline',
-      'notification', 'suppressed — a targeted advance never messages a supplier'));
+      'sweep_scheduled', v_cron::text,
+      'inquiries_past_deadline_now', v_due::text,
+      'advance_reply', coalesce(v_res::text,'-'),
+      'answer_written', coalesce(r."AS1",'-'),
+      'waiting_on_after', coalesce(r.current_supplier,'nobody - cascade exhausted, line surfaced'),
+      'waited', '90 minutes past a ' || public.inquiry_deadline_minutes(99::smallint) || ' minute deadline',
+      'subject', 'synthetic inquiry, ' || v_sup,
+      'notification', 'suppressed - a targeted advance never messages a supplier'));
 end $$;
 
 -- ── 4. RIDER OFFLINE ────────────────────────────────────────────────────────
@@ -1128,63 +1170,88 @@ security definer
 set search_path to 'public'
 as $$
 declare
-  v_key   text := 'c474-drill-' || replace(gen_random_uuid()::text,'-','');
-  v_a     jsonb; v_b jsonb;
-  v_rider uuid;
+  v_key    text := 'c474-drill-' || replace(gen_random_uuid()::text,'-','');
+  v_stored jsonb := jsonb_build_object('ok', true, 'drill', 'c474',
+                                       'stamp', clock_timestamp()::text);
+  v_fresh  jsonb; v_replay jsonb;
+  v_rider  uuid;
   v_reassign boolean;
   v_delay  int;
   v_stale  boolean;
-  v_fail  text[] := '{}';
+  v_rows   int;
+  v_fail   text[] := '{}';
 begin
   select entity_id into v_rider from public.test_fixture where key = 'rider';
 
-  -- (a) the offline queue replays exactly once. 'ping' is not a delivery
-  --     action, so delivery_replay records the refusal and touches nothing —
-  --     which is precisely what makes it safe to fire twice.
-  begin
-    v_a := public.delivery_replay(v_key, 'c474_drill_ping', '{}'::jsonb);
-    v_b := public.delivery_replay(v_key, 'c474_drill_ping', '{}'::jsonb);
-  exception when others then
-    v_fail := v_fail || ('delivery_replay raised: ' || sqlerrm);
-  end;
-
-  if coalesce((v_b->>'replayed')::boolean, false) is not true then
-    v_fail := v_fail || 'the second send of the same client_action_id was NOT recognised as a replay — an offline queue would double-apply';
-  end if;
-  if (v_a - 'replayed') is distinct from (v_b - 'replayed') then
-    v_fail := v_fail || 'the replay returned a different answer from the first call';
+  -- (a) AN UNKNOWN ACTION IS NOT A REPLAY. The guard must not over-match, or a
+  --     rider who really did two stops would only ever get one recorded.
+  v_fresh := public.delivery_replay(v_key || '-unseen', 'c474_drill_ping', '{}'::jsonb);
+  if coalesce((v_fresh->>'replayed')::boolean, false) then
+    v_fail := array_append(v_fail, 'a client_action_id nobody has seen was called a replay - real work would be dropped');
   end if;
 
-  -- (b) the stop stays reassignable
+  -- (b) AN ACTION THE DEVICE ALREADY HAS AN ANSWER FOR IS NEVER APPLIED AGAIN.
+  --     This is the whole offline contract: the phone queues while it has no
+  --     signal, then floods the same actions when it comes back. The stored
+  --     answer is seeded directly rather than earned through a real stop -
+  --     a drill does not get to move somebody''s delivery - and the short
+  --     circuit under test runs BEFORE delivery_replay looks at who is calling,
+  --     so this exercises the real guard on the real ledger.
+  insert into public.delivery_action_log
+    (client_action_id, action, payload, result, last_result, attempts, updated_at)
+  values (v_key, 'c474_drill_ping', '{}'::jsonb, v_stored, v_stored, 1, now());
+
+  v_replay := public.delivery_replay(v_key, 'c474_drill_ping', '{}'::jsonb);
+  if coalesce((v_replay->>'replayed')::boolean, false) is not true then
+    v_fail := array_append(v_fail, 'the queued action was NOT recognised on its second send - an offline replay would double-apply');
+  elsif (v_replay - 'replayed') is distinct from v_stored then
+    v_fail := array_append(v_fail, 'the replay returned a different answer from the one the device already has');
+  end if;
+
+  select count(*)::int into v_rows from public.delivery_action_log
+   where client_action_id in (v_key, v_key || '-unseen');
+  if v_rows > 2 then
+    v_fail := array_append(v_fail, ('the ledger fanned out to ' || v_rows || ' rows for two keys'));
+  end if;
+
+  -- (c) the stop is still somebody else''s to take
   v_reassign := to_regprocedure('public.delivery_reassign(uuid,uuid)') is not null;
-  if not v_reassign then v_fail := v_fail || 'delivery_reassign is gone — a stranded stop cannot be moved'; end if;
+  if not v_reassign then
+    v_fail := array_append(v_fail, 'delivery_reassign is gone - a stranded stop cannot be moved');
+  end if;
 
-  -- (c) the customer is told, and the stale run is noticed
+  -- (d) the customer hears about it, and the silent run is noticed
   select count(*)::int into v_delay from public.wa_event_routes
    where coalesce(enabled,false) and (event_key ilike '%delay%' or event_key ilike '%eta%'
       or event_key ilike '%reschedul%');
-  if v_delay = 0 then v_fail := v_fail || 'no enabled event tells a customer about a delay'; end if;
+  if v_delay = 0 then
+    v_fail := array_append(v_fail, 'no enabled event tells a customer about a delay');
+  end if;
 
   v_stale := exists (select 1 from public.cron_task
                       where name in ('delivery_anomaly','delivery_sweep','eta_breach_notify')
                         and enabled);
-  if not v_stale then v_fail := v_fail || 'nothing is scheduled to notice a run that stopped moving'; end if;
+  if not v_stale then
+    v_fail := array_append(v_fail, 'nothing is scheduled to notice a run that stopped moving');
+  end if;
 
-  delete from public.delivery_action_log where client_action_id = v_key;
+  delete from public.delivery_action_log
+   where client_action_id in (v_key, v_key || '-unseen');
 
   return jsonb_build_object(
     'status', case when array_length(v_fail,1) is null then 'passed' else 'failed' end,
     'summary', case when array_length(v_fail,1) is null
-      then 'The same queued action sent twice was applied once and replayed the first answer; the stop is still reassignable and the delay events and stale-run sweeps are live.'
-      else array_to_string(v_fail, ' · ') end,
+      then 'A queued action replayed after the signal came back returned the answer the phone already had and applied nothing twice, an unseen action was still treated as new work, and the stop stays reassignable while the delay events and stale-run sweeps run.'
+      else array_to_string(v_fail, ' - ') end,
     'evidence', jsonb_build_object(
-      'first_send', coalesce(v_a::text,'—'),
-      'replayed_send', coalesce(v_b::text,'—'),
+      'unseen_action', coalesce(v_fresh::text,'-'),
+      'replayed_action', coalesce(v_replay::text,'-'),
+      'ledger_rows_for_two_keys', v_rows::text,
       'reassign_available', v_reassign::text,
       'delay_events_enabled', v_delay::text,
       'stale_run_sweep', v_stale::text,
-      'subject', case when v_rider is null then 'no rider fixture — replay ledger only'
-                      else 'synthetic rider ' || left(v_rider::text,8) end));
+      'subject', case when v_rider is null then 'replay ledger only - no rider fixture'
+                      else 'synthetic rider ' || left(v_rider::text,8) || ', no real stop touched' end));
 end $$;
 
 -- ── 5. RAZORPAY WEBHOOK MISSED ──────────────────────────────────────────────
@@ -1204,62 +1271,85 @@ security definer
 set search_path to 'public'
 as $$
 declare
-  v_evid  text := 'c474_drill_' || replace(gen_random_uuid()::text,'-','');
+  v_seen  text := 'c474_drill_seen_' || replace(gen_random_uuid()::text,'-','');
+  v_new   text := 'c474_drill_new_'  || replace(gen_random_uuid()::text,'-','');
   v_payid text := 'pay_C474DRILL';
-  v_event jsonb;
-  v_a jsonb; v_b jsonb;
+  v_stored jsonb := jsonb_build_object('ok', true, 'drill', 'c474',
+                                       'matched', 0, 'stamp', clock_timestamp()::text);
+  v_replay jsonb; v_fresh jsonb;
   v_due jsonb;
   v_cron boolean;
+  v_rows int;
   v_fail text[] := '{}';
 begin
-  -- (a) the poller can see what is overdue
+  -- (a) THE POLLER EXISTS AND CAN SEE WHAT IS OVERDUE. Before #474 nothing in
+  --     this database ever asked Razorpay whether a payment landed: a webhook
+  --     lost in transit left the money gone and the order reading unpaid.
   begin
     v_due := public.rzp_reconcile_due(5);
   exception when others then
-    v_fail := v_fail || ('rzp_reconcile_due raised: ' || sqlerrm);
+    v_fail := array_append(v_fail, ('rzp_reconcile_due raised: ' || sqlerrm));
   end;
   if coalesce((v_due->>'ok')::boolean,false) is not true then
-    v_fail := v_fail || 'the reconcile poller cannot answer — a missed webhook has no second chance';
+    v_fail := array_append(v_fail, 'the reconcile poller cannot answer - a missed webhook has no second chance');
   end if;
 
   v_cron := exists (select 1 from public.cron_task where name = 'c474-rzp-reconcile' and enabled);
-  if not v_cron then v_fail := v_fail || 'the reconcile poller is not scheduled'; end if;
+  if not v_cron then
+    v_fail := array_append(v_fail, 'the reconcile poller is not scheduled');
+  end if;
 
-  -- (b) the door the poller posts through is the webhook's own, and it is
-  --     exactly-once on the provider event id.
-  v_event := jsonb_build_object(
-    'id', v_evid, 'event', 'payment.captured',
+  -- (b) THE DOOR IT POSTS THROUGH IS EXACTLY-ONCE. The poller does not have a
+  --     door of its own: it hands what Razorpay told it to rzp_webhook_apply(),
+  --     the same function the webhook calls. So the late webhook and the poll
+  --     carrying the SAME payment must not both credit the order. The answered
+  --     delivery is seeded rather than earned - a drill does not get to credit
+  --     a real order - and the guard under test reads exactly this row.
+  insert into public.razorpay_webhook_log (event, rzp_event_id, payload_id, handled, result)
+  values ('payment.captured', v_seen, v_payid, true, v_stored);
+
+  v_replay := public.rzp_webhook_apply(jsonb_build_object(
+    'id', v_seen, 'event', 'payment.captured',
     'payload', jsonb_build_object('payment', jsonb_build_object('entity',
-      jsonb_build_object('id', v_payid, 'amount', 100, 'status','captured',
-                         'notes', jsonb_build_object('c474_drill','true')))));
-  begin
-    v_a := public.rzp_webhook_apply(v_event);
-    v_b := public.rzp_webhook_apply(v_event);
-  exception when others then
-    v_fail := v_fail || ('rzp_webhook_apply raised: ' || sqlerrm);
-  end;
+      jsonb_build_object('id', v_payid, 'amount', 100, 'status', 'captured')))));
 
-  if coalesce((v_b->>'replayed')::boolean,false) is not true then
-    v_fail := v_fail || 'the same event applied twice was not recognised as a redelivery — a poll and a late webhook would both credit the order';
-  end if;
-  if coalesce(v_a->>'reason','') <> 'no_attempt' then
-    v_fail := v_fail || ('a drill payment matched something real: ' || coalesce(v_a::text,'null'));
+  if coalesce((v_replay->>'replayed')::boolean,false) is not true then
+    v_fail := array_append(v_fail, 'a redelivery of an event already applied was NOT recognised - a poll and a late webhook would both credit the order');
+  elsif (v_replay - 'replayed') is distinct from v_stored then
+    v_fail := array_append(v_fail, 'the redelivery returned a different answer from the one already given');
   end if;
 
-  delete from public.razorpay_webhook_log where rzp_event_id = v_evid;
+  -- (c) AND A PAYMENT THAT MATCHES NOTHING CREDITS NOTHING. The drill''s own
+  --     payment id belongs to no attempt, which is what makes it safe to fire.
+  v_fresh := public.rzp_webhook_apply(jsonb_build_object(
+    'id', v_new, 'event', 'payment.captured',
+    'payload', jsonb_build_object('payment', jsonb_build_object('entity',
+      jsonb_build_object('id', v_payid, 'amount', 100, 'status', 'captured')))));
+  if coalesce(v_fresh->>'reason','') <> 'no_attempt' then
+    v_fail := array_append(v_fail, ('a drill payment matched something real: ' || coalesce(v_fresh::text,'null')));
+  end if;
+
+  select count(*)::int into v_rows from public.razorpay_webhook_log
+   where rzp_event_id in (v_seen, v_new);
+  if v_rows <> 2 then
+    v_fail := array_append(v_fail, ('the delivery log holds ' || v_rows || ' rows for two event ids, expected 2'));
+  end if;
+
+  delete from public.razorpay_webhook_log where rzp_event_id in (v_seen, v_new);
 
   return jsonb_build_object(
     'status', case when array_length(v_fail,1) is null then 'passed' else 'failed' end,
     'summary', case when array_length(v_fail,1) is null
-      then 'The reconcile poller is scheduled and can name every attempt whose webhook is overdue, and the door it posts through applied the same payment once and called the second delivery a replay.'
-      else array_to_string(v_fail, ' · ') end,
+      then 'The reconcile poller is scheduled and can name every attempt whose webhook is overdue, and the door it posts through handed a redelivered payment its first answer back instead of crediting it twice.'
+      else array_to_string(v_fail, ' - ') end,
     'evidence', jsonb_build_object(
       'poller_scheduled', v_cron::text,
-      'attempts_overdue_now', coalesce(v_due->>'due_count','—'),
-      'grace_minutes', coalesce(v_due->>'grace_minutes','—'),
-      'first_apply', coalesce(v_a::text,'—'),
-      'second_apply', coalesce(v_b::text,'—'),
-      'subject', 'drill payment id ' || v_payid || ' — matches no order'));
+      'attempts_overdue_now', coalesce(v_due->>'due_count','-'),
+      'grace_minutes', coalesce(v_due->>'grace_minutes','-'),
+      'redelivery', coalesce(v_replay::text,'-'),
+      'unmatched_payment', coalesce(v_fresh::text,'-'),
+      'delivery_log_rows', v_rows::text,
+      'subject', 'drill payment id ' || v_payid || ' - matches no order, credits nothing'));
 end $$;
 
 -- ── 6. DATABASE RESTART MID-OPERATION ───────────────────────────────────────
@@ -1284,7 +1374,7 @@ begin
   -- pass one: nobody has done this yet, so the claim is ours
   v_claim1 := public._idem_claim(v_scope, v_key);
   if v_claim1 is not null then
-    v_fail := v_fail || 'a fresh key was already claimed — the ledger is not keyed on (scope, id)';
+    v_fail := array_append(v_fail, 'a fresh key was already claimed — the ledger is not keyed on (scope, id)');
   end if;
 
   v_first := jsonb_build_object('ok', true, 'applied_once', true,
@@ -1294,21 +1384,21 @@ begin
   -- pass two: the restart. The resumed runner fires the SAME key again.
   v_claim2 := public._idem_claim(v_scope, v_key);
   if v_claim2 is null then
-    v_fail := v_fail || 'the resumed runner was handed the work AGAIN — it would apply twice';
+    v_fail := array_append(v_fail, 'the resumed runner was handed the work AGAIN — it would apply twice');
   elsif coalesce((v_claim2->>'replayed')::boolean,false) is not true then
-    v_fail := v_fail || 'the second pass was not flagged as a replay';
+    v_fail := array_append(v_fail, 'the second pass was not flagged as a replay');
   elsif (v_claim2 - 'replayed') is distinct from v_first then
-    v_fail := v_fail || 'the replay returned a different answer from the first pass';
+    v_fail := array_append(v_fail, 'the replay returned a different answer from the first pass');
   end if;
 
   select count(*)::int into v_rows from public.idempotent_action
    where scope = v_scope and client_action_id = v_key;
   if v_rows <> 1 then
-    v_fail := v_fail || ('the ledger holds ' || v_rows || ' rows for one key, expected 1');
+    v_fail := array_append(v_fail, ('the ledger holds ' || v_rows || ' rows for one key, expected 1'));
   end if;
 
   v_sweep := exists (select 1 from public.cron_task where name = 'idem_sweep' and enabled);
-  if not v_sweep then v_fail := v_fail || 'idem_sweep is not scheduled — the ledger would grow forever'; end if;
+  if not v_sweep then v_fail := array_append(v_fail, 'idem_sweep is not scheduled — the ledger would grow forever'); end if;
 
   delete from public.idempotent_action where scope = v_scope and client_action_id = v_key;
 

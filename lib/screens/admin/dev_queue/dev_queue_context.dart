@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../design_tokens.dart';
+import '../../../utils/render_log.dart';
 import '../../../services/ui_copy.dart';
 import 'dev_queue_common.dart';
 
@@ -34,8 +35,14 @@ class ContextEconomyCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if ((payload['has'] ?? false) != true) return const SizedBox.shrink();
+    if ((payload['has'] ?? false) != true) {
+      RenderLog.write('c1197_ctx_rows', 0);
+      return const SizedBox.shrink();
+    }
     final rows = (payload['rows'] as List?) ?? const [];
+    // Reachability proof (CLAUDE.md): the live render-log is what says this
+    // widget PAINTED, not that it compiled.
+    RenderLog.write('c1197_ctx_rows', rows.length);
     final threshold = '${payload['threshold_label'] ?? ''}';
     final since = '${payload['since_label'] ?? ''}';
     final footnote = '${payload['footnote'] ?? ''}';

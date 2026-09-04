@@ -27,6 +27,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/screens/admin/dev_queue/dev_queue_context.dart';
 
 Map<String, dynamic> _payload({bool has = true, List? rows}) => {
@@ -83,6 +84,10 @@ Future<void> _pump(WidgetTester tester, Map<String, dynamic> payload) =>
     ));
 
 void main() {
+  // The card calls RenderLog.write; its 800 ms debounce is a real Timer that
+  // would outlive the test and try to reach Supabase.
+  setUpAll(() => RenderLog.flushEnabled = false);
+
   testWidgets('every string on the card is the backend\'s, verbatim',
       (tester) async {
     await _pump(tester, _payload());

@@ -28,6 +28,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../design_tokens.dart';
 import '../models/catalogue.dart';
 import '../models/product.dart';
+import '../services/ui_copy.dart';
 import '../url_sync.dart';
 import '../utils/render_log.dart';
 import '../widgets/catalogue_alphabet_rail.dart';
@@ -1500,24 +1501,43 @@ class _CatSkeleton extends StatelessWidget {
 }
 
 /// The error state prints the BACKEND's copy plus Retry — never a Dart apology.
+///
+/// It used to be handed `e.toString()`, and on 4 Sep a cold anon visit painted
+/// "PostgrestException(message: canceling statement due to statement timeout,
+/// code: 57014, details: , hint: null)" across the middle of the catalogue.
+/// The sentence is `catalogue.load_error` and the button is `catalogue.retry`;
+/// the exception text is kept for the render log and never shown.
 class _CatError extends StatelessWidget {
   final String message;
   final VoidCallback onRetry;
   const _CatError({required this.message, required this.onRetry});
 
   @override
-  Widget build(BuildContext context) => Container(
-        color: Ds.c.bg,
-        padding: EdgeInsets.all(Ds.space.x24),
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(message, textAlign: TextAlign.center, style: Ds.t.bodySecondary),
-              SizedBox(height: Ds.space.x16),
-              OutlinedButton(onPressed: onRetry, child: const Icon(Icons.refresh)),
-            ],
-          ),
+  Widget build(BuildContext context) {
+    if (message.isNotEmpty) {
+      RenderLog.write('c799_catalogue_error',
+          message.length > 120 ? message.substring(0, 120) : message);
+    }
+    return Container(
+      color: Ds.c.bg,
+      padding: EdgeInsets.all(Ds.space.x24),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(c('catalogue.load_error'),
+                key: const Key('c799_catalogue_error_copy'),
+                textAlign: TextAlign.center,
+                style: Ds.t.bodySecondary),
+            SizedBox(height: Ds.space.x16),
+            OutlinedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh),
+              label: Text(c('catalogue.retry')),
+            ),
+          ],
         ),
-      );
+      ),
+    );
+  }
 }

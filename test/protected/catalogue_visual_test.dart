@@ -36,6 +36,13 @@
 //      call made once the cards are already on screen — the grid must paint
 //      without it — and `has:false` (a one-pack family) draws no chips.
 //
+//   8. THE ERROR STATE IS THE BACKEND'S SENTENCE. A failed load prints
+//      `catalogue.load_error` and a Retry labelled `catalogue.retry` — never
+//      the exception. A live anon visit on 4 Sep painted
+//      "PostgrestException(message: canceling statement due to statement
+//      timeout, code: 57014 …)" across the middle of the screen, which is what
+//      this pins shut.
+//
 //   7. THE EMPTY STATE TEACHES AND ACTS. Its sentence, its hint and both of
 //      its buttons are the payload's `empty` block; `has:false` on an action
 //      draws no button rather than a dead one.
@@ -49,6 +56,7 @@ import 'package:pharma_b2b/app_state.dart';
 import 'package:pharma_b2b/models/cart_model.dart';
 import 'package:pharma_b2b/models/catalogue.dart';
 import 'package:pharma_b2b/screens/catalogue_screen.dart';
+import 'package:pharma_b2b/services/ui_copy.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/widgets/catalogue_alphabet_rail.dart';
 import 'package:pharma_b2b/widgets/catalogue_product_card.dart';
@@ -253,10 +261,17 @@ Map<String, dynamic> _variants() => {
 class _Rpc {
   final List<(String, Map<String, dynamic>)> calls = [];
   final Map<String, List<Map<String, dynamic>>> queued;
-  _Rpc(this.queued);
+  /// Functions that FAIL rather than answer — the real shape of a statement
+  /// timeout, which arrives as a thrown PostgrestException, not `ok:false`.
+  final Set<String> throwFor;
+  _Rpc(this.queued, {this.throwFor = const {}});
 
   Future<Map<String, dynamic>> call(String fn, Map<String, dynamic> args) async {
     calls.add((fn, args));
+    if (throwFor.contains(fn)) {
+      throw Exception('PostgrestException(message: canceling statement due to '
+          'statement timeout, code: 57014, details: , hint: null)');
+    }
     final q = queued[fn];
     if (q == null || q.isEmpty) return {'ok': false};
     return q.length == 1 ? q.first : q.removeAt(0);
@@ -270,6 +285,7 @@ Future<_Rpc> _pump(
   WidgetTester tester, {
   required Map<String, List<Map<String, dynamic>>> queued,
   CatalogueRoute? route,
+  Set<String> throwFor = const {},
   Size size = const Size(430, 900),
 }) async {
   tester.view.physicalSize = size;
@@ -277,7 +293,7 @@ Future<_Rpc> _pump(
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
 
-  final rpc = _Rpc(queued);
+  final rpc = _Rpc(queued, throwFor: throwFor);
   await tester.pumpWidget(
     AppState(
       cart: CartModel.forTest(),
@@ -297,7 +313,14 @@ Future<_Rpc> _pump(
 }
 
 void main() {
-  setUpAll(() => RenderLog.flushEnabled = false);
+  setUpAll(() {
+    RenderLog.flushEnabled = false;
+    UiCopy.debugSet(const {
+      'catalogue.load_error':
+          "The catalogue didn't load. Check your connection and try again.",
+      'catalogue.retry': 'Retry',
+    });
+  });
 
   group('the three doors are the payload\'s', () {
     testWidgets('label, count and glyph letter all print verbatim',
@@ -512,6 +535,47 @@ void main() {
       }, route: const CatalogueRoute(listKind: 'tab', listKey: 'cold_chain'));
       expect(find.text('Request this product'), findsNothing);
       expect(find.text('Clear all'), findsOneWidget);
+    });
+  });
+
+  group('the error state is the backend sentence, never the exception', () {
+    testWidgets('a failed catalogue_home prints the copy and a labelled Retry',
+        (tester) async {
+      final rpc = await _pump(tester, queued: {
+        'catalogue_tree': [_treeRoot()],
+      }, throwFor: {'catalogue_home'});
+      expect(
+          find.text(
+              "The catalogue didn't load. Check your connection and try again."),
+          findsOneWidget);
+      expect(find.text('Retry'), findsOneWidget);
+      // The one thing that must never reach a customer's screen.
+      expect(find.textContaining('PostgrestException'), findsNothing);
+      expect(find.textContaining('statement timeout'), findsNothing);
+      expect(find.textContaining('Exception'), findsNothing);
+
+      // Retry re-asks the backend rather than clearing the message locally.
+      final before = rpc.count('catalogue_home');
+      await tester.tap(find.text('Retry'));
+      await tester.pumpAndSettle();
+      expect(rpc.count('catalogue_home'), greaterThan(before));
+    });
+
+    testWidgets('the sentence is the copy map, not a Dart fallback',
+        (tester) async {
+      UiCopy.debugSet(const {
+        'catalogue.load_error': 'Backend wrote this line.',
+        'catalogue.retry': 'Try again',
+      });
+      addTearDown(() => UiCopy.debugSet(const {
+            'catalogue.load_error':
+                "The catalogue didn't load. Check your connection and try again.",
+            'catalogue.retry': 'Retry',
+          }));
+      await _pump(tester, queued: {'catalogue_tree': [_treeRoot()]},
+          throwFor: {'catalogue_home'});
+      expect(find.text('Backend wrote this line.'), findsOneWidget);
+      expect(find.text('Try again'), findsOneWidget);
     });
   });
 }

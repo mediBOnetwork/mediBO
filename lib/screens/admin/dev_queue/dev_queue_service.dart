@@ -124,6 +124,12 @@ class DevQueueService {
   Future<Map<String, dynamic>> runnerBoot({int limit = 12}) async =>
       _asMap(await _c.rpc('runner_boot_status', params: {'p_limit': limit}));
 
+  /// CHANGE #1268 — one agent id per live session, one building command per
+  /// agent. Its own RPC beside the lanes, so a refused read never blanks them.
+  /// Every label, tone and caption is built by `dev_agent_sessions_status()`.
+  Future<Map<String, dynamic>> runnerSessions() async =>
+      _asMap(await _c.rpc('dev_agent_sessions_status'));
+
   /// CHANGE #916 — the regression guard, which until now had no surface at
   /// all: its only way to reach Om was to file an urgent "RG red after #N"
   /// command. Verdict, the recent runs in order, what the watcher will do

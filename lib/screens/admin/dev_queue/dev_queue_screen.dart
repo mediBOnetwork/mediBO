@@ -22,6 +22,7 @@ import 'play_store_screen.dart';
 import 'signin_diag_screen.dart';
 import 'memory_screen.dart';
 import 'threads_screen.dart';
+import '../ops_runbooks_screen.dart';           // CHANGE #474
 import 'dev_tools_sheet.dart';
 
 /// The Dev Queue registry — the permanent development record, rendered from
@@ -1092,6 +1093,10 @@ const Set<String> kDevToolKeys = <String>{
   'memory',
   'threads',
   'play_store',
+  // CHANGE #474 — Failure drills. It belongs to this family, beside Cron
+  // health, Test mode and the daily heartbeat: the things that tell an
+  // operator whether the platform is still standing up.
+  'runbooks',
 };
 
 /// Open one registered tool. Returns false for a key this build does not know,
@@ -1147,6 +1152,14 @@ bool openDevTool(
       return true;
     case 'play_store':
       push(PlayStoreScreen(service: svc));
+      return true;
+    // CHANGE #474 — the six external dependencies mediBO does not own, what
+    // happens by itself when each one breaks, and the last time the fallback
+    // was proved by deliberately breaking it. Authorisation is not the door:
+    // ops_runbooks_home() and ops_runbook_drill() gate on _ops_admin() and
+    // answer anyone else with their own refusal sentence.
+    case 'runbooks':
+      push(const OpsRunbooksScreen());
       return true;
   }
   return false;

@@ -316,20 +316,70 @@ update public.legal_pages
    and not exists (select 1 from jsonb_array_elements(sections) s
                     where s->>'heading' = 'Zone and date scoping');
 
--- ── 9. fence the two functions this change added ───────────────────────────
+-- ── 9. fence what this change added ───────────────────────────────────────
 -- Postgres creates every function with an implicit GRANT EXECUTE TO PUBLIC and
 -- anon inherits it, so a SECURITY DEFINER function is a public endpoint until
 -- it is explicitly revoked — and the anon key ships inside the web bundle and
 -- the APK. `revoke ... from anon` alone is the trap: it leaves the PUBLIC grant
--- standing. Revoke PUBLIC, then re-grant the signed-in role, or the admin
--- screens lose their own RPC (the second branch of privileged_rpcs_are_not_anon).
--- Caught by that guard on this very change.
-revoke all on function public.zone_scope_audit(text)                from public, anon;
-revoke all on function public.zone_scope_baseline_capture(boolean)  from public, anon;
+-- standing.
+--
+-- But the OTHER half of privileged_rpcs_are_not_anon is just as real: revoking
+-- PUBLIC without re-granting the signed-in role locks the admin screens out of
+-- their own RPC (#436). This migration shipped with
+-- `revoke ... from authenticated` on the capture, and that is exactly what the
+-- guard went red on — the fence has to live INSIDE the function, the way
+-- _dev_guard() does it, not at the GRANT.
+--
+-- So: revoke PUBLIC and anon, keep EXECUTE for authenticated, and decide
+-- authority in the body. Replayed on a rebuilt database this now reproduces the
+-- live state instead of re-breaking the guard.
+revoke all on function public.zone_scope_audit(text)               from public, anon;
+revoke all on function public.zone_scope_baseline_capture(boolean) from public, anon;
 grant execute on function public.zone_scope_audit(text)             to authenticated, service_role;
--- The capture MUTATES the baseline, so it is service_role only: nobody signs in
--- and re-grandfathers their own unscoped RPC. `authenticated` needs its own
--- revoke — this schema hands it EXECUTE on new functions by default privilege,
--- so revoking PUBLIC alone leaves every signed-in user holding it.
-revoke all on function public.zone_scope_baseline_capture(boolean) from authenticated;
-grant execute on function public.zone_scope_baseline_capture(boolean) to service_role;
+grant execute on function public.zone_scope_baseline_capture(boolean) to authenticated, service_role;
+
+create or replace function public.zone_scope_baseline_capture(p_seed boolean default false)
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+declare v_added int := 0; v_dropped int := 0; v_audit jsonb;
+begin
+  -- The fence lives here, not in the GRANT. The capture edits the grandfather
+  -- list of the zone-scoping gate, so it is admin work; the ratchet's own
+  -- cron/service_role caller carries no JWT and must still pass.
+  if not (public._is_service_role()
+          or public.get_my_role() in ('admin','super_admin')) then
+    return jsonb_build_object('ok', false, 'error', 'not_authorized');
+  end if;
+
+  if p_seed then
+    insert into public.zone_scope_baseline (fn_name, sig, body_md5, note)
+    select r->>'fn', r->>'sig',
+           (select md5(regexp_replace(pg_get_functiondef(p.oid), '--[^' || chr(10) || ']*', '', 'g'))
+              from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+             where n.nspname='public' and p.proname = r->>'fn' limit 1),
+           'CHANGE #1094 initial capture'
+      from jsonb_array_elements(public.zone_scope_audit('all')->'rows') r
+     where r->>'verdict' = 'new_unscoped'
+    on conflict (fn_name) do nothing;
+    get diagnostics v_added = row_count;
+  end if;
+
+  -- the ratchet: anything now scoped, allow-listed or simply gone leaves.
+  v_audit := public.zone_scope_audit('all');
+  delete from public.zone_scope_baseline b
+   where not exists (
+     select 1 from jsonb_array_elements(v_audit->'rows') r
+      where r->>'fn' = b.fn_name
+        and r->>'verdict' in ('grandfathered','changed_still_unscoped','new_unscoped'));
+  get diagnostics v_dropped = row_count;
+
+  return jsonb_build_object('ok', true, 'added', v_added, 'dropped', v_dropped,
+    'baseline_size', (select count(*) from public.zone_scope_baseline),
+    'counts', public.zone_scope_audit('violations')->'counts');
+end $function$;
+
+revoke all on function public.zone_scope_baseline_capture(boolean) from public, anon;
+grant execute on function public.zone_scope_baseline_capture(boolean) to authenticated, service_role;

@@ -58,21 +58,23 @@ probe_login() {           # <label> <email> <password> <expected-role-substring>
   tok=$(sign_in "$2" "$3")
   if [ -z "$tok" ]; then bad "$1 login" "auth returned no access token"; return; fi
   ok "$1 login"
-  body=$(rpc "$tok" ui_boot '{}')
-  role=$(jq -r '.role // .user.role // .auth.role // empty' <<<"$body")
+  # CHANGE #571: the APK asks ONE question — my_session() — and every shell
+  # decision in lib/user_state.dart is a straight read of its role/is_* fields.
+  body=$(rpc "$tok" my_session '{}')
+  role=$(jq -r 'if type=="array" then .[0] else . end | .role // empty' <<<"$body")
   if [ -z "$role" ]; then
-    bad "$1 role resolution" "ui_boot returned no role field"
+    bad "$1 role resolution" "my_session returned no role field: $(head -c 120 <<<"$body")"
   elif [ -n "$4" ] && [[ "$role" != *"$4"* ]]; then
-    bad "$1 role resolution" "ui_boot says role='$role', expected to contain '$4'"
+    bad "$1 role resolution" "my_session says role='$role', expected to contain '$4'"
   else
     ok "$1 role resolution (role=$role)"
   fi
   printf '%s' "$tok" > "/dev/shm/.j985.$1.tok"
 }
 
-probe_login customer test.cust1@medibo.in TestCust1#26 ""
-probe_login supplier test.sup1@medibo.in  TestSup1#26  ""
-probe_login admin    test.admin@medibo.in TestAdmin#26 ""
+probe_login customer test.cust1@medibo.in TestCust1#26 "customer"
+probe_login supplier test.sup1@medibo.in  TestSup1#26  "supplier"
+probe_login admin    test.admin@medibo.in TestAdmin#26 "admin"
 
 # ── 4  order place → track: the customer's own order surfaces answer ────────
 if [ -s /dev/shm/.j985.customer.tok ]; then
@@ -99,7 +101,7 @@ fi
 # ── 5  push registration: the Android platform speaks for itself ────────────
 P=$(curl -s -X POST "$URL/rest/v1/rpc/push_config_get" \
       -H "apikey: $ANON" -H "Content-Type: application/json" \
-      -d '{"p_platform":"android"}')
+      -d '{}')   # push_config_get takes no argument (lib/services/push_service.dart)
 if jq -e '.api_key // .app_id // .sender_id // .project_id' >/dev/null 2>&1 <<<"$P"; then
   ok "android push registration config is populated"
 else

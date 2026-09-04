@@ -12,6 +12,9 @@ import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:http/http.dart' as http; // CHANGE #1149
+import 'services/resilient_http.dart'; // CHANGE #1149 — cache instead of spin
+import 'widgets/reconnecting_banner.dart'; // CHANGE #1149
 
 import 'app_state.dart';
 import 'order_hours_state.dart';
@@ -127,7 +130,16 @@ void main() {
         // already uses records the function name, status and duration of each
         // call with no change at a single call site. It reads the URL and the
         // status code only: never a request body, never a response body.
-        httpClient: CrashReporting.breadcrumbHttpClient(),
+        // CHANGE #1149 — under the breadcrumbs sits the caching client: the
+        // last good body of each read/RPC is served in place of a 502/503/504
+        // or a timeout, and the Reconnecting strip is raised. The breadcrumb
+        // therefore records what the SCREEN got (200 + x-medibo-cached), which
+        // is the truth an outage report needs.
+        httpClient: CrashReporting.breadcrumbHttpClient(ResilientClient(
+          http.Client(),
+          probeUri: Uri.parse('${SupabaseConfig.url}/rest/v1/'),
+          probeHeaders: const {'apikey': SupabaseConfig.anonKey},
+        )),
         authOptions: const FlutterAuthClientOptions(
           authFlowType: AuthFlowType.pkce,
           autoRefreshToken: true,
@@ -529,7 +541,13 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               child: TestModeBannerHost(
                 child: UpdateBarHost(
                   controller: VersionWatcher.instance.updateBar,
-                  child: child!,
+                  // CHANGE #1149 — the reconnecting strip sits above every
+                  // route of every role and never blocks the page under it:
+                  // the cached payload stays visible while the backend is out.
+                  child: Column(children: [
+                    const ReconnectingBanner(),
+                    Expanded(child: child!),
+                  ]),
                 ),
               ),
             ),

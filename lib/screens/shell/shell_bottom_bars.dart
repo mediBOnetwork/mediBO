@@ -147,9 +147,12 @@ class _MobileBottomBar extends StatelessWidget {
         : (active ? pair.active : pair.icon));
     switch ((slot['badge_key'] ?? '').toString()) {
       case 'cart':
-        return Badge(
-          isLabelVisible: cart.orders.isNotEmpty,
-          label: Text('${cart.orders.length}'),
+        // CHANGE #799 — the badge PULSES when the count changes. Motion with a
+        // meaning: an add that happened three screens away (a catalogue card,
+        // a quick peek) has to be visible where the cart lives, or the only
+        // feedback for the tap is the row the finger is already covering.
+        return _CartBadgePulse(
+          count: cart.orders.length,
           child: icon,
         );
       case 'shop':
@@ -557,3 +560,57 @@ class _WebDiscountBarState extends State<_WebDiscountBar>
 // ─────────────────────── Desktop top bar (Row 1) ───────────────────────
 
 // ─────────────────────── Desktop single-row header ───────────────────────
+
+
+/// CHANGE #799 — the bottom bar's cart badge, and the one beat it grows for
+/// when the count changes.
+///
+/// The animation is driven by the COUNT, not by the add: any route into the
+/// cart — a catalogue card, the quick peek, the product page, a restored
+/// draft — moves this badge, because all of them move the number.
+class _CartBadgePulse extends StatefulWidget {
+  final int count;
+  final Widget child;
+  const _CartBadgePulse({required this.count, required this.child});
+
+  @override
+  State<_CartBadgePulse> createState() => _CartBadgePulseState();
+}
+
+class _CartBadgePulseState extends State<_CartBadgePulse>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: Ds.motion.standard,
+    lowerBound: 1.0,
+    upperBound: 1.35,
+  );
+
+  @override
+  void didUpdateWidget(covariant _CartBadgePulse old) {
+    super.didUpdateWidget(old);
+    // Only a RISE pulses. Removing a line is not a moment to celebrate, and a
+    // badge that jumps on every decrement is noise.
+    if (widget.count > old.count) {
+      _c.forward(from: 1.0).then((_) {
+        if (mounted) _c.reverse();
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Badge(
+        isLabelVisible: widget.count > 0,
+        label: ScaleTransition(
+          scale: _c,
+          child: Text('${widget.count}'),
+        ),
+        child: widget.child,
+      );
+}

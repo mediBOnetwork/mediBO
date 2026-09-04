@@ -434,6 +434,20 @@ class MedicineRepository {
     }
   }
 
+  /// CHANGE #799 — the company header's salt cloud, asked for AFTER the first
+  /// page of products is on screen. It is a group-by over everything the
+  /// marketer makes (a second on the biggest of them), and a header must never
+  /// hold the grid behind it. A failure is an absent cloud, never an error.
+  Future<CompanySaltCloud> fetchCompanySaltCloud(String key) async {
+    try {
+      final res = await _rpc('company_salt_cloud', params: {'p_key': key});
+      if (res is! Map) return CompanySaltCloud.none;
+      return CompanySaltCloud.fromMap(Map<String, dynamic>.from(res));
+    } catch (_) {
+      return CompanySaltCloud.none;
+    }
+  }
+
   /// CHANGE #160 — toggle a product in/out of the customer's wishlist.
   Future<WishlistResult> wishlistToggle(String productId) async {
     final id = int.tryParse(productId);

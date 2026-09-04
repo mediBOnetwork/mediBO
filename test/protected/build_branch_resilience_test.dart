@@ -9,7 +9,9 @@
 //     data) and still raises the flag;
 //   * a later 2xx clears the flag;
 //   * auth / storage / non-REST traffic is never cached;
-//   * the banner prints the backend's copy while down and nothing when up.
+//   * the banner prints the backend's copy while down and nothing when up;
+//   * the Runner control card prints build_branch_state().display verbatim
+//     ("branch: on · 2h 14m") and draws no branch line when none was sent.
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -17,6 +19,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:pharma_b2b/services/resilient_http.dart';
+import 'package:pharma_b2b/screens/admin/dev_queue/dev_queue_service.dart';
+import 'package:pharma_b2b/screens/admin/dev_queue/dev_queue_workers.dart';
+import 'package:supabase_flutter/supabase_flutter.dart'
+    show AuthClientOptions, SupabaseClient;
 import 'package:pharma_b2b/services/ui_copy.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/widgets/reconnecting_banner.dart';
@@ -127,6 +133,45 @@ void main() {
       f.markUp();
       await t.pump();
       expect(find.byType(Row), findsNothing);
+    });
+  });
+
+  group('CHANGE #1149 — the control card prints the branch line verbatim', () {
+    Widget card(Map<String, dynamic> state) => MaterialApp(
+          home: Scaffold(
+            body: WorkerGridCard(
+              pool: {'config': const {'cap': 3}, 'state': state},
+              // A bare client: no auth refresh timer, no realtime socket —
+              // the card never calls it in these tests.
+              service: DevQueueService(
+                  client: SupabaseClient('https://x.supabase.co', 'anon',
+                      authOptions:
+                          const AuthClientOptions(autoRefreshToken: false))),
+              onChanged: () {},
+            ),
+          ),
+        );
+
+    testWidgets('branch_display is the backend sentence, byte for byte',
+        (tester) async {
+      await tester.pumpWidget(card({
+        'active_workers': 2,
+        'branch_display': 'branch: on · 2h 14m',
+        'quota_display': 'Usage 41%',
+      }));
+      await tester.pump();
+      final line = find.byKey(const Key('c1149_branch_line'));
+      expect(line, findsOneWidget);
+      expect(tester.widget<Text>(line).data, 'branch: on · 2h 14m');
+      expect(find.text('Usage 41%'), findsOneWidget);
+    });
+
+    testWidgets('no branch_display → no branch line, not an invented "off"',
+        (tester) async {
+      await tester.pumpWidget(card({'active_workers': 1}));
+      await tester.pump();
+      expect(find.byKey(const Key('c1149_branch_line')), findsNothing);
+      expect(find.textContaining('branch'), findsNothing);
     });
   });
 }

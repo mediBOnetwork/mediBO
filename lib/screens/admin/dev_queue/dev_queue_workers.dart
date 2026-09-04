@@ -44,6 +44,9 @@ class WorkerGridCard extends StatelessWidget {
     final shrink = (_state['shrink_display'] ?? '').toString();
     final quota = (_state['quota_display'] ?? '').toString();
     final load = (_state['load_display'] ?? '').toString();
+    // CHANGE #1149 — "branch: on · 2h 14m" / "branch: off" is the backend's
+    // sentence (build_branch_state().display, forwarded by the supervisor).
+    final branch = (_state['branch_display'] ?? '').toString();
     // CHANGE #233B — the backend blanks workers/counts/countdowns and hands
     // down this one line the moment the pool's own heartbeat goes stale, so a
     // stopped VM can never keep drawing a live worker grid.
@@ -124,18 +127,20 @@ class WorkerGridCard extends StatelessWidget {
           runSpacing: Ds.space.x8,
           children: [for (final w in workers) _WorkerChip(worker: w, service: service)],
         ),
-      // Quota / load caption.
-      if (quota.isNotEmpty || load.isNotEmpty) ...[
+      // Quota / load / build-branch caption — each segment is a backend string.
+      if (quota.isNotEmpty || load.isNotEmpty || branch.isNotEmpty) ...[
         SizedBox(height: Ds.space.x8),
-        Row(children: [
-          if (quota.isNotEmpty)
-            Text(quota, style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
-          if (quota.isNotEmpty && load.isNotEmpty)
-            Text('   ·   ',
-                style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
-          if (load.isNotEmpty)
-            Text(load, style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
-        ]),
+        Wrap(
+          spacing: Ds.space.x8,
+          runSpacing: Ds.space.x4,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            for (final seg in [quota, load, branch].where((s) => s.isNotEmpty))
+              Text(seg,
+                  key: seg == branch ? const Key('c1149_branch_line') : null,
+                  style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+          ],
+        ),
       ],
     ]);
   }

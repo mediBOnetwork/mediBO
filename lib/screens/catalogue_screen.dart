@@ -20,14 +20,21 @@
 // same widget reading the same parser — otherwise the two surfaces eventually
 // disagree about a price.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../design_tokens.dart';
 import '../models/catalogue.dart';
+import '../models/product.dart';
 import '../url_sync.dart';
 import '../utils/render_log.dart';
-import '../widgets/compact_product_card.dart';
+import '../widgets/catalogue_alphabet_rail.dart';
+import '../widgets/catalogue_product_card.dart';
+import '../widgets/product_image.dart';
+import '../widgets/search_typeahead.dart';
+import 'admin/nav_registry_view.dart' show NavGlyph;
 import 'catalogue_extras.dart'; // CHANGE #748
 
 /// Test seam: production goes to Supabase, a test hands back a payload.
@@ -164,6 +171,17 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
 
   final _scroll = ScrollController();
   final _searchCtrl = TextEditingController();
+  final _searchFocus = FocusNode();
+
+  // CHANGE #799 — the typeahead panel under the hero search. The controller
+  // owns the debounce and the last payload; the panel renders it verbatim.
+  final _suggest = SearchSuggestController();
+
+  /// Pack families for the ids currently on screen. Asked for AFTER the grid
+  /// paints (`catalogue_variants`), so first paint never waits on it.
+  CatVariantMap _variants = CatVariantMap.empty;
+  final Set<String> _variantsAsked = <String>{};
+
   final List<CatRow> _rows = [];
   int _nextOffset = 0;
   bool _rowsHaveMore = false;
@@ -180,6 +198,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
     _route = widget.initialRoute ?? CatalogueRoute.parse(initialSearch());
     _searchCtrl.text = _route.query;
     _scroll.addListener(_onScroll);
+    _suggest.addListener(_onSuggest);
     if (widget.active) _boot();
   }
 
@@ -195,6 +214,9 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
     _scroll.removeListener(_onScroll);
     _scroll.dispose();
     _searchCtrl.dispose();
+    _searchFocus.dispose();
+    _suggest.removeListener(_onSuggest);
+    _suggest.dispose();
     super.dispose();
   }
 
@@ -253,6 +275,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         RenderLog.write('c747_catalogue_list',
             '${_route.listKind}:${_route.listKey ?? _route.path.join('/')};'
             'items=${list.items.length};more=${list.hasMore};filters=${list.filtersActive}');
+        unawaited(_loadVariants(list.items));
       } else {
         final fn = switch (_route.tab) {
           'companies' => 'catalogue_companies',
@@ -292,6 +315,44 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
 
   String? _letter;
 
+  void _onSuggest() { if (mounted) setState(() {}); }
+
+  /// CHANGE #799 — the pack families for a page of cards, asked for once the
+  /// cards are already on screen. `catalogue_list` is 190 ms on a warm scope
+  /// and the variant join adds 170 ms to it; a buyer should not wait 170 ms
+  /// longer for a grid so that a chip row can arrive at the same instant.
+  Future<void> _loadVariants(List<Product> items) async {
+    final ids = <int>[];
+    for (final p in items) {
+      if (_variantsAsked.contains(p.id)) continue;
+      final n = int.tryParse(p.id);
+      if (n != null) { ids.add(n); _variantsAsked.add(p.id); }
+    }
+    if (ids.isEmpty) return;
+    try {
+      final v = CatVariantMap.fromMap(await _call('catalogue_variants', {'p_ids': ids}));
+      if (!mounted || v.byId.isEmpty) return;
+      setState(() => _variants = _variants.merge(v));
+      RenderLog.write('c799_catalogue_variants', 'families=${v.byId.length}');
+    } catch (_) {
+      // A family that never arrives is a card with no chip row — which is
+      // exactly what a one-pack product looks like. Never an error line.
+    }
+  }
+
+  /// The typeahead's own answer: the BACKEND's query for the tapped
+  /// suggestion, which for a Hindi word is the salt and not the word.
+  void _pickSuggestion(String query) {
+    _suggest.close();
+    _searchFocus.unfocus();
+    _searchCtrl.text = query;
+    _letter = null;
+    // A search is a PRODUCT search, so it opens the grid — the same scope the
+    // full catalogue uses, narrowed by the backend's own query string.
+    _go(_route.copy(tab: 'browse', path: const [], listKind: 'search',
+        listKey: query, query: query));
+  }
+
   void _go(CatalogueRoute next, {bool push = true}) {
     setState(() {
       _route = next;
@@ -301,6 +362,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
       _list = null;
       _browse = null;
     });
+    _suggest.close();
     if (push) pushUrl(next.url);
     _fetch();
   }
@@ -339,6 +401,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
           moreLabel: cur.moreLabel, endLabel: cur.endLabel, sort: cur.sort,
           filtersActive: cur.filtersActive, filtersActiveLabel: cur.filtersActiveLabel,
           zone: cur.zone, filters: cur.filters,
+          sentence: cur.sentence, empty: cur.empty,
           items: [...cur.items, ...p.items],
           // Paging stops when the BACKEND says so, never when a page comes back
           // short — that is wrong on an exact boundary.
@@ -346,6 +409,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         );
         _cursor = p.nextCursor;
       });
+      unawaited(_loadVariants(p.items));
     } catch (_) {
       if (mounted) setState(() => _loadingMore = false);
     }
@@ -415,6 +479,11 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
 
   // ── build ─────────────────────────────────────────────────────────────────
 
+  /// The catalogue's own front page: no tab chosen, no list open, no crumb.
+  /// Only here do the doors and the recently-viewed strip appear — inside a
+  /// tab they would be furniture in the way of the thing you came for.
+  bool get _isHome => !_route.showsList && _route.tab == 'browse' && _route.path.isEmpty;
+
   @override
   Widget build(BuildContext context) {
     final home = _home;
@@ -426,13 +495,48 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _CatHeader(
+          // 1. The search bar IS the screen's hero — one field, at the top,
+          //    above everything else, on every state of this tab.
+          _SearchHero(
             home: home,
-            route: _route,
-            extras: _extras,
-            onTab: _tapTab,
-            onRequest: _openRequest,
-            onZone: (on) => _go(_route.copy(zoneOn: on)),
+            controller: _searchCtrl,
+            focus: _searchFocus,
+            zoneOn: _route.zoneOn,
+            suggest: _suggest,
+            onSubmit: (q) {
+              final t = q.trim();
+              if (t.isEmpty) return;
+              _suggest.close();
+              _letter = null;
+              _go(_route.copy(tab: 'browse', path: const [], listKind: 'search',
+                  listKey: t, query: t));
+            },
+            onPick: _pickSuggestion,
+            onClear: () {
+              _searchCtrl.clear();
+              _suggest.close();
+              if (_route.listKind == 'search') {
+                _go(_route.copy(listKind: null, listKey: null, query: ''));
+              }
+            },
+          ),
+          // 2. The sentence. Sticky under the search on every state, because a
+          //    filter you cannot see is a filter you forget you set.
+          _SentenceRow(
+            sentence: _route.showsList
+                ? (_list?.sentence ?? home.sentence)
+                : home.sentence,
+            state: _route.filters,
+            onToggle: (g, k, single) {
+              if (g == 'zone') { _go(_route.copy(zoneOn: !_route.zoneOn)); return; }
+              final next = _route.filters.toggle(g, k, single: single);
+              // A chip tapped on the front page has to have somewhere to land:
+              // it opens the whole-catalogue grid already narrowed by it.
+              _go(_route.showsList
+                  ? _route.copy(filters: next)
+                  : _route.copy(filters: next, listKind: 'tree', listKey: null));
+            },
+            onClear: () => _go(_route.copy(filters: const CatFilterState())),
           ),
           if (_route.showsList)
             _ListToolbar(
@@ -494,20 +598,67 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
     );
   }
 
+  /// Long-press on a card. Everything the sheet prints is already on the card's
+  /// own payload, so a peek costs no round trip — which is the whole point of
+  /// it on a slow connection.
+  void _openPeek(Product p) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (_) => CataloguePeekSheet(
+        product: p,
+        variants: _variants.of(p.id),
+        title: _peek('title'),
+        openLabel: _peek('open_label'),
+        onOpen: () {
+          Navigator.of(context).pop();
+          Navigator.of(context).pushNamed('/product/${p.id}');
+        },
+        onVariant: (id) {
+          Navigator.of(context).pop();
+          Navigator.of(context).pushNamed('/product/$id');
+        },
+      ),
+    );
+  }
+
   Widget _rowList() {
     final b = _browse;
     if (b == null) return const _CatSkeleton();
 
     final searchable = _route.tab == 'companies' || _route.tab == 'salts';
-    return CustomScrollView(
+    final list = CustomScrollView(
       controller: _scroll,
       slivers: [
-        if (searchable)
+        // The front page: recently viewed, then the three doors, then the tree.
+        if (_isHome && (_home?.hasRecentViewed ?? false))
+          SliverToBoxAdapter(
+            child: _RecentStrip(
+              title: _home!.recentViewedTitle,
+              items: _home!.recentViewed,
+              onTap: (p) => Navigator.of(context).pushNamed('/product/${p.id}'),
+            ),
+          ),
+        if (_isHome && (_home?.doors.isNotEmpty ?? false))
+          SliverToBoxAdapter(
+            child: _Doors(
+              title: _home!.doorsTitle,
+              doors: _home!.doors,
+              onTap: (d) {
+                _letter = null;
+                _go(_route.copy(tab: d.tab, path: const [], listKind: null,
+                    listKey: null, query: ''));
+              },
+            ),
+          ),
+        if (_isHome) SliverToBoxAdapter(child: _tabStrip()),
+        if (searchable && _route.tab == 'salts')
           SliverToBoxAdapter(
             child: Padding(
               padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x4),
               child: TextField(
-                controller: _searchCtrl,
+                controller: TextEditingController(text: _route.query),
                 onSubmitted: (v) => _go(_route.copy(query: v.trim())),
                 decoration: InputDecoration(
                   hintText: b.searchHint,
@@ -517,17 +668,11 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
               ),
             ),
           ),
-        if (_route.tab == 'companies' && b.letters.isNotEmpty)
-          SliverToBoxAdapter(child: _LetterIndex(
-            browse: b,
-            active: _letter,
-            onPick: (l) { _letter = l; _go(_route.copy(query: '')); },
-          )),
         if (_route.path.isNotEmpty)
           SliverToBoxAdapter(child: _Crumbs(browse: b, path: _route.path, onTap: _crumbTo)),
         SliverToBoxAdapter(
           child: Padding(
-            padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x8),
+            padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x24, Ds.space.x16, Ds.space.x8),
             child: Row(
               children: [
                 Expanded(child: Text(b.title, style: Ds.t.title)),
@@ -575,6 +720,60 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         SliverToBoxAdapter(child: _Tail(loading: _loadingMore)),
       ],
     );
+
+    // CHANGE #799 — the A–Z rail rides on the RIGHT of the company list, on
+    // top of it rather than beside it, so the rows keep the full width.
+    if (_route.tab != 'companies' || b.rail.isEmpty) return list;
+    return Stack(
+      children: [
+        Positioned.fill(child: list),
+        Positioned(
+          top: Ds.space.x24,
+          bottom: Ds.space.x24,
+          right: 0,
+          child: CatalogueAlphabetRail(
+            rail: b.rail,
+            active: _letter,
+            onPick: (l) { _letter = l; _go(_route.copy(query: '')); },
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// The tabs #747/#748 shipped — Schemes, Cold chain, Recently added — now a
+  /// quiet chip row under the doors instead of the screen's main navigation.
+  Widget _tabStrip() {
+    final home = _home;
+    if (home == null) return const SizedBox.shrink();
+    const known = {'list', 'recent'};
+    final tabs = home.tabs.where((t) => known.contains(t.kind)).toList();
+    final recent = _extras['recent'];
+    if (recent is Map && recent['show'] == true) {
+      tabs.add(CatTab.fromMap(Map<String, dynamic>.from(recent)));
+    }
+    if (tabs.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.only(top: Ds.space.x24),
+      child: SizedBox(
+        height: Ds.touch.minTarget,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+          itemCount: tabs.length,
+          separatorBuilder: (_, _) => SizedBox(width: Ds.space.x8),
+          itemBuilder: (context, i) => Center(
+            child: _Chip(
+              label: tabs[i].countLabel.isEmpty
+                  ? tabs[i].label
+                  : '${tabs[i].label}  ${tabs[i].countLabel}',
+              selected: tabs[i].key == _route.tab,
+              onTap: () => _tapTab(tabs[i]),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _productGrid() {
@@ -582,13 +781,21 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
     if (l == null) return const _CatSkeleton();
     if (l.items.isEmpty) {
       return CustomScrollView(controller: _scroll, slivers: [
-        SliverToBoxAdapter(child: _CatEmpty(label: l.emptyLabel)),
+        SliverToBoxAdapter(
+          child: _CatEmptyState(
+            empty: l.empty,
+            onAction: _openRequest,
+            onClear: () => _go(_route.copy(filters: const CatFilterState())),
+          ),
+        ),
       ]);
     }
     return LayoutBuilder(builder: (context, c) {
       final cross = c.maxWidth >= 900 ? 4 : c.maxWidth >= 600 ? 3 : 2;
       return CustomScrollView(
         controller: _scroll,
+        // The grid is a sliver list: only the cards on screen are built, so a
+        // 5.6-lakh scope costs the same as a 24-row one on a low-end phone.
         slivers: [
           SliverToBoxAdapter(
             child: Padding(
@@ -612,14 +819,19 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
             sliver: SliverGrid(
               gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: cross,
-                mainAxisExtent: CompactProductCard.extent,
+                mainAxisExtent: CatalogueProductCard.extent,
                 crossAxisSpacing: Ds.space.x12,
                 mainAxisSpacing: Ds.space.x12,
               ),
               delegate: SliverChildBuilderDelegate(
-                (context, i) => CompactProductCard(
+                (context, i) => CatalogueProductCard(
                   product: l.items[i],
+                  variants: _variants.of(l.items[i].id),
+                  addedLabel: _addedLabel,
+                  undoLabel: _undoLabel,
                   onTap: () => Navigator.of(context).pushNamed('/product/${l.items[i].id}'),
+                  onPeek: () => _openPeek(l.items[i]),
+                  onVariant: (id) => Navigator.of(context).pushNamed('/product/$id'),
                 ),
                 childCount: l.items.length,
               ),
@@ -630,7 +842,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
               padding: EdgeInsets.all(Ds.space.x16),
               child: Center(
                 child: _loadingMore
-                    ? const CircularProgressIndicator(strokeWidth: 2)
+                    ? const _MoreSkeleton()
                     : Text(l.hasMore ? l.moreLabel : l.endLabel, style: Ds.t.caption),
               ),
             ),
@@ -639,146 +851,301 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
       );
     });
   }
+
+  /// The add toast and its undo word, from the payload the extras call
+  /// returned. Absent means no snackbar — never a sentence written here.
+  String get _addedLabel =>
+      (_extras['added'] is Map ? (_extras['added'] as Map)['label'] : '')?.toString() ?? '';
+  String get _undoLabel =>
+      (_extras['added'] is Map ? (_extras['added'] as Map)['undo_label'] : '')?.toString() ?? '';
+  String _peek(String k) =>
+      (_extras['peek'] is Map ? (_extras['peek'] as Map)[k] : '')?.toString() ?? '';
 }
 
 // ── pieces ────────────────────────────────────────────────────────────────
 
-class _CatHeader extends StatelessWidget {
+/// CHANGE #799 — the hero. One field, at the top, on every state of the tab,
+/// with the typeahead panel #790 built hanging under it.
+class _SearchHero extends StatelessWidget {
   final CatHome home;
-  final CatalogueRoute route;
-  final ValueChanged<CatTab> onTab;
-  final Map<String, dynamic> extras;
-  final VoidCallback onRequest;
-  final ValueChanged<bool> onZone;
+  final TextEditingController controller;
+  final FocusNode focus;
+  final bool zoneOn;
+  final SearchSuggestController suggest;
+  final ValueChanged<String> onSubmit;
+  final ValueChanged<String> onPick;
+  final VoidCallback onClear;
 
-  const _CatHeader({
-    required this.extras,
-    required this.onRequest,
+  const _SearchHero({
     required this.home,
-    required this.route,
-    required this.onTab,
-    required this.onZone,
+    required this.controller,
+    required this.focus,
+    required this.zoneOn,
+    required this.suggest,
+    required this.onSubmit,
+    required this.onPick,
+    required this.onClear,
+  });
+
+  @override
+  Widget build(BuildContext context) => Container(
+        color: Ds.c.surface,
+        padding: EdgeInsets.fromLTRB(
+            Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SizedBox(
+              height: Ds.touch.minTarget,
+              child: TextField(
+                controller: controller,
+                focusNode: focus,
+                textInputAction: TextInputAction.search,
+                onChanged: (v) => suggest.onQueryChanged(v, zoneOnly: zoneOn),
+                onSubmitted: onSubmit,
+                decoration: InputDecoration(
+                  // The placeholder is the payload's. There is no second
+                  // sentence under this field: the field IS the instruction.
+                  hintText: home.searchPlaceholder,
+                  prefixIcon: const Icon(Icons.search),
+                  isDense: true,
+                  suffixIcon: ValueListenableBuilder<TextEditingValue>(
+                    valueListenable: controller,
+                    builder: (context, v, _) => v.text.isEmpty
+                        ? const SizedBox.shrink()
+                        : IconButton(
+                            tooltip: home.searchClearLabel,
+                            icon: const Icon(Icons.close),
+                            onPressed: onClear,
+                          ),
+                  ),
+                ),
+              ),
+            ),
+            // The panel is part of the header, not an overlay: an overlay over
+            // a canvas app is one more layer to composite on a low-end phone,
+            // and this list is already the thing under the finger.
+            ListenableBuilder(
+              listenable: suggest,
+              builder: (context, _) => suggest.isOpen
+                  ? Padding(
+                      padding: EdgeInsets.only(top: Ds.space.x8),
+                      child: SearchSuggestions(
+                          payload: suggest.payload, onPick: onPick),
+                    )
+                  : const SizedBox.shrink(),
+            ),
+          ],
+        ),
+      );
+}
+
+/// CHANGE #799 — "Showing · Tablets · Rx · In my zone".
+///
+/// Chips, never a menu. The lead word, the dot between the chips, which chips
+/// are worth offering and whether each is on are all `catalogue_sentence()`'s
+/// answers — this row lays them out and hands taps back.
+class _SentenceRow extends StatelessWidget {
+  final CatSentence sentence;
+  final CatFilterState state;
+  final void Function(String group, String key, bool single) onToggle;
+  final VoidCallback onClear;
+
+  const _SentenceRow({
+    required this.sentence,
+    required this.state,
+    required this.onToggle,
+    required this.onClear,
   });
 
   @override
   Widget build(BuildContext context) {
-    // An unknown `kind` is skipped in silence — the backend may ship a tab this
-    // build has never heard of, and forward compatibility beats an exception.
-    const known = {'tree', 'companies', 'salts', 'list', 'recent'};
-    final tabs = home.tabs.where((t) => known.contains(t.kind)).toList();
-    // CHANGE #748 — "Recently added" is a tab like any other, appended only
-    // when the backend says there IS something new (`show`). An always-present
-    // empty tab teaches people to stop tapping it.
-    final recent = extras['recent'];
-    if (recent is Map && recent['show'] == true) {
-      tabs.add(CatTab.fromMap(Map<String, dynamic>.from(recent)));
-    }
-    final request = extras['request'];
-    final showRequest = request is Map && request['show'] == true;
+    if (sentence.isEmpty) return const SizedBox.shrink();
     return Container(
       color: Ds.c.surface,
-      padding: EdgeInsets.only(top: Ds.space.x12, bottom: Ds.space.x8),
+      padding: EdgeInsets.only(bottom: Ds.space.x8),
+      child: SizedBox(
+        height: Ds.touch.minTarget,
+        child: ListView(
+          scrollDirection: Axis.horizontal,
+          padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+          children: [
+            if (sentence.lead.isNotEmpty)
+              Center(
+                child: Padding(
+                  padding: EdgeInsets.only(right: Ds.space.x8),
+                  child: Text(
+                      sentence.hasSelection
+                          ? sentence.lead
+                          : '${sentence.lead} ${sentence.allLabel}'.trim(),
+                      style: Ds.t.caption),
+                ),
+              ),
+            for (final part in sentence.parts)
+              _Chip(
+                label: part.label,
+                selected: part.selected,
+                onTap: () => onToggle(part.group, part.key, part.isSingle),
+              ),
+            if (sentence.hasSelection && sentence.clearLabel.isNotEmpty)
+              _Chip(label: sentence.clearLabel, selected: false, onTap: onClear),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// CHANGE #799 — three doors, large and calm: a glyph, a name, a count in
+/// grey. Nothing else on the tile, which is the whole instruction.
+class _Doors extends StatelessWidget {
+  final String title;
+  final List<CatDoor> doors;
+  final ValueChanged<CatDoor> onTap;
+  const _Doors({required this.title, required this.doors, required this.onTap});
+
+  static const double _tileH = 104;
+  static const double _glyphBox = 32;
+  static const double _glyph = 20;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: EdgeInsets.fromLTRB(
+            Ds.space.x16, Ds.space.x24, Ds.space.x16, 0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (title.isNotEmpty) ...[
+              Text(title, style: Ds.t.caption),
+              SizedBox(height: Ds.space.x8),
+            ],
+            Row(
+              children: [
+                for (var i = 0; i < doors.length; i++) ...[
+                  if (i > 0) SizedBox(width: Ds.space.x12),
+                  Expanded(
+                    child: InkWell(
+                      onTap: () => onTap(doors[i]),
+                      borderRadius: Ds.r.rCard,
+                      child: Ink(
+                        height: _tileH,
+                        decoration: BoxDecoration(
+                          color: Ds.c.surface,
+                          borderRadius: Ds.r.rCard,
+                          border: Border.all(color: Ds.c.divider),
+                        ),
+                        padding: EdgeInsets.all(Ds.space.x12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            NavGlyph(
+                              row: doors[i].glyphRow,
+                              box: _glyphBox,
+                              glyph: _glyph,
+                              color: Ds.c.brand,
+                            ),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(doors[i].label,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Ds.t.bodyStrong),
+                                Text(doors[i].countLabel,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Ds.t.caption),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
+      );
+}
+
+/// CHANGE #799 — the horizontal strip above the doors. Present only when the
+/// BACKEND said this viewer has one (`recent_viewed.has`), so an anonymous
+/// visitor and a buyer with no history both simply get no strip.
+class _RecentStrip extends StatelessWidget {
+  final String title;
+  final List<Product> items;
+  final ValueChanged<Product> onTap;
+  const _RecentStrip({required this.title, required this.items, required this.onTap});
+
+  static const double _tile = 88;
+  static const double _row = 132;
+
+  @override
+  Widget build(BuildContext context) {
+    if (items.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.only(top: Ds.space.x12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-            child: Row(
-              children: [
-                Expanded(child: Text(home.title, style: Ds.t.display)),
-                // CHANGE #748 — "Missing product?", beside the title where a
-                // buyer is already looking when the search came back empty.
-                if (showRequest)
-                  SizedBox(
-                    height: Ds.space.x48,
-                    child: TextButton(
-                      onPressed: onRequest,
-                      child: Text(
-                        (request['title'] ?? '').toString(),
-                        style: Ds.t.caption.copyWith(color: Ds.c.brand),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
+            padding: EdgeInsets.fromLTRB(Ds.space.x16, 0, Ds.space.x16, Ds.space.x8),
+            child: Text(title, style: Ds.t.caption),
           ),
-          if (home.subtitle.isNotEmpty)
-            Padding(
-              padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x4, Ds.space.x16, 0),
-              child: Text(home.subtitle, style: Ds.t.caption),
-            ),
-          if (home.zone.has) _ZoneSwitch(zone: home.zone, on: route.zoneOn, onChanged: onZone),
-          SizedBox(height: Ds.space.x8),
           SizedBox(
-            height: Ds.touch.minTarget,
+            height: _row,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-              itemCount: tabs.length,
-              separatorBuilder: (_, _) => SizedBox(width: Ds.space.x8),
-              itemBuilder: (context, i) {
-                final t = tabs[i];
-                final sel = t.key == route.tab;
-                return Center(
-                  child: InkWell(
-                    onTap: () => onTab(t),
-                    borderRadius: Ds.r.rChip,
-                    child: Container(
-                      padding: EdgeInsets.symmetric(
-                          horizontal: Ds.space.x12, vertical: Ds.space.x8),
-                      decoration: BoxDecoration(
-                        color: sel ? Ds.c.brandSoft : Ds.c.bg,
-                        borderRadius: Ds.r.rChip,
-                        border: Border.all(color: sel ? Ds.c.brand : Ds.c.divider),
+              itemCount: items.length,
+              separatorBuilder: (_, _) => SizedBox(width: Ds.space.x12),
+              itemBuilder: (context, i) => InkWell(
+                onTap: () => onTap(items[i]),
+                borderRadius: Ds.r.rCard,
+                child: SizedBox(
+                  width: _tile,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        height: _tile,
+                        width: _tile,
+                        clipBehavior: Clip.antiAlias,
+                        decoration: BoxDecoration(
+                          color: Ds.c.surface,
+                          borderRadius: Ds.r.rCard,
+                          border: Border.all(color: Ds.c.divider),
+                        ),
+                        child: Padding(
+                          padding: EdgeInsets.all(Ds.space.x8),
+                          child: ProductImage(
+                            url: items[i].imageUrl,
+                            width: _tile,
+                            height: _tile,
+                            radius: Ds.r.rChip,
+                          ),
+                        ),
                       ),
-                      child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        Text(t.label,
-                            style: Ds.t.body.copyWith(
-                                color: sel ? Ds.c.brand : Ds.c.text)),
-                        if (t.countLabel.isNotEmpty) ...[
-                          SizedBox(width: Ds.space.x8),
-                          Text(t.countLabel, style: Ds.t.caption),
-                        ],
-                      ]),
-                    ),
+                      SizedBox(height: Ds.space.x4),
+                      Expanded(
+                        child: Text(items[i].name,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: Ds.t.caption.copyWith(color: Ds.c.text)),
+                      ),
+                    ],
                   ),
-                );
-              },
+                ),
+              ),
             ),
           ),
         ],
       ),
     );
   }
-}
-
-/// The zone switch. Drawn only when the backend said this viewer HAS one, and
-/// worded entirely by it — including the sentence under it, which changes with
-/// the switch because the backend changed it, not because this widget did.
-class _ZoneSwitch extends StatelessWidget {
-  final CatZone zone;
-  final bool on;
-  final ValueChanged<bool> onChanged;
-  const _ZoneSwitch({required this.zone, required this.on, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) => Padding(
-        padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x8, Ds.space.x8, 0),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(zone.label, style: Ds.t.body),
-                  if (zone.note.isNotEmpty) Text(zone.note, style: Ds.t.caption),
-                ],
-              ),
-            ),
-            Switch(value: on, activeThumbColor: Ds.c.brand, onChanged: onChanged),
-          ],
-        ),
-      );
 }
 
 class _ListToolbar extends StatelessWidget {
@@ -856,31 +1223,6 @@ class _Chip extends StatelessWidget {
                   style: Ds.t.caption.copyWith(color: selected ? Ds.c.brand : Ds.c.text)),
             ),
           ),
-        ),
-      );
-}
-
-class _LetterIndex extends StatelessWidget {
-  final CatBrowse browse;
-  final String? active;
-  final ValueChanged<String?> onPick;
-  const _LetterIndex({required this.browse, required this.active, required this.onPick});
-
-  @override
-  Widget build(BuildContext context) => SizedBox(
-        height: Ds.touch.minTarget,
-        child: ListView(
-          scrollDirection: Axis.horizontal,
-          padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-          children: [
-            _Chip(label: browse.allLabel, selected: active == null, onTap: () => onPick(null)),
-            for (final l in browse.letters)
-              _Chip(
-                label: l.label,
-                selected: active == l.key,
-                onTap: () => onPick(l.key),
-              ),
-          ],
         ),
       );
 }
@@ -975,6 +1317,80 @@ class _CatEmpty extends StatelessWidget {
   Widget build(BuildContext context) => Padding(
         padding: EdgeInsets.all(Ds.space.x32),
         child: Center(child: Text(label, textAlign: TextAlign.center, style: Ds.t.bodySecondary)),
+      );
+}
+
+/// CHANGE #799 — an empty scope names itself, says why it is empty, and offers
+/// the two ways out: request the product, or clear the filters. Which of those
+/// is offered is the payload's `has` flag, never a guess made here.
+class _CatEmptyState extends StatelessWidget {
+  final CatEmptyState empty;
+  final VoidCallback onAction;
+  final VoidCallback onClear;
+  const _CatEmptyState({
+    required this.empty,
+    required this.onAction,
+    required this.onClear,
+  });
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: EdgeInsets.all(Ds.space.x32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(empty.label,
+                textAlign: TextAlign.center, style: Ds.t.bodyStrong),
+            if (empty.hint.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x8),
+              Text(empty.hint, textAlign: TextAlign.center, style: Ds.t.caption),
+            ],
+            if (empty.action.has) ...[
+              SizedBox(height: Ds.space.x24),
+              SizedBox(
+                height: Ds.touch.minTarget,
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: onAction,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Ds.c.brand,
+                    shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+                  ),
+                  child: Text(empty.action.label),
+                ),
+              ),
+            ],
+            if (empty.clear.has) ...[
+              SizedBox(height: Ds.space.x12),
+              SizedBox(
+                height: Ds.touch.minTarget,
+                width: double.infinity,
+                child: OutlinedButton(
+                    onPressed: onClear, child: Text(empty.clear.label)),
+              ),
+            ],
+          ],
+        ),
+      );
+}
+
+/// One more row of card skeletons while the next page lands. A skeleton, never
+/// a spinner — the design QA gate's rule six, and the honest shape of what is
+/// arriving.
+class _MoreSkeleton extends StatelessWidget {
+  const _MoreSkeleton();
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        height: CatalogueProductCard.extent,
+        child: Row(
+          children: [
+            for (var i = 0; i < 2; i++) ...[
+              if (i > 0) SizedBox(width: Ds.space.x12),
+              const Expanded(child: CatalogueCardSkeleton()),
+            ],
+          ],
+        ),
       );
 }
 

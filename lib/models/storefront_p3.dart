@@ -13,6 +13,17 @@ class CompanyPage {
   final String label;
   final String key;
   final String countLabel;
+
+  /// CHANGE #799 — the header's own furniture: the initial the logo box falls
+  /// back to, and the salts this company actually makes. `saltCloudHas` is the
+  /// backend's flag, so a company with none draws no section at all rather
+  /// than an empty heading.
+  final String iconLetter;
+  final bool saltCloudHas;
+  final String saltCloudTitle;
+  final List<({String key, String label, String countLabel})> saltCloud;
+  final String backLabel;
+
   final List<Product> items;
   final int offset;
 
@@ -26,6 +37,11 @@ class CompanyPage {
     required this.label,
     required this.key,
     required this.countLabel,
+    required this.iconLetter,
+    required this.saltCloudHas,
+    required this.saltCloudTitle,
+    required this.saltCloud,
+    required this.backLabel,
     required this.items,
     required this.offset,
     required this.hasMore,
@@ -37,6 +53,11 @@ class CompanyPage {
     label: '',
     key: '',
     countLabel: '',
+    iconLetter: '',
+    saltCloudHas: false,
+    saltCloudTitle: '',
+    saltCloud: [],
+    backLabel: '',
     items: <Product>[],
     offset: 0,
     hasMore: false,
@@ -52,18 +73,36 @@ class CompanyPage {
         label: '',
         key: '',
         countLabel: '',
+        iconLetter: '',
+        saltCloudHas: false,
+        saltCloudTitle: '',
+        saltCloud: const [],
+        backLabel: '',
         items: const [],
         offset: 0,
         hasMore: false,
       );
     }
     final c = (m['company'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final cloud = (m['salt_cloud'] as Map?)?.cast<String, dynamic>() ?? const {};
     return CompanyPage(
       ok: true,
       error: '',
       label: c['label']?.toString() ?? '',
       key: c['key']?.toString() ?? '',
       countLabel: c['count_label']?.toString() ?? '',
+      iconLetter: c['icon_letter']?.toString() ?? '',
+      saltCloudHas: cloud['has'] == true,
+      saltCloudTitle: cloud['title']?.toString() ?? '',
+      saltCloud: ((cloud['items'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => (
+                key: (e['key'] ?? '').toString(),
+                label: (e['label'] ?? '').toString(),
+                countLabel: (e['count_label'] ?? '').toString(),
+              ))
+          .toList(growable: false),
+      backLabel: m['back_label']?.toString() ?? '',
       items: ((m['items'] as List?) ?? const [])
           .whereType<Map>()
           .map((e) => Product.fromHomeCard(Map<String, dynamic>.from(e)))

@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 
 import '../data/medicine_repository.dart';
+import '../design_tokens.dart';
 import '../models/product.dart';
 import '../models/storefront_p3.dart';
 import '../widgets/animations.dart';
 import '../widgets/compact_product_card.dart';
+import 'catalogue_screen.dart';
 
 typedef CompanyPageLoader = Future<CompanyPage> Function(String key, int offset);
 
@@ -117,29 +119,12 @@ class _CompanyScreenState extends State<CompanyScreen> {
   Widget build(BuildContext context) {
     final first = _first;
 
+    // CHANGE #799 — the header is a COLLAPSING sliver, not an AppBar plus a
+    // block under it. Expanded it is the company's identity: the logo box, the
+    // name, the count and the salt cloud. Scrolled, it becomes a slim bar with
+    // the name alone, so the products get the screen back.
     return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        surfaceTintColor: Colors.white,
-        elevation: 0.5,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Color(0xFF111827)),
-          onPressed: () => Navigator.of(context).maybePop(),
-        ),
-        title: first != null && first.ok
-            ? Text(
-                first.label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 15.5,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFF111827),
-                ),
-              )
-            : null,
-      ),
+      backgroundColor: Ds.c.bg,
       body: _loading
           ? const _CompanySkeleton()
           : (first == null || !first.ok)
@@ -152,6 +137,128 @@ class _CompanyScreenState extends State<CompanyScreen> {
                 ),
     );
   }
+}
+
+/// The company's identity, and the salts it makes. Every string is the
+/// payload's; the only thing decided here is how tall it is when open.
+class _CompanyHeader extends StatelessWidget {
+  final CompanyPage page;
+  const _CompanyHeader({required this.page});
+
+  static const double _expanded = 188;
+  static const double _logo = 44;
+  static const double _cloud = 32;
+
+  @override
+  Widget build(BuildContext context) => SliverAppBar(
+        pinned: true,
+        backgroundColor: Ds.c.surface,
+        surfaceTintColor: Ds.c.surface,
+        foregroundColor: Ds.c.text,
+        elevation: 0,
+        expandedHeight: page.saltCloudHas ? _expanded : _expanded - _cloud * 2,
+        leading: IconButton(
+          tooltip: page.backLabel,
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.of(context).maybePop(),
+        ),
+        title: Text(page.label,
+            maxLines: 1, overflow: TextOverflow.ellipsis, style: Ds.t.subtitle),
+        flexibleSpace: FlexibleSpaceBar(
+          collapseMode: CollapseMode.pin,
+          background: SafeArea(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                  Ds.space.x16, Ds.space.x48, Ds.space.x16, Ds.space.x8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      // The logo box. There is no company artwork in the
+                      // catalogue, so the payload's own initial is the honest
+                      // mark — the same rule the nav registry follows.
+                      Container(
+                        width: _logo,
+                        height: _logo,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: Ds.c.bg,
+                          borderRadius: Ds.r.rCard,
+                          border: Border.all(color: Ds.c.divider),
+                        ),
+                        child: Text(page.iconLetter, style: Ds.t.title),
+                      ),
+                      SizedBox(width: Ds.space.x12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(page.label,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: Ds.t.title),
+                            if (page.countLabel.isNotEmpty)
+                              Text(page.countLabel, style: Ds.t.caption),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (page.saltCloudHas) ...[
+                    SizedBox(height: Ds.space.x12),
+                    Text(page.saltCloudTitle, style: Ds.t.caption),
+                    SizedBox(height: Ds.space.x8),
+                    SizedBox(
+                      height: _cloud,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: page.saltCloud.length,
+                        separatorBuilder: (_, _) => SizedBox(width: Ds.space.x8),
+                        itemBuilder: (context, i) => InkWell(
+                          // A salt in the cloud opens the catalogue's own salt
+                          // listing. Pushed directly with the route as a seed
+                          // rather than through a URL: the Catalogue is a page
+                          // of the shell's IndexedStack, and pushing a named
+                          // path would land on the shell's boot parse instead
+                          // of this salt.
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => _SaltListing(
+                                title: page.saltCloud[i].label,
+                                backLabel: page.backLabel,
+                                route: CatalogueRoute(
+                                    listKind: 'salt',
+                                    listKey: page.saltCloud[i].key),
+                              ),
+                            ),
+                          ),
+                          borderRadius: Ds.r.rChip,
+                          child: Container(
+                            padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: Ds.c.bg,
+                              borderRadius: Ds.r.rChip,
+                              border: Border.all(color: Ds.c.divider),
+                            ),
+                            child: Text(page.saltCloud[i].label,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Ds.t.caption.copyWith(color: Ds.c.text)),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
 }
 
 class _Body extends StatelessWidget {
@@ -175,35 +282,7 @@ class _Body extends StatelessWidget {
         return CustomScrollView(
           controller: scroll,
           slivers: [
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      page.label,
-                      style: const TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w700,
-                        height: 1.25,
-                        color: Color(0xFF111827),
-                      ),
-                    ),
-                    if (page.countLabel.isNotEmpty) ...[
-                      const SizedBox(height: 3),
-                      Text(
-                        page.countLabel,
-                        style: const TextStyle(
-                          fontSize: 12.5,
-                          color: Color(0xFF9CA3AF),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
+            _CompanyHeader(page: page),
             SliverPadding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               sliver: SliverGrid(
@@ -310,5 +389,41 @@ class _CompanySkeleton extends StatelessWidget {
             );
           },
         ),
+      );
+}
+
+
+/// CHANGE #799 — one salt's products, opened from a company's salt cloud.
+///
+/// It is the Catalogue screen with its route pre-seeded, not a second listing:
+/// the same RPC, the same cards, the same filter sentence. A salt page that
+/// drifted from the catalogue's own would be two answers to one question.
+class _SaltListing extends StatelessWidget {
+  final String title;
+  final String backLabel;
+  final CatalogueRoute route;
+  const _SaltListing({
+    required this.title,
+    required this.backLabel,
+    required this.route,
+  });
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        backgroundColor: Ds.c.bg,
+        appBar: AppBar(
+          backgroundColor: Ds.c.surface,
+          surfaceTintColor: Ds.c.surface,
+          foregroundColor: Ds.c.text,
+          elevation: 0,
+          leading: IconButton(
+            tooltip: backLabel,
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () => Navigator.of(context).maybePop(),
+          ),
+          title: Text(title,
+              maxLines: 1, overflow: TextOverflow.ellipsis, style: Ds.t.subtitle),
+        ),
+        body: CatalogueScreen(active: true, initialRoute: route),
       );
 }

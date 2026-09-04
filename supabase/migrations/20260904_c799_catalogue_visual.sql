@@ -342,6 +342,69 @@ returns jsonb language sql stable security definer set search_path to public as 
               from shown s), '[]'::jsonb));
 $$;
 
+-- ── the list: a free-text scope, a sentence filter row, an empty state ────
+-- CHANGE #799 — `kind='search'`. The hero search bar and every brand the
+-- typeahead offers land here. It is a PREFIX range on
+-- idx_medicine_name_norm_prefix (`~>=~` / `~<~`, the text_pattern_ops
+-- operators), not a trigram scan: a brand the shopper is already halfway
+-- through typing is a prefix, and a prefix is the one shape 5.6 lakh rows can
+-- answer in milliseconds.
+create or replace function public._cat_where(p_kind text, p_key text, p_path text[], p_filters jsonb)
+returns text language plpgsql immutable set search_path to public as $function$
+declare w text := 'public.catalogue_universe_ok(m.status)'; v text; q text;
+begin
+  if p_kind = 'tree' then
+    if coalesce(array_length(p_path,1),0) >= 1 then
+      w := w || format(' and m.therapeutic_class = %L', p_path[1]); end if;
+    if coalesce(array_length(p_path,1),0) >= 2 then
+      w := w || format(' and m.chemical_class = %L', p_path[2]); end if;
+    if coalesce(array_length(p_path,1),0) >= 3 then
+      w := w || format(' and m.action_class = %L', p_path[3]); end if;
+  elsif p_kind = 'company' then
+    w := w || format(' and m.marketer_canonical = %L', coalesce(p_key,''));
+  elsif p_kind = 'salt' then
+    w := w || format(' and m.salt_composition = %L', coalesce(p_key,''));
+  elsif p_kind = 'search' then
+    q := public._norm_name(coalesce(p_key,''));
+    if coalesce(q,'') = '' then
+      w := w || ' and false';
+    else
+      w := w || format(
+        ' and public._norm_name(m.product_name) operator(pg_catalog.~>=~) %L'
+        || ' and public._norm_name(m.product_name) operator(pg_catalog.~<~) %L',
+        q, left(q, length(q)-1) || chr(ascii(right(q,1)) + 1));
+    end if;
+  elsif p_kind = 'tab' then
+    -- Written as the bare boolean, not coalesce(...,false): the partial
+    -- indexes below are declared `where has_scheme` / `where cold_chain`, and a
+    -- coalesce wrapper stops the planner matching them (4.2 s vs 3 ms).
+    if p_key = 'schemes'    then w := w || ' and m.has_scheme';
+    elsif p_key = 'cold_chain' then w := w || ' and m.cold_chain';
+    end if;
+  end if;
+
+  if coalesce(jsonb_array_length(p_filters->'pack_type'),0) > 0 then
+    select string_agg(format('%L', x), ',') into v
+      from jsonb_array_elements_text(p_filters->'pack_type') x;
+    w := w || format(' and m.pack_type in (%s)', v);
+  end if;
+  if (p_filters->>'rx') in ('Rx','OTC') then
+    w := w || format(' and upper(btrim(coalesce(m.rx_required,''''))) = %L', upper(p_filters->>'rx'));
+  end if;
+  if (p_filters->>'habit_forming') = 'true' then
+    w := w || ' and upper(btrim(coalesce(m.habit_forming,''''))) = ''YES''';
+  end if;
+  if (p_filters->>'cold_chain') = 'true' then w := w || ' and m.cold_chain'; end if;
+  -- has_image reads image_url_1, not the has_image boolean: the boolean is true
+  -- on 4,095 rows while 252,760 actually carry a photo, and this filter has to
+  -- agree with the picture the grid draws.
+  if (p_filters->>'has_image') = 'true' then
+    w := w || ' and m.image_url_1 is not null and btrim(m.image_url_1) <> ''''';
+  end if;
+  if (p_filters->>'has_scheme') = 'true' then w := w || ' and m.has_scheme'; end if;
+  return w;
+end $function$;
+
 -- ── the list: a sentence filter row and an empty state that acts ──────────
 create or replace function public.catalogue_list(
   p_kind text default 'tree', p_key text default null, p_path text[] default '{}'::text[],
@@ -406,6 +469,8 @@ begin
     when p_kind = 'company' then coalesce((select label from public.catalogue_facet_count
         where facet='company' and zone_id=v_cz and facet_key = coalesce(p_key,'')), coalesce(p_key,''))
     when p_kind = 'salt'    then coalesce(p_key,'')
+    when p_kind = 'search'  then coalesce(nullif(btrim(coalesce(p_key,'')),''),
+                                          public.uic('catalogue.all_products','All products'))
     when p_kind = 'tab' and p_key = 'schemes'    then public.uic('catalogue.tab_schemes','Schemes')
     when p_kind = 'tab' and p_key = 'cold_chain' then public.uic('catalogue.tab_cold','Cold chain')
     when p_kind = 'tree' and coalesce(array_length(p_path,1),0) > 0
@@ -431,6 +496,7 @@ begin
     'subtitle', case
       when p_kind = 'salt' then public.uic('catalogue.salt_subtitle','Every brand for this salt')
       when p_kind = 'company' then public.uic('catalogue.company_subtitle','Products from this company')
+      when p_kind = 'search' then public.uic('catalogue.search_subtitle','Matches in the catalogue')
       else '' end,
     'zone', v_zsw,
     'sort', v_sort,
@@ -475,7 +541,8 @@ begin
 end $function$;
 
 insert into public.ui_copy(key, value) values
-  ('catalogue.list_empty_zone', to_jsonb('No {scope} in {zone} yet.'::text))
+  ('catalogue.list_empty_zone', to_jsonb('No {scope} in {zone} yet.'::text)),
+  ('catalogue.search_subtitle', to_jsonb('Matches in the catalogue'::text))
 on conflict (key) do nothing;
 
 -- ── the company page: a salt cloud and a header that collapses ────────────
@@ -523,4 +590,51 @@ begin
     'items', public._sf_cards(coalesce(v_ids, '{}'::bigint[])),
     'offset', greatest(p_offset,0),
     'has_more', (greatest(p_offset,0) + coalesce(array_length(v_ids,1),0)) < v_total);
+end $function$;
+
+
+-- ── the extras block gains the motion copy ────────────────────────────────
+-- The add toast, its undo word and the quick-peek headings. Dart shows a
+-- snackbar only when these arrive: a toast worded in the app is a toast that
+-- cannot be changed without a deploy.
+create or replace function public.catalogue_extras(p_zone boolean default true)
+returns jsonb language plpgsql stable security definer set search_path to public as $function$
+declare c public.catalogue_extras_config%rowtype; v_recent int; v jsonb;
+begin
+  select * into c from public.catalogue_extras_config where id = 1;
+  select count(*) into v_recent from public."MEDICINE"
+   where created_at is not null
+     and created_at >= now() - make_interval(days => coalesce(c.new_days,30));
+
+  return jsonb_build_object(
+    'recent', jsonb_build_object(
+      'key',   'recent',
+      'kind',  'recent',
+      'label', public.uic('catalogue.recent_title','Recently added'),
+      'count', v_recent,
+      'count_label', public.cat_count_label(v_recent::bigint),
+      'show',  v_recent > 0),
+    'added', jsonb_build_object(
+      'label',      public.uic('catalogue.added_toast','Added to cart'),
+      'undo_label', public.uic('catalogue.added_undo','Undo')),
+    'peek', jsonb_build_object(
+      'title',      public.uic('catalogue.peek_title','Quick look'),
+      'open_label', public.uic('catalogue.peek_open','Open full page')),
+    'request', jsonb_build_object(
+      'show',         coalesce(c.request_open,true),
+      'title',        public.uic('catalogue.request_title','Missing product?'),
+      'subtitle',     public.uic('catalogue.request_sub','Tell us what you could not find and we will add it.'),
+      'submit_label', public.uic('catalogue.request_submit','Send request'),
+      'fields', jsonb_build_array(
+        jsonb_build_object('key','name',    'label', public.uic('catalogue.request_name','Product name'),    'required', true),
+        jsonb_build_object('key','company', 'label', public.uic('catalogue.request_company','Company'),      'required', false),
+        jsonb_build_object('key','salt',    'label', public.uic('catalogue.request_salt','Salt / composition'),'required', false),
+        jsonb_build_object('key','pack',    'label', public.uic('catalogue.request_pack','Pack'),            'required', false)),
+      'photo_label',  public.uic('catalogue.request_photo','Add a photo (optional)')),
+    'export', jsonb_build_object(
+      'show',         true,
+      'title',        public.uic('catalogue.export_title','Print / share my catalogue list'),
+      'subtitle',     public.uic('catalogue.export_sub','A plain product list — no prices.'),
+      'action_label', public.uic('catalogue.export_action','Make the PDF'),
+      'max',          coalesce(c.export_max,500)));
 end $function$;

@@ -5,6 +5,10 @@
 #   bash scripts/publish_play.sh              # drain one queued play_release row
 #   bash scripts/publish_play.sh --now        # queue one for this build and run it
 #   bash scripts/publish_play.sh --now --track internal --draft   # rehearsal
+#   bash scripts/publish_play.sh --now --reuse-aab --not-for-review
+#                                # CHANGE #985: draft upload so a Play-gated
+#                                # declaration (FGS, full-screen intent) can be
+#                                # answered in Console; promote the code after
 #   bash scripts/publish_play.sh --tracks     # only read Play's live track state
 #
 # CHANGE #281 — a queued row now carries a KIND, and this script serves all three:
@@ -69,13 +73,27 @@ EXPECT_SHA1=$(bash scripts/verify_signing.sh --expected) || EXPECT_SHA1=""
 }
 ABIS="arm64-v8a,armeabi-v7a,x86_64"       # the full 3-ABI bundle from #278
 
-TRACK="production"; MODE="serve"; DRAFT=""
+TRACK="production"; MODE="serve"; DRAFT=""; NOT_FOR_REVIEW=""; REUSE_AAB=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --now)     MODE="now" ;;
     --tracks)  MODE="tracks" ;;
     --track)   TRACK="${2:?--track needs a value}"; shift ;;
     --draft)   DRAFT="--draft" ;;
+    # CHANGE #985 — the declaration dance. A bundle declaring a Play-gated
+    # permission is refused at commit until the Console form is answered, and
+    # the form only appears once such a bundle has been uploaded. This uploads
+    # the bundle as a DRAFT with changesNotSentForReview=true, records the row
+    # as draft_uploaded, and deliberately writes NO app_releases row — phones
+    # must not be told to update to a version Play has not shipped. The real
+    # release is a later promote of the same versionCode (kind=promote,
+    # from_track=production), which sends it for review with the full rollout.
+    --not-for-review) NOT_FOR_REVIEW="--not-for-review" ;;
+    # CHANGE #985 — reuse the AAB already in build/ when the tree carries the
+    # exact versionCode Play expects next and the artifact is newer than the
+    # version bump. Both artifact gates (16 KB + signing) still run on it; only
+    # the ~4 min flutter build is skipped. A stale or missing bundle rebuilds.
+    --reuse-aab) REUSE_AAB="1" ;;
     --help|-h) sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "publish_play: unknown argument $1" >&2; exit 2 ;;
   esac
@@ -314,21 +332,33 @@ progress building "$(jq -nc --arg n "$NAME" --argjson c "$CODE" '{version_name:$
 
 # versionCode lives in TWO files and they must stay in lockstep — the in-app
 # updater compares the backend's latest code against kAndroidVersionCode.
-sed -i "s/versionCode = .*/versionCode = $CODE/; s/versionName = \".*\"/versionName = \"$NAME\"/" \
-  android/app/build.gradle.kts
-sed -i "s/const int kAndroidVersionCode = .*/const int kAndroidVersionCode = $CODE;/" \
-  lib/services/android_update_check.dart
+# CHANGE #985 — only rewrite when something changes: an unconditional sed -i
+# bumps the file's mtime even when the values are identical, which made
+# --reuse-aab see a "stale" bundle every time and rebuild it.
+if [ "$CUR_CODE" != "$CODE" ] || [ "$CUR_NAME" != "$NAME" ]; then
+  sed -i "s/versionCode = .*/versionCode = $CODE/; s/versionName = \".*\"/versionName = \"$NAME\"/" \
+    android/app/build.gradle.kts
+  sed -i "s/const int kAndroidVersionCode = .*/const int kAndroidVersionCode = $CODE;/" \
+    lib/services/android_update_check.dart
+fi
 grep -q "versionCode = $CODE" android/app/build.gradle.kts \
   && grep -q "kAndroidVersionCode = $CODE;" lib/services/android_update_check.dart \
   || die "version bump did not apply to both files — refusing to build out of lockstep"
 
 # ── 3. the signed bundle + the #278 gates ───────────────────────────────────
 AAB="build/app/outputs/bundle/release/app-release.aab"
-rm -f "$AAB"
-mkdir -p /dev/shm/gtmp
-log "flutter build appbundle --release …"
-if ! flutter build appbundle --release >>"$LOG" 2>&1; then
-  die "the AAB build failed" "$(tail -c 2500 "$LOG")"
+REUSED=""
+if [ -n "$REUSE_AAB" ] && [ -f "$AAB" ] && [ "$CUR_CODE" = "$CODE" ] \
+   && [ "$AAB" -nt android/app/build.gradle.kts ]; then
+  REUSED="1"
+  log "reusing $AAB (tree already at $NAME ($CODE); artifact newer than the version bump) — gates still run"
+else
+  rm -f "$AAB"
+  mkdir -p /dev/shm/gtmp
+  log "flutter build appbundle --release …"
+  if ! flutter build appbundle --release >>"$LOG" 2>&1; then
+    die "the AAB build failed" "$(tail -c 2500 "$LOG")"
+  fi
 fi
 [ -f "$AAB" ] || die "the build produced no AAB"
 AAB_BYTES=$(stat -c%s "$AAB")
@@ -356,7 +386,7 @@ progress uploading "$(jq -nc --argjson b "$AAB_BYTES" '{aab_bytes:($b|tostring)}
 log "uploading to Play (track $TRACK)…"
 OUT=$(mktemp /dev/shm/play_out.XXXX); ERR=$(mktemp /dev/shm/play_err.XXXX)
 if ! python3 scripts/play_publish.py publish --sa "$SA" --aab "$AAB" \
-        --notes-file "$NOTES_FILE" --track "$TRACK" $DRAFT >"$OUT" 2>"$ERR"; then
+        --notes-file "$NOTES_FILE" --track "$TRACK" $DRAFT $NOT_FOR_REVIEW >"$OUT" 2>"$ERR"; then
   BODY=$(cat "$ERR"); rm -f "$OUT" "$ERR"
   die "Google Play rejected the release" "$BODY"
 fi
@@ -369,6 +399,26 @@ cat "$OUT" >> "$LOG"; rm -f "$OUT" "$ERR"
 
 [ "$PLAY_CODE" = "$CODE" ] \
   || log "note: Play reported code $PLAY_CODE for an artifact built as $CODE"
+
+# ── 4b. CHANGE #985 — a draft stops HERE ─────────────────────────────────────
+# The bundle is on Play as a draft and nothing was sent for review. No APK, no
+# app_releases row, no finish_ok: play_publish_finish(p_ok=true) would insert
+# the app_releases row that tells every phone an update exists, and nothing
+# has shipped. The row stays 'draft_uploaded' until the promote of this code.
+if [ -n "$NOT_FOR_REVIEW" ]; then
+  progress draft_uploaded "$(jq -nc --arg n "$NAME" --arg c "$PLAY_CODE" --arg e "$EDIT_ID" \
+      --arg r "draft: $NAME ($PLAY_CODE) uploaded, not sent for review — Play-gated declaration pending in Console" \
+      --arg no "$(cat "$NOTES_FILE")" --arg t "$(tail_log)" \
+      '{version_name:$n,version_code:$c,edit_id:$e,review_status:$r,release_notes:$no,log_tail:$t}')"
+  refresh_tracks
+  rm -f "$NOTES_FILE"
+  jq -nc --argjson id "$REL_ID" --arg n "$NAME" --arg c "$PLAY_CODE" --arg tr "$TRACK" \
+     --arg e "$EDIT_ID" --arg r "$REVIEW" \
+     '{ok:true,release_id:$id,kind:"draft",version_name:$n,version_code:$c,track:$tr,
+       committed_edit:$e,review_status:$r,sent_for_review:false}'
+  log "── done: $NAME ($PLAY_CODE) uploaded to $TRACK as a DRAFT (not sent for review) ──"
+  exit 0
+fi
 
 # ── 5. the APK channel + the app_releases row ───────────────────────────────
 # The direct-download APK is arm64-only (~38 MB); a fat APK is ~110 MB and these

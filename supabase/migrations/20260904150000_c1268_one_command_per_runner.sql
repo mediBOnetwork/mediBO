@@ -123,6 +123,15 @@ create or replace function public.dev_agent_sessions_status()
 returns jsonb language plpgsql security definer set search_path=public as $fn$
 declare v_rows jsonb; v_inc jsonb; v_dupes int; v_live int;
 begin
+  -- Admin-gated like every other panel on Cron health: this names live sessions
+  -- and hosts, which is not for a logged-in customer to read.
+  -- service_role is the runner harness (the supervisor reads this to refuse a
+  -- duplicate agent id); a human caller must be an admin.
+  if coalesce(auth.jwt()->>'role','') <> 'service_role'
+     and get_my_role() not in ('admin','super_admin') then
+    return jsonb_build_object('ok', false, 'has', false, 'error', 'not_authorized');
+  end if;
+
   select count(*) into v_live from dev_agent_session where released_at is null;
 
   select coalesce(jsonb_agg(x order by x->>'agent'), '[]'::jsonb) into v_rows from (

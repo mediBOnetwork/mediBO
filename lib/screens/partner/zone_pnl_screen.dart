@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../design_tokens.dart';
+import '../../utils/toast.dart';
 
 /// CHANGE #694 — Zone P&L (feature_gaps #157).
 ///
@@ -34,6 +36,7 @@ class ZonePnlScreen extends StatefulWidget {
 class _ZonePnlScreenState extends State<ZonePnlScreen> {
   Map<String, dynamic> _p = const {};
   bool _loading = true;
+  bool _docBusy = false;
   String _period = 'month';
 
   @override
@@ -65,6 +68,53 @@ class _ZonePnlScreenState extends State<ZonePnlScreen> {
     _load();
   }
 
+  /// Ask for the zone P&L as a document, poll on the backend's OWN `poll_ms`
+  /// until it says ready, and open the file at the bucket and path IT named —
+  /// the settlement statement's pattern, unchanged. The kind and the ref are
+  /// the payload's: this screen never assembles a document reference, so a
+  /// partner can only ever ask for the export the backend offered it.
+  Future<void> _export(Map<String, dynamic> export) async {
+    if (_docBusy) return;
+    setState(() => _docBusy = true);
+    try {
+      var res = _asMap(await ZonePnlScreen.rpc('partner_doc_request', {
+        'p_kind': (export['kind'] ?? '').toString(),
+        'p_ref': (export['ref'] ?? '').toString(),
+      }));
+      var guard = 0;
+      while (res['ok'] == true &&
+          res['status'] == 'building' &&
+          guard < 40 &&
+          mounted) {
+        guard++;
+        final ms = int.tryParse('${res['poll_ms'] ?? 1500}') ?? 1500;
+        await Future<void>.delayed(Duration(milliseconds: ms));
+        res = _asMap(
+            await ZonePnlScreen.rpc('partner_doc_status', {'p_id': res['doc_id']}));
+      }
+      if (!mounted) return;
+      final msg = (res['message'] ?? '').toString();
+      if (res['ok'] != true || res['status'] != 'ready') {
+        if (msg.isNotEmpty) showToast(context, msg, isError: true);
+        return;
+      }
+      final url = await Supabase.instance.client.storage
+          .from((res['bucket'] ?? '').toString())
+          .createSignedUrl((res['path'] ?? '').toString(),
+              int.tryParse('${res['expires_s'] ?? 300}') ?? 300);
+      if (!mounted) return;
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      if (mounted && msg.isNotEmpty) showToast(context, msg);
+    } catch (e) {
+      if (mounted) showToast(context, e.toString(), isError: true);
+    } finally {
+      if (mounted) setState(() => _docBusy = false);
+    }
+  }
+
+  static Map<String, dynamic> _asMap(dynamic v) =>
+      v is Map ? Map<String, dynamic>.from(v) : <String, dynamic>{};
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -76,7 +126,12 @@ class _ZonePnlScreenState extends State<ZonePnlScreen> {
             ? ZonePnlView.skeleton()
             : RefreshIndicator(
                 onRefresh: _load,
-                child: ZonePnlView(payload: _p, onPeriod: _pickPeriod),
+                child: ZonePnlView(
+                  payload: _p,
+                  onPeriod: _pickPeriod,
+                  onExport: _export,
+                  docBusy: _docBusy,
+                ),
               ),
       ),
     );
@@ -86,10 +141,18 @@ class _ZonePnlScreenState extends State<ZonePnlScreen> {
 /// The rendered P&L, split from the screen so a protected test can pump a
 /// payload with no Supabase and no timers.
 class ZonePnlView extends StatelessWidget {
-  const ZonePnlView({super.key, required this.payload, this.onPeriod});
+  const ZonePnlView({
+    super.key,
+    required this.payload,
+    this.onPeriod,
+    this.onExport,
+    this.docBusy = false,
+  });
 
   final Map<String, dynamic> payload;
   final ValueChanged<String>? onPeriod;
+  final ValueChanged<Map<String, dynamic>>? onExport;
+  final bool docBusy;
 
   static String _s(Map<String, dynamic> m, String k) => (m[k] ?? '').toString();
 
@@ -169,7 +232,14 @@ class ZonePnlView extends StatelessWidget {
           Text(_s(payload, 'empty_note'), style: Ds.t.caption)
         else
           for (final z in zones) ...[
-            _ZoneCard(zone: z, labels: labels, tone: _tone, payload: payload),
+            _ZoneCard(
+              zone: z,
+              labels: labels,
+              tone: _tone,
+              payload: payload,
+              onExport: onExport,
+              docBusy: docBusy,
+            ),
             SizedBox(height: Ds.space.x16),
           ],
         if (_list(payload, 'trend').isNotEmpty) ...[
@@ -191,12 +261,16 @@ class _ZoneCard extends StatelessWidget {
     required this.labels,
     required this.tone,
     required this.payload,
+    this.onExport,
+    this.docBusy = false,
   });
 
   final Map<String, dynamic> zone;
   final Map<String, dynamic> labels;
   final Color Function(String) tone;
   final Map<String, dynamic> payload;
+  final ValueChanged<Map<String, dynamic>>? onExport;
+  final bool docBusy;
 
   static String _s(Map<String, dynamic> m, String k) => (m[k] ?? '').toString();
 
@@ -212,6 +286,8 @@ class _ZoneCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final export = Map<String, dynamic>.from(
+        (zone['export'] as Map?) ?? const <String, dynamic>{});
     final lines = ((zone['lines'] as List<dynamic>?) ?? const [])
         .whereType<Map>()
         .map((e) => Map<String, dynamic>.from(e))
@@ -267,6 +343,24 @@ class _ZoneCard extends StatelessWidget {
                   ],
                 ),
               ),
+          ],
+          // The export is the backend's offer, not this card's idea: it draws
+          // only when the payload sent one, it prints the label it was given,
+          // and it hands `kind` and `ref` straight back. A zone with nobody to
+          // send it to arrives has:false with the backend's own note.
+          if (export['has'] == true && onExport != null) ...[
+            SizedBox(height: Ds.space.x24),
+            SizedBox(
+              width: double.infinity,
+              height: Ds.touch.minTarget,
+              child: OutlinedButton(
+                onPressed: docBusy ? null : () => onExport!(export),
+                child: Text(_s(export, 'label')),
+              ),
+            ),
+          ] else if (_s(export, 'note').isNotEmpty) ...[
+            SizedBox(height: Ds.space.x16),
+            Text(_s(export, 'note'), style: Ds.t.caption),
           ],
         ],
       ),

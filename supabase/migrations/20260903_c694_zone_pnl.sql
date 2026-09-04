@@ -318,8 +318,13 @@ begin
 
   foreach v_z in array coalesce(v_zones, '{}') loop
     if v_z is not null then
+      -- The export descriptor rides on the slice: the card that prints a
+      -- zone is the card that offers to send it, and the kind + ref it will
+      -- quote back are the backend's, never assembled in Dart.
       v_slices := v_slices || jsonb_build_array(
-        public._c694_zone_slice(v_z, v_from, v_to, v_pv));
+        public._c694_zone_slice(v_z, v_from, v_to, v_pv)
+        || jsonb_build_object('export',
+             public._c694_export(v_z, v_p->>'key')));
     end if;
   end loop;
 
@@ -619,3 +624,325 @@ revoke all on function public._c694_period(text) from public, anon;
 
 grant execute on function public.zone_pnl(smallint, text) to authenticated;
 grant execute on function public._c694_doc_payload(smallint, text) to authenticated;
+
+-- ── 10. the export, actually reachable ─────────────────────────────────────
+-- Section 8 built the P&L as a bill-render payload and stopped there: nothing
+-- could ASK for it. `partner_doc_request` only knew 'agreement' and
+-- 'statement', so `_c694_doc_payload` was an orphan and the screen's
+-- `export_label` labelled a button that did not exist. This section closes
+-- spec item 3 — the same statement pattern, one more kind.
+
+insert into public.pnl_label (key, label) values
+  ('zone.export_none',  'This zone has no partner yet, so there is nobody to send it to.'),
+  ('zone.export_kind',  'zone_pnl')
+on conflict (key) do update set label = excluded.label;
+
+-- Who owns a zone. An admin exporting a zone files the document against that
+-- zone's partner (partner_document.partner_id is NOT NULL and carries the
+-- storage prefix), so a zone with no active partner has no export at all —
+-- said in the backend's words rather than a dead button.
+create or replace function public._c694_zone_owner(p_zone smallint)
+returns bigint
+language sql
+stable
+security definer
+set search_path to 'public'
+as $function$
+  select rp.id from public.region_partners rp
+   where rp.zone_id = p_zone and rp.is_active
+   order by rp.id limit 1
+$function$;
+
+comment on function public._c694_zone_owner(smallint) is
+  'CHANGE #694 — the active region partner that owns a zone, for filing the '
+  'zone P&L document against.';
+
+-- The export descriptor the card renders. `has` is the backend''s decision,
+-- the label is the backend''s wording, and the kind and the ref are the
+-- backend''s too — Dart never assembles a document reference.
+create or replace function public._c694_export(p_zone smallint, p_period_key text)
+returns jsonb
+language sql
+stable
+security definer
+set search_path to 'public'
+as $function$
+  select jsonb_build_object(
+    'has',   public._c694_zone_owner(p_zone) is not null,
+    'label', public._pnl_c('zone.export_label'),
+    'kind',  public._pnl_c('zone.export_kind'),
+    'ref',   'z' || p_zone::text || '-' || coalesce(p_period_key, 'month'),
+    'note',  case when public._c694_zone_owner(p_zone) is null
+                  then public._pnl_c('zone.export_none') else '' end)
+$function$;
+
+comment on function public._c694_export(smallint, text) is
+  'CHANGE #694 — the Send-as-PDF descriptor for one zone slice: has/label/'
+  'kind/ref, so the screen carries the backend''s own document reference.';
+
+revoke all on function public._c694_zone_owner(smallint) from public, anon;
+revoke all on function public._c694_export(smallint, text) from public, anon;
+grant execute on function public._c694_zone_owner(smallint) to authenticated;
+grant execute on function public._c694_export(smallint, text) to authenticated;
+
+-- ── 11. the export, asked for and rendered ─────────────────────────────────
+-- Both of these already existed; each gains ONE branch for kind='zone_pnl'.
+-- Replaced whole because that is what `create or replace function` means —
+-- the rest of each body is byte-for-byte what was live before this change.
+
+CREATE OR REPLACE FUNCTION public.partner_doc_render_input(p_doc_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare d public.partner_document%rowtype; pay jsonb;
+begin
+  select * into d from public.partner_document where id = p_doc_id;
+  if not found then return jsonb_build_object('ok', false, 'error','doc_not_found'); end if;
+
+  update public.partner_document
+     set status = 'running', attempts = attempts + 1, started_at = now()
+   where id = p_doc_id;
+
+  if d.kind = 'agreement' then
+    pay := public._c692_agreement_doc_payload(d.ref_key::bigint);
+    if coalesce(pay->>'ok','false') <> 'true' then
+      return jsonb_build_object('ok', false, 'error', coalesce(pay->>'error','no_payload'));
+    end if;
+    return jsonb_build_object('ok', true,
+      'doc_id', d.id,
+      'bucket', 'partner-receipts',
+      'path', 'p' || d.partner_id::text || '/agreement/' ||
+              regexp_replace(d.ref_key, '[^0-9A-Za-z_-]', '', 'g') || '.pdf',
+      'file_name', coalesce(nullif(d.file_name,''), 'agreement.pdf'),
+      'document', pay->'doc');
+  end if;
+
+  -- CHANGE #694 — the zone P&L, drawn by the same renderer. ref_key is
+  -- 'z<zone>-<period>', which is also the storage file name, so the document
+  -- for March never overwrites the document for April.
+  if d.kind = 'zone_pnl' then
+    pay := public._c694_doc_payload(
+             nullif(regexp_replace(split_part(d.ref_key, '-', 1), '\D', '', 'g'),'')::smallint,
+             coalesce(nullif(split_part(d.ref_key, '-', 2), ''), 'month'));
+    if coalesce(pay->>'ok','false') <> 'true' then
+      return jsonb_build_object('ok', false, 'error', coalesce(pay->>'error','no_payload'));
+    end if;
+    return jsonb_build_object('ok', true,
+      'doc_id', d.id,
+      'bucket', 'partner-receipts',
+      'path', 'p' || d.partner_id::text || '/zone_pnl/' ||
+              regexp_replace(d.ref_key, '[^0-9A-Za-z_-]', '', 'g') || '.pdf',
+      'file_name', coalesce(nullif(d.file_name,''), 'zone-pnl.pdf'),
+      'document', pay->'doc');
+  end if;
+
+  pay := public._c466_statement_payload(d.partner_id, d.ref_key::bigint);
+  if coalesce(pay->>'ok','false') <> 'true' then
+    return jsonb_build_object('ok', false, 'error', coalesce(pay->>'error','no_payload'));
+  end if;
+
+  return jsonb_build_object('ok', true,
+    'doc_id', d.id,
+    'bucket', 'partner-receipts',
+    'path', 'p' || d.partner_id::text || '/statement/' ||
+            regexp_replace(d.ref_key, '[^0-9A-Za-z_-]', '', 'g') || '.pdf',
+    'file_name', coalesce(nullif(d.file_name,''), 'statement.pdf'),
+    'document', pay->'doc');
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.partner_doc_request(p_kind text, p_ref text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'net'
+AS $function$
+declare
+  v_pid bigint := public.my_partner_id();
+  v_admin boolean := public.role_for_medibo_only() in ('admin','super_admin');
+  v_period bigint; v_sig bigint; pay jsonb; d public.partner_document%rowtype; v_id uuid;
+  v_zone smallint; v_pk text; v_ref text;
+  s public.partner_agreement_signature%rowtype;
+begin
+  if coalesce(p_kind,'') = 'agreement' then
+    v_sig := nullif(regexp_replace(coalesce(p_ref,''), '\D', '', 'g'),'')::bigint;
+    select * into s from public.partner_agreement_signature where id = v_sig;
+    if not found then
+      return jsonb_build_object('ok', false, 'error','not_found',
+        'message', public._c('partner_doc.err_not_found'));
+    end if;
+    if v_pid is null and v_admin then v_pid := s.partner_id; end if;
+    if v_pid is distinct from s.partner_id and not v_admin then
+      return jsonb_build_object('ok', false, 'error','not_partner',
+        'message', public._c('partner_doc.err_not_partner'));
+    end if;
+    v_pid := s.partner_id;
+
+    pay := public._c692_agreement_doc_payload(v_sig);
+    if coalesce(pay->>'ok','false') <> 'true' then
+      return jsonb_build_object('ok', false, 'error', coalesce(pay->>'error','not_found'),
+        'message', public._c('partner_doc.err_not_found'));
+    end if;
+
+    select * into d from public.partner_document
+     where partner_id = v_pid and kind = 'agreement' and ref_key = v_sig::text;
+    if found and d.status = 'ready' and coalesce(d.path,'') <> '' then
+      return jsonb_build_object('ok', true, 'status','ready', 'doc_id', d.id,
+        'bucket', d.bucket, 'path', d.path, 'file_name', d.file_name,
+        'expires_s', 300, 'message', public._c('partner_doc.ready_message'));
+    end if;
+
+    insert into public.partner_document(
+        partner_id, kind, ref_key, title, file_name, status, attempts,
+        source_stamp, requested_by, requested_at, started_at, last_error)
+    values (v_pid, 'agreement', v_sig::text,
+            coalesce(pay#>>'{doc,title}',''),
+            'agreement-v' || s.version::text || '.pdf',
+            'queued', 0, 'sig' || v_sig::text, auth.uid(), now(), null, null)
+    on conflict (partner_id, kind, ref_key) do update
+      set status = 'queued', attempts = 0, requested_at = now(),
+          started_at = null, last_error = null
+    returning id into v_id;
+
+    update public.partner_agreement_signature set doc_id = v_id, updated_at = now()
+     where id = v_sig;
+
+    perform net.http_post(
+      url     := 'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/bill-render',
+      headers := jsonb_build_object('Content-Type','application/json',
+                                    'x-notify-secret','medibo_order_notify_2027',
+                                    'Authorization','Bearer ' || public._service_key()),
+      body    := jsonb_build_object('supplier_doc_id', v_id),
+      timeout_milliseconds := 20000);
+
+    return jsonb_build_object('ok', true, 'status','building', 'doc_id', v_id,
+      'poll_ms', 1500, 'message', public._c('partner_doc.building_message'));
+  end if;
+
+  -- CHANGE #694 — the zone P&L as a document. Section 8 built the payload and
+  -- nothing could ask for it; this is the ask. The role fence is zone_pnl()'s
+  -- own (a partner reads its own zone whatever it names), and the document is
+  -- filed against the partner that owns the zone because partner_document
+  -- carries the storage prefix.
+  if coalesce(p_kind,'') = 'zone_pnl' then
+    v_zone := nullif(regexp_replace(split_part(coalesce(p_ref,''), '-', 1), '\D', '', 'g'),'')::smallint;
+    v_pk   := nullif(split_part(coalesce(p_ref,''), '-', 2), '');
+    if v_pid is not null then v_zone := public.partner_zone_id(); end if;
+    if v_zone is null or not (v_admin or v_pid is not null) then
+      return jsonb_build_object('ok', false, 'error','not_partner',
+        'message', public._c('partner_doc.err_not_partner'));
+    end if;
+    if v_pid is null then v_pid := public._c694_zone_owner(v_zone); end if;
+    if v_pid is null then
+      return jsonb_build_object('ok', false, 'error','not_found',
+        'message', public._c('partner_doc.err_not_found'));
+    end if;
+
+    pay := public._c694_doc_payload(v_zone, coalesce(v_pk, 'month'));
+    if coalesce(pay->>'ok','false') <> 'true' then
+      return jsonb_build_object('ok', false, 'error', coalesce(pay->>'error','not_found'),
+        'message', public._c('partner_doc.err_not_found'));
+    end if;
+
+    v_ref := 'z' || v_zone::text || '-' || coalesce(v_pk, 'month');
+    select * into d from public.partner_document
+     where partner_id = v_pid and kind = 'zone_pnl' and ref_key = v_ref;
+    -- The stamp is the figures themselves, so a period that has moved on
+    -- rebuilds instead of handing back yesterday's PDF.
+    if found and d.status = 'ready' and coalesce(d.path,'') <> ''
+       and d.source_stamp is not distinct from (pay->>'stamp') then
+      return jsonb_build_object('ok', true, 'status','ready', 'doc_id', d.id,
+        'bucket', d.bucket, 'path', d.path, 'file_name', d.file_name,
+        'expires_s', 300, 'message', public._c('partner_doc.ready_message'));
+    end if;
+
+    insert into public.partner_document(
+        partner_id, kind, ref_key, title, file_name, status, attempts,
+        source_stamp, requested_by, requested_at, started_at, last_error)
+    values (v_pid, 'zone_pnl', v_ref, pay->>'title', pay->>'file_name',
+            'queued', 0, pay->>'stamp', auth.uid(), now(), null, null)
+    on conflict (partner_id, kind, ref_key) do update
+      set title = excluded.title, file_name = excluded.file_name,
+          status = 'queued', attempts = 0, source_stamp = excluded.source_stamp,
+          requested_by = excluded.requested_by, requested_at = now(),
+          started_at = null, last_error = null
+    returning id into v_id;
+
+    perform net.http_post(
+      url     := 'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/bill-render',
+      headers := jsonb_build_object('Content-Type','application/json',
+                                    'x-notify-secret','medibo_order_notify_2027',
+                                    'Authorization','Bearer ' || public._service_key()),
+      body    := jsonb_build_object('supplier_doc_id', v_id),
+      timeout_milliseconds := 20000);
+
+    return jsonb_build_object('ok', true, 'status','building', 'doc_id', v_id,
+      'poll_ms', 1500, 'message', public._c('partner_doc.building_message'));
+  end if;
+
+  if v_pid is null and v_admin then
+    select p.partner_id into v_pid from partner_settlement_periods p
+     where p.id = nullif(regexp_replace(coalesce(p_ref,''), '\D', '', 'g'),'')::bigint;
+  end if;
+  if v_pid is null then
+    return jsonb_build_object('ok', false, 'error','not_partner',
+      'message', public._c('partner_doc.err_not_partner'));
+  end if;
+  if coalesce(p_kind,'') <> 'statement' then
+    return jsonb_build_object('ok', false, 'error','unknown_kind',
+      'message', public._c('partner_doc.err_unknown_kind'));
+  end if;
+
+  v_period := nullif(regexp_replace(coalesce(p_ref,''), '\D', '', 'g'),'')::bigint;
+  if v_period is null then
+    return jsonb_build_object('ok', false, 'error','not_found',
+      'message', public._c('partner_doc.err_not_found'));
+  end if;
+
+  pay := public._c466_statement_payload(v_pid, v_period);
+  if coalesce(pay->>'ok','false') <> 'true' then
+    return jsonb_build_object('ok', false, 'error', coalesce(pay->>'error','not_found'),
+      'message', public._c('partner_doc.err_not_found'));
+  end if;
+
+  select * into d from public.partner_document
+   where partner_id = v_pid and kind = p_kind and ref_key = v_period::text;
+
+  if found and d.status = 'ready' and coalesce(d.path,'') <> ''
+     and d.source_stamp is not distinct from (pay->>'stamp') then
+    return jsonb_build_object('ok', true, 'status','ready', 'doc_id', d.id,
+      'bucket', d.bucket, 'path', d.path, 'file_name', d.file_name,
+      'expires_s', 300, 'message', public._c('partner_doc.ready_message'),
+      'gst', pay->'gst');
+  end if;
+
+  insert into public.partner_document(
+      partner_id, kind, ref_key, title, file_name, status, attempts,
+      source_stamp, requested_by, requested_at, started_at, last_error)
+  values (v_pid, p_kind, v_period::text, pay->>'title', pay->>'file_name',
+          'queued', 0, pay->>'stamp', auth.uid(), now(), null, null)
+  on conflict (partner_id, kind, ref_key) do update
+    set title = excluded.title, file_name = excluded.file_name,
+        status = 'queued', attempts = 0, source_stamp = excluded.source_stamp,
+        requested_by = excluded.requested_by, requested_at = now(),
+        started_at = null, last_error = null
+  returning id into v_id;
+
+  perform net.http_post(
+    url     := 'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/bill-render',
+    headers := jsonb_build_object('Content-Type','application/json',
+                                  'x-notify-secret','medibo_order_notify_2027',
+                                  'Authorization','Bearer ' || public._service_key()),
+    body    := jsonb_build_object('supplier_doc_id', v_id),
+    timeout_milliseconds := 20000);
+
+  return jsonb_build_object('ok', true, 'status','building', 'doc_id', v_id,
+    'poll_ms', 1500, 'message', public._c('partner_doc.building_message'),
+    'gst', pay->'gst');
+end $function$;
+
+comment on function public.partner_doc_request(text, text) is
+  'Partner documents: agreement (CHANGE #692), settlement statement (CMD #466) '
+  'and the zone P&L (CHANGE #694). Every kind files a partner_document row and '
+  'hands bill-render the same envelope.';

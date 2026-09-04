@@ -13,7 +13,12 @@
 //   * the period picker is the payload's list and the payload's `active` flag,
 //     never a local index, and a tap reports the backend's own key;
 //   * the margin tone is the payload's verdict, not a threshold applied here;
-//   * ok:false renders the backend's refusal and no numbers at all.
+//   * ok:false renders the backend's refusal and no numbers at all;
+//   * the export is the backend's OFFER: the button draws only when the
+//     payload carried one, its label is printed verbatim, and the kind and
+//     ref it hands back are the payload's own — this screen never assembles a
+//     document reference, so a partner can only ask for the export it was
+//     given. has:false with a note is an explanation, never a dead button.
 //
 // No network, no Supabase: every RPC is a mocked payload.
 import 'package:flutter/material.dart';
@@ -103,6 +108,14 @@ Map<String, dynamic> _payload({bool partner = false, bool ok = true}) => ok
             'margin_display': '12.36%',
             'margin_tone': 'success',
             'split_label': 'Split 50% to you',
+            // the document reference is the BACKEND's, ref included
+            'export': const {
+              'has': true,
+              'label': 'Send as PDF',
+              'kind': 'zone_pnl',
+              'ref': 'z1-month',
+              'note': '',
+            },
             'lines': _lines(partner: partner),
           },
         ],
@@ -135,9 +148,18 @@ void main() {
   tearDown(() => ZonePnlScreen.rpcTransport = null);
 
   Future<void> pump(WidgetTester t, Map<String, dynamic> p,
-          {ValueChanged<String>? onPeriod}) =>
+          {ValueChanged<String>? onPeriod,
+          ValueChanged<Map<String, dynamic>>? onExport,
+          bool docBusy = false}) =>
       t.pumpWidget(MaterialApp(
-        home: Scaffold(body: ZonePnlView(payload: p, onPeriod: onPeriod)),
+        home: Scaffold(
+          body: ZonePnlView(
+            payload: p,
+            onPeriod: onPeriod,
+            onExport: onExport,
+            docBusy: docBusy,
+          ),
+        ),
       ));
 
   group('the zone P&L computes nothing', () {
@@ -240,6 +262,69 @@ void main() {
       expect(find.text('₹200.00'), findsOneWidget);
       expect(t.getTopLeft(find.text('01 Sep')).dx,
           lessThan(t.getTopLeft(find.text('02 Sep')).dx));
+    });
+
+    testWidgets('the export button is the payload offer, printed verbatim',
+        (t) async {
+      Map<String, dynamic>? asked;
+      await pump(t, _payload(), onExport: (e) => asked = e);
+      await t.pumpAndSettle();
+
+      expect(find.widgetWithText(OutlinedButton, 'Send as PDF'), findsOneWidget);
+      await t.tap(find.text('Send as PDF'));
+      await t.pumpAndSettle();
+
+      // the screen hands back the backend's OWN kind and ref — it built
+      // neither, so a period or a zone it was never offered cannot be asked for
+      expect(asked?['kind'], 'zone_pnl');
+      expect(asked?['ref'], 'z1-month');
+    });
+
+    testWidgets('a zone with nobody to send it to shows the note, not a button',
+        (t) async {
+      final p = _payload();
+      final z = Map<String, dynamic>.from((p['zones'] as List).first as Map);
+      z['export'] = const {
+        'has': false,
+        'label': 'Send as PDF',
+        'kind': 'zone_pnl',
+        'ref': 'z9-month',
+        'note': 'This zone has no partner yet, so there is nobody to send it to.',
+      };
+      p['zones'] = [z];
+
+      await pump(t, p, onExport: (_) {});
+      await t.pumpAndSettle();
+
+      expect(find.byType(OutlinedButton), findsNothing);
+      expect(find.text('Send as PDF'), findsNothing);
+      expect(
+          find.text(
+              'This zone has no partner yet, so there is nobody to send it to.'),
+          findsOneWidget);
+    });
+
+    testWidgets('a payload with no export offers nothing at all', (t) async {
+      final p = _payload();
+      final z = Map<String, dynamic>.from((p['zones'] as List).first as Map);
+      z.remove('export');
+      p['zones'] = [z];
+
+      await pump(t, p, onExport: (_) {});
+      await t.pumpAndSettle();
+      expect(find.byType(OutlinedButton), findsNothing);
+    });
+
+    testWidgets('a document already being built cannot be asked for twice',
+        (t) async {
+      var calls = 0;
+      await pump(t, _payload(), onExport: (_) => calls++, docBusy: true);
+      await t.pumpAndSettle();
+
+      final b = t.widget<OutlinedButton>(
+          find.widgetWithText(OutlinedButton, 'Send as PDF'));
+      expect(b.onPressed, isNull);
+      expect(calls, 0);
     });
 
     testWidgets('no zones renders the backend empty line', (t) async {

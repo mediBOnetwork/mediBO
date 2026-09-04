@@ -37,11 +37,14 @@ for k in $KEYS; do
 done
 
 echo | tee -a "$OUT/table.txt"
+# The LATEST run per runbook — the whole history stays in ops_drill_run and is
+# what the Failure drills screen prints; this file is the evidence for THIS pass.
 psql "$DB" -At -c "
-  select 'evidence: '||runbook_key||' -> '||status||' ('||duration_ms||' ms) '||evidence::text
-    from public.ops_drill_run
-   where command_id = 474
-   order by ran_at" | tee "$OUT/evidence.txt"
+  select 'evidence: '||d.runbook_key||' -> '||d.status||' ('||d.duration_ms||' ms) '||d.evidence::text
+    from public.ops_runbook r
+    join lateral (select * from public.ops_drill_run
+                   where runbook_key = r.key order by ran_at desc limit 1) d on true
+   order by r.sort, r.key" | tee "$OUT/evidence.txt"
 
 echo "drills rc=$rc"
 exit $rc

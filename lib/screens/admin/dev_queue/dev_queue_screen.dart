@@ -309,7 +309,15 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
               // CHANGE #73 — the GCP Control banner card was removed; the AppBar
               // cloud icon is now the single entry point (the card was a
               // duplicate that ate screen space).
-              SliverToBoxAdapter(child: DevQueueControl(service: _svc)),
+              SliverToBoxAdapter(
+                child: DevQueueControl(
+                  service: _svc,
+                  // CHANGE #1197 — ?panel=runner lands with the runner panel
+                  // already open, so its contents can be photographed and can
+                  // write their render-log keys at all.
+                  startExpanded: Uri.base.queryParameters['panel'] == 'runner',
+                ),
+              ),
               if (_draftBadge > 0)
                 SliverToBoxAdapter(child: _draftsStrip()),
               SliverToBoxAdapter(child: _header()),

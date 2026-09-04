@@ -315,3 +315,21 @@ update public.legal_pages
  where slug = 'about'
    and not exists (select 1 from jsonb_array_elements(sections) s
                     where s->>'heading' = 'Zone and date scoping');
+
+-- ── 9. fence the two functions this change added ───────────────────────────
+-- Postgres creates every function with an implicit GRANT EXECUTE TO PUBLIC and
+-- anon inherits it, so a SECURITY DEFINER function is a public endpoint until
+-- it is explicitly revoked — and the anon key ships inside the web bundle and
+-- the APK. `revoke ... from anon` alone is the trap: it leaves the PUBLIC grant
+-- standing. Revoke PUBLIC, then re-grant the signed-in role, or the admin
+-- screens lose their own RPC (the second branch of privileged_rpcs_are_not_anon).
+-- Caught by that guard on this very change.
+revoke all on function public.zone_scope_audit(text)                from public, anon;
+revoke all on function public.zone_scope_baseline_capture(boolean)  from public, anon;
+grant execute on function public.zone_scope_audit(text)             to authenticated, service_role;
+-- The capture MUTATES the baseline, so it is service_role only: nobody signs in
+-- and re-grandfathers their own unscoped RPC. `authenticated` needs its own
+-- revoke — this schema hands it EXECUTE on new functions by default privilege,
+-- so revoking PUBLIC alone leaves every signed-in user holding it.
+revoke all on function public.zone_scope_baseline_capture(boolean) from authenticated;
+grant execute on function public.zone_scope_baseline_capture(boolean) to service_role;

@@ -9,7 +9,7 @@
      Dev Queue → Memory screen, or via the MCP memory server. Do NOT hand-edit
      this block; it is rewritten on every session start. Target: generic -->
 
-# Agent memory (generic) — 42 rules
+# Agent memory (generic) — 45 rules
 # Canonical fallback: see RULES.md in the repo root (git-committed).
 
 ## GLOBAL · style  (priority 10, v2)
@@ -222,6 +222,27 @@ Failure rules.
 
 
 
+## PROJECT · runner_context  (priority 66, v1)
+
+## CONTEXT ECONOMY (CHANGE #1197)
+The window is a budget, and re-reading is how it is wasted.
+- Your prompt file carries the SPEC and the STATE only. The rules and the business context are in
+  CLAUDE.md / RULES.md and are ALREADY in your context — never re-read them, and never open
+  `standing_preamble.md`.
+- `~/mediBO-runner/work/cmd-<id>.state.md` is written for you after every `steps_set`,
+  `step_done`, `spec_done`, `log_decision` and `mig_note`. On ANY resume (compact, clear,
+  restart, retry, auto-heal) that file — as a <=200-word brief, `devcmd.sh resume_brief <id>` —
+  is all you are handed. Do not go back to the prompt file.
+- A session past `worker_pool.context_compact_pct` (70%) is COMPACTED, not cleared; `/clear` is
+  only the fallback when `/compact` fails. `devcmd.sh ctx` reads the window.
+- Output you will not read still costs the whole window. Use `devcmd.sh tests` (one summary line
+  + failures only), `logtail` (40 lines), `migs` (filenames), `cat` (refuses >300 lines),
+  `rgcheck` (the diff table only). Never `bash -x` a devcmd call, and never `cat` a big file —
+  `grep -n` and `sed -n <from>,<to>p` instead.
+- An xlarge spec with more than 8 numbered items is SPLIT at add time into chained parts of at
+  most 6. Write "single command" in a spec to opt out.
+
+
 ## PROJECT · runner_recording  (priority 66, v2)
 
 ## 5. RECORDING (the registry is the memory)
@@ -256,6 +277,21 @@ Also: capture 2–3 screenshots of the changed screens into the `dev-cmd-proofs`
 
 `kind='gcp'` commands additionally write `p_plain_summary` (2–4 non-technical sentences) and put every copyable follow-up in `p_result_actions`.
 
+
+
+## PROJECT · runner_finish  (priority 67, v1)
+
+## FINISHED MEANS EXIT (CHANGE #369)
+Every heartbeat the harness asks `dev_cmd_finish_state(<ID>)`. When every condition is observed —
+steps N/N, QA passed where required, required journeys green, screenshot proof in
+`dev-cmd-proofs`, the change deployed and promoted, `rg_check` green, no open question — the
+BACKEND completes the row itself and interrupts your turn.
+- Mark the last step the MOMENT it lands: it is the trigger, not bookkeeping.
+- `complete` returning `already: true` is SUCCESS. Do not retry, do not look for a bug.
+- A turn interrupted right after everything landed is the feature working.
+- `devcmd.sh finish_state <ID>` names what is still holding the row open, in the backend's words.
+It cannot fire early: no step plan, an unanswered question, a pending QA verdict, a red journey,
+no proof, no promoted deploy or a red `rg_check` all block it.
 
 
 ## PROJECT · runner_solve  (priority 67, v1)
@@ -323,6 +359,26 @@ Mandatory for every build/change/update:
 
 Definition of done = backend built + frontend wired + deployed + reachable + click path reported + screenshot proof.
 
+
+
+## PROJECT · runner_completion  (priority 68, v1)
+
+## COMPLETION INTEGRITY (CHANGE #571) — three rules that are no longer yours to get wrong
+1. **A finished build always registers as finished.** `devcmd.sh complete` is two idempotent
+   writes (`dev_cmd_complete_fast` + `dev_cmd_result_write`), spooled to disk and retried with
+   backoff. `spooled:true` means the completion is ON DISK and every heartbeat replays it until
+   it lands. Do NOT loop on `complete` and do NOT "fix" a timeout by failing the row.
+   `already:true` is success.
+2. **WAITING IS NOT FAILING.** Only a failing ARTIFACT — a red test, a broken build, a red
+   `rg_check`, a QA verdict of failed — may fail a command. A lease you cannot get, a merge-queue
+   eviction, an RPC timeout, a busy DB are WAIT states: `dev_cmd_fail` classifies the text
+   (`dev_fail_rule`) and PARKS the row instead. Park deliberately with
+   `devcmd.sh park <ID> <lease|merge|db|rpc> "<reason>"`. Land everything you CAN land first.
+3. **THE SPEC IS A CHECKLIST, AND IT GATES THE FINISH.** Every enumerated spec becomes
+   `dev_command_spec_item` rows. `devcmd.sh spec <ID>` shows them; an OPEN item blocks
+   `dev_cmd_complete`. Close each as it lands (`spec_done <ID> <n> "<evidence>"`), drop it with a
+   reason (`spec_drop`), or replace the derived list with your accurate one (`spec_set`).
+   Silence is the one thing that is not allowed.
 
 
 ## PROJECT · deploy  (priority 70, v3)
@@ -852,7 +908,7 @@ NEVER flip `bugloop.enforce=true` until the full chain (preview → journeys →
 
 
 
-## PROJECT · protected_tests  (priority 90, v5)
+## PROJECT · protected_tests  (priority 90, v9)
 
 ## PROTECTED TEST SUITE (CHANGE #635 — never remove)
 Before EVERY deploy, run `flutter test test/protected/` in addition to the
@@ -927,6 +983,13 @@ Current files and what they hold down:
   fallback wording, and an order with no permitted counterparty is absent from
   call_mask_targets rather than a greyed-out button.
 
+- `delivery_eta_proof_test.dart` — the arrival window and the proof block, on
+  the widgets every delivery surface shares: the countdown is the payload's
+  sentence (the fixture's eta_at deliberately disagrees with its label, so a
+  client-side clock fails), absence is `has:false` rather than an empty string,
+  the method label is never method_key title-cased, an absent receiver omits the
+  row instead of printing a dash, and the Orders card draws a window only when
+  the payload sent one.
 - `cart_unavailable_test.dart` — the cart's red state is the backend's flag:
   per-line unavailable/qty_locked are carried through untouched,
   unavailable_badge prints verbatim (never pluralised in Dart), the badge is
@@ -934,15 +997,21 @@ Current files and what they hold down:
   SERVER recomputed them, and CartOrderRefusal treats only
   error:'unavailable_in_cart' as that refusal, keeping its message verbatim.
 
-- `customer_console_test.dart` — the Customers console and the customer page
-  (CHANGE #810): the row prints name/subtitle/status verbatim and shows the
-  churn flag only when the payload sent `has:true` (a label with has:false
-  draws nothing), the page's header chips, churn sentence and tab list are the
-  payload's, an unknown block kind renders zero pixels, Performance prints the
-  backend's own rupees and percentages, an empty list shows the backend's empty
-  state, ok:false renders the refusal instead of throwing, Block collects a
-  reason while Approve sends none, and a chips block sends back the backend's
-  own arg and value.
+- `supplier_return_test.dart` — the return-to-supplier flow and its
+  debit note: no rupee, status word, tone, GST figure or return ceiling is
+  computed in Dart (the fixture's total deliberately does NOT equal the sum of
+  its lines), Acknowledge is the backend's can_ack flag while the
+  "Acknowledged on …" sentence is its own `ack_done_label` key, rows and lines
+  render in payload order, ok:false and an unknown /return-ack/<token> print
+  the backend's refusal instead of throwing, and the partner editor's Send /
+  Remove / PDF buttons are can_send / can_edit / can_doc.
+
+- `context_economy_test.dart` — the Context economy panel is a PRINTER: title,
+  threshold chip, since-line, every row label/value/sub-line and the footnote are
+  dev_context_metrics() strings (the fixture's before/after deliberately disagree
+  with its own Change row, so a card that recomputed the percentage fails), has:false
+  draws nothing at all, an absent sub-line is omitted rather than dashed, tone is one
+  lookup with an unknown tone staying neutral, and rows render in payload order.
 
 The suite runs on the Dart VM in ~2s. Keep it that way: no network, no goldens,
 no Supabase, no camera — mock RPC payloads inline. If a widget resists mocking,
@@ -995,8 +1064,39 @@ What each file holds down:
   fallback wording, and an order with no permitted counterparty is absent from
   call_mask_targets rather than a greyed-out button.
 
+- `delivery_eta_proof_test.dart` — the arrival window and the proof block, on
+  the widgets every delivery surface shares: the countdown is the payload's
+  sentence (the fixture's eta_at deliberately disagrees with its label, so a
+  client-side clock fails), absence is `has:false` rather than an empty string,
+  the method label is never method_key title-cased, an absent receiver omits the
+  row instead of printing a dash, and the Orders card draws a window only when
+  the payload sent one.
 - `cart_unavailable_test.dart` — the cart's red state is the backend's flag: per-line unavailable/qty_locked carried through untouched, unavailable_badge printed verbatim (never pluralised in Dart), absent at count 0, cleared on re-render because the SERVER recomputed them, and CartOrderRefusal treats only error:'unavailable_in_cart' as that refusal, keeping its message verbatim.
 - `design_literal_gate_test.dart` — the style-literal baseline gate (see design).
+- `order_feedback_test.dart` — the whole-order feedback card, on the ONE widget
+  the in-app sheet and the public WhatsApp page share: dimensions and their
+  low-score chips render in PAYLOAD order, a prefilled star (the rider rating)
+  arrives selected and stays editable while an absent one is never defaulted,
+  the chips for a dimension appear only once its score is at or under the
+  backend's own `low_score_at`, Submit stays closed until every star AND the
+  NPS are set, and the anonymous /feedback/<token> page prints the backend's
+  refusal (unknown / used / expired) instead of throwing.
+
+- `supplier_return_test.dart` — the return-to-supplier flow and its
+  debit note: no rupee, status word, tone, GST figure or return ceiling is
+  computed in Dart (the fixture's total deliberately does NOT equal the sum of
+  its lines), Acknowledge is the backend's can_ack flag while the
+  "Acknowledged on …" sentence is its own `ack_done_label` key, rows and lines
+  render in payload order, ok:false and an unknown /return-ack/<token> print
+  the backend's refusal instead of throwing, and the partner editor's Send /
+  Remove / PDF buttons are can_send / can_edit / can_doc.
+
+- `context_economy_test.dart` — the Context economy panel is a PRINTER: title,
+  threshold chip, since-line, every row label/value/sub-line and the footnote are
+  dev_context_metrics() strings (the fixture's before/after deliberately disagree
+  with its own Change row, so a card that recomputed the percentage fails), has:false
+  draws nothing at all, an absent sub-line is omitted rather than dashed, tone is one
+  lookup with an unknown tone staying neutral, and rows render in payload order.
 
 The suite runs on the Dart VM in ~2s. Keep it that way: no network, no goldens, no Supabase, no camera — mock RPC payloads inline. If a widget resists mocking, extract its decisions into a pure class and test that. Set `RenderLog.flushEnabled = false` in setUpAll for any test rendering a widget that calls RenderLog.write — its 800 ms debounce is a real Timer that would otherwise outlive the test and try to reach Supabase.
 

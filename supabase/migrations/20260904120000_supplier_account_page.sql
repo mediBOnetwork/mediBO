@@ -77,6 +77,27 @@ returns jsonb language sql stable security definer set search_path to 'public' a
                             'message', public._sup850_t('denied'))
 $fn$;
 
+-- status_chip() is the app's one chip factory, but it only knows the groups
+-- seeded for it. A group this migration is the first to name must not take the
+-- whole tab down, so an unknown one degrades to a neutral chip carrying the
+-- backend's own raw value.
+create or replace function public._sup850_chip(p_group text, p_value text)
+returns jsonb language plpgsql stable security definer set search_path to 'public' as $fn$
+declare v jsonb;
+begin
+  begin
+    v := public.status_chip(p_group, coalesce(p_value,''));
+  exception when others then
+    v := null;
+  end;
+  if v is not null and coalesce(v->>'label','') <> '' then return v; end if;
+  if coalesce(btrim(coalesce(p_value,'')),'') = '' then
+    return jsonb_build_object('show', false);
+  end if;
+  return jsonb_build_object('show', true, 'label', btrim(p_value),
+                            'bg','#EFF6FF','fg','#1E40AF','border','#BFDBFE');
+end $fn$;
+
 create or replace function public._sup850_kv(p_label text, p_value text)
 returns jsonb language sql stable security definer set search_path to 'public' as $fn$
   select jsonb_build_object(
@@ -294,7 +315,7 @@ begin
   select coalesce(jsonb_agg(jsonb_build_object(
            'title', coalesce(nullif(d.title,''), d.file_name, d.kind),
            'subtitle', coalesce(public.ist_fmt(d.ready_at,'day_mon_year'), ''),
-           'chip', public.status_chip('doc_status', d.status))
+           'chip', public._sup850_chip('doc_status', d.status))
          order by d.requested_at desc), '[]'::jsonb)
     into v_docs
     from public.supplier_document d
@@ -478,7 +499,7 @@ begin
            'title', q.company_name,
            'subtitle', coalesce(nullif(q.reject_reason,''),''),
            'meta', public.ist_fmt(q.created_at,'day_mon_year'),
-           'chip', public.status_chip('pending_company_status', coalesce(q.status,'pending')))
+           'chip', public._sup850_chip('pending_company_status', coalesce(q.status,'pending')))
          order by q.created_at desc), '[]'::jsonb)
     into v_pending
     from public.supplier_pending_companies q
@@ -555,7 +576,7 @@ begin
            'subtitle', public.count_label(v_copy,'one','many',coalesce(jsonb_array_length(p.items),0)),
            'meta', public.ist_fmt(coalesce(p.created_at, p.order_date::timestamptz),'day_mon_year'),
            'trailing', public.inr_money(coalesce(p.total_amount,0)),
-           'chip', public.status_chip('supplier_status', p.status),
+           'chip', public._sup850_chip('supplier_status', p.status),
            'actions', jsonb_build_array(
              jsonb_build_object('label', public._sup850_t('o_pdf'), 'tone','brand',
                'kind','doc', 'rpc','supplier_account_doc',
@@ -664,7 +685,7 @@ begin
                  jsonb_build_object(
                    'title', coalesce(nullif(pb.file_name,''), public._sup850_t('y_unbilled')),
                    'subtitle', coalesce(public.ist_fmt(coalesce(pb.received_at, pb.created_at),'day_mon_year'),''),
-                   'chip', public.status_chip('bill_status', coalesce(pb.status,''))) row
+                   'chip', public._sup850_chip('bill_status', coalesce(pb.status,''))) row
             from public.pending_bills pb
            where lower(btrim(coalesce(pb.supplier_name,''))) = lower(btrim(coalesce(sp.supplier_name,'')))
            order by coalesce(pb.received_at, pb.created_at) desc
@@ -755,7 +776,7 @@ begin
             'meta', coalesce(public.ist_fmt(r.created_at,'day_mon_year'),''),
             'trailing', public.inr_money(coalesce(r.grand_total,0)),
             'trailing_tone', 'danger',
-            'chip', public.status_chip('supplier_return_status', coalesce(r.status,'')),
+            'chip', public._sup850_chip('supplier_return_status', coalesce(r.status,'')),
             'actions',
               (case when r.acknowledged_at is null then jsonb_build_array(
                  jsonb_build_object('label', public._sup850_t('r_ack'), 'tone','success',
@@ -785,7 +806,7 @@ begin
            'meta', coalesce(public.ist_fmt(d.created_at,'day_mon_year'),''),
            'trailing', public.inr_money(coalesce(d.adj_amount,0)),
            'trailing_tone', 'danger',
-           'chip', public.status_chip('dispute_status', coalesce(d.status,'')))
+           'chip', public._sup850_chip('dispute_status', coalesce(d.status,'')))
          order by d.created_at desc), '[]'::jsonb)
     into v_debits
     from public.supplier_disputes d
@@ -872,7 +893,7 @@ begin
       jsonb_build_object('text', public._sup850_t('spn_f_payment'), 'align','left'),
       jsonb_build_object('text', coalesce(nullif(btrim(coalesce(sp.payment_term,'')),''),
                                           public._sup850_t('not_set')), 'align','left'),
-      jsonb_build_object('text', coalesce(sp.payment_points,0)::text, 'align','right')));
+      jsonb_build_object('text', coalesce(sp.payment_term_points,0)::text, 'align','right')));
 
   -- "What moves it" — every option the grader can pick, and its points. These
   -- are spn_options rows verbatim; nothing is invented here.
@@ -1049,6 +1070,9 @@ declare sp public.supplier_profiles%rowtype; v_state text := btrim(coalesce(p_st
 begin
   sp := public._sup850_me();
   if sp.id is null then return public._sup850_deny(); end if;
+  if p_product_id is null then
+    return jsonb_build_object('ok', false, 'message', public._sup850_t('a_no_product'));
+  end if;
 
   if v_state = '' then
     delete from public.supplier_item_memory
@@ -1225,7 +1249,7 @@ begin
            'meta', case when f.expires_at is null then ''
                         else public._sup850_t('a_form_expires')||': '||
                              public.ist_fmt(f.expires_at,'day_mon_time12') end,
-           'chip', public.status_chip('stock_update_status', coalesce(f.status,'')))
+           'chip', public._sup850_chip('stock_update_status', coalesce(f.status,'')))
          order by f.created_at desc), '[]'::jsonb)
     into v_forms
     from public.stock_update_forms f
@@ -1270,15 +1294,16 @@ begin;
 insert into public.wa_event_routes (event_key, label, description, audience,
                                     enabled, push_enabled, email_enabled,
                                     push_title, push_body, email_subject, email_body)
-values ('supplier_statement_ready',
-        'Supplier monthly statement',
-        'The monthly statement a supplier asked for from My Account.',
-        'supplier', true, true, true,
-        'Your statement is ready',
-        'Your mediBO statement for {{month}} is ready in the app.',
-        'Your mediBO statement for {{month}}',
-        'Your mediBO statement for {{month}} is ready. Open My Account → Statement in the app to download it.')
-on conflict (event_key) do nothing;
+select 'supplier_statement_ready',
+       'Supplier monthly statement',
+       'The monthly statement a supplier asked for from My Account.',
+       'supplier', true, true, true,
+       'Your statement is ready',
+       'Your mediBO statement for {{month}} is ready in the app.',
+       'Your mediBO statement for {{month}}',
+       'Your mediBO statement for {{month}} is ready. Open My Account -> Statement in the app to download it.'
+ where not exists (select 1 from public.wa_event_routes
+                    where event_key = 'supplier_statement_ready');
 
 create or replace function public.supplier_account_statement_wa(p_month text)
 returns jsonb language plpgsql security definer set search_path to 'public' as $fn$
@@ -1433,10 +1458,14 @@ begin
   if sp.id is null then return public._sup850_deny(); end if;
 
   select coalesce(jsonb_agg(jsonb_build_object(
-           'title', coalesce(nullif(btrim(coalesce(su.name,'')),''), su.identity),
+           'title', coalesce(nullif(btrim(coalesce(su.display_name,'')),''), su.identity),
            'subtitle', coalesce(su.identity,''),
-           'meta', coalesce(rp.label, su.role_key, ''))
-         order by lower(coalesce(su.name, su.identity))), '[]'::jsonb)
+           'meta', coalesce(nullif(public.ui_text(rp.copy_key),''), su.role_key, ''),
+           'chip', case when coalesce(su.is_active,true) then jsonb_build_object('show', false)
+                        else jsonb_build_object('show', true,
+                               'label', public._sup850_t('sf_inactive'),
+                               'bg','#FEE2E2','fg','#991B1B','border','#FECACA') end)
+         order by lower(coalesce(su.display_name, su.identity))), '[]'::jsonb)
     into v_rows
     from public.supplier_users su
     left join public.supplier_role_preset rp on rp.role_key = su.role_key
@@ -1482,7 +1511,15 @@ begin
     from public.user_notify_quiet where user_id = auth.uid();
   v_quiet := coalesce(v_win, public._sup850_t('pr_quiet_off'));
 
-  v_langs := coalesce((public.ui_language_block())->'options', '[]'::jsonb);
+  -- ui_language_block() speaks code/selected; the select block reads
+  -- value/active. The rename happens HERE, never in Dart.
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'value', o->>'code',
+           'label', coalesce(nullif(o->>'label',''), o->>'code'),
+           'active', coalesce((o->>'selected')::boolean, false))), '[]'::jsonb)
+    into v_langs
+    from jsonb_array_elements(
+           coalesce((public.ui_language_block())->'options','[]'::jsonb)) o;
 
   return jsonb_build_object('ok', true, 'blocks', jsonb_build_array(
     jsonb_build_object('kind','toggles','title',public._sup850_t('pr_notify'),
@@ -1618,6 +1655,7 @@ insert into public.ui_copy (key, value) values
   ('sup_acct.a_set_oos',       to_jsonb('Out of stock'::text)),
   ('sup_acct.a_set_dont',      to_jsonb('I do not stock this'::text)),
   ('sup_acct.a_saved',         to_jsonb('Updated.'::text)),
+  ('sup_acct.a_no_product',    to_jsonb('Pick a product first.'::text)),
   ('sup_acct.a_bulk_title',    to_jsonb('Update a whole company'::text)),
   ('sup_acct.a_bulk_empty',    to_jsonb('No company to update in bulk yet.'::text)),
   ('sup_acct.a_bulk_n',        to_jsonb('{n} products'::text)),
@@ -1746,6 +1784,7 @@ insert into public.ui_copy (key, value) values
   -- Staff
   ('sup_acct.sf_title',        to_jsonb('People with a login'::text)),
   ('sup_acct.sf_empty',        to_jsonb('Only you can sign in to this shop.'::text)),
+  ('sup_acct.sf_inactive',     to_jsonb('Removed'::text)),
   ('sup_acct.sf_manage_title', to_jsonb('Staff logins'::text)),
   ('sup_acct.sf_manage',       to_jsonb('Manage staff'::text)),
   ('sup_acct.sf_manage_cap',   to_jsonb('Add a login, change what it may open, or remove it'::text)),
@@ -1814,6 +1853,7 @@ grant execute on function public.supplier_account_statement_wa(text) to authenti
 grant execute on function public.supplier_account_doc(text, text) to authenticated;
 grant execute on function public.supplier_account_doc_status(uuid) to authenticated;
 
+grant execute on function public._sup850_chip(text, text) to authenticated;
 grant select on public.supplier_account_tab to authenticated, anon;
 
 commit;

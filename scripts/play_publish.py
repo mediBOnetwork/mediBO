@@ -176,14 +176,26 @@ class Play:
             f"tracks.update({track})",
             headers={"Content-Type": "application/json"}, json=body)
 
-    def commit(self) -> dict:
+    def commit(self, not_for_review: bool = False) -> dict:
         # changesNotSentForReview=false → Play takes the release into review and,
         # once approved, rolls it out. Anything else would leave Om a manual step.
+        #
+        # CHANGE #985 — the ONE case where that manual step is the point.
+        # A bundle that declares a permission Play gates (FOREGROUND_SERVICE_LOCATION
+        # here, USE_FULL_SCREEN_INTENT on #293) is refused at commit with 403
+        # "You must let us know whether your app uses any … permissions", and the
+        # Console form that answers it only APPEARS once such a bundle has been
+        # uploaded. So the draft path commits with changesNotSentForReview=true:
+        # the bundle lands on the track as a DRAFT, nothing is sent for review,
+        # Om fills the declaration, and a later promote of the SAME versionCode
+        # (play_ops.py promote --from production) sends it for review with the
+        # full rollout. Play's own instruction for this state, followed verbatim.
+        flag = "true" if not_for_review else "false"
         out = self._req(
             "POST",
             f"{API}/applications/{PKG}/edits/{self.edit_id}:commit"
-            "?changesNotSentForReview=false",
-            "edits.commit")
+            f"?changesNotSentForReview={flag}",
+            f"edits.commit(changesNotSentForReview={flag})")
         self.edit_id = None
         return out
 
@@ -200,6 +212,9 @@ def main() -> int:
     ap.add_argument("--notes-file")
     ap.add_argument("--code", help="versionCode to patch (notes)")
     ap.add_argument("--track", default="production")
+    ap.add_argument("--not-for-review", action="store_true",
+                    help="CHANGE #985: upload as a DRAFT and commit with "
+                         "changesNotSentForReview=true (Play-gated declaration pending)")
     ap.add_argument("--draft", action="store_true",
                     help="stage the release without sending it for review")
     a = ap.parse_args()
@@ -270,8 +285,8 @@ def main() -> int:
 
         play.open_edit()
         code = play.upload_bundle(a.aab)
-        play.set_track(a.track, code, notes, draft=a.draft)
-        committed = play.commit()
+        play.set_track(a.track, code, notes, draft=(a.draft or a.not_for_review))
+        committed = play.commit(not_for_review=a.not_for_review)
 
         # Re-open a read-only edit to read back what Play now believes.
         play.open_edit()
@@ -279,7 +294,7 @@ def main() -> int:
         play.delete_edit()
         _emit({"ok": True, "package": PKG, "track": a.track,
                "version_code": code, "committed_edit": committed.get("id"),
-               "release_notes": notes,
+               "release_notes": notes, "sent_for_review": not a.not_for_review,
                "track_state": tr})
         return 0
     except PlayError as e:

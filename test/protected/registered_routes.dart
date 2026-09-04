@@ -30,7 +30,7 @@ const kRegisteredAdminRoutes = <String>[
   'loyalty', 'manage_admins', 'money', 'mr', 'my_shop', 'my_tasks',
   'notify_center', 'notify_cost', 'ops_board', 'ops_queues',
   'order_alerts', 'order_closure', 'order_threads', 'order_timeline',
-  'paper_sale', 'partner_issues', 'payment_upi', 'pharmacy_audit',
+  'paper_sale', 'partner_documents', 'partner_issues', 'payment_upi', 'pharmacy_audit',
   'pharmacy_gst', 'pharmacy_owner', 'pharmacy_radar', 'pharmacy_reorder',
   'pharmacy_stock', 'pharmacy_vault', 'pnl', 'pos', 'pos_upi',
   'price_check', 'pricing', 'pricing_backfill', 'profile', 'purchases',

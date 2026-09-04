@@ -7,6 +7,7 @@ import 'build_lane_section.dart';
 import 'masked_calling_section.dart';
 import 'runner_boot_section.dart';
 import 'db_lane_section.dart';
+import 'runner_sessions_section.dart';
 import 'guard_lane_section.dart';
 import 'deploy_lane_section.dart';
 import 'dev_queue_common.dart';
@@ -51,6 +52,7 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
   // CHANGE #530 — the boot doctor's verdict per runner. Same panel contract as
   // the lanes above: its own RPC, so a refused read never blanks the others.
   Map<String, dynamic> _boot = const {};
+  Map<String, dynamic> _sessions = const {};
   // CHANGE #916 — the regression guard. Same panel contract again, and the
   // reason a suppressed "RG red" command hides nothing: before this the guard
   // had no surface, so "no command" and "nothing wrong" looked identical.
@@ -105,9 +107,16 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
       } catch (_) {
         // Same contract once more: a panel, never the page.
       }
+      Map<String, dynamic> rs = const {};
+      try {
+        rs = await _svc.runnerSessions();
+      } catch (_) {
+        // Same contract once more: a panel, never the page.
+      }
       if (!mounted) return;
       setState(() {
         _guard = rg;
+        _sessions = rs;
         _boot = rb;
         _db = db;
         _lane = lane;
@@ -158,6 +167,14 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
         // CHANGE #916 — painted-proof for the regression guard, same contract
         // as the lanes: 'ok' only when the backend answered AND the section
         // drew its payload.
+        // CHANGE #1268 — painted-proof for the runner sessions panel, same
+        // contract as the lanes.
+        RenderLog.write(
+          'c1268_runner_sessions',
+          _sessions['ok'] == true
+              ? '${((_sessions['rows'] as List?) ?? const []).length}'
+              : (_sessions.isEmpty ? 'absent' : 'refused'),
+        );
         RenderLog.write(
           'c916_rg_guard',
           _guard['ok'] == true ? 'ok' : (_guard.isEmpty ? 'absent' : 'refused'),
@@ -303,6 +320,14 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
                     if (_guard.isNotEmpty) ...[
                       SizedBox(height: Ds.space.x24),
                       GuardLaneSection(data: _guard),
+                    ],
+                    // CHANGE #1268 — the sixth panel, and the same question in
+                    // a sixth resource: who is registered as which runner, and
+                    // what each one is holding. One agent id per live session,
+                    // one building command per agent.
+                    if (_sessions.isNotEmpty) ...[
+                      SizedBox(height: Ds.space.x24),
+                      RunnerSessionsSection(data: _sessions),
                     ],
                     SizedBox(height: Ds.space.x16),
                     _tickCard(tick),

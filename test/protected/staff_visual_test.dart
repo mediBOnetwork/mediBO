@@ -125,7 +125,10 @@ void main() {
       Ds.setBrightness(Brightness.dark);
       expect(Ds.isDark, isTrue);
       expect(Ds.c.bg, Ds.dark.bg);
-      expect(Ds.c.danger, light.danger, reason: 'state colours keep their meaning across modes');
+      // State colours keep their MEANING, not their hex: the dark palette
+      // carries its own red (the token set's, not a Dart literal).
+      expect(Ds.c.danger, Ds.dark.danger);
+      expect(Ds.c.success, Ds.dark.success);
       expect(Ds.revision.value, greaterThan(before));
       Ds.setBrightness(Brightness.light);
       expect(Ds.isDark, isFalse);

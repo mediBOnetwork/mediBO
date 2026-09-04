@@ -3,6 +3,7 @@ import '../design_tokens.dart';
 import '../services/admin_date_scope.dart';
 import '../services/admin_zone_scope.dart';
 import '../services/staff_nav.dart';
+import '../utils/render_log.dart';
 import 'admin_date_picker.dart';
 import 'admin_zone_picker.dart';
 import 'offline_banner.dart';
@@ -56,6 +57,9 @@ class _StaffScopeBarState extends State<StaffScopeBar> {
           final canPickDate = scope['can_pick_date'] != false;
           final zoneLabel = (scope['zone_label'] ?? '').toString();
           final lockedLabel = (scope['zone_locked_label'] ?? '').toString();
+          // the live proof reads this: which chrome drew the bar, and for whom
+          RenderLog.write('c1017_scope_bar',
+              '${zoneLocked ? "locked" : (canPickZone ? "pick" : "none")};zone=$zoneLabel;date=${scope['date_label'] ?? ''}');
 
           return Column(mainAxisSize: MainAxisSize.min, children: [
             Material(

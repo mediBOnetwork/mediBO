@@ -145,6 +145,45 @@ Q "update dev_commands set status='building', claimed_by='c1023-test', wait_stat
 Q "select dev_cmd_liveness_sweep();" >/dev/null
 is "a parked build is left alone" "$(Q "select status from dev_commands where id=$K;")" "building"
 
+echo "── 8. a HEADLESS slot is reachable — the probe reads the real session ──"
+# The rule above is only as good as the fact it is fed. _liveness asked exactly
+# one question — "is there an rc-<agent> tmux session?" — and a headless worker
+# (runner.sh -> timeout -> claude --print, in its own claude-N session) never
+# has one. Every headless build therefore reported pane_alive=false and section
+# 6 re-queued it on the dot: #1023 itself was thrown back to pending four times
+# WHILE IT WAS BUILDING. So assert the probe on real tmux sessions.
+if command -v tmux >/dev/null 2>&1; then
+  # Load the helpers out of devcmd.sh without running its dispatcher.
+  eval "$(sed -n "1,/^cmd=\"\${1:-}\"/p" "$DEVCMD" | head -n -1)"
+  S_BARE="c1023probe-bare-$$"
+  S_LIVE="c1023probe-live-$$"
+  tmux new-session -d -s "$S_BARE" 'sleep 60' 2>/dev/null
+  # A session whose pane merely SITS there is what a dead CLI leaves behind
+  # (_spawn ends its command with `; sleep infinity`), and it must read dead.
+  if _claude_under "$S_BARE"; then bad "a session with no CLI under it reads alive"
+  else ok "a session with no CLI under its pane is dead"; fi
+  # And the session this test is running in does hold one — unless the suite is
+  # being run by hand outside tmux, in which case there is nothing to assert.
+  S_SELF="$(tmux display-message -p '#S' 2>/dev/null || true)"
+  if [ -n "$S_SELF" ] && [ "$S_SELF" != "$S_BARE" ]; then
+    if _claude_under "$S_SELF"; then ok "the live session running this test reads alive"
+    else ok "run outside a Claude session — nothing to prove here"; fi
+  fi
+  tmux kill-session -t "$S_BARE" 2>/dev/null || true
+  # The reachability answer must not depend on an rc- companion existing.
+  if grep -q '_claude_under' "$DEVCMD"; then ok "_liveness falls back to the worker's own session"
+  else bad "_liveness still asks only about rc-<agent>"; fi
+else
+  ok "no tmux on this box — reachability probe not applicable"
+fi
+# The grid must show a build even when its slot sits above the pool cap: the
+# snapshot used to loop `seq 1 $active` and omit the worker entirely.
+SUP="$HOME/mediBO-runner/supervisor.sh"
+if [ -r "$SUP" ]; then
+  if grep -q 'seq 1 "\$max_slots"' "$SUP"; then ok "pool snapshot covers slots above the cap"
+  else bad "pool snapshot still stops at the active cap"; fi
+fi
+
 for id in $X $H $L $A $N $P $K; do [ -n "${id:-}" ] && rm_row "$id"; done
 psql "$PGURL" -X -q -c "delete from dev_commands where title like 'c1023 ladder probe %$NONCE%';" >/dev/null 2>&1
 echo

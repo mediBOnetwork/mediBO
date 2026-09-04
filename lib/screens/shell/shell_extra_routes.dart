@@ -47,6 +47,7 @@ import '../admin/kyc_review_screen.dart';
 import '../partner/partner_documents_screen.dart';
 import '../admin/settlement_invoices_screen.dart'; // CHANGE #695 — tax invoices
 import '../partner/partner_issues_screen.dart'; // CHANGE #696 — partner issues
+import '../partner/partner_returns_screen.dart'; // CHANGE #710 — returns door
 
 /// CHANGE #697 — the whole-order feedback card's one hook into the shell.
 /// `home_shell.dart` sits under a 2,000-line guard (#340 / #327 layer 1) and
@@ -173,6 +174,25 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       // refuses anyone who is neither with its own sentence — the screen never
       // decides who may read what.
       'partner_issues' => const PartnerIssuesScreen(),
+      // CHANGE #710 — stock going BACK to a supplier, and the debit note it
+      // raises.
+      //
+      // This arm is the whole reason #710 needed a second pass. The route was
+      // wired into partnerDestination() in partner_home_screen.dart, which is
+      // where a partner route used to be declared — and #653 retired the last
+      // caller of that resolver when it merged the partner surface into this
+      // shell. So feature_registry shipped the tile, access_role_default
+      // granted it to admin, super_admin and partner, PartnerReturnsScreen
+      // compiled and every RPC answered, and the tap fell through
+      // _handleAdminNav into "route unavailable": proven on live change #1074,
+      // where /admin/go/supplier_returns rendered the storefront home. The
+      // third time this file's own comments describe the same failure.
+      //
+      // Authorisation is NOT here. partner_return_console() zone-clamps a
+      // partner to their own returns and refuses anyone who is neither office
+      // nor partner with its own sentence, so the door being open to a role
+      // decides nothing about what that role may read or write.
+      'supplier_returns' => const PartnerReturnsScreen(),
       _ => null,
     };
 

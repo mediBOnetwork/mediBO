@@ -5,6 +5,7 @@ import 'package:pharma_b2b/services/ui_copy.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/screens/admin/admin_partner_scorecards_screen.dart';
 import 'package:pharma_b2b/screens/partner/settlement_ack_card.dart';
+import 'package:pharma_b2b/services/idempotency.dart';
 
 /// CHANGE #323 — Partner settlement.
 ///
@@ -639,6 +640,10 @@ class _SettlementStatementPageState extends State<SettlementStatementPage> {
   Map<String, dynamic>? _s;
   bool _loading = true;
 
+  /// CHANGE #472 — the key for the transfer being recorded, held across
+  /// retries so a second attempt is the same payment and not a second one.
+  final ActionSlot _recordKey = ActionSlot();
+
   Map<String, dynamic> _asMap(dynamic v) =>
       v is Map ? Map<String, dynamic>.from(v) : const <String, dynamic>{};
 
@@ -721,11 +726,18 @@ class _SettlementStatementPageState extends State<SettlementStatementPage> {
               child: FilledButton(
                 onPressed: () async {
                   Navigator.of(ctx).pop();
-                  _toast(_asMap(await widget.rpc('settlement_record_payment', {
+                  // CHANGE #472 — one key per transfer the admin recorded. The
+                  // old shape converted the queued row on the first fire and
+                  // INSERTED a second paid row on the next, so the partner was
+                  // recorded as paid twice for one transfer.
+                  final r = _asMap(await widget.rpc('settlement_record_payment', {
                     'p_period_id': widget.periodId,
                     'p_amount': num.tryParse(amount),
                     'p_reference': reference,
-                  })));
+                    'p_client_action_id': _recordKey.key,
+                  }));
+                  if (r['ok'] == true) _recordKey.done();
+                  _toast(r);
                   await _load();
                 },
                 child: Text((s['record_label'] ?? '').toString()),

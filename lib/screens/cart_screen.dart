@@ -25,6 +25,7 @@ import '../widgets/companion_rail.dart';
 import 'auth/login_screen.dart';
 import 'profile_screen.dart';
 import 'customer/profile_edit_screen.dart'; // CHANGE #572 — the notice's action
+import '../services/idempotency.dart';
 
 class CartScreen extends StatefulWidget {
   final VoidCallback? onOrderPlaced;
@@ -37,6 +38,12 @@ class CartScreen extends StatefulWidget {
 
 class _CartScreenState extends State<CartScreen> {
   bool _orderInProgress = false;
+
+  /// CHANGE #472 — the key for the order the buyer is currently committing to.
+  /// It is minted on the first attempt and REUSED by every retry, so the
+  /// server can tell a retry from a second order. `done()` is called only once
+  /// an order actually came back, which is what makes the next tap a new one.
+  final ActionSlot _placeKey = ActionSlot();
 
   // ── CHANGE #553 — cart availability, straight from cart_availability() ─────
   // Every string and colour below is rendered by the backend. The client
@@ -594,7 +601,14 @@ class _CartScreenState extends State<CartScreen> {
       // Now the server reads its own cart, prices it, totals it, resolves the
       // account's address, stamps customer_id, and empties the cart itself.
       // The response is render-ready; nothing below formats anything.
-      final raw = await Supabase.instance.client.rpc('place_order_v2');
+      // CHANGE #472 — ONE key per order the buyer committed to. Placing used
+      // to be unkeyed: a double tap made two orders, and a retry after a
+      // timeout on a request that had actually committed found the cart empty
+      // and showed 'empty_cart' for an order that exists. The key is minted
+      // when the buyer confirms and reused for every retry, so the server
+      // hands back the first order instead of creating a second.
+      final raw = await Supabase.instance.client
+          .rpc('place_order_v2', params: {'p_client_action_id': _placeKey.key});
       final res = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
       if (res is! Map) throw StateError('place_order_v2 returned no payload');
       final placed = res.cast<String, dynamic>();
@@ -644,6 +658,9 @@ class _CartScreenState extends State<CartScreen> {
       // itself when the webhook confirms. The decision is the backend's
       // (checkout_action().pay_now), never a client guess about roles.
       final orderId = (placed['id'] ?? '').toString();
+      // The order exists, so this intent is finished: the next Place Order is
+      // a genuinely different action and gets a key of its own.
+      _placeKey.done();
       if (_checkout['pay_now'] == true && orderId.isNotEmpty) {
         RenderLog.write('c293_checkout_pay_now', 1);
         await _showCheckoutQr(orderId, displayCode, amountDisplay);

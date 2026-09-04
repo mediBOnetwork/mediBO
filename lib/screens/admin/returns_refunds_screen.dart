@@ -16,6 +16,7 @@ import '../../design_tokens.dart';
 import '../../services/returns_service.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
+import '../../services/idempotency.dart';
 
 /// Backend tone name -> the token pair the design system paints it with.
 /// The backend names the MEANING; only the palette lives here.
@@ -375,13 +376,21 @@ class _OrderPanelPageState extends State<_OrderPanelPage> {
     }
   }
 
+  /// CHANGE #472 — one key per refund the admin confirmed, held across retries
+  /// so a second attempt is the same refund and not a second one.
+  String? _refundKey;
+
   /// Every mutation lands here: run it, print the BACKEND's own message, reload.
-  Future<void> _run(Future<Map<String, dynamic>> Function() action) async {
-    if (_busy) return;
+  /// Returns whether the backend said ok, which is what tells a keyed action
+  /// (#472) that it may retire its client_action_id.
+  Future<bool> _run(Future<Map<String, dynamic>> Function() action) async {
+    if (_busy) return false;
     setState(() => _busy = true);
+    bool ok = false;
     try {
       final r = await action();
-      if (!mounted) return;
+      ok = r['ok'] == true;
+      if (!mounted) return ok;
       final msg = _s(r['message']);
       if (msg.isNotEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -392,12 +401,13 @@ class _OrderPanelPageState extends State<_OrderPanelPage> {
       }
       await _load();
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted) return ok;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(e.toString()), backgroundColor: Ds.c.danger));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+    return ok;
   }
 
   @override
@@ -588,13 +598,19 @@ class _OrderPanelPageState extends State<_OrderPanelPage> {
       ),
     );
     if (res == null) return;
-    await _run(() => ReturnsService.requestRefund(
+    // CHANGE #472 — one key per refund the admin actually confirmed. _run may
+    // be tapped again after a timeout; the same key makes that the SAME refund
+    // rather than a second one against the same order.
+    _refundKey ??= ActionKey.mint();
+    final ok = await _run(() => ReturnsService.requestRefund(
           orderId: widget.orderId,
           amount: res['amount'] as num,
           reasonCode: _s(res['reason_code']),
           method: _s(res['method']),
           note: _s(res['note']),
+          clientActionId: _refundKey,
         ));
+    if (ok) _refundKey = null;
   }
 
   Future<void> _openCancelSheet() async {

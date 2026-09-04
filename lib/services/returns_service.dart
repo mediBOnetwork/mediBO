@@ -62,12 +62,17 @@ class ReturnsService {
       _map(await _c.rpc('order_return_reject',
           params: {'p_return_id': returnId, 'p_reason': reason}));
 
+  /// CHANGE #472 — `clientActionId` is the caller's ONE key for this refund.
+  /// refund_request answers a repeat with the first refund instead of minting
+  /// a second one, so a retry after a timeout must pass the SAME key. A caller
+  /// that omits it gets the old behaviour and no protection.
   static Future<Map<String, dynamic>> requestRefund({
     required String orderId,
     required num amount,
     String? reasonCode,
     String? method,
     String? note,
+    String? clientActionId,
   }) async =>
       _map(await _c.rpc('refund_request', params: {
         'p_order_id': orderId,
@@ -75,6 +80,7 @@ class ReturnsService {
         'p_reason_code': reasonCode,
         'p_method': method,
         'p_note': note,
+        'p_client_action_id': clientActionId,
       }));
 
   /// Razorpay leg. The edge function re-derives the amount server-side and caps

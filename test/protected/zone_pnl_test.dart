@@ -13,7 +13,10 @@
 //   * the period picker is the payload's list and the payload's `active` flag,
 //     never a local index, and a tap reports the backend's own key;
 //   * the margin tone is the payload's verdict, not a threshold applied here;
-//   * ok:false renders the backend's refusal and no numbers at all;
+//   * ok:false renders the backend's refusal and no numbers at all, and a
+//     load that FAILED outright (a cancelled statement, an offline tab) is a
+//     distinct state with copy and a Retry — never the blank page it painted
+//     before, which is how nobody noticed the RPC was timing out;
 //   * the export is the backend's OFFER: the button draws only when the
 //     payload carried one, its label is printed verbatim, and the kind and
 //     ref it hands back are the payload's own — this screen never assembles a
@@ -325,6 +328,24 @@ void main() {
           find.widgetWithText(OutlinedButton, 'Send as PDF'));
       expect(b.onPressed, isNull);
       expect(calls, 0);
+    });
+
+    testWidgets('a load that failed shows copy and a Retry, never a blank page',
+        (t) async {
+      var retried = 0;
+      await t.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: ZonePnlView.loadFailed(onRetry: () => retried++)),
+      ));
+      await t.pumpAndSettle();
+
+      // The wording is ui_copy's; with no copy loaded in a VM test it is empty,
+      // and the point is that the ACTION is there either way — a blank page
+      // with nothing to tap is what this state replaces.
+      expect(find.byType(OutlinedButton), findsOneWidget);
+      await t.tap(find.byType(OutlinedButton));
+      await t.pumpAndSettle();
+      expect(retried, 1);
     });
 
     testWidgets('no zones renders the backend empty line', (t) async {

@@ -31,10 +31,7 @@ update dev_runner_config
                   'compact_pct',       coalesce((value->'context'->>'compact_pct')::int, 70),
                   'window_tokens',     coalesce((value->'context'->>'window_tokens')::int, 200000),
                   'resume_words',      coalesce((value->'context'->>'resume_words')::int, 200),
-                  'split_at_items',    coalesce((value->'context'->>'split_at_items')::int, 8),
-                  'split_max_items',   coalesce((value->'context'->>'split_max_items')::int, 6),
                   'metric_window',     coalesce((value->'context'->>'metric_window')::int, 20),
-                  'split_exempt_ids',  coalesce(value->'context'->'split_exempt_ids', '[1000,1016,1017]'::jsonb),
                   'since',             coalesce(value->'context'->>'since', to_char(now(),'YYYY-MM-DD"T"HH24:MI:SSOF'))
                 ))
  where key = 'worker_pool';
@@ -185,74 +182,12 @@ begin
   return jsonb_build_object('ok', true, 'id', v_id, 'kind', p_kind, 'pct', p_pct);
 end $$;
 
--- ── 6. AUTO-SPLIT OF AN OVERSIZED SPEC ──────────────────────────────────────
--- At ADD time only. An xlarge spec carrying more than split_at_items numbered
--- items becomes chained parts of at most split_max_items each. "single command"
--- anywhere in the spec is an explicit opt-out and is always honoured.
-create or replace function public.dev_spec_split_plan(
-  p_title text, p_spec text, p_size text default null)
-returns jsonb language plpgsql stable set search_path to 'public' as $$
-declare v_cfg jsonb; v_at int; v_max int; ln text; v_txt text;
-        v_head text := ''; v_items text[] := '{}'; v_seen boolean := false;
-        v_n int; v_parts jsonb := '[]'::jsonb; v_chunks int; k int; a int; b int;
-        v_body text;
-begin
-  v_cfg := dev_context_cfg();
-  v_at  := coalesce((v_cfg->>'split_at_items')::int, 8);
-  v_max := coalesce((v_cfg->>'split_max_items')::int, 6);
-
-  if coalesce(p_spec,'') = '' then
-    return jsonb_build_object('split', false, 'reason', 'empty spec');
-  end if;
-  if p_spec ~* 'single command' then
-    return jsonb_build_object('split', false, 'reason', 'spec says "single command" — left whole');
-  end if;
-  if coalesce(p_size,'') <> 'xlarge' then
-    return jsonb_build_object('split', false, 'reason', 'not xlarge (' || coalesce(p_size,'unknown') || ')');
-  end if;
-
-  -- Split on NUMBERED items only: a dashed bullet list is prose, not a plan.
-  for ln in select unnest(string_to_array(p_spec, E'\n')) loop
-    v_txt := btrim(ln);
-    if v_txt ~ '^\d{1,2}[\).]\s+\S' then
-      v_seen := true;
-      v_items := v_items || v_txt;
-    elsif v_seen then
-      if v_txt <> '' and array_length(v_items,1) > 0 then
-        v_items[array_length(v_items,1)] := v_items[array_length(v_items,1)] || E'\n' || v_txt;
-      end if;
-    else
-      v_head := v_head || ln || E'\n';
-    end if;
-  end loop;
-
-  v_n := coalesce(array_length(v_items,1), 0);
-  if v_n <= v_at then
-    return jsonb_build_object('split', false, 'reason', v_n || ' numbered items — at or under the ' || v_at || ' threshold', 'items', v_n);
-  end if;
-
-  v_chunks := ceil(v_n::numeric / v_max)::int;
-  for k in 1..v_chunks loop
-    a := (k-1)*v_max + 1;
-    b := least(k*v_max, v_n);
-    v_body := btrim(v_head);
-    if v_body <> '' then v_body := v_body || E'\n\n'; end if;
-    v_body := v_body
-      || 'Part ' || k || ' of ' || v_chunks || ' — items ' || a || '–' || b
-      || ' of the original spec. The other parts are chained behind this one; build ONLY these items.' || E'\n\n'
-      || array_to_string(v_items[a:b], E'\n');
-    v_parts := v_parts || jsonb_build_object(
-      'k', k, 'of', v_chunks, 'from', a, 'to', b,
-      'title', left(coalesce(p_title,'Command'), 44) || ' (' || k || '/' || v_chunks || ')',
-      'spec', v_body);
-  end loop;
-
-  return jsonb_build_object(
-    'split', true, 'items', v_n, 'chunks', v_chunks,
-    'reason', v_n || ' numbered items on an xlarge spec — split into ' || v_chunks
-              || ' chained parts of at most ' || v_max || ' (CHANGE #1197)',
-    'parts', v_parts);
-end $$;
+-- ── 6. (WITHDRAWN) AUTO-SPLIT OF AN OVERSIZED SPEC ─────────────────────────
+-- Om, mid-build on #1197: "DROP item 5 (auto-split). No auto-splitting of specs
+-- — compact + state file + output hygiene are enough." Built, then withdrawn on
+-- his call. The drops below are what makes replaying this file on a database
+-- that saw the first version a clean no-op.
+drop function if exists public.dev_spec_split_plan(text, text, text);
 
 -- ── 7. METRICS ──────────────────────────────────────────────────────────────
 create or replace function public.dev_context_metrics(p_window int default null)
@@ -352,7 +287,6 @@ grant execute on function public.dev_context_cfg()                              
 grant execute on function public.dev_cmd_state_write(bigint, text, text)        to authenticated, service_role;
 grant execute on function public.dev_cmd_resume_brief(bigint)                   to authenticated, service_role;
 grant execute on function public.dev_context_event(bigint, text, text, numeric, boolean, jsonb) to authenticated, service_role;
-grant execute on function public.dev_spec_split_plan(text, text, text)          to authenticated, service_role;
 grant execute on function public.dev_context_metrics(int)                       to authenticated, service_role;
 grant execute on function public.dev_ctl_get()                                  to authenticated, service_role;
 grant execute on function public.dev_ctl_get_core()                             to authenticated, service_role;
@@ -413,167 +347,12 @@ begin
     raise exception 'RG_FAIL: dev_context_metrics() returned no card — the Context economy panel would be blank (CHANGE #1197)';
   end if;
 
-  -- auto-split: 10 numbered items on an xlarge spec become chained parts of <= 6
-  v := public.dev_spec_split_plan('probe',
-        E'preamble\n1) a aaaa\n2) b bbbb\n3) c cccc\n4) d dddd\n5) e eeee\n6) f ffff\n7) g gggg\n8) h hhhh\n9) i iiii\n10) j jjjj',
-        'xlarge');
-  if coalesce((v->>'split')::boolean,false) is not true then
-    raise exception 'RG_FAIL: a 10-item xlarge spec was not split (CHANGE #1197): %', v->>'reason';
-  end if;
-  if (v->>'chunks')::int <> 2 then
-    raise exception 'RG_FAIL: expected 2 chained parts, got % (CHANGE #1197)', v->>'chunks';
-  end if;
-
-  -- "single command" is an explicit opt-out and must always win
-  v := public.dev_spec_split_plan('probe',
-        E'single command please\n1) a aaaa\n2) b bbbb\n3) c cccc\n4) d dddd\n5) e eeee\n6) f ffff\n7) g gggg\n8) h hhhh\n9) i iiii\n10) j jjjj',
-        'xlarge');
-  if coalesce((v->>'split')::boolean,false) is not false then
-    raise exception 'RG_FAIL: a spec that says "single command" was split anyway (CHANGE #1197)';
-  end if;
-
   raise exception 'RG_ROLLBACK';
 end $t$;
 $b$,
 true,
-'CHANGE #1197 — context economy: the compact threshold is config, the state mirror exists, a mid-build compact resumes from the state file inside the word cap, the metrics card renders, and an oversized numbered spec auto-splits unless the spec says "single command".')
+'CHANGE #1197 — context economy: the compact threshold is config, the state mirror exists, a mid-build compact resumes from the state file inside the word cap, and the metrics card renders. (Auto-split was built and then withdrawn by Om mid-build — this test deliberately does not assert it.)')
 on conflict (name) do update set body = excluded.body, note = excluded.note, enabled = true;
 
--- ── 12. AUTO-SPLIT AT ADD TIME ──────────────────────────────────────────────
--- dev_cmd_bulk_add is the ONE add path (the sheet, the drafter and bulk add all
--- land here). An xlarge spec with more than split_at_items numbered items now
--- becomes chained parts instead of one command no worker can hold in context.
--- Everything else in this function is unchanged from CHANGE #656.
-CREATE OR REPLACE FUNCTION public.dev_cmd_bulk_add(p_items jsonb, p_force boolean DEFAULT false)
- RETURNS jsonb
- LANGUAGE plpgsql
- SECURITY DEFINER
- SET search_path TO 'public'
-AS $function$
-DECLARE r jsonb; v_warn jsonb := '[]'; v_added jsonb := '[]'; v_id bigint; v_dup record; v_deps bigint[];
-        v_scan jsonb; v_kind text; v_danger boolean; v_title text; v_imgs jsonb; v_atts jsonb;
-        v_route text; v_area text; v_size text; v_why text; v_effort text; v_fast text;
-        v_model text;
-        v_split jsonb; v_part jsonb; v_prev bigint; v_pdeps bigint[];
-BEGIN
-  PERFORM _dev_guard();
-  IF (_sec_cfg()->>'frozen')::boolean THEN RAISE EXCEPTION 'queue frozen — unlock with PIN first'; END IF;
-  FOR r IN SELECT * FROM jsonb_array_elements(p_items) LOOP
-    v_title := coalesce(nullif(btrim(r->>'title'),''), left(regexp_replace(coalesce(r->>'spec',''), '\s+', ' ', 'g'), 60));
-    v_scan := sec_scan_spec(coalesce(r->>'title','')||' '||coalesce(r->>'spec',''));
-    IF NOT (v_scan->>'clean')::boolean THEN
-      v_warn := v_warn || jsonb_build_object('title', v_title, 'reason','blocked', 'blocked_injection', v_scan->'hits');
-      PERFORM _audit(_actor(),'cmd_blocked_injection', v_title, v_scan); CONTINUE;
-    END IF;
-
-    -- CHANGE #656: model/effort arrive from the add sheet and are AUTHORITATIVE.
-    v_model  := coalesce(_dev_model_norm(r->>'model'), 'claude-opus-5');
-    v_effort := coalesce(_dev_effort_norm(r->>'effort'), _dev_effort_for(r->>'spec', NULL, 0));
-    IF v_model NOT IN ('claude-opus-5','claude-fable-5-1') THEN
-      RAISE EXCEPTION 'dev_cmd_bulk_add: model "%" is not allowed (CHANGE #656 — only claude-opus-5 and claude-fable-5-1)', r->>'model';
-    END IF;
-    IF v_effort NOT IN ('high','extra') THEN
-      RAISE EXCEPTION 'dev_cmd_bulk_add: effort "%" is not allowed (CHANGE #656 — only high and extra)', r->>'effort';
-    END IF;
-
-    SELECT id, title INTO v_dup FROM dev_commands
-      WHERE status IN ('pending','building','awaiting_approval')
-        AND (similarity(title, v_title) > 0.6 OR similarity(spec, r->>'spec') > 0.8)
-      ORDER BY similarity(spec, r->>'spec') DESC LIMIT 1;
-    IF v_dup.id IS NOT NULL AND NOT p_force THEN
-      v_warn := v_warn || jsonb_build_object('title', v_title, 'reason','duplicate', 'duplicate_of', v_dup.id, 'duplicate_title', v_dup.title); CONTINUE;
-    END IF;
-    SELECT coalesce(array_agg(x::bigint), '{}') INTO v_deps FROM jsonb_array_elements_text(coalesce(r->'depends_on','[]'::jsonb)) x;
-    v_kind := CASE WHEN coalesce(r->>'kind','dev')='gcp' THEN 'gcp' ELSE 'dev' END;
-    v_danger := sec_is_danger(coalesce(r->>'spec',''));
-    SELECT route, area, size_class, reason INTO v_route, v_area, v_size, v_why
-      FROM _route_detect(v_title, r->>'spec');
-    IF v_kind='gcp' THEN
-      v_route := 'opus'; v_size := coalesce(v_size,'normal');
-      v_why := 'Build lane — Google Cloud command, runs the gcloud lane.';
-    END IF;
-
-    -- ── CHANGE #1197: an oversized numbered spec is chained, never one row ──
-    -- A 12-item xlarge spec cannot be held in one context, so it was being
-    -- re-read from the top after every /clear. Split it here, at add time,
-    -- into parts of at most context.split_max_items, each depending on the one
-    -- before it. "single command" in the spec is an explicit opt-out.
-    v_split := NULL;
-    IF v_kind = 'dev' AND NOT p_force THEN
-      v_split := dev_spec_split_plan(v_title, r->>'spec', v_size);
-    END IF;
-    IF v_split IS NOT NULL AND coalesce((v_split->>'split')::boolean, false) THEN
-      v_prev := NULL;
-      FOR v_part IN SELECT * FROM jsonb_array_elements(v_split->'parts') LOOP
-        v_pdeps := CASE WHEN v_prev IS NULL THEN v_deps ELSE ARRAY[v_prev] END;
-        INSERT INTO dev_commands (title, spec, status, priority, urgent, depends_on, batch_label,
-                                  targets_web, targets_android, targets_ios, kind, is_danger,
-                                  route, area, size_class, effort, model, route_reason, chain_reason,
-                                  qa_required, created_by)
-        VALUES (
-          v_part->>'title', v_part->>'spec',
-          CASE WHEN coalesce((r->>'require_approval')::boolean,false) THEN 'awaiting_approval' ELSE 'pending' END,
-          coalesce((r->>'priority')::int, 100), coalesce((r->>'urgent')::boolean, false), v_pdeps,
-          coalesce(r->>'batch_label', v_area),
-          coalesce((r->>'targets_web')::boolean, true),
-          coalesce((r->>'targets_android')::boolean, false), coalesce((r->>'targets_ios')::boolean, false),
-          v_kind, v_danger, v_route, v_area, 'large', v_effort, v_model, v_why,
-          v_split->>'reason',
-          coalesce((r->>'qa_required')::boolean, true),
-          auth.uid()
-        ) RETURNING id INTO v_id;
-        v_prev := v_id;
-        v_added := v_added || jsonb_build_object('id', v_id, 'title', v_part->>'title', 'route', v_route,
-                                                 'area', v_area, 'size_class', 'large', 'effort', v_effort,
-                                                 'model', v_model, 'route_reason', v_why,
-                                                 'is_danger', v_danger, 'split_part', v_part->>'k',
-                                                 'split_of', v_part->>'of', 'split_reason', v_split->>'reason');
-      END LOOP;
-      PERFORM _audit(_actor(),'cmd_autosplit', v_title,
-                     jsonb_build_object('items', v_split->>'items', 'chunks', v_split->>'chunks', 'why', v_split->>'reason'));
-      v_warn := v_warn || jsonb_build_object('title', v_title, 'reason','auto_split', 'note', v_split->>'reason');
-      CONTINUE;
-    END IF;
-
-    IF v_route='fast' AND v_kind='dev' AND NOT v_danger THEN
-      v_fast := _fast_execute(r->>'spec');
-      IF v_fast IS NOT NULL THEN
-        INSERT INTO dev_commands (title, spec, status, kind, route, area, size_class, route_reason,
-                                  plain_summary, result_summary, finished_at, started_at, created_by, qa_status, qa_required)
-        VALUES (v_title, r->>'spec', 'completed', 'dev', 'fast', v_area, coalesce(v_size,'small'), v_why,
-                v_fast, v_fast, now(), now(), auth.uid(), 'waived', false)
-        RETURNING id INTO v_id;
-        INSERT INTO dev_command_messages (command_id, sender, body) VALUES (v_id,'agent',v_fast);
-        v_added := v_added || jsonb_build_object('id', v_id, 'title', v_title, 'route','fast', 'instant', true);
-        PERFORM _audit(_actor(),'cmd_fastlane', v_id::text, jsonb_build_object('area',v_area));
-        CONTINUE;
-      ELSE
-        v_route := 'opus';
-        v_why := 'Build lane — fast-lane grammar did not apply, so it is a normal build on the command''s own model.';
-      END IF;
-    END IF;
-
-    INSERT INTO dev_commands (title, spec, status, priority, urgent, depends_on, batch_label, targets_web, targets_android, targets_ios, kind, is_danger, route, area, size_class, effort, model, route_reason, qa_required, created_by)
-    VALUES (
-      v_title, r->>'spec',
-      CASE WHEN coalesce((r->>'require_approval')::boolean,false) THEN 'awaiting_approval' ELSE 'pending' END,
-      coalesce((r->>'priority')::int, 100), coalesce((r->>'urgent')::boolean, false), v_deps,
-      coalesce(r->>'batch_label', v_area),
-      coalesce((r->>'targets_web')::boolean, v_kind='dev'),
-      coalesce((r->>'targets_android')::boolean, false), coalesce((r->>'targets_ios')::boolean, false),
-      v_kind, v_danger, v_route, v_area, v_size, v_effort, v_model, v_why,
-      coalesce((r->>'qa_required')::boolean, true),
-      auth.uid()
-    ) RETURNING id INTO v_id;
-    v_imgs := coalesce(r->'images','[]'::jsonb); v_atts := coalesce(r->'attachments','[]'::jsonb);
-    IF jsonb_array_length(v_imgs) > 0 OR jsonb_array_length(v_atts) > 0 THEN
-      INSERT INTO dev_command_messages (command_id, sender, body, images, attachments)
-      VALUES (v_id, 'om', coalesce(nullif(btrim(r->>'media_note'),''),'Attached with the spec'), v_imgs, v_atts);
-    END IF;
-    v_added := v_added || jsonb_build_object('id', v_id, 'title', v_title, 'route', v_route, 'area', v_area,
-                                             'size_class', v_size, 'effort', v_effort, 'model', v_model,
-                                             'route_reason', v_why, 'is_danger', v_danger);
-    PERFORM _audit(_actor(),'cmd_add', v_id::text, jsonb_build_object('route',v_route,'area',v_area,'size',v_size,'effort',v_effort,'model',v_model,'danger',v_danger,'why',v_why));
-  END LOOP;
-  RETURN jsonb_build_object('added', v_added, 'warnings', v_warn);
-END $function$;
+-- ── 12. (WITHDRAWN) AUTO-SPLIT AT ADD TIME ─────────────────────────────────
+-- dev_cmd_bulk_add is deliberately left exactly as CHANGE #656 wrote it.

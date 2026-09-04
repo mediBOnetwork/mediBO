@@ -25,6 +25,24 @@ class Ds {
   static final ValueNotifier<int> revision = ValueNotifier<int>(0);
 
   static DsColors c = DsColors._defaults();
+
+  // CHANGE #1017 (4) — dark mode is a second palette in the SAME token set
+  // (`design.dark.colors`, data via ui_design_set) and one switch. Only the
+  // ground and the text swap; the state colours keep their meaning. `_light`
+  // remembers the day palette so a toggle is a swap, never a re-fetch.
+  static DsColors _light = DsColors._defaults();
+  static DsColors dark = DsColors._darkDefaults();
+  static Brightness brightness = Brightness.light;
+  static bool get isDark => brightness == Brightness.dark;
+
+  /// Switch the live palette. The theme is rebuilt by whoever listens to
+  /// [revision] — the same bump every token change already makes.
+  static void setBrightness(Brightness b) {
+    if (brightness == b) return;
+    brightness = b;
+    c = b == Brightness.dark ? dark : _light;
+    revision.value++;
+  }
   static DsRadius r = DsRadius._defaults();
   static DsType t = DsType._defaults();
   static DsSpace space = DsSpace._defaults();
@@ -40,7 +58,9 @@ class Ds {
   /// their current value, so a partial patch never blanks the theme.
   static void apply(Object? design) {
     if (design is! Map) return;
-    c = DsColors._from(_asMap(design['colors']), c);
+    _light = DsColors._from(_asMap(design['colors']), _light);
+    dark = DsColors._from(_asMap(_asMap(design['dark'])['colors']), dark);
+    c = isDark ? dark : _light;
     r = DsRadius._from(_asMap(design['radius']), r);
     t = DsType._from(_asMap(design['type']), t);
     space = DsSpace._from(design['spacing'], space);
@@ -102,6 +122,22 @@ class DsColors {
         warning: Color(0xFFFF9500),
         danger: Color(0xFFFF3B30),
         info: Color(0xFF0A84FF),
+      );
+
+  /// The dark defaults, for a boot before the tokens arrive. The live values
+  /// are the backend's (`design.dark.colors`); these only stop a flash.
+  factory DsColors._darkDefaults() => const DsColors(
+        bg: Color(0xFF0F1113),
+        surface: Color(0xFF1A1D21),
+        brand: Color(0xFF2FB25A),
+        brandDark: Color(0xFF1B873F),
+        text: Color(0xFFF2F3F5),
+        textSecondary: Color(0xFFA0A6AD),
+        divider: Color(0xFF2A2F35),
+        success: Color(0xFF34C759),
+        warning: Color(0xFFFF9F0A),
+        danger: Color(0xFFFF453A),
+        info: Color(0xFF409CFF),
       );
 
   factory DsColors._from(Map m, DsColors f) => DsColors(

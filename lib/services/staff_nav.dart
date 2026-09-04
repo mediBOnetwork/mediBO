@@ -16,6 +16,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter/widgets.dart';
+import '../design_tokens.dart';
+import 'ui_copy.dart';
 
 import '../screens/admin/admin_nav_entries.dart';
 import '../screens/admin/nav_registry_view.dart';
@@ -77,6 +80,9 @@ class StaffNavPayload {
     this.layoutNote = '',
     this.tabs = const [],
     this.redirects = const {},
+    this.scope = const {},
+    this.copy = const {},
+    this.viewAs = const {},
   });
 
   static const StaffNavPayload empty = StaffNavPayload(ok: false);
@@ -90,7 +96,29 @@ class StaffNavPayload {
   final List<StaffTab> tabs;
   final Map<String, StaffRedirect> redirects;
 
+  /// CHANGE #1017 — three blocks the shell renders VERBATIM.
+  /// `scope`  : the header's zone/date — zone_label, date_label, zone_locked,
+  ///            can_pick_zone, can_pick_all, can_pick_date. Chosen once, here.
+  /// `copy`   : every sentence the staff chrome prints (offline banner, undo,
+  ///            empty state, dark-mode labels).
+  /// `viewAs` : the super admin's preview — active, role, options[], banner,
+  ///            exit_label. The TABS above are already the previewed role's.
+  final Map<String, dynamic> scope;
+  final Map<String, dynamic> copy;
+  final Map<String, dynamic> viewAs;
+
   bool get isLegacy => layout == 'v1';
+
+  String copyOf(String key) => (copy[key] ?? '').toString();
+  bool get isPreview => viewAs['active'] == true;
+  String get previewBanner => (viewAs['banner'] ?? '').toString();
+  String get previewExitLabel => (viewAs['exit_label'] ?? '').toString();
+  bool get canPreview => viewAs['can_preview'] == true;
+  List<Map<String, dynamic>> get previewOptions =>
+      ((viewAs['options'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => e.cast<String, dynamic>())
+          .toList(growable: false);
 
   List<StaffTab> get visibleTabs =>
       tabs.where((t) => t.visible).toList(growable: false);
@@ -111,12 +139,17 @@ class StaffNavPayload {
         whenNoSeed: m['when_no_seed'] == true,
       );
     });
+    Map<String, dynamic> block(String k) =>
+        (json[k] as Map?)?.cast<String, dynamic>() ?? const {};
     return StaffNavPayload(
       ok: true,
       layout: (json['layout'] ?? 'v2').toString(),
       layoutNote: (json['layout_note'] ?? '').toString(),
       tabs: tabs,
       redirects: redirects,
+      scope: block('scope'),
+      copy: block('copy'),
+      viewAs: block('view_as'),
     );
   }
 
@@ -225,12 +258,64 @@ class StaffNav {
     }
   }
 
+  /// CHANGE #1017 (7) — the role the super admin is previewing, or null.
+  /// The BACKEND computes the previewed bar; this only remembers the ask.
+  static String? previewRole;
+
+  /// Enter or leave a preview. The next load carries it; a preview payload is
+  /// never written to the cache, so a restart always comes back as yourself.
+  static Future<void> preview(String? role) async {
+    previewRole = (role ?? '').trim().isEmpty ? null : role!.trim();
+    RenderLog.write('c1017_view_as', previewRole ?? 'exit');
+    await load();
+  }
+
+  // CHANGE #1017 (4) — the dark-mode choice is the device's until the person
+  // picks one; a pick is remembered on this device (shared_preferences, the
+  // sanctioned store — never dart:html) and re-applied before the first load.
+  static const String _darkKey = 'staff.dark_mode';
+  static bool _brightnessRestored = false;
+
+  static Future<void> setDark(bool? dark) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (dark == null) {
+        await prefs.remove(_darkKey);
+      } else {
+        await prefs.setBool(_darkKey, dark);
+      }
+    } catch (_) {}
+    _applyBrightness(dark);
+    RenderLog.write('c1017_dark_mode', dark == null ? 'system' : (dark ? 'on' : 'off'));
+    UiCopy.revision.value++; // MaterialApp rebuilds and buildTheme() reads Ds.brightness
+  }
+
+  static void _applyBrightness(bool? dark) {
+    final b = dark == null
+        ? WidgetsBinding.instance.platformDispatcher.platformBrightness
+        : (dark ? Brightness.dark : Brightness.light);
+    Ds.setBrightness(b);
+  }
+
+  static Future<void> restoreBrightness() async {
+    if (_brightnessRestored) return;
+    _brightnessRestored = true;
+    bool? dark;
+    try {
+      dark = (await SharedPreferences.getInstance()).getBool(_darkKey);
+    } catch (_) {}
+    _applyBrightness(dark);
+    if (Ds.isDark) UiCopy.revision.value++;
+  }
+
   static Future<void> load() async {
     if (_loading) return;
     _loading = true;
     try {
+      await restoreBrightness();
       await _restore();
-      final raw = await Supabase.instance.client.rpc('staff_nav');
+      final raw = await Supabase.instance.client.rpc('staff_nav',
+          params: {'p_view_as_role': previewRole});
       final map = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
       if (map is! Map) return;
       final json = map.cast<String, dynamic>();
@@ -242,7 +327,7 @@ class StaffNav {
       _boundUid = Supabase.instance.client.auth.currentUser?.id;
       _bound = true;
       value.value = next;
-      await _persist(json);
+      if (!next.isPreview) await _persist(json);
       RenderLog.write(
         'c1016_staff_tabs',
         next.visibleTabs.map((t) => t.key).join('>'),

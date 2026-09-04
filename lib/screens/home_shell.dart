@@ -1752,9 +1752,10 @@ class _HomeShellState extends State<HomeShell> {
   // ─── Mobile / tablet layout (< 900px) ────────────────────────────────────
 
   Widget _buildMobile(List<Widget> pages, VoidCallback onLogoTap, bool isAdmin) {
+    final isTablet = isAdmin && MediaQuery.sizeOf(context).width >= 600; // CHANGE #1017 (6)
     return Scaffold(
-      backgroundColor: Colors.white,
-      bottomNavigationBar: isAdmin
+      backgroundColor: Ds.c.bg,
+      bottomNavigationBar: isAdmin && !isTablet
           ? _AdminMobileBottomBar(
               index: _index,
               alertCount: _alertCount,
@@ -1790,7 +1791,11 @@ class _HomeShellState extends State<HomeShell> {
                     onPageTap: _setIndex,
                   ),
                 )),
-      body: Stack(
+      body: shellStaffBody(
+        isTablet: isTablet,
+        entries: isAdmin ? visibleNavEntries(shellStaffBarEntries(kAdminBottomNav), Access.instance.routeCanView) : const [],
+        index: _index, alertCount: _alertCount, onRoute: _handleAdminNav,
+        body: Stack(
         children: [
           SizedBox.expand(
             child: Column(
@@ -1810,6 +1815,7 @@ class _HomeShellState extends State<HomeShell> {
                 // CHANGE #455 B1 — the persistent order-hours banner that
                 // used to sit here (and in the desktop header below) is
                 // deleted, not hidden. c455_banners proves zero render.
+                shellStaffChrome(isAdmin), // CHANGE #1017
                 Builder(builder: (_) {
                   RenderLog.write('c455_banners', 0);
                   return const SizedBox.shrink();
@@ -1876,6 +1882,7 @@ class _HomeShellState extends State<HomeShell> {
               ),
             ),
         ],
+        ),
       ),
     );
   }
@@ -1884,7 +1891,7 @@ class _HomeShellState extends State<HomeShell> {
 
   Widget _buildDesktop(List<Widget> pages, VoidCallback onLogoTap, bool isAdmin) {
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: Ds.c.bg,
       body: Stack(
         children: [
           Column(
@@ -1922,6 +1929,7 @@ class _HomeShellState extends State<HomeShell> {
                   cartOpen: _cartOpen,
                 ),
               // ── Search + chips: storefront only (index 0) ─────────────────
+              shellStaffChrome(isAdmin), // CHANGE #1017
               if (_index == 0)
                 _DesktopSearchRow(
                   controller: _searchCtrl,

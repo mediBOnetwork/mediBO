@@ -26,9 +26,12 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../design_tokens.dart';
 import '../../services/access.dart';
 import '../../services/staff_nav.dart';
 import '../../utils/render_log.dart';
+import '../../widgets/pulse_badge.dart';
+import '../../widgets/staff_scope_bar.dart';
 import '../admin/admin_dashboard_screen.dart' show AdminDashboardScreen;
 import '../admin/admin_nav_entries.dart';
 import '../admin/admin_ops_queues_screen.dart';
@@ -185,3 +188,122 @@ Widget shellStaffHomePage(String tab, bool active,
           onOpen: (t) => shellOpenStaffTile(ctx, t, navigate),
           onUnusedReport: () => AdminDashboardScreen.openUnusedReport(ctx),
         ));
+
+/// CHANGE #1017 (6) — on a wide screen the tabs stand in a rail on the left
+/// instead of a bar at the bottom. Same entries, same routes, same badge; only
+/// the placement changes. Everything drawn is the row's own label and icon.
+class StaffSidebar extends StatelessWidget {
+  const StaffSidebar({
+    super.key,
+    required this.entries,
+    required this.index,
+    required this.onRoute,
+    this.alertCount = 0,
+  });
+  final List<AdminNavEntry> entries;
+  /// The shell's page index — the SAME rule the bottom bar uses to know which
+  /// tab is lit, copied verbatim so the two chromes can never disagree.
+  final int index;
+  final void Function(String route) onRoute;
+  final int alertCount;
+
+  String get _activeRoute {
+    switch (index) {
+        case 3: return 'dashboard';
+        case 6: return 'customers';
+        case 5: return 'suppliers';
+        // CHANGE #1016 — Fulfill is page 10 (11 is My Shop; the old mapping
+        // never highlighted the Fulfill tab), and the two new homes.
+        case 10: return 'fulfillment';
+        case 13: return 'money_home';
+        case 14: return 'more';
+        default: return '';
+      }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (entries.isEmpty) return const SizedBox.shrink();
+    return Container(
+      key: const Key('c1017_staff_sidebar'),
+      width: Ds.space.x48 * 2,
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        border: Border(right: BorderSide(color: Ds.c.divider)),
+      ),
+      child: ListView(
+        padding: EdgeInsets.symmetric(vertical: Ds.space.x8),
+        children: [
+          for (final e in entries)
+            _StaffRailItem(
+              entry: e,
+              selected: _activeRoute.isNotEmpty && _activeRoute == (e.route ?? ''),
+              badge: e.route == 'fulfillment' ? alertCount : 0,
+              onTap: () => onRoute(e.route ?? ''),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StaffRailItem extends StatelessWidget {
+  const _StaffRailItem({required this.entry, required this.selected, required this.badge, required this.onTap});
+  final AdminNavEntry entry;
+  final bool selected;
+  final int badge;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = selected ? Ds.c.brand : Ds.c.textSecondary;
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: entry.label,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          constraints: BoxConstraints(minHeight: Ds.touch.minTarget + Ds.space.x16),
+          padding: EdgeInsets.symmetric(vertical: Ds.space.x8),
+          decoration: BoxDecoration(
+            color: selected ? Ds.c.brandSoft : null,
+            border: Border(left: BorderSide(color: selected ? Ds.c.brand : Colors.transparent, width: Ds.space.x4)),
+          ),
+          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+            PulseBadge(count: badge, child: Icon(entry.icon, size: Ds.space.x24, color: color)),
+            SizedBox(height: Ds.space.x4),
+            Text(entry.label, style: Ds.t.caption.copyWith(color: color, fontWeight: selected ? FontWeight.w600 : FontWeight.w400),
+                maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// CHANGE #1017 — the staff chrome the shell mounts ONCE under either header:
+/// the preview banner (only while a super admin previews a role) and the
+/// scope bar (zone + date, chosen here and nowhere else). Both verbatim from
+/// staff_nav(). Kept here so home_shell stays the shell (#340 size guard).
+Widget shellStaffChrome(bool isAdmin) => isAdmin
+    ? const Column(mainAxisSize: MainAxisSize.min,
+        children: [StaffPreviewBanner(), StaffScopeBar()])
+    : const SizedBox.shrink();
+
+/// CHANGE #1017 (6) — on a tablet the staff tabs stand in a rail on the left
+/// of [body] and the bottom bar is gone; on a phone [body] is returned as-is.
+Widget shellStaffBody({
+  required bool isTablet,
+  required List<AdminNavEntry> entries,
+  required int index,
+  required int alertCount,
+  required void Function(String route) onRoute,
+  required Widget body,
+}) =>
+    !isTablet
+        ? body
+        : Row(children: [
+            StaffSidebar(entries: entries, index: index, alertCount: alertCount, onRoute: onRoute),
+            Expanded(child: body),
+          ]);

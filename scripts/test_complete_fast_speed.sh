@@ -76,6 +76,24 @@ for g in "${GUARDS[@]}"; do
     fi
     break
   done
+  # CHANGE #1016 — a TIMING verdict is one sample of a shared 1 GB instance.
+  # Batches 395 and 396 (2026-09-04 05:39–05:59) evicted a branch whose Dart
+  # suite was green because the probe read 2072 ms once while the database
+  # was restarting; the very next run took 400 ms. The regression this guard
+  # exists for (#641: a 10–25 minute scan on the HTTP path) fails every sample,
+  # so red now means three consecutive overruns, never one unlucky poll.
+  # Structural guards (c641_no_rg_in_http_rpcs) still fail on the first read.
+  if [ "$(jq -r '.ok // false' <<<"$out")" != "true" ] && [ "$g" = "c641_complete_fast_under_2s" ]; then
+    for retry in 2 3; do
+      echo "  $g: overrun on sample $((retry-1)) — $(jq -r '.error // .message // "unknown"' <<<"$out"); resampling"
+      sleep 10
+      again="$("$DEVCMD" rpc rg_run_behavior "$(printf '{"p_name":"%s"}' "$g")" 2>/dev/null)"
+      if [ -n "$again" ] && jq -e . >/dev/null 2>&1 <<<"$again" && ! is_transport_error "$again"; then
+        out="$again"
+      fi
+      [ "$(jq -r '.ok // false' <<<"$out")" = "true" ] && break
+    done
+  fi
   if [ "$(jq -r '.ok // false' <<<"$out")" = "true" ]; then
     echo "  $g: GREEN"
   else

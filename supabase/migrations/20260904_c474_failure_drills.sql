@@ -459,13 +459,26 @@ grant execute on function public.ops_runbook_drill(text, text, bigint) to authen
 --    operator would actually type at 2 a.m.
 -- ─────────────────────────────────────────────────────────────────────────────
 
+-- THE ADMIN DASHBOARD TILE IS SHIPPED DARK (is_active=false), deliberately.
+-- Its door is an arm in shell/shell_extra_routes.dart, and that file was leased
+-- by another in-flight command for the whole of this build (#710, with #692,
+-- #695 and #696 queued behind it). A registry row whose door has not landed is
+-- exactly the "built for X, missing from X" failure #570 exists to prevent: the
+-- tile draws, the tap falls through the shell's switch, and the operator gets
+-- "route unavailable". So the row is seeded with its final shape and left OFF;
+-- the follow-up that adds the arm flips is_active on both rows below and
+-- regenerates test/protected/registered_routes.dart.
+--
+-- The screen is NOT unreachable in the meantime: devtool.runbooks below opens
+-- the same screen from the Dev Queue tools sheet, whose door is in this
+-- command's own leased file.
 insert into public.feature_registry(
   feature_key, label, group_label, icon_key, route_key, sort_order, owner,
   partner_eligible, default_access, is_active, category, surface,
   roles_allowed, deep_link, search_terms, description)
 values (
   'admin.runbooks', 'Failure drills', 'Admin & System', 'rule_folder', 'runbooks', 930,
-  'medibo', false, 'none', true, 'system', 'dashboard',
+  'medibo', false, 'none', false, 'system', 'dashboard',
   array['admin','super_admin']::text[], '/admin/go/runbooks',
   'runbook drill failure fallback outage whatsapp ocr razorpay rider offline disaster recovery',
   'What breaks when WhatsApp, OCR, a supplier, a rider, Razorpay or the database fails — and the last time we proved the fallback.')
@@ -483,9 +496,42 @@ on conflict (feature_key) do update
 -- column scripts/gen_registered_routes.sh reads to build the offline mirror the
 -- reachability gate checks, so naming the shard here would have hidden this door
 -- from the very gate that exists to catch a tile with no door.
-insert into public.surface_route (route_key, kind, feature_key, handled_by, note)
+insert into public.surface_route (route_key, kind, feature_key, handled_by, note, is_active)
 values ('runbooks', 'feature', 'admin.runbooks', 'home_shell',
-        'OpsRunbooksScreen — CHANGE #474; the arm is in shell/shell_extra_routes.dart')
+        'OpsRunbooksScreen — CHANGE #474; the arm is in shell/shell_extra_routes.dart',
+        false)
+on conflict (route_key, feature_key) do update
+  set handled_by = excluded.handled_by, note = excluded.note;
+
+-- ...and the SECOND door, in the family this screen actually belongs to.
+-- Cron health, Test mode and the daily heartbeat are the other three things
+-- that tell an operator whether the platform is still standing up, and they all
+-- live in the Dev Queue tools sheet. `dev_tools()` admits a row by
+-- surface='dev_tools' and the caller's role; openDevTool() in
+-- dev_queue/dev_queue_screen.dart is its door, and kDevToolKeys is the second
+-- half of that gate — a registry key with no case there is never even drawn.
+insert into public.feature_registry(
+  feature_key, label, group_label, icon_key, route_key, sort_order, owner,
+  partner_eligible, default_access, is_active, category, surface,
+  roles_allowed, deep_link, search_terms, description)
+values (
+  'devtool.runbooks', 'Failure drills', 'Runtime & health', 'rule_folder',
+  'runbooks', 47, 'medibo', false, 'none', true, 'system', 'dev_tools',
+  array['super_admin']::text[], '/admin/go/runbooks',
+  'runbook drill failure fallback outage whatsapp ocr razorpay rider offline disaster recovery',
+  'What breaks when WhatsApp, OCR, a supplier, a rider, Razorpay or the database fails — and the last time we proved the fallback.')
+on conflict (feature_key) do update
+  set label = excluded.label, group_label = excluded.group_label,
+      icon_key = excluded.icon_key, route_key = excluded.route_key,
+      sort_order = excluded.sort_order,
+      surface = excluded.surface, category = excluded.category,
+      roles_allowed = excluded.roles_allowed,
+      deep_link = excluded.deep_link, search_terms = excluded.search_terms,
+      description = excluded.description, is_active = true;
+
+insert into public.surface_route (route_key, kind, feature_key, handled_by, note)
+values ('runbooks', 'feature', 'devtool.runbooks', 'dev_queue_screen',
+        'openDevTool() — CHANGE #474')
 on conflict (route_key, feature_key) do update
   set handled_by = excluded.handled_by, note = excluded.note;
 

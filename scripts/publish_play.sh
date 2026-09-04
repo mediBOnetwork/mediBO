@@ -332,10 +332,15 @@ progress building "$(jq -nc --arg n "$NAME" --argjson c "$CODE" '{version_name:$
 
 # versionCode lives in TWO files and they must stay in lockstep — the in-app
 # updater compares the backend's latest code against kAndroidVersionCode.
-sed -i "s/versionCode = .*/versionCode = $CODE/; s/versionName = \".*\"/versionName = \"$NAME\"/" \
-  android/app/build.gradle.kts
-sed -i "s/const int kAndroidVersionCode = .*/const int kAndroidVersionCode = $CODE;/" \
-  lib/services/android_update_check.dart
+# CHANGE #985 — only rewrite when something changes: an unconditional sed -i
+# bumps the file's mtime even when the values are identical, which made
+# --reuse-aab see a "stale" bundle every time and rebuild it.
+if [ "$CUR_CODE" != "$CODE" ] || [ "$CUR_NAME" != "$NAME" ]; then
+  sed -i "s/versionCode = .*/versionCode = $CODE/; s/versionName = \".*\"/versionName = \"$NAME\"/" \
+    android/app/build.gradle.kts
+  sed -i "s/const int kAndroidVersionCode = .*/const int kAndroidVersionCode = $CODE;/" \
+    lib/services/android_update_check.dart
+fi
 grep -q "versionCode = $CODE" android/app/build.gradle.kts \
   && grep -q "kAndroidVersionCode = $CODE;" lib/services/android_update_check.dart \
   || die "version bump did not apply to both files — refusing to build out of lockstep"

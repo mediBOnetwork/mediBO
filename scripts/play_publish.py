@@ -190,12 +190,29 @@ class Play:
         # Om fills the declaration, and a later promote of the SAME versionCode
         # (play_ops.py promote --from production) sends it for review with the
         # full rollout. Play's own instruction for this state, followed verbatim.
-        flag = "true" if not_for_review else "false"
+        # Play answers the flag differently per app: an app WITHOUT managed
+        # publishing refuses the parameter outright (400 "Changes are sent for
+        # review automatically. The query parameter changesNotSentForReview must
+        # not be set." — mediBO on 2026-09-04). The release is already a DRAFT
+        # on the track, and a draft is never sent for review, so the plain
+        # commit is the same outcome. Follow whichever instruction Play gives.
+        if not_for_review:
+            try:
+                out = self._req(
+                    "POST",
+                    f"{API}/applications/{PKG}/edits/{self.edit_id}:commit"
+                    "?changesNotSentForReview=true",
+                    "edits.commit(changesNotSentForReview=true)")
+                self.edit_id = None
+                return out
+            except PlayError as e:
+                if e.status != 400 or "must not be set" not in (e.body or ""):
+                    raise
         out = self._req(
             "POST",
             f"{API}/applications/{PKG}/edits/{self.edit_id}:commit"
-            f"?changesNotSentForReview={flag}",
-            f"edits.commit(changesNotSentForReview={flag})")
+            "?changesNotSentForReview=false",
+            "edits.commit")
         self.edit_id = None
         return out
 

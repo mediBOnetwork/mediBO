@@ -71,8 +71,13 @@ on conflict (key) do nothing;
 -- ── 3. LIFECYCLE RPCs (runner only) ───────────────────────────────────────────
 create or replace function public._build_branch_guard()
 returns void language plpgsql stable security definer set search_path to 'public' as $$
+declare v_role text;
 begin
-  if coalesce(current_setting('request.jwt.claim.role', true), '') = 'service_role'
+  -- PostgREST 12 exposes the JWT as request.jwt.claims (json); the dotted
+  -- request.jwt.claim.role setting is the pre-12 spelling and is absent here.
+  begin v_role := coalesce(auth.jwt() ->> 'role', ''); exception when others then v_role := ''; end;
+  if v_role = 'service_role'
+     or coalesce(current_setting('request.jwt.claim.role', true), '') = 'service_role'
      or session_user in ('postgres','supabase_admin','service_role') then return; end if;
   raise exception 'build_branch: runner only';
 end $$;

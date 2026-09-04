@@ -37,8 +37,18 @@ const PROJECT_REF   = 'swojhmarmaijkshsbeih';
 const SUPABASE_URL  = `https://${PROJECT_REF}.supabase.co`;
 const ANON_KEY      = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN3b2pobWFybWFpamtzaHNiZWloIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk5Nzc2NjAsImV4cCI6MjA5NTU1MzY2MH0.KREJQV_VLVwZqHmDA96qt-Bi0naUkuSPo4uyLyur7xQ';
 const STORAGE_KEY   = `sb-${PROJECT_REF}-auth-token`;
-const ADMIN_EMAIL    = 'test.admin@medibo.in';
-const ADMIN_PASS     = 'TestAdmin#26';
+// CHANGE #1197 — a super-admin-only screen needs a super-admin session.
+// test.admin is is_super=false, so --admin-path could never open the Dev Queue
+// or any other super-gated route: the app renders the refusal and the
+// render-log key never appears, which is why those screens have always shipped
+// unphotographed. MEDIBO_SUPER=1 swaps in the dedicated verification identity,
+// whose credentials come from ~/.medibo/verify_super.env (chmod 600, never
+// committed and never echoed). Default runs are unchanged.
+const SUPER_EMAIL    = process.env.VERIFY_SUPER_EMAIL || '';
+const SUPER_PASS     = process.env.VERIFY_SUPER_PASS  || '';
+const USE_SUPER      = process.env.MEDIBO_SUPER === '1' && SUPER_EMAIL && SUPER_PASS;
+const ADMIN_EMAIL    = USE_SUPER ? SUPER_EMAIL : 'test.admin@medibo.in';
+const ADMIN_PASS     = USE_SUPER ? SUPER_PASS  : 'TestAdmin#26';
 const SUPPLIER_EMAIL = 'test.sup1@medibo.in';
 const SUPPLIER_PASS  = 'TestSup1#26';
 // CHANGE #174 — the storefront phase runs as a CUSTOMER: the product grid, the

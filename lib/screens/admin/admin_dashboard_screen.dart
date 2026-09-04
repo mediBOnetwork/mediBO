@@ -10,8 +10,6 @@ import '../pharmacy/pharmacy_variance_screen.dart';
 import '../pharmacy/rx_scan_screen.dart'; // CMD #418
 import '../pharmacy/pharmacy_parcel_count_screen.dart'; // CMD #431
 import 'package:pharma_b2b/utils/render_log.dart';
-import 'package:pharma_b2b/widgets/admin_date_picker.dart';
-import 'package:pharma_b2b/widgets/admin_zone_picker.dart'; // CHANGE #609
 import 'package:pharma_b2b/widgets/order_hours_card.dart';
 import 'package:pharma_b2b/widgets/notifications_card.dart';
 import '../../design_tokens.dart';
@@ -597,10 +595,10 @@ class _StickyDashHeader extends SliverPersistentHeaderDelegate {
   // = 120 expanded. A sliver header that overflows its own extent paints the
   // yellow stripes, so these are deliberately a few pixels loose.
   @override
-  double get maxExtent => 128;
+  double get maxExtent => 76;
 
   @override
-  double get minExtent => 100;
+  double get minExtent => 72;
 
   @override
   Widget build(
@@ -644,24 +642,11 @@ class _StickyDashHeader extends SliverPersistentHeaderDelegate {
                     style: Ds.t.caption),
               ),
             ],
-            SizedBox(height: Ds.space.x8),
-            // A rail, not a Wrap: a second line of chips on a 360px phone
-            // would push the header past its own extent. It scrolls sideways
-            // instead, and the pickers never leave the header.
-            SizedBox(
-              height: 44,
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    const AdminDatePicker(bare: true),
-                    SizedBox(width: Ds.space.x8),
-                    AdminZonePicker(onChanged: onZoneChanged),
-                  ],
-                ),
-              ),
-            ),
+            // CHANGE #1017 (1) — the zone and date pickers left this screen.
+            // They live ONCE, in the staff header (StaffScopeBar), for every
+            // tab; this screen reads the same admin_active_zone()/date the
+            // header set. `onZoneChanged` still fires — the bar's listener
+            // reloads the nav and dashboard_v2 re-reads the scope on refresh.
           ],
         ),
       ),

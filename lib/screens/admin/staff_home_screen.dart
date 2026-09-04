@@ -15,6 +15,8 @@ import 'package:flutter/material.dart';
 import '../../design_tokens.dart';
 import '../../utils/render_log.dart';
 import 'nav_registry_view.dart';
+import '../../services/staff_nav.dart';
+import '../../widgets/staff_row.dart';
 
 /// `staff_home(tab)`.
 typedef StaffHomeLoad = Future<Map<String, dynamic>> Function(String tabKey);
@@ -149,6 +151,10 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
               onChanged: (v) => setState(() => _query = v),
             ),
             SizedBox(height: Ds.space.x24),
+            // CHANGE #1017 — the two doors this design pass adds, on More:
+            // Appearance (dark mode) and, for a super admin, View as. Every
+            // label is staff_nav().copy / view_as; the rows are StaffRow.
+            const _StaffPrefsSection(),
           ],
           if (_loading && _home.isEmpty)
             const _HomeSkeleton()
@@ -529,4 +535,56 @@ class _HomeSkeleton extends StatelessWidget {
           ],
         );
       });
+}
+
+
+/// CHANGE #1017 (4, 7) — Appearance and View-as, on the More tab.
+///
+/// Rendered from staff_nav() alone: `copy.dark_mode` / `copy.dark_system`
+/// name the appearance rows, `view_as.options[]` are the previews the backend
+/// allows this login (empty for anyone but a super admin), `view_as.title` is
+/// the section label. Nothing here decides who may preview whom.
+class _StaffPrefsSection extends StatelessWidget {
+  const _StaffPrefsSection();
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<StaffNavPayload>(
+        valueListenable: StaffNav.value,
+        builder: (context, nav, _) {
+          if (!nav.ok) return const SizedBox.shrink();
+          final dark = nav.copyOf('dark_mode');
+          final system = nav.copyOf('dark_system');
+          final options = nav.previewOptions;
+          final title = (nav.viewAs['title'] ?? '').toString();
+          return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            if (dark.isNotEmpty)
+              StaffRow(
+                key: const Key('c1017_dark_row'),
+                row: {'title': dark, 'value_label': system.isEmpty ? '' : system, 'tone': Ds.isDark ? 'good' : ''},
+                leading: Icon(Ds.isDark ? Icons.dark_mode : Icons.light_mode_outlined, size: Ds.space.x16 + Ds.space.x4, color: Ds.c.textSecondary),
+                onTap: () => StaffNav.setDark(!Ds.isDark),
+              ),
+            if (options.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x16),
+              if (title.isNotEmpty) _SectionLabel(title),
+              for (final o in options)
+                StaffRow(
+                  key: Key('c1017_view_as_${o['role']}'),
+                  row: {'title': (o['label'] ?? '').toString(),
+                        'tone': nav.isPreview && nav.viewAs['role'] == o['role'] ? 'good' : ''},
+                  leading: Icon(Icons.visibility_outlined, size: Ds.space.x16 + Ds.space.x4, color: Ds.c.textSecondary),
+                  onTap: () => StaffNav.preview((o['role'] ?? '').toString()),
+                ),
+              if (nav.isPreview)
+                StaffRow(
+                  key: const Key('c1017_view_as_exit'),
+                  row: {'title': nav.previewExitLabel},
+                  leading: Icon(Icons.close, size: Ds.space.x16 + Ds.space.x4, color: Ds.c.textSecondary),
+                  onTap: () => StaffNav.preview(null),
+                ),
+            ],
+            SizedBox(height: Ds.space.x24),
+          ]);
+        },
+      );
 }

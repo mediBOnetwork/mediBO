@@ -130,6 +130,7 @@ import 'storefront_screen.dart';
 import 'supplier/supplier_shell.dart';
 // #745 — drawn by this library's `part` files (mobile + desktop chrome).
 import '../widgets/customer_surface_widgets.dart';
+import '../widgets/staff_scope_bar.dart';
 
 // CHANGE #327 · LAYER 1 — the shell is sharded.
 //
@@ -1752,9 +1753,15 @@ class _HomeShellState extends State<HomeShell> {
   // ─── Mobile / tablet layout (< 900px) ────────────────────────────────────
 
   Widget _buildMobile(List<Widget> pages, VoidCallback onLogoTap, bool isAdmin) {
+    // CHANGE #1017 (6) — a tablet gets the staff tabs as a rail on the left
+    // and no bottom bar. Same entries, same routes; only the placement moves.
+    final isTablet = isAdmin && MediaQuery.sizeOf(context).width >= 600;
+    final staffEntries = isAdmin
+        ? visibleNavEntries(shellStaffBarEntries(kAdminBottomNav), Access.instance.routeCanView)
+        : const <AdminNavEntry>[];
     return Scaffold(
-      backgroundColor: Colors.white,
-      bottomNavigationBar: isAdmin
+      backgroundColor: Ds.c.bg,
+      bottomNavigationBar: isAdmin && !isTablet
           ? _AdminMobileBottomBar(
               index: _index,
               alertCount: _alertCount,
@@ -1790,7 +1797,15 @@ class _HomeShellState extends State<HomeShell> {
                     onPageTap: _setIndex,
                   ),
                 )),
-      body: Stack(
+      body: Row(children: [
+        if (isTablet)
+          StaffSidebar(
+            entries: staffEntries,
+            index: _index,
+            alertCount: _alertCount,
+            onRoute: _handleAdminNav,
+          ),
+        Expanded(child: Stack(
         children: [
           SizedBox.expand(
             child: Column(
@@ -1810,6 +1825,11 @@ class _HomeShellState extends State<HomeShell> {
                 // CHANGE #455 B1 — the persistent order-hours banner that
                 // used to sit here (and in the desktop header below) is
                 // deleted, not hidden. c455_banners proves zero render.
+                // CHANGE #1017 (1, 7) — once, for every staff tab: the preview
+                // banner and the header scope bar (zone + date), both verbatim
+                // from staff_nav(). The same two the desktop chrome mounts.
+                if (isAdmin) const StaffPreviewBanner(),
+                if (isAdmin) const StaffScopeBar(),
                 Builder(builder: (_) {
                   RenderLog.write('c455_banners', 0);
                   return const SizedBox.shrink();
@@ -1876,7 +1896,8 @@ class _HomeShellState extends State<HomeShell> {
               ),
             ),
         ],
-      ),
+      )),
+      ]),
     );
   }
 
@@ -1884,7 +1905,7 @@ class _HomeShellState extends State<HomeShell> {
 
   Widget _buildDesktop(List<Widget> pages, VoidCallback onLogoTap, bool isAdmin) {
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: Ds.c.bg,
       body: Stack(
         children: [
           Column(
@@ -1922,6 +1943,12 @@ class _HomeShellState extends State<HomeShell> {
                   cartOpen: _cartOpen,
                 ),
               // ── Search + chips: storefront only (index 0) ─────────────────
+              // CHANGE #1017 (1, 6, 7) — for staff, once, above every tab:
+              // the preview banner (only while a super admin previews a role)
+              // and the header scope bar (zone + date, chosen here and nowhere
+              // else). Both render staff_nav() verbatim.
+              if (isAdmin) const StaffPreviewBanner(),
+              if (isAdmin) const StaffScopeBar(),
               if (_index == 0)
                 _DesktopSearchRow(
                   controller: _searchCtrl,

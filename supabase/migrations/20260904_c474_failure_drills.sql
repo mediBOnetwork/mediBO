@@ -477,9 +477,15 @@ on conflict (feature_key) do update
       deep_link = excluded.deep_link, search_terms = excluded.search_terms,
       description = excluded.description, is_active = true;
 
+-- handled_by is 'home_shell' for every route the Flutter shell opens, INCLUDING
+-- the ones whose arm lives in shell/shell_extra_routes.dart (kyc_review,
+-- zone_pnl, partner_documents and the rest are all recorded that way). It is the
+-- column scripts/gen_registered_routes.sh reads to build the offline mirror the
+-- reachability gate checks, so naming the shard here would have hidden this door
+-- from the very gate that exists to catch a tile with no door.
 insert into public.surface_route (route_key, kind, feature_key, handled_by, note)
-values ('runbooks', 'feature', 'admin.runbooks', 'shell_extra_routes',
-        'OpsRunbooksScreen — CHANGE #474')
+values ('runbooks', 'feature', 'admin.runbooks', 'home_shell',
+        'OpsRunbooksScreen — CHANGE #474; the arm is in shell/shell_extra_routes.dart')
 on conflict (route_key, feature_key) do update
   set handled_by = excluded.handled_by, note = excluded.note;
 

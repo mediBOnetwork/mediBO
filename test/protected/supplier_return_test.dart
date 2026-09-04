@@ -12,6 +12,12 @@
 //      payload sent them. The fixtures deliberately carry a total that does NOT
 //      equal the sum of the lines, so a widget that adds anything up fails.
 //
+//   1b. THE TILE HAS A DOOR THE SHELL ACTUALLY OPENS. The route_key resolves
+//      through shellExtraRouteScreen(), not only through partnerDestination():
+//      #653 retired the last caller of that resolver, so a route wired only
+//      there is a tile that does nothing on tap — which is how #710 first
+//      reached live (change #1074) with an unreachable returns console.
+//
 //   2. THE ACKNOWLEDGE BUTTON IS A BACKEND FLAG, NOT A STATUS COMPARISON.
 //      can_ack decides whether it exists; an acknowledged return prints the
 //      backend's own `ack_done_label` sentence and offers no button. The two
@@ -43,6 +49,7 @@ import 'package:pharma_b2b/screens/partner/partner_home_screen.dart';
 import 'package:pharma_b2b/screens/partner/partner_returns_screen.dart';
 import 'package:pharma_b2b/screens/public/supplier_return_ack_screen.dart';
 import 'package:pharma_b2b/screens/supplier/supplier_records_screen.dart';
+import 'package:pharma_b2b/screens/shell/shell_extra_routes.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 
 Widget _host(Widget child) => MaterialApp(home: Scaffold(body: child));
@@ -520,12 +527,33 @@ void main() {
   });
 
   group('routing — the route_key is the backend\'s', () {
-    test('supplier_returns opens the returns screen', () {
-      expect(partnerDestination('supplier_returns'),
-          isA<PartnerReturnsScreen>());
+    // The door the SHELL actually opens. This assertion is the one that
+    // matters and it is deliberately first: #710 shipped to live change #1074
+    // with the route wired ONLY into partnerDestination() below, and
+    // /admin/go/supplier_returns silently rendered the storefront home. #653
+    // retired the last caller of that resolver when it merged the partner
+    // surface into the shared shell, so since then a partner route is reachable
+    // only as an arm of shellExtraRouteScreen(), which home_shell reaches
+    // through its one `case _ when shellExtraRouteScreen(route) != null`
+    // lookup. A tile whose feature_registry row ships while this returns null
+    // is a dead tap, however well every RPC behind it answers.
+    test('supplier_returns opens the returns screen from the SHELL', () {
+      expect(shellExtraRouteScreen('supplier_returns'),
+          isA<PartnerReturnsScreen>(),
+          reason: 'the shell opens partner routes through the shard — a route '
+              'only partnerDestination() knows is a tile that does nothing');
     });
 
-    test('a route_key this build never heard of still opens nothing', () {
+    test('an unknown route_key still opens nothing in the shell', () {
+      expect(shellExtraRouteScreen('supplier_returns_v2'), isNull);
+    });
+
+    // partnerDestination() is kept in step so the resolver and the shard never
+    // disagree about which screen the key means, but it is no longer the proof
+    // of reachability — the assertion above is.
+    test('partnerDestination agrees with the shard', () {
+      expect(partnerDestination('supplier_returns'),
+          isA<PartnerReturnsScreen>());
       expect(partnerDestination('supplier_returns_v2'), isNull);
     });
   });

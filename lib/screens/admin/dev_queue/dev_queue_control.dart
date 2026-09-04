@@ -18,7 +18,20 @@ import 'vm_toggle_policy.dart';
 /// The backend/supervisor is the source of truth — this never infers state.
 class DevQueueControl extends StatefulWidget {
   final DevQueueService service;
-  const DevQueueControl({super.key, required this.service});
+  const DevQueueControl({
+    super.key,
+    required this.service,
+    this.startExpanded = false,
+  });
+
+  /// CHANGE #1197 — open the panel on arrival.
+  ///
+  /// Everything inside this card (the Context economy section included) lives
+  /// behind a header tap, and a Flutter canvas cannot be tapped by any headless
+  /// tool — so nothing in here could ever be photographed or write its
+  /// render-log key. `/admin/dev-queue?panel=runner` sets this, which makes the
+  /// panel provable and gives Om a link that lands straight on it.
+  final bool startExpanded;
 
   @override
   State<DevQueueControl> createState() => _DevQueueControlState();
@@ -29,7 +42,7 @@ class _DevQueueControlState extends State<DevQueueControl> {
   Map<String, dynamic> _snap = const {};
   Map<String, dynamic> _usage = const {};
   final Set<String> _busy = {}; // keys mid-flip
-  bool _expanded = false; // collapsed by default — tap the header to open
+  late bool _expanded = widget.startExpanded; // collapsed unless asked to open
   // Anchors so a lock/confirm popup can float right next to the tapped toggle.
   final Map<String, GlobalKey> _anchors = {
     'vm': GlobalKey(),
@@ -43,6 +56,9 @@ class _DevQueueControlState extends State<DevQueueControl> {
   void initState() {
     super.initState();
     _tick();
+    // Opening via the header pulls a fresh usage reading; arriving already
+    // open has to do the same or the panel paints with an empty usage block.
+    if (_expanded) _refreshUsage();
     _poll = Timer.periodic(const Duration(seconds: 10), (_) => _tick());
   }
 

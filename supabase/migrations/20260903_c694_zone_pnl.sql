@@ -1023,3 +1023,28 @@ insert into public.ui_copy (key, value) values
   ('zone_pnl.load_failed', to_jsonb('Could not load the Zone P&L just now.'::text)),
   ('zone_pnl.retry',       to_jsonb('Retry'::text))
 on conflict (key) do update set value = excluded.value;
+
+-- ── 13. the partner's door was declared onto a dead resolver ───────────────
+-- Found by driving it, not by reading it: signing in as test.partner1 and
+-- opening /admin/go/partner_zone_pnl never reached the screen, while the same
+-- session's zone_pnl() answered 200 with Raipur and its 8 partner_visible
+-- lines. Every piece worked except the one that opens the door.
+--
+-- The route was wired only in partnerDestination() (partner_home_screen.dart),
+-- and #653 removed the last caller of that resolver when it merged the partner
+-- surface into the shared shell. #707, #692 and #695 each document this exact
+-- shape; this is the fourth. The screen is now declared in
+-- shellExtraRouteScreen() — the resolver the shell actually calls — and this
+-- row says so, so the surface map and rg_check describe what really happens.
+--
+-- Authorisation does not move: zone_pnl() resolves the zone from the caller's
+-- own partner row and filters lines by pnl_line_type.partner_visible, so the
+-- door being open decides nothing about what a partner may read.
+update public.surface_route
+   set handled_by = 'home_shell',
+       note = 'CHANGE #694 — opened by shellExtraRouteScreen() in '
+              'lib/screens/shell/shell_extra_routes.dart. Was declared onto '
+              'partnerDestination(), which has had no caller since #653, so '
+              'the partner tile drew and its tap fell through.',
+       is_active = true
+ where route_key = 'partner_zone_pnl';

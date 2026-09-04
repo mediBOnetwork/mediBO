@@ -128,6 +128,20 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       // zone, a partner only its own) and the screen renders its refusal,
       // the same story as damage_report above.
       'zone_pnl' => const ZonePnlScreen(),
+      // CHANGE #694 — the PARTNER's door onto the same screen.
+      //
+      // This route was wired only in partnerDestination(), and that resolver
+      // has had no caller since #653 merged the partner surface into this
+      // shell — the same mistake #707, #692 and #695 each document above. So
+      // feature_registry emitted the `partner.zone_pnl` tile, access_role_default
+      // gave a partner view on it, zone_pnl() answered a partner with its own
+      // zone and its partner_visible lines — and the tap fell through this
+      // switch. Verified live before the fix: /admin/go/partner_zone_pnl as
+      // test.partner1 never reached the screen.
+      //
+      // Same screen, not a copy: zone_pnl() resolves the zone from the caller's
+      // own partner row, so this door needs no argument and decides nothing.
+      'partner_zone_pnl' => const ZonePnlScreen(),
       // CHANGE #714 — the WhatsApp assistant console. wa_assistant_console()
       // gates on get_my_role() and the screen renders its refusal, the same
       // story as damage_report above.

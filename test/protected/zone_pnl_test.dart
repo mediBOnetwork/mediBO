@@ -27,6 +27,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:pharma_b2b/screens/shell/shell_extra_routes.dart';
 import 'package:pharma_b2b/screens/partner/zone_pnl_screen.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 
@@ -346,6 +347,24 @@ void main() {
       await t.tap(find.byType(OutlinedButton));
       await t.pumpAndSettle();
       expect(retried, 1);
+    });
+
+    // CHANGE #694 — the door, not the screen.
+    //
+    // Both route keys must resolve to the SAME screen through the resolver the
+    // shell actually calls. partner_zone_pnl was wired only in
+    // partnerDestination(), which has had no caller since #653, so the
+    // partner's registry tile drew and its tap fell through to "route
+    // unavailable" while every RPC behind it answered correctly. A screen the
+    // role it was built for cannot open is not shipped, so this is held down
+    // here rather than rediscovered a fourth time.
+    test('both doors open the Zone P&L, through the resolver the shell calls',
+        () {
+      expect(shellExtraRouteScreen('zone_pnl'), isA<ZonePnlScreen>());
+      expect(shellExtraRouteScreen('partner_zone_pnl'), isA<ZonePnlScreen>());
+      // An unknown key stays null — null means "keep looking", so the shell's
+      // own backend-worded default branch stays in charge.
+      expect(shellExtraRouteScreen('zone_pnl_not_a_route'), isNull);
     });
 
     testWidgets('no zones renders the backend empty line', (t) async {

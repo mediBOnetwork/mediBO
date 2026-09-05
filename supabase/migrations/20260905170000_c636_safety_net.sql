@@ -1053,3 +1053,364 @@ begin
   return jsonb_build_object('ok', true, 'ran', v_ran, 'failed', v_fail,
     'gaps', v_gaps, 'partial', v_partial);
 end $fn$;
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- PART 3 — INVARIANT ORACLES
+--
+-- Things that must be true after ANY action, whoever took it. They run after
+-- every bot action and after every fuzz batch, so a violation is attributed to
+-- the action that broke it rather than found weeks later by a human.
+--
+-- `mode` is the difference between a safety net and an alarm nobody reads:
+--   enforce — the check is EXACT (a negative price is never right). Violation
+--             is CRITICAL.
+--   observe — the check is a RECONCILIATION with legitimate rounding and
+--             timing gaps. Violation is reported at its own severity and can be
+--             promoted to enforce once it has been quiet on live.
+-- A new oracle is one INSERT, never a deploy.
+-- ═════════════════════════════════════════════════════════════════════════════
+create table if not exists public.autotest_invariant (
+  key         text primary key,
+  family      text not null,           -- money | stock | state | orphan | synthetic
+  title       text not null,
+  detail      text not null default '',
+  check_sql   text not null,           -- must return: n bigint, sample text
+  severity    text not null default 'critical'
+              check (severity in ('critical','high','medium','low')),
+  mode        text not null default 'enforce' check (mode in ('enforce','observe')),
+  enabled     boolean not null default true,
+  sort        integer not null default 0,
+  updated_at  timestamptz not null default now()
+);
+
+create table if not exists public.autotest_invariant_result (
+  id          bigserial primary key,
+  run_id      bigint,
+  key         text not null,
+  phase       text not null default 'run',   -- baseline | after_fuzz | after_action | run
+  violations  bigint not null default 0,
+  sample      text,
+  verdict     text not null default 'pass',
+  severity    text,
+  ms          integer not null default 0,
+  error       text,
+  ran_at      timestamptz not null default now()
+);
+create index if not exists autotest_invariant_result_run_idx
+  on public.autotest_invariant_result (run_id, key);
+
+alter table public.autotest_invariant        enable row level security;
+alter table public.autotest_invariant_result enable row level security;
+
+do $$
+declare t text;
+begin
+  foreach t in array array['autotest_invariant','autotest_invariant_result'] loop
+    execute format('grant select, insert, update, delete on public.%I to authenticated, service_role', t);
+    execute format($p$ drop policy if exists %I on public.%I $p$, t || '_super', t);
+    execute format($p$ create policy %I on public.%I for all to authenticated, service_role
+                       using (public.get_my_role() = 'super_admin' or public._is_service_role())
+                       with check (public.get_my_role() = 'super_admin' or public._is_service_role()) $p$,
+                   t || '_super', t);
+  end loop;
+end $$;
+grant usage, select on sequence public.autotest_invariant_result_id_seq to authenticated, service_role;
+
+-- Synthetic residue, discovered rather than listed: every business table that
+-- HAS an is_synthetic column is checked, so a table that grows one tomorrow is
+-- covered without editing this file.
+create or replace function public._autotest_synthetic_residue()
+returns table (n bigint, sample text)
+language plpgsql stable security definer set search_path to 'public' as $fn$
+declare r record; c bigint; total bigint := 0; hits text[] := '{}';
+begin
+  for r in
+    select c1.table_name
+      from information_schema.columns c1
+     where c1.table_schema = 'public' and c1.column_name = 'is_synthetic'
+       and exists (select 1 from information_schema.columns c2
+                    where c2.table_schema = 'public' and c2.table_name = c1.table_name
+                      and c2.column_name = 'test_session_id')
+       and c1.table_name not like 'autotest%'
+     order by c1.table_name
+  loop
+    begin
+      execute format($q$
+        select count(*) from public.%I t
+         where t.is_synthetic
+           and (t.test_session_id is null
+                or not exists (select 1 from public.test_sessions s
+                                where s.id = t.test_session_id and s.status = 'live'))
+      $q$, r.table_name) into c;
+    exception when others then c := 0;
+    end;
+    if coalesce(c,0) > 0 then
+      total := total + c;
+      hits := hits || (r.table_name || '=' || c);
+    end if;
+  end loop;
+  n := total;
+  sample := coalesce(array_to_string(hits[1:12], ', '), '');
+  return next;
+end $fn$;
+
+-- Orphans in the relationships nobody declared a foreign key for. The pairs are
+-- inferred from naming (<parent>_id), so this too is generated, not written.
+create or replace function public._autotest_orphan_scan(
+  p_max_pairs integer default 25, p_budget_ms integer default 3000)
+returns table (n bigint, sample text)
+language plpgsql stable security definer set search_path to 'public' as $fn$
+declare
+  r record; c bigint; total bigint := 0; hits text[] := '{}'; pairs int := 0;
+  v_deadline timestamptz := clock_timestamp()
+                            + make_interval(secs => greatest(coalesce(p_budget_ms,3000),500)/1000.0);
+begin
+  -- Hard bounds, not politeness: this runs on a 1 GB instance shared by five
+  -- builders. An unbounded version of this scan took the connection down.
+  -- pg_catalog, never information_schema: those views are joins over every
+  -- object in the database and on this schema the discovery query alone ran
+  -- longer than the whole safety net is allowed to take.
+  for r in
+    with child as (
+      select c.oid as reloid, c.relname as child, a.attname as col,
+             a.atttypid as coltype, c.reltuples,
+             left(a.attname, length(a.attname) - 3) || 's' as parent
+        from pg_class c
+        join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+       where c.relnamespace = 'public'::regnamespace
+         and c.relkind = 'r'
+         and c.relname not like 'autotest%'
+         and c.reltuples between 1 and 50000
+         and a.attname like '%\_id'
+         and a.attname not in ('test_session_id','user_id','auth_user_id',
+                               'client_action_id','run_id','case_id','command_id')
+    )
+    select ch.child, ch.col, ch.parent
+      from child ch
+      join pg_class p on p.relname = ch.parent
+                     and p.relnamespace = 'public'::regnamespace
+                     and p.relkind = 'r'
+      join pg_attribute pa on pa.attrelid = p.oid and pa.attname = 'id'
+                          and pa.atttypid = ch.coltype and not pa.attisdropped
+     where not exists (
+             select 1 from pg_constraint fk
+              where fk.conrelid = ch.reloid and fk.contype = 'f'
+                and ch.col = any (select att.attname from pg_attribute att
+                                   where att.attrelid = fk.conrelid
+                                     and att.attnum = any (fk.conkey)))
+     order by ch.reltuples, ch.child, ch.col
+  loop
+    exit when pairs >= greatest(coalesce(p_max_pairs, 25), 1);
+    exit when clock_timestamp() > v_deadline;
+    pairs := pairs + 1;
+    begin
+      execute format($q$
+        select count(*) from (
+          select c.%I as v from public.%I c where c.%I is not null limit 5000
+        ) s
+        where not exists (select 1 from public.%I p where p.id = s.v)
+      $q$, r.col, r.child, r.col, r.parent) into c;
+    exception when others then c := 0;
+    end;
+    if coalesce(c,0) > 0 then
+      total := total + c;
+      hits := hits || (r.child || '.' || r.col || '=' || c);
+    end if;
+  end loop;
+  n := total;
+  sample := coalesce(array_to_string(hits[1:12], ', '), '') ||
+            case when pairs = 0 then 'no undeclared pairs in range' else '' end;
+  return next;
+end $fn$;
+
+insert into public.autotest_invariant (key, family, title, detail, check_sql, severity, mode, sort) values
+ ('money.no_negative_order_total','money','An order total is never negative',
+  'orders.total_amount below zero.',
+  $s$select count(*)::bigint as n, coalesce(string_agg(id::text, ', '), '') as sample
+       from (select id from public.orders where total_amount < 0 limit 20) s$s$,
+  'critical','enforce',10),
+
+ ('money.no_negative_line','money','An order line is never negative',
+  'order_items.line_total or price below zero.',
+  $s$select count(*)::bigint as n, coalesce(string_agg(id::text, ', '), '') as sample
+       from (select id from public.order_items where line_total < 0 or price < 0 limit 20) s$s$,
+  'critical','enforce',11),
+
+ ('money.no_negative_payment','money','A payment is never negative',
+  'payment_claims.amount below zero.',
+  $s$select count(*)::bigint as n, coalesce(string_agg(id::text, ', '), '') as sample
+       from (select id from public.payment_claims where amount < 0 limit 20) s$s$,
+  'critical','enforce',12),
+
+ ('money.no_negative_bill_line','money','A bill line is never negative',
+  'bill_lines.line_amount or qty below zero.',
+  $s$select count(*)::bigint as n, coalesce(string_agg(id::text, ', '), '') as sample
+       from (select id from public.bill_lines where line_amount < 0 or qty < 0 limit 20) s$s$,
+  'critical','enforce',13),
+
+ ('money.payments_within_order','money','Payments never exceed the order they settle',
+  'Sum of verified payment_claims for an order, against that order total plus delivery.',
+  $s$with p as (
+       select pc.order_id, sum(pc.amount) as paid
+         from public.payment_claims pc
+        where pc.order_id is not null and coalesce(pc.status,'') in ('verified','matched','linked')
+        group by pc.order_id)
+     select count(*)::bigint as n,
+            coalesce(string_agg(format('%s paid %s vs %s', o.id, p.paid, o.total_amount), ', '), '') as sample
+       from p join public.orders o on o.id = p.order_id
+      where p.paid > coalesce(o.total_amount,0)
+                     + coalesce(o.delivery_charge,0) + coalesce(o.delivery_charge_gst,0) + 1$s$,
+  'high','observe',14),
+
+ ('money.order_total_matches_items','money','An order total equals its lines',
+  'orders.total_amount against sum(order_items.line_total) plus the delivery charge, +/- 1.',
+  $s$with t as (
+       select oi.order_id, sum(coalesce(oi.line_total,0)) as lines
+         from public.order_items oi group by oi.order_id)
+     select count(*)::bigint as n,
+            coalesce(string_agg(format('%s total %s vs lines %s', o.id, o.total_amount, t.lines), ', '), '') as sample
+       from t join public.orders o on o.id = t.order_id
+      where coalesce(o.status,'') not in ('cancelled','closed','draft')
+        and abs(coalesce(o.total_amount,0)
+                - (t.lines + coalesce(o.delivery_charge,0) + coalesce(o.delivery_charge_gst,0))) > 1$s$,
+  'high','observe',15),
+
+ ('stock.no_negative_quantity','stock','A quantity is never negative',
+  'order_items.quantity / received_qty / packed_qty below zero.',
+  $s$select count(*)::bigint as n, coalesce(string_agg(id::text, ', '), '') as sample
+       from (select id from public.order_items
+              where coalesce(quantity,0) < 0 or coalesce(received_qty,0) < 0
+                 or coalesce(packed_qty,0) < 0 limit 20) s$s$,
+  'critical','enforce',20),
+
+ ('stock.lot_balance_not_negative','stock','A stock lot never goes below zero',
+  'Sum of stock_movement.qty per lot.',
+  $s$select count(*)::bigint as n, coalesce(string_agg(lot::text || '=' || bal::text, ', '), '') as sample
+       from (select lot_id as lot, sum(qty) as bal from public.stock_movement
+              where lot_id is not null group by lot_id having sum(qty) < 0 limit 20) s$s$,
+  'critical','enforce',21),
+
+ ('stock.allocated_within_received','stock','Allocated never exceeds received',
+  'bag_allocations.qty per order item against order_items.received_qty.',
+  $s$with a as (select order_item_id, sum(coalesce(qty,0)) as alloc
+                from public.bag_allocations where order_item_id is not null
+               group by order_item_id)
+     select count(*)::bigint as n,
+            coalesce(string_agg(format('%s alloc %s vs recd %s', oi.id, a.alloc, oi.received_qty), ', '), '') as sample
+       from a join public.order_items oi on oi.id = a.order_item_id
+      where a.alloc > coalesce(oi.received_qty, 0)$s$,
+  'high','observe',22),
+
+ ('state.no_illegal_jump','state','No illegal order-state jump',
+  'order_state_event rows the transition table has already judged illegal.',
+  $s$select count(*)::bigint as n,
+            coalesce(string_agg(format('%s %s->%s by %s', entity_kind, from_state, to_state, actor_role), ', '), '') as sample
+       from (select entity_kind, from_state, to_state, actor_role
+               from public.order_state_event where legal is false
+              order by at desc limit 20) s$s$,
+  'critical','enforce',30),
+
+ ('state.transition_declared','state','Every transition taken is a declared one',
+  'order_state_event against order_state_transitions (#469).',
+  $s$select count(*)::bigint as n,
+            coalesce(string_agg(format('%s %s->%s by %s', e.entity_kind, e.from_state, e.to_state, e.actor_role), ', '), '') as sample
+       from (select distinct entity_kind, from_state, to_state, actor_role
+               from public.order_state_event
+              where at > now() - interval '30 days' limit 200) e
+      where not exists (
+        select 1 from public.order_state_transitions t
+         where t.entity_kind = e.entity_kind and t.from_state = e.from_state
+           and t.to_state = e.to_state and coalesce(t.is_active, true)
+           and (t.actor_role is null or t.actor_role = e.actor_role))$s$,
+  'high','observe',31),
+
+ ('orphan.undeclared_parents','orphan','No orphan rows in undeclared relationships',
+  'Columns named <parent>_id with no foreign key, scanned for values their parent does not have.',
+  $s$select n, sample from public._autotest_orphan_scan(25, 3000)$s$,
+  'high','observe',40),
+
+ ('synthetic.no_residue','synthetic','No synthetic row loose in a business table',
+  'is_synthetic rows with no live test session behind them.',
+  $s$select n, sample from public._autotest_synthetic_residue()$s$,
+  'critical','enforce',50)
+on conflict (key) do update
+  set family = excluded.family, title = excluded.title, detail = excluded.detail,
+      check_sql = excluded.check_sql, severity = excluded.severity,
+      mode = excluded.mode, sort = excluded.sort, updated_at = now();
+
+create or replace function public.autotest_invariant_run(
+  p_run_id bigint default null, p_phase text default 'run', p_family text default null)
+returns jsonb
+language plpgsql security definer set search_path to 'public' as $fn$
+declare
+  v_i record; v_n bigint; v_sample text; v_t0 timestamptz; v_ms int;
+  v_total int := 0; v_fail int := 0; v_gaps int := 0; v_err text;
+  v_worst text := null;
+begin
+  perform public._dev_guard();
+
+  for v_i in
+    select * from public.autotest_invariant
+     where enabled and (p_family is null or family = p_family)
+     order by sort, key
+  loop
+    v_t0 := clock_timestamp(); v_n := 0; v_sample := null; v_err := null;
+    begin
+      execute v_i.check_sql into v_n, v_sample;
+    exception when others then
+      v_err := left(sqlstate || ' ' || coalesce(sqlerrm,''), 400); v_n := -1;
+    end;
+    v_ms := (extract(epoch from clock_timestamp() - v_t0) * 1000)::int;
+    v_total := v_total + 1;
+
+    insert into public.autotest_invariant_result
+      (run_id, key, phase, violations, sample, verdict, severity, ms, error)
+    values (p_run_id, v_i.key, coalesce(p_phase,'run'), greatest(coalesce(v_n,0),0),
+            left(coalesce(v_sample,''), 800),
+            case when v_err is not null then 'error'
+                 when coalesce(v_n,0) > 0 then 'fail' else 'pass' end,
+            case when coalesce(v_n,0) > 0 then v_i.severity else null end,
+            v_ms, v_err);
+
+    if v_err is not null then
+      v_fail := v_fail + 1;
+      perform public.feature_gap_add(
+        (select gap_surface from public.autotest_config where id = 1),
+        format('Invariant %s cannot run', v_i.key),
+        'broken', 'high', 'invariant',
+        format('%s · %s', v_i.title, v_err),
+        'Fix the oracle SQL in autotest_invariant, or the schema it reads.',
+        'S', null, (select gap_command_id from public.autotest_config where id = 1));
+      v_gaps := v_gaps + 1;
+    elsif coalesce(v_n,0) > 0 then
+      v_fail := v_fail + 1;
+      if v_worst is null or v_i.severity = 'critical' then v_worst := v_i.key; end if;
+      perform public.feature_gap_add(
+        (select gap_surface from public.autotest_config where id = 1),
+        format('Invariant broken — %s', v_i.title),
+        'broken',
+        -- An exact oracle is CRITICAL whatever tripped it; a reconciliation
+        -- keeps its own severity until it has been quiet on live.
+        case when v_i.mode = 'enforce' then 'critical' else v_i.severity end,
+        'invariant',
+        format('%s · %s violation(s) at phase %s · %s',
+               v_i.key, v_n, coalesce(p_phase,'run'), coalesce(v_sample,'')),
+        format('Replay: %s', left(v_i.check_sql, 300)),
+        'M', null, (select gap_command_id from public.autotest_config where id = 1));
+      v_gaps := v_gaps + 1;
+    end if;
+  end loop;
+
+  if p_run_id is not null then
+    update public.autotest_run
+       set inv_total = v_total, inv_failed = v_fail,
+           gaps_written = gaps_written + v_gaps,
+           summary = summary || jsonb_build_object('invariants_' || coalesce(p_phase,'run'),
+             jsonb_build_object('checked', v_total, 'broken', v_fail))
+     where id = p_run_id;
+  end if;
+
+  return jsonb_build_object('ok', true, 'checked', v_total, 'broken', v_fail,
+                            'gaps', v_gaps, 'phase', coalesce(p_phase,'run'),
+                            'worst', v_worst);
+end $fn$;

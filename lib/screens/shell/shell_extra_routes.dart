@@ -24,6 +24,7 @@
 // a screen no longer collide on the shell.
 
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'dart:async';
 
@@ -213,8 +214,16 @@ const Map<String, String> _coldBootStages = {'exceptions': 'exceptions'};
 /// switch; this shard has no state of its own, which is the point: it lives
 /// here so `home_shell.dart` stays a shell and not the ninth concern again
 /// (#340 / CHANGE #327 layer 1).
-bool shellOpenFulfillStage(String routeKey, void Function(int index) goToPage) {
-  var stage = Access.instance.fulfillStageForRoute(routeKey);
+bool shellOpenFulfillStage(
+    String routeKey, String? seed, void Function(int index) goToPage) {
+  // CHANGE #632 — a stage NAMED outright wins over the registry pairing. Two
+  // callers name one: `/admin/go/fulfillment/<stage_key>`, whose tail
+  // AdminGoLink parks as the seed, and the new-order alert, which asks the
+  // backend where its order is and says `fulfillment:<stage_key>`. `fulfillment`
+  // carries no pairing of its own, so before this the seed was simply dropped
+  // and the link opened whichever tab that login had used last.
+  var stage = routeKey == 'fulfillment' ? (seed ?? '') : '';
+  if (stage.isEmpty) stage = Access.instance.fulfillStageForRoute(routeKey);
   // A deep link can land BEFORE access_boot() answers, and an unresolved
   // matrix carries no pairing at all. #690 hand-wrote a branch in the shell for
   // exactly that cold boot; it lives here now so the shell keeps shrinking, and
@@ -228,6 +237,61 @@ bool shellOpenFulfillStage(String routeKey, void Function(int index) goToPage) {
   WidgetsBinding.instance.addPostFrameCallback(
       (_) => AdminFulfillmentScreen.openStage(stage));
   return true;
+}
+
+/// CHANGE #632 — the route shape that names a Fulfill stage outright.
+///
+/// `fulfillment:<stage_key>`. It exists because the shell's nav takes ONE
+/// string, and a caller that already knows the stage (the new-order alert,
+/// once it has asked the backend) has nowhere else to put it.
+const String kFulfillStagePrefix = 'fulfillment:';
+
+/// Split `fulfillment:<stage_key>` back into the route the access matrix knows
+/// and the stage as a seed, so the shell's own View gate still runs on
+/// `fulfillment` itself.
+///
+/// This is not cosmetic. `routeCanView()` deliberately leaves an UNREGISTERED
+/// key alone — hiding a destination the backend has not catalogued yet would
+/// delete it — and `fulfillment:warehouse` is not a registered key, so a colon
+/// form carried past the gate would be a door around the gate. Everything else
+/// is returned untouched, seed included.
+(String, String?) shellFulfillHop(String route, String? seed) =>
+    route.startsWith(kFulfillStagePrefix)
+        ? ('fulfillment', route.substring(kFulfillStagePrefix.length))
+        : (route, seed);
+
+/// CHANGE #632 — the new-order alert's "View orders" button, finished.
+///
+/// #537 built both ends and neither one hop: the alert learned to hand over
+/// the order's uuid (AdminAlertOverlay.onOrderStageTap), Fulfill learned to
+/// open on a named stage (AdminFulfillmentScreen.openStage), and the button
+/// still dropped the admin on the customer list to go and find the order by
+/// eye, because the two lines that join them live in `home_shell.dart` and
+/// that file was leased for the whole of #537's build.
+///
+/// WHERE the order is, is the BACKEND's answer — `fulfill_order_stage()` reads
+/// disputes, deliveries, packing, bags, arrivals, shop counts, supplier orders
+/// and inquiries in that order — never a guess from the alert's own fields. An
+/// order that has already reached Pack opens on Pack.
+///
+/// A refusal, an order that no longer exists, or no network at all is not an
+/// error the admin has to read: Fulfill still opens, on the stage it would
+/// have opened on anyway. That is strictly what the button promised, and it is
+/// the customer list this replaces that was the actual dead end.
+Future<void> shellOpenOrderStage(
+    String orderId, void Function(String route) navigate) async {
+  var stage = '';
+  try {
+    final res = await Supabase.instance.client
+        .rpc('fulfill_order_stage', params: {'p_order_id': orderId});
+    if (res is Map && res['ok'] == true) {
+      stage = (res['stage_key'] as String?) ?? '';
+    }
+  } catch (_) {
+    // Deliberately swallowed — the fallback below IS the error handling.
+  }
+  RenderLog.write('c632_order_stage', stage.isEmpty ? 'none' : stage);
+  navigate(stage.isEmpty ? 'fulfillment' : '$kFulfillStagePrefix$stage');
 }
 
 /// CHANGE #754 — run [then] once the access matrix has answered.

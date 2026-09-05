@@ -802,6 +802,7 @@ class _HomeShellState extends State<HomeShell> {
   /// destination by themselves.
   void _handleAdminNav(String route, [String? seed]) {
     if (!mounted) return;
+    (route, seed) = shellFulfillHop(route, seed); // CHANGE #632 — stage hop
     route = shellResolveStaffRoute(route, seed); // CHANGE #1016 — nav_redirect
     // CHANGE #653 — ONE interface: super admin, admin and partner share these
     // routes, and the per-feature View toggle is the only differentiator. A
@@ -819,7 +820,7 @@ class _HomeShellState extends State<HomeShell> {
     // CHANGE #754 — a route whose screen moved into Fulfill opens there
     // instead. The pairing is the backend's; see shell_extra_routes.dart.
     if (shellOpenFulfillStage(
-        route, (i) => setState(() { _index = i; _cartOpen = false; }))) {
+        route, seed, (i) => setState(() { _index = i; _cartOpen = false; }))) {
       return;
     }
     switch (route) {
@@ -1743,6 +1744,7 @@ class _HomeShellState extends State<HomeShell> {
         if (!isAdmin) return shell;
         return AdminAlertOverlay(
           onOrderTap: () => _handleAdminNav('customers'),
+          onOrderStageTap: (id) => shellOpenOrderStage(id, _handleAdminNav),
           child: shell,
         );
       },

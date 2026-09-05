@@ -106,6 +106,17 @@ class _DevQueueControlState extends State<DevQueueControl> {
     // open has to do the same or the panel paints with an empty usage block.
     if (_expanded) _refreshUsage();
     _poll = Timer.periodic(const Duration(seconds: 10), (_) => _tick());
+    // CHANGE #636 — `/admin/dev-queue?panel=safety_net` lands ON the safety
+    // net. A screen that can only be reached by expanding a card and tapping a
+    // row cannot be photographed, and a proof nobody can capture is a proof
+    // nobody checks.
+    if (Uri.base.queryParameters['panel'] == 'safety_net') {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => SafetyNetScreen(service: widget.service)));
+      });
+    }
   }
 
   @override

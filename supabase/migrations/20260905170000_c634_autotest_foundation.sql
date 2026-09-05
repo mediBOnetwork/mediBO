@@ -822,3 +822,38 @@ $c634$;
   'CHANGE #634 — a feature without a test contract turns the guard red, and the gate is proven still able to see one.')
 on conflict (name) do update
   set body = excluded.body, enabled = true, note = excluded.note;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 8. WHO THE BOT SIGNS IN AS — backend-owned, passwords never stored here
+-- ─────────────────────────────────────────────────────────────────────────
+-- qa_test_identities has existed since #129 with every row ready=false and no
+-- identity, so nothing could ever be driven as a role. The three published test
+-- logins (CLAUDE.md) are filled in here; the PASSWORD stays on the VM in
+-- ~/.medibo/autotest.env (chmod 600, never committed, never in a payload).
+-- A role with no identity is reported by the harness as BLOCKED with this
+-- table's own note — never as a failure, and never silently skipped.
+insert into public.qa_test_identities (role, identity, ready, note)
+values ('customer', 'test.cust1@medibo.in', true, 'password lives in ~/.medibo/autotest.env on the build VM'),
+       ('admin',    'test.admin@medibo.in', true, 'password lives in ~/.medibo/autotest.env on the build VM'),
+       ('supplier', 'test.sup1@medibo.in',  true, 'password lives in ~/.medibo/autotest.env on the build VM')
+on conflict (role) do update
+   set identity = excluded.identity,
+       ready    = true,
+       note     = excluded.note
+ where coalesce(public.qa_test_identities.identity,'') = '';
+
+update public.qa_test_identities
+   set note = 'no test account exists for this role yet — seed one and set ready'
+ where coalesce(identity,'') = '' and coalesce(note,'') like 'seed a test-only%';
+
+create or replace function public.test_identities()
+returns jsonb
+language sql stable security definer set search_path to 'public'
+as $$
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'role', t.role, 'identity', coalesce(t.identity,''),
+           'ready', t.ready, 'note', coalesce(t.note,'')) order by t.role), '[]'::jsonb)
+    from public.qa_test_identities t;
+$$;
+revoke all on function public.test_identities() from public, anon;
+grant execute on function public.test_identities() to authenticated, service_role;

@@ -88,6 +88,7 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
       if (mounted && _hasActive) setState(() => _now = DateTime.now());
     });
     _openDeepLinkedCommand();
+    _openDeepLinkedTool();
   }
 
   /// CHANGE #1802 — `/admin/dev-queue?cmd=1802` opens that command's detail.
@@ -115,6 +116,24 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
     } catch (_) {/* the detail reads the row itself */}
     if (!mounted) return;
     await _openDetail({'id': id, ...row});
+  }
+
+  /// CHANGE #637 — `/admin/dev-queue?tool=visual_baselines` opens that dev
+  /// tool.
+  ///
+  /// The same hole #1802 closed for a command's detail, one level down: every
+  /// dev tool is behind the tools sheet, which is behind a header tap, and a
+  /// Flutter canvas cannot be tapped by the headless capture the runner uses.
+  /// So a tool screen was reachable by a human and by nothing else, and the
+  /// reachability proof §11 demands could never be a picture of the screen.
+  /// The key travels in the query string; a key this build does not know opens
+  /// nothing, exactly as `openDevTool` already reports for one it cannot route.
+  Future<void> _openDeepLinkedTool() async {
+    final key = (Uri.base.queryParameters['tool'] ?? '').trim();
+    if (key.isEmpty || !kDevToolKeys.contains(key)) return;
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    openDevTool(context, key, service: _svc, onDraftsQueued: _loadDrafts);
   }
 
   @override

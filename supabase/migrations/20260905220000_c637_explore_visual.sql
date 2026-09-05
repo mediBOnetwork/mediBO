@@ -415,13 +415,21 @@ on conflict (key) do nothing;
 -- The key is (kind, key), not key: 'admin' is BOTH a role and a feature-key
 -- prefix, and a single-column key silently swallowed the second one — which is
 -- how every admin finding was landing on 'platform'.
+-- `'public.gap_surface_map'::regclass` THROWS when the relation is absent, and
+-- `and` does not promise to short-circuit: the merge worker replayed this file
+-- on live, where the table had never existed, and batch 572 died on
+-- `relation "public.gap_surface_map" does not exist` — taking #636 and #1807
+-- down with it. to_regclass() returns NULL for an absent relation, and the
+-- constraint check is NESTED so it is never reached unless the table is there.
 do $c637_map$
+declare v_oid oid := to_regclass('public.gap_surface_map');
 begin
-  if exists (select 1 from information_schema.tables
-              where table_schema = 'public' and table_name = 'gap_surface_map')
-     and not exists (select 1 from pg_constraint c
-                      where c.conrelid = 'public.gap_surface_map'::regclass
-                        and c.contype = 'p' and array_length(c.conkey, 1) = 2)
+  if v_oid is null then
+    return;   -- first run on this database: nothing to reshape
+  end if;
+  if not exists (select 1 from pg_constraint c
+                  where c.conrelid = v_oid
+                    and c.contype = 'p' and array_length(c.conkey, 1) = 2)
   then
     drop table public.gap_surface_map;   -- this migration's own seed table, one shape old
   end if;

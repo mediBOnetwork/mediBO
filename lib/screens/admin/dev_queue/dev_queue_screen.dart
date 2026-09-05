@@ -20,6 +20,7 @@ import 'strip_v3/strip_v3_card.dart';
 import '../admin_heartbeat_screen.dart';        // CHANGE #468
 import '../test_mode_screen.dart';             // CHANGE #573, wired #468
 import 'journey_library_screen.dart';
+import 'test_coverage_screen.dart';   // CHANGE #634
 import 'play_store_screen.dart';
 import 'signin_diag_screen.dart';
 import 'memory_screen.dart';
@@ -1131,6 +1132,10 @@ class _DraftsInboxSheetState extends State<_DraftsInboxSheet> {
 /// that would do nothing is never drawn.
 const Set<String> kDevToolKeys = <String>{
   'journey_library',
+  // CHANGE #634 — the coverage ledger. It sits in the same group as the
+  // Journey Library on purpose: journeys are what the bot runs, coverage is
+  // the list of what it has never run.
+  'test_coverage',
   'bug_report',
   'drafts_inbox',
   'cron_health',
@@ -1164,6 +1169,9 @@ bool openDevTool(
   switch (toolKey) {
     case 'journey_library':
       push(JourneyLibraryScreen(service: svc));
+      return true;
+    case 'test_coverage':
+      push(TestCoverageScreen(service: svc));
       return true;
     case 'bug_report':
       showBugReportSheet(context, svc);

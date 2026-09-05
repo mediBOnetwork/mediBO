@@ -54,8 +54,6 @@ import 'admin/admin_delivery_ops_screen.dart';  // CHANGE #325
 import 'admin/notify_cost_screen.dart';         // CHANGE #325
 import 'admin/admin_supplier_account_screen.dart'; // CHANGE #402
 import 'admin/settlement_screen.dart';          // CHANGE #325
-import 'admin/dev_queue/cron_health_screen.dart'; // CHANGE #325
-import 'admin/test_mode_screen.dart';            // CHANGE #573
 import '../services/discount_slabs_service.dart'; // CHANGE #325
 import 'admin/admin_pricing_screen.dart';
 import 'admin/pricing_backfill_screen.dart';
@@ -823,6 +821,12 @@ class _HomeShellState extends State<HomeShell> {
         route, seed, (i) => setState(() { _index = i; _cartOpen = false; }))) {
       return;
     }
+    // CHANGE #634 — ONE door for every registered Dev Queue tool. A per-tool
+    // case here is how devtool.test_mode went missing for #468: the tools
+    // sheet drops a key this build cannot open, and this switch was the only
+    // other way in. openDevTool already knows all of them, so a tool added to
+    // the registry is deep-linkable the moment the build knows its key.
+    if (kDevToolKeys.contains(route) && openDevTool(context, route)) return;
     switch (route) {
       case 'home': _goHome(); break;
       case 'dashboard': setState(() { _index = 3; _cartOpen = false; }); break;
@@ -1302,23 +1306,12 @@ class _HomeShellState extends State<HomeShell> {
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const SettlementScreen()));
         break;
-      case 'cron_health':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const CronHealthScreen()));
-        break;
       // CHANGE #402 — supplier bank/UPI approvals and the Hindi coverage
       // report. Both RPCs gate on get_my_role() and the screen renders the
       // backend's own refusal, the same story as the screens above.
       case 'supplier_accounts':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const AdminSupplierAccountScreen()));
-        break;
-      // CHANGE #573 — the synthetic lane: what is test data right now, one tap
-      // to walk a whole order through it, one tap to purge it, and the switch
-      // that stops it being created at all.
-      case 'test_mode':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const TestModeScreen()));
         break;
       // The identity row the profile dropdown fires.
       case 'profile':

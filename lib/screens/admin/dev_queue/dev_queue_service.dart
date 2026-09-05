@@ -41,6 +41,9 @@ class DevQueueService {
     'rg_guard_card',
     'call_setup_status',
     'auth_diag_list',
+    // CHANGE #634 — the coverage ledger reads production's feature_registry,
+    // test_coverage and test_runs; the control plane has none of them.
+    'test_coverage_home',
   };
 
   /// The control-plane client (medibo-dev): minted on first use, re-minted
@@ -196,6 +199,13 @@ class DevQueueService {
 
   Future<List<Map<String, dynamic>>> areasGet() async =>
       _asList(await _rpc('dev_areas_get'));
+
+  /// CHANGE #634 — the coverage ledger. One RPC, one payload, printed as it
+  /// arrives: this method merges nothing and defaults nothing. It reads
+  /// PRODUCTION's own feature_registry and test_coverage, so it is routed
+  /// there by [productionRpcs] rather than to the control plane.
+  Future<Map<String, dynamic>> testCoverageHome({String filter = 'all'}) async =>
+      _asMap(await _rpc('test_coverage_home', params: {'p_filter': filter}));
 
   /// The journey library: every enabled journey, optionally scoped to an area.
   /// Rendered verbatim in the Journey Library screen.

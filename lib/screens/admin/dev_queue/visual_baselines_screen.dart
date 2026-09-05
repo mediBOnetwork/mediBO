@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
+import '../../../utils/render_log.dart';
 import '../../../utils/payment_proof.dart';
 import '../../../widgets/payment_proof_image.dart';
 import 'dev_queue_common.dart';
@@ -93,6 +94,11 @@ class _VisualBaselinesScreenState extends State<VisualBaselinesScreen> {
           ? await widget.load!(_filter)
           : await _api.home(_filter);
       if (!mounted) return;
+      // CHANGE #637 — the render-log key this screen is PROVEN by. A string in
+      // the bundle only says the code compiled; this says the list painted, and
+      // how many rows the backend actually handed it.
+      RenderLog.write('c637_visual_rows',
+          ((p['rows'] as List?) ?? const []).length);
       setState(() {
         _payload = p;
         _loading = false;

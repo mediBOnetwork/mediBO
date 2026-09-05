@@ -46,7 +46,12 @@ const secrets = Object.assign(
 const SERVICE_KEY = secrets.AUTOTEST_SERVICE_KEY || secrets.SERVICE_ROLE_KEY ||
                     secrets.SUPABASE_SERVICE_ROLE_KEY || '';
 
-function request(method, url, body, headers) {
+// Every call is bounded and retried once. The 1 GB database goes busy under
+// load and a POST can sit unanswered: a bot that hangs forever is worse than a
+// bot that reports a slow backend, because nobody ever sees its verdict.
+const REQUEST_TIMEOUT_MS = parseInt(process.env.AUTOTEST_HTTP_TIMEOUT_MS || '25000', 10);
+
+function requestOnce(method, url, body, headers) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const data = body === undefined ? null : JSON.stringify(body);
@@ -72,9 +77,24 @@ function request(method, url, body, headers) {
       });
     });
     req.on('error', reject);
+    req.setTimeout(REQUEST_TIMEOUT_MS, () => {
+      req.destroy(new Error(`${method} ${u.pathname} timed out after ${REQUEST_TIMEOUT_MS}ms`));
+    });
     if (data) req.write(data);
     req.end();
   });
+}
+
+async function request(method, url, body, headers) {
+  try {
+    return await requestOnce(method, url, body, headers);
+  } catch (e) {
+    // A 4xx/5xx is an ANSWER and must not be retried into a different story.
+    // Only a dead socket or a timeout gets a second chance.
+    if (e && e.status) throw e;
+    await new Promise((r) => setTimeout(r, 2000));
+    return requestOnce(method, url, body, headers);
+  }
 }
 
 function rpc(fn, params, token) {

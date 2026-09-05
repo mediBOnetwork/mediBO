@@ -10,6 +10,8 @@
 //   --commit <sha> --deploy <n>   what is being tested
 //   --triggered-by <who>          vm | dispatcher | admin
 //   --limit <n>                   cap features (a smoke run)
+//   --if-requested                claim a run the #305 dispatcher asked for;
+//                                 exits 0 doing nothing when none is waiting
 //   --no-purge                    keep the test session (debugging only)
 //   --dry                         print the manifest and exit, open nothing
 //
@@ -42,6 +44,23 @@ function resolveTarget() {
 }
 
 async function main() {
+  // The dispatcher lane. cron_task 'autotest_nightly' inserts a request; this
+  // claims it with SKIP LOCKED so two workers never run the same one. No
+  // request waiting is a normal, quiet exit — not a failure.
+  let request = null;
+  if (flag('if-requested')) {
+    if (!api.hasServiceKey()) { console.error('autotest: no service key'); process.exit(3); }
+    const claimed = await api.rpc('test_run_request_claim',
+      { p_worker: process.env.DEVCMD_AGENT || require('os').hostname() }, null);
+    if (!claimed || !claimed.has) { console.log('[autotest] no run requested'); return 0; }
+    request = claimed;
+    if (claimed.kind && !argv.includes('--target')) { argv.push('--target', claimed.kind === 'prod_smoke' ? 'prod' : 'preview'); }
+    const a = claimed.args || {};
+    if (a.limit && !argv.includes('--limit')) argv.push('--limit', String(a.limit));
+    if (a.feature && !argv.includes('--feature')) argv.push('--feature', String(a.feature));
+    console.log(`[autotest] claimed request ${claimed.request_id} (${claimed.kind})`);
+  }
+
   const target = resolveTarget();
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const artifactRoot = process.env.AUTOTEST_ARTIFACTS ||
@@ -185,6 +204,14 @@ async function main() {
 
   fs.writeFileSync(path.join(artifactDir, 'run.json'),
     JSON.stringify({ run_id: runId, target, results, finished }, null, 2));
+  if (request) {
+    await api.rpc('test_run_request_close', {
+      p_request: request.request_id,
+      p_status: (finished && finished.status === 'passed') ? 'done' : 'failed',
+      p_run_id: runId,
+      p_note: JSON.stringify((finished && finished.totals) || {}).slice(0, 300)
+    }, null);
+  }
   console.log('[autotest] ' + JSON.stringify(finished && finished.totals));
   console.log('[autotest] purge: ' + JSON.stringify((finished && finished.purge && finished.purge.message) || finished && finished.purge));
   return (finished && finished.status === 'passed') ? 0 : 1;

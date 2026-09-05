@@ -936,3 +936,101 @@ begin
                             'session', coalesce(v_sess, '{}'::jsonb));
 end $$;
 grant execute on function public.test_run_start(text,text,text,int,bigint,text,text,boolean) to authenticated, service_role;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 10. THE DISPATCHER LANE — the schedule asks, the VM runs
+-- ─────────────────────────────────────────────────────────────────────────
+-- The #305 dispatcher executes SQL; Playwright needs a machine. So the
+-- dispatcher does not run the bot, it REQUESTS a run, and the VM claims that
+-- request on its next pass. One row, claimed with SKIP LOCKED, so two workers
+-- can never run the same request twice.
+create table if not exists public.test_run_request (
+  id           bigserial primary key,
+  kind         text        not null default 'prod_smoke',
+  args         jsonb       not null default '{}'::jsonb,
+  requested_by text        not null default 'dispatcher',
+  status       text        not null default 'pending',   -- pending | claimed | done | failed
+  run_id       bigint,
+  created_at   timestamptz not null default now(),
+  claimed_at   timestamptz,
+  claimed_by   text,
+  finished_at  timestamptz,
+  note         text
+);
+create index if not exists test_run_request_pending_idx
+  on public.test_run_request (created_at) where status = 'pending';
+alter table public.test_run_request enable row level security;
+
+create or replace function public.test_run_request_add(
+  p_kind text default 'prod_smoke', p_args jsonb default '{}'::jsonb,
+  p_by text default 'dispatcher')
+returns jsonb
+language plpgsql security definer set search_path to 'public'
+as $$
+declare v_id bigint;
+begin
+  perform public._dev_guard();
+  -- One waiting request is enough. A dispatcher that fell behind must not
+  -- queue six identical smoke runs for the VM to work through.
+  select id into v_id from public.test_run_request
+   where status = 'pending' and kind = coalesce(nullif(p_kind,''),'prod_smoke') limit 1;
+  if v_id is not null then
+    return jsonb_build_object('ok', true, 'already', true, 'request_id', v_id);
+  end if;
+  insert into public.test_run_request (kind, args, requested_by)
+  values (coalesce(nullif(p_kind,''),'prod_smoke'), coalesce(p_args,'{}'::jsonb),
+          coalesce(nullif(p_by,''),'dispatcher'))
+  returning id into v_id;
+  return jsonb_build_object('ok', true, 'request_id', v_id);
+end $$;
+
+create or replace function public.test_run_request_claim(p_worker text)
+returns jsonb
+language plpgsql security definer set search_path to 'public'
+as $$
+declare r public.test_run_request;
+begin
+  perform public._dev_guard();
+  select * into r from public.test_run_request
+   where status = 'pending' order by created_at
+   for update skip locked limit 1;
+  if r.id is null then return jsonb_build_object('ok', true, 'has', false); end if;
+  update public.test_run_request
+     set status='claimed', claimed_at=now(), claimed_by=coalesce(nullif(p_worker,''),'vm')
+   where id = r.id;
+  return jsonb_build_object('ok', true, 'has', true, 'request_id', r.id,
+                            'kind', r.kind, 'args', r.args);
+end $$;
+
+create or replace function public.test_run_request_close(
+  p_request bigint, p_status text, p_run_id bigint default null, p_note text default null)
+returns jsonb
+language plpgsql security definer set search_path to 'public'
+as $$
+begin
+  perform public._dev_guard();
+  update public.test_run_request
+     set status = coalesce(nullif(p_status,''),'done'), run_id = p_run_id,
+         finished_at = now(), note = p_note
+   where id = p_request;
+  return jsonb_build_object('ok', true, 'request_id', p_request);
+end $$;
+
+revoke all on function public.test_run_request_add(text,jsonb,text) from public, anon;
+revoke all on function public.test_run_request_claim(text) from public, anon;
+revoke all on function public.test_run_request_close(bigint,text,bigint,text) from public, anon;
+grant execute on function public.test_run_request_add(text,jsonb,text) to authenticated, service_role;
+grant execute on function public.test_run_request_claim(text) to service_role;
+grant execute on function public.test_run_request_close(bigint,text,bigint,text) to service_role;
+
+-- The schedule itself. DISABLED on arrival, deliberately: parts 2-6 write the
+-- journeys, and a nightly bot that runs an unfinished library would teach
+-- everyone to ignore a red. Enable it with one UPDATE when the library is real.
+-- The offset is not a bare */N — a step expression collides on minute 0, which
+-- is how the 29-minute connection-exhaustion outage happened.
+insert into public.cron_task (name, ord, mode, work_sql, enabled, night_only, note)
+values ('autotest_nightly', 900, 'poll',
+        $$select public.test_run_request_add('prod_smoke', '{"limit":40}'::jsonb, 'dispatcher')$$,
+        false, true,
+        'CHANGE #634 — asks the VM for a nightly bot run. The VM claims it with test_run_request_claim(). Enable once the journey library (parts 2-6) is real.')
+on conflict (name) do nothing;

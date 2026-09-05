@@ -21,6 +21,7 @@ import '../admin_heartbeat_screen.dart';        // CHANGE #468
 import '../test_mode_screen.dart';             // CHANGE #573, wired #468
 import 'journey_library_screen.dart';
 import 'test_coverage_screen.dart';   // CHANGE #634
+import 'journey_bot_screen.dart';     // CHANGE #635
 import 'play_store_screen.dart';
 import 'signin_diag_screen.dart';
 import 'memory_screen.dart';
@@ -1164,6 +1165,10 @@ const Set<String> kDevToolKeys = <String>{
   // Journey Library on purpose: journeys are what the bot runs, coverage is
   // the list of what it has never run.
   'test_coverage',
+  // CHANGE #635 — the journey bot: what the coverage ledger says has never
+  // been tested is the list; this is the run that tests it, every role and
+  // every hostile variant, with the gaps it filed.
+  'journey_bot',
   'bug_report',
   'drafts_inbox',
   'cron_health',
@@ -1200,6 +1205,9 @@ bool openDevTool(
       return true;
     case 'test_coverage':
       push(TestCoverageScreen(service: svc));
+      return true;
+    case 'journey_bot':
+      push(JourneyBotScreen(service: svc));
       return true;
     case 'bug_report':
       showBugReportSheet(context, svc);

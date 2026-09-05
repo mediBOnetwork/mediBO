@@ -44,6 +44,10 @@ class DevQueueService {
     // CHANGE #634 — the coverage ledger reads production's feature_registry,
     // test_coverage and test_runs; the control plane has none of them.
     'test_coverage_home',
+    // CHANGE #635 — the journey bot reads production's test_runs,
+    // test_results, feature_gaps and the role/hostile/stage tables. Same
+    // reason: the control plane has none of them.
+    'autotest_home',
   };
 
   /// The control-plane client (medibo-dev): minted on first use, re-minted
@@ -206,6 +210,13 @@ class DevQueueService {
   /// there by [productionRpcs] rather than to the control plane.
   Future<Map<String, dynamic>> testCoverageHome({String filter = 'all'}) async =>
       _asMap(await _rpc('test_coverage_home', params: {'p_filter': filter}));
+
+  /// CHANGE #635 — the journey bot's whole screen, in one payload. Like the
+  /// coverage ledger it merges nothing and defaults nothing: the roles, the
+  /// hostile variants, the nine pipeline stages, the gaps and the deploy gate
+  /// all arrive already worded and already toned.
+  Future<Map<String, dynamic>> autotestHome({String filter = 'all'}) async =>
+      _asMap(await _rpc('autotest_home', params: {'p_filter': filter}));
 
   /// The journey library: every enabled journey, optionally scoped to an area.
   /// Rendered verbatim in the Journey Library screen.

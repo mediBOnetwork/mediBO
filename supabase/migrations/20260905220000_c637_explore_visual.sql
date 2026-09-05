@@ -636,26 +636,18 @@ begin
                    then v_item->>'severity' else 'medium' end;
     v_shot := nullif(v_item->>'shot','');
 
-    insert into public.feature_gaps
-      (surface, journey_step, title, type, severity, evidence, suggestion,
-       effort_guess, status, notes, source, feature_key, role, run_id,
-       spec_line, artifact_bucket, artifact_path, confidence)
-    values
-      (v_surface,
-       coalesce(nullif(p_role,''),'') ,
-       left(coalesce(nullif(v_item->>'title',''), 'Exploratory finding'), 200),
-       v_type, v_sev,
-       nullif(v_item->>'evidence',''),
-       nullif(v_item->>'suggestion',''),
-       null, 'open',
-       nullif(p_summary,''),
-       'explore', p_feature, coalesce(p_role,''), p_run_id,
-       nullif(v_item->>'spec_line',''),
-       case when v_shot is not null then v_bucket else null end,
-       case when v_shot is not null
-            then coalesce(p_artifacts->>'prefix','') || v_shot else null end,
-       nullif(v_item->>'confidence',''))
-    returning id into v_id;
+    -- Filed, or SEEN AGAIN if this same opinion is already open: a lane that
+    -- runs nightly must not add a row nightly.
+    v_id := (public.gap_file_or_touch(
+               'explore', v_surface, p_feature, coalesce(p_role,''),
+               coalesce(nullif(v_item->>'title',''), 'Exploratory finding'),
+               v_type, v_sev,
+               v_item->>'evidence', v_item->>'suggestion', p_summary,
+               p_run_id, v_item->>'spec_line',
+               case when v_shot is not null then v_bucket else null end,
+               case when v_shot is not null
+                    then coalesce(p_artifacts->>'prefix','') || v_shot else null end,
+               v_item->>'confidence')->>'id')::bigint;
     v_gap_ids := v_gap_ids || v_id;
     v_n := v_n + 1;
   end loop;
@@ -837,21 +829,16 @@ begin
     if v_rule.gap_type is not null and v_verdict in ('changed','broken') then
       v_surface := public.gap_surface_for(v_feature, v_role);
 
-      insert into public.feature_gaps
-        (surface, journey_step, title, type, severity, evidence, suggestion,
-         status, source, feature_key, role, run_id, spec_line,
-         artifact_bucket, artifact_path, notes)
-      values
-        (v_surface, v_role,
-         left(coalesce(v_rule.label,'Visual regression') || ' — ' || v_feature
-              || ' (' || v_vp || ')', 200),
-         v_rule.gap_type, v_rule.gap_severity,
-         v_rule.message,
-         null, 'open', 'visual', v_feature, v_role, p_run_id, null,
-         coalesce(v_item->>'bucket','test-artifacts'),
-         coalesce(nullif(v_item->>'diff_path',''), v_item->>'path'),
-         null)
-      returning id into v_gap_id;
+      v_gap_id := (public.gap_file_or_touch(
+                     'visual', v_surface, v_feature, v_role,
+                     coalesce(v_rule.label,'Visual regression') || ' — ' || v_feature
+                       || ' (' || v_vp || ')',
+                     v_rule.gap_type, v_rule.gap_severity,
+                     v_rule.message, null, null,
+                     p_run_id, null,
+                     coalesce(v_item->>'bucket','test-artifacts'),
+                     coalesce(nullif(v_item->>'diff_path',''), v_item->>'path'),
+                     null)->>'id')::bigint;
       update public.visual_shot set gap_id = v_gap_id where id = v_shot_id;
       v_gaps := v_gaps + 1;
     end if;
@@ -1230,6 +1217,15 @@ begin
            'source_tone',     public.fg_tone('source.' || p.source),
            'spec_line',       p.spec_line,
            'confidence',      p.confidence,
+           -- A repeat is a FACT about the finding, worded here: "reported by 4
+           -- runs, first on …". One sighting says nothing and prints nothing.
+           'repeat_label',    case when coalesce(p.seen_count,1) > 1
+                                   then replace(replace(
+                                          coalesce((select value #>> '{}' from public.ui_copy
+                                                     where key='feature_gaps.repeat_label'),''),
+                                          '{n}', p.seen_count::text),
+                                          '{first}', public.fg_when(p.found_at))
+                                   else '' end,
            'shot',            case when coalesce(p.artifact_path,'') = '' then null
                                    else jsonb_build_object('bucket', p.artifact_bucket,
                                                            'path',   p.artifact_path) end,
@@ -1260,7 +1256,8 @@ begin
       'found',        public.fg_label('ui.field_found'),
       'spec_line',    public.fg_label('ui.field_spec_line'),
       'shot',         public.fg_label('ui.field_shot'),
-      'confidence',   public.fg_label('ui.field_confidence')
+      'confidence',   public.fg_label('ui.field_confidence'),
+      'repeat',       public.fg_label('ui.field_repeat')
     ),
     'filters',     public.fg_filters(p_surface, p_type, p_severity, p_status, _sort, coalesce(p_source,'all')),
     'counts',      public.fg_counts(p_surface, p_type, p_severity, p_status, _total, _all)
@@ -1373,3 +1370,90 @@ begin
                             'keep_runs', v_keep);
 end $$;
 grant execute on function public.visual_prune(int) to authenticated, service_role;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 15. A NIGHTLY OPINION MUST NOT BECOME A NIGHTLY ROW
+-- ─────────────────────────────────────────────────────────────────────────
+-- Both lanes run every night, and both will keep noticing the same thing until
+-- somebody fixes it. Filed naively that is thirty identical rows a month and a
+-- register nobody reads. A finding that is already OPEN is therefore SEEN
+-- AGAIN, not filed again: it keeps its original found_at (the age is the point)
+-- and gains a count and the newest evidence.
+alter table public.feature_gaps
+  add column if not exists seen_count   int not null default 1,
+  add column if not exists last_seen_at timestamptz;
+
+comment on column public.feature_gaps.seen_count is
+  'CHANGE #637 — how many bot runs have reported this same finding. 1 for anything filed by hand.';
+
+insert into public.feature_gap_label (key, label, tone, sort_order) values
+  ('ui.field_repeat', 'Seen again', null, 90)
+on conflict (key) do nothing;
+
+insert into public.ui_copy (key, value) values
+  ('feature_gaps.repeat_label', to_jsonb('reported by {n} runs, first on {first}'::text))
+on conflict (key) do nothing;
+
+-- The one place a repeat is recognised, so both lanes behave identically.
+create or replace function public.gap_file_or_touch(
+  p_source     text,
+  p_surface    text,
+  p_feature    text,
+  p_role       text,
+  p_title      text,
+  p_type       text,
+  p_severity   text,
+  p_evidence   text,
+  p_suggestion text,
+  p_notes      text,
+  p_run_id     bigint,
+  p_spec_line  text,
+  p_bucket     text,
+  p_path       text,
+  p_confidence text)
+returns jsonb
+language plpgsql security definer set search_path to 'public'
+as $$
+declare v_id bigint; v_new boolean := false;
+begin
+  select g.id into v_id
+    from public.feature_gaps g
+   where g.source = p_source
+     and coalesce(g.feature_key,'') = coalesce(p_feature,'')
+     and coalesce(g.role,'')        = coalesce(p_role,'')
+     and lower(btrim(coalesce(g.title,''))) = lower(btrim(coalesce(p_title,'')))
+     and g.status in ('open','approved','queued')
+   order by g.found_at
+   limit 1;
+
+  if v_id is null then
+    insert into public.feature_gaps
+      (surface, journey_step, title, type, severity, evidence, suggestion,
+       status, notes, source, feature_key, role, run_id, spec_line,
+       artifact_bucket, artifact_path, confidence, seen_count, last_seen_at)
+    values
+      (p_surface, coalesce(p_role,''), left(coalesce(nullif(btrim(p_title),''),'Bot finding'), 200),
+       p_type, p_severity, nullif(p_evidence,''), nullif(p_suggestion,''),
+       'open', nullif(p_notes,''), p_source, p_feature, coalesce(p_role,''),
+       p_run_id, nullif(p_spec_line,''), nullif(p_bucket,''), nullif(p_path,''),
+       nullif(p_confidence,''), 1, now())
+    returning id into v_id;
+    v_new := true;
+  else
+    -- The newest evidence, the newest picture, the original found_at.
+    update public.feature_gaps
+       set seen_count   = seen_count + 1,
+           last_seen_at = now(),
+           updated_at   = now(),
+           run_id       = p_run_id,
+           evidence     = coalesce(nullif(p_evidence,''), evidence),
+           spec_line    = coalesce(nullif(p_spec_line,''), spec_line),
+           artifact_bucket = coalesce(nullif(p_bucket,''), artifact_bucket),
+           artifact_path   = coalesce(nullif(p_path,''), artifact_path),
+           confidence   = coalesce(nullif(p_confidence,''), confidence)
+     where id = v_id;
+  end if;
+
+  return jsonb_build_object('id', v_id, 'new', v_new);
+end $$;
+grant execute on function public.gap_file_or_touch(text,text,text,text,text,text,text,text,text,text,bigint,text,text,text,text) to authenticated, service_role;

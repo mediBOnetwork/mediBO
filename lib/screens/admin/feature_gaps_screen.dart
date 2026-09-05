@@ -455,6 +455,9 @@ class FeatureGapCard extends StatelessWidget {
         // registry row — an opinion with nothing to point at is an argument.
         _field(fieldLabels['spec_line'], row['spec_line']),
         _field(fieldLabels['confidence'], row['confidence']),
+        // "reported by 4 runs, first on …" — the backend's sentence, and only
+        // when there IS a repeat: one sighting says nothing and prints nothing.
+        _field(fieldLabels['repeat'], row['repeat_label']),
         _field(fieldLabels['evidence'], row['evidence']),
         _field(fieldLabels['suggestion'], row['suggestion']),
         _field(fieldLabels['effort'], row['effort_guess']),

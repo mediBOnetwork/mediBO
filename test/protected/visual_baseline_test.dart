@@ -344,6 +344,7 @@ void main() {
                   'spec_line': 'Contradicts',
                   'shot': 'Seen in',
                   'confidence': 'Confidence',
+                  'repeat': 'Seen again',
                 },
                 busy: false,
                 onAction: (_) {},
@@ -363,6 +364,22 @@ void main() {
           find.text('What it is for: the cart totals every line the customer added'),
           findsOneWidget);
       expect(find.text('Confidence'), findsOneWidget);
+    });
+
+    testWidgets('a repeat prints the backend sentence; one sighting prints nothing',
+        (t) async {
+      await t.pumpWidget(card(gapRow(spec: 'x')));
+      await t.pump();
+      expect(find.text('Seen again'), findsNothing);
+
+      final repeated = gapRow(spec: 'x');
+      repeated['repeat_label'] = 'reported by 4 runs, first on 02 Sep 2026';
+      await t.pumpWidget(card(repeated));
+      await t.pump();
+      expect(find.text('Seen again'), findsOneWidget);
+      // The sentence is printed, never assembled here: no count arrives
+      // separately, so a card that worded it would have nothing to word.
+      expect(find.text('reported by 4 runs, first on 02 Sep 2026'), findsOneWidget);
     });
 
     testWidgets('a hand-filed finding draws no source chip and no spec line',

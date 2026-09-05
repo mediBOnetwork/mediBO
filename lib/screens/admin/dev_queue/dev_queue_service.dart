@@ -477,6 +477,16 @@ class DevQueueService {
   Future<Map<String, dynamic>> ctlGet() async =>
       _asMap(await _c.rpc('dev_ctl_get'));
 
+  /// CHANGE #1593 — the autoscaler's decision, taken again NOW.
+  ///
+  /// The health card's numbers are the last probe's, up to a minute old. This
+  /// asks the backend to run the same decide step against the current vitals,
+  /// so "why is it not climbing?" has an answer that does not require waiting
+  /// for the next probe. It decides nothing here: every word, the brake name
+  /// and the deciding metric arrive in the payload.
+  Future<Map<String, dynamic>> autoscaleState() async =>
+      _asMap(await _c.rpc('runner_autoscale_state'));
+
   /// CHANGE #1401 — the Runner card's re-login tap, the SAME RPC the Cron
   /// health panel calls, so the two surfaces can never start different logins.
   /// The backend starts `claude auth login` on the VM and answers with the

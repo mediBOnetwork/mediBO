@@ -519,7 +519,7 @@ class _DevQueueControlState extends State<DevQueueControl> {
           ],
           if (_health.isNotEmpty) ...[
             _divider(),
-            RunnerHealthCard(health: _health),
+            RunnerHealthCard(health: _health, onWhy: _showWhy),
           ],
           if ((_usage['has_usage'] ?? false) == true) ...[
             _divider(),
@@ -597,6 +597,51 @@ class _DevQueueControlState extends State<DevQueueControl> {
   /// verbatim; ContextEconomyCard prints it and computes nothing.
   Map<String, dynamic> get _context =>
       (_snap['context'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  /// CHANGE #1593 — "why is it holding there?", answered live.
+  ///
+  /// Every line in this sheet is a string the backend already wrote: the brake
+  /// sentence, the deciding metric's name and its two numbers, and each brake's
+  /// own reason. Nothing here compares, formats or words anything — an unknown
+  /// brake name simply prints itself.
+  Future<void> _showWhy() async {
+    Map<String, dynamic> st = const {};
+    try {
+      st = await widget.service.autoscaleState();
+    } catch (_) {
+      // The sheet still opens: an empty payload renders the backend's absence
+      // honestly rather than a fabricated reassurance.
+    }
+    if (!mounted) return;
+    final rows = <List<String>>[
+      ['${st['brake'] ?? ''}', '${st['label'] ?? ''}'],
+      for (final k in const ['ceiling_detail', 'headroom', 'pace', 'wait'])
+        if ((st[k] as Map?)?['reason'] != null)
+          ['$k', '${(st[k] as Map)['reason']}'],
+    ];
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sctx) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.all(Ds.space.x16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('${st['label'] ?? c('dev_queue.health_title')}',
+                  style: Ds.t.body.copyWith(fontWeight: FontWeight.w700)),
+              SizedBox(height: Ds.space.x12),
+              for (final r in rows.skip(1)) ...[
+                Text(r[1], style: Ds.t.caption),
+                SizedBox(height: Ds.space.x8),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   Widget _blockedBanner() => RunnersBlockedBanner(blocked: _blocked);
 

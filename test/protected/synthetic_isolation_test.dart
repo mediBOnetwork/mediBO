@@ -122,13 +122,25 @@ void main() {
     // The other half of the same contract: the fixture must ASK to be hidden.
     // A seed that forgets is_synthetic=true would sail past the gate above and
     // put a test pharmacy into every real list.
-    final seeds = dir
+    //
+    // CHANGE #1765 — this used to take any migration whose text MENTIONED
+    // test_customer_shop_ensure, off an UNSORTED listSync(). Two ways to be
+    // wrong, and #1765 hit both at once: a migration that merely names the
+    // function in a comment was read as the seed, and directory order decided
+    // which file won, so the same tree passed the merge worker's run at 18:21
+    // and failed deploy.sh's at 18:27. It now resolves the DEFINITION, over a
+    // sorted list, exactly as the gate above already did.
+    final files = dir
         .listSync()
         .whereType<File>()
         .where((f) => f.path.endsWith('.sql'))
-        .map((f) => f.readAsStringSync())
-        .where((s) => s.contains('test_customer_shop_ensure'))
-        .toList();
+        .toList()
+      ..sort((a, b) => a.path.compareTo(b.path));
+
+    final seeds = <String>[];
+    for (final f in files) {
+      seeds.addAll(_bodiesFor(f.readAsStringSync(), 'test_customer_shop_ensure'));
+    }
 
     expect(seeds, isNotEmpty,
         reason: 'the test.cust1 shop fixture (#668) has left the repo');

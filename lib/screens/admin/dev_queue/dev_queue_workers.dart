@@ -19,11 +19,17 @@ import 'dev_queue_service.dart';
 /// only forwards the admin's patch to `pool_set`.
 class WorkerGridCard extends StatelessWidget {
   final Map<String, dynamic> pool;
+  /// CHANGE #1366 — `dev_ctl_get().disk` (runner_disk_state), already a label,
+  /// a value string, a sub-line and a tone name. The card computes no
+  /// percentage and knows no threshold: a disk that filled to 99% for 21 hours
+  /// was invisible here because nothing on this card was ever asked to say so.
+  final Map<String, dynamic> disk;
   final DevQueueService service;
   final VoidCallback onChanged;
   const WorkerGridCard({
     super.key,
     required this.pool,
+    this.disk = const {},
     required this.service,
     required this.onChanged,
   });
@@ -75,6 +81,12 @@ class WorkerGridCard extends StatelessWidget {
           ),
         ),
       ]),
+      // Disk line. Present whenever the backend has a reading; absent (has:false)
+      // draws nothing rather than a dash, so "not measured" never reads as "0%".
+      if ((disk['has'] ?? false) == true) ...[
+        SizedBox(height: Ds.space.x8),
+        RunnerDiskLine(disk: disk),
+      ],
       // Offline banner — same shape as the shrink banner, danger tone.
       if (stale.isNotEmpty) ...[
         SizedBox(height: Ds.space.x8),
@@ -545,4 +557,66 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
           ),
         ),
       );
+}
+
+/// CHANGE #1366 — the disk line on the Runner health card, on its own so it can
+/// be tested without a Supabase client behind it.
+///
+/// A PRINTER: `runner_disk_state()` sends the label, the value sentence, the
+/// sub-line and a tone name. Nothing here divides, rounds or compares against a
+/// threshold. `has:false` draws nothing — "not measured yet" must never render
+/// as a reassuring 0%.
+class RunnerDiskLine extends StatelessWidget {
+  final Map<String, dynamic> disk;
+  const RunnerDiskLine({super.key, required this.disk});
+
+  @override
+  Widget build(BuildContext context) {
+    if ((disk['has'] ?? false) != true) return const SizedBox.shrink();
+    final sub = (disk['sub_line'] ?? '').toString();
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Icon(Icons.storage_outlined,
+          size: Ds.space.x16, color: Ds.c.textSecondary),
+      SizedBox(width: Ds.space.x8),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Text((disk['label'] ?? '').toString(),
+                style: Ds.t.caption.copyWith(
+                    fontWeight: FontWeight.w600, color: Ds.c.text)),
+            SizedBox(width: Ds.space.x8),
+            Flexible(
+              child: Text((disk['value'] ?? '').toString(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Ds.t.caption
+                      .copyWith(color: _diskColor((disk['tone'] ?? '').toString()))),
+            ),
+          ]),
+          if (sub.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(sub, style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+          ],
+        ]),
+      ),
+    ]);
+  }
+
+  /// The tone→colour lookup, exposed so the protected test can prove there is
+  /// exactly ONE of them and that an unknown tone falls back to neutral.
+  static Color debugValueColour(String tone) => _diskColor(tone);
+
+  static Color _diskColor(String tone) {
+    switch (tone) {
+      case 'success':
+        return Ds.c.success;
+      case 'warning':
+        return Ds.c.warning;
+      case 'danger':
+      case 'error':
+        return Ds.c.danger;
+      default:
+        return Ds.c.textSecondary;
+    }
+  }
 }

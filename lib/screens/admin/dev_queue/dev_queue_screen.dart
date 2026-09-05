@@ -15,6 +15,7 @@ import 'dev_queue_gcp.dart';
 import 'dev_queue_qa.dart';
 import 'dev_queue_questions.dart';
 import 'cron_health_screen.dart';
+import 'runner_ops/runner_ops_card.dart';
 import 'strip_v3/strip_v3_card.dart';
 import '../admin_heartbeat_screen.dart';        // CHANGE #468
 import '../test_mode_screen.dart';             // CHANGE #573, wired #468
@@ -323,6 +324,12 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
                   // Swapping v2 out wholesale would have put a day's worth of
                   // working surface behind one build's worth of new code.
                   const StripV3Card(),
+                  // CHANGE #1368 — the policies sit directly under the strip,
+                  // and in that order on purpose: the strip answers "is it
+                  // running?", this answers "should it be, right now?". A
+                  // blocked claim is meaningless until you can see which
+                  // policy is doing the blocking, so the two are read together.
+                  const RunnerOpsCard(),
                   DevQueueControl(
                     service: _svc,
                     // CHANGE #1197 — ?panel=runner lands with the runner panel

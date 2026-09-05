@@ -320,6 +320,15 @@ Current files and what they hold down:
   deliberately disagrees with its own pct/free_gb numbers), an unmeasured disk
   renders nothing rather than 0% or a dash, and tone is one lookup with an
   unknown tone staying neutral.
+- `android_release_gate_test.dart` — the Android release block is a PRINTER,
+  and the gate behind it is what #1801 did not have: the fixture pairs
+  status:'published' with the label 'Shipped, allegedly' and tone 'warning',
+  so a card that re-derived either from the status fails; the blocker prints
+  whole (it is dev_cmd_complete's own refusal sentence); has:false and a row
+  with no android block at all both draw NOTHING; an absent sub-line, an
+  absent URL and a URL with no label each omit their row instead of dashing
+  it; an unknown tone stays neutral; and androidTone knows 'published' and
+  'skipped', which before #1802 both fell to the same grey as never-built.
 - `cart_unavailable_test.dart` — the cart's red state is the backend's flag:
   per-line unavailable/qty_locked are carried through untouched,
   unavailable_badge prints verbatim (never pluralised in Dart), the badge is

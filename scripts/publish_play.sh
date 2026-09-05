@@ -446,13 +446,41 @@ if flutter build apk --release --target-platform android-arm64 >>"$LOG" 2>&1 && 
     log "WARNING: the APK failed the signing gate; not publishing it"
   else
     source "$RUNNER/runner.env"
+    # CHANGE #1802 — the app-releases BUCKET and the app_releases TABLE both
+    # live on PRODUCTION. #1761 repointed SUPABASE_URL at the medibo-dev
+    # control plane, which has ZERO buckets, so this upload answered HTTP 400
+    # and 1.3.24 (38) went live on Play with apk_url NULL: the direct-download
+    # channel dead, and the in-app "update available" reminder still naming
+    # 1.3.23. The symptom is one WARNING line in a log that otherwise reads
+    # like a clean release, which is why it survived a whole publish.
+    # Two fixes here, and neither is optional:
+    #   1. the PROD_* pair, so the bytes go where the bucket is;
+    #   2. a SIGNED UPLOAD URL, because the standard POST is capped
+    #      project-wide well under this APK's ~60 MB (the same cap that 413s
+    #      the AAB), while the signed PUT is not.
+    S_URL="${PROD_SUPABASE_URL:-$SUPABASE_URL}"
+    S_KEY="${PROD_SERVICE_ROLE_KEY:-$SERVICE_ROLE_KEY}"
     P="medibo-$NAME.apk"
-    if curl -fsS -X POST "$SUPABASE_URL/storage/v1/object/app-releases/$P" \
-         -H "apikey: $SERVICE_ROLE_KEY" -H "Authorization: Bearer $SERVICE_ROLE_KEY" \
+    SIGNED=$(curl -fsS -X POST "$S_URL/storage/v1/object/upload/sign/app-releases/$P" \
+               -H "apikey: $S_KEY" -H "Authorization: Bearer $S_KEY" \
+               -H "Content-Type: application/json" -H "x-upsert: true" \
+               -d '{}' 2>>"$LOG" | jq -r '.url // empty' 2>/dev/null)
+    if [ -n "$SIGNED" ] && curl -fsS -X PUT "$S_URL/storage/v1$SIGNED" \
          -H "Content-Type: application/vnd.android.package-archive" \
-         -H "x-upsert: true" --data-binary "@$APK" >>"$LOG" 2>&1; then
-      APK_URL="$SUPABASE_URL/storage/v1/object/public/app-releases/$P"
+         --data-binary "@$APK" >>"$LOG" 2>&1; then
+      APK_URL="$S_URL/storage/v1/object/public/app-releases/$P"
       log "APK published → $APK_URL"
+      # play_publish_finish writes app_releases on the CONTROL PLANE, where
+      # nothing reads it; app_update_check runs against production. Write the
+      # row the phone actually reads, through the prod-routed RPC.
+      ar=$("$DEVCMD" rpc app_release_publish "$(jq -nc --arg n "$NAME" \
+             --argjson c "${PLAY_CODE:-0}" --arg u "$APK_URL" --arg no "$NOTES" \
+             '{p_version_name:$n,p_version_code:$c,p_apk_url:$u,p_notes:$no}')" 2>/dev/null)
+      if [ "$(jq -r '.ok // false' <<<"$ar" 2>/dev/null)" = "true" ]; then
+        log "app_releases published on production: $NAME ($PLAY_CODE)"
+      else
+        log "WARNING: app_release_publish refused the row — $(jq -rc '.' <<<"$ar" 2>/dev/null | head -c 200)"
+      fi
     else
       log "WARNING: APK upload failed; the Play release still stands"
     fi

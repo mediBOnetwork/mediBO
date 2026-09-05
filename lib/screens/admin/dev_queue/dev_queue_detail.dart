@@ -8,6 +8,7 @@ import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
 import '../../../widgets/payment_proof_image.dart';
 import 'dev_queue_common.dart';
+import 'dev_queue_android.dart';
 import 'restart_safety.dart';
 import 'dev_queue_image_tray.dart';
 import 'dev_queue_qa.dart';
@@ -177,6 +178,10 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
                   _tokensCard(),
                 _timerCard(),
                 if (asInt(_row['steps_total']) > 0) _stepsCard(),
+                // CHANGE #1802 — the Android release, and the sentence that
+                // refuses to let this row close without one. has:false on a
+                // command that never asked for a build, so it costs nothing.
+                AndroidReleaseCard(row: _row, onOpen: _open),
                 if (_status == 'needs_input') _needsInputBanner(),
                 if (_row['is_waiting'] == true) _waitingBanner(),
                 const SizedBox(height: 12),

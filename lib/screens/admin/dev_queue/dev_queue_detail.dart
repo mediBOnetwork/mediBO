@@ -719,6 +719,19 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
   }
 
   Widget _androidChip(String android) {
+    // CHANGE #1802 — the Targets row read 'Not built' under an Android release
+    // block that said "Published to Play", because this switch had no case for
+    // the two states the gate added and everything unknown fell to `default`.
+    // Two mappings of the same status to two different words is how that
+    // happens, so there is now one: when the backend sent the release block,
+    // the chip prints ITS label and tone, exactly like the block above does.
+    final rel = AndroidRelease.fromRow(_row);
+    if (rel.has && rel.label.isNotEmpty) {
+      final chip =
+          ToneChip(label: rel.label, tone: toneByName(rel.tone), icon: Icons.android);
+      if (rel.url.isEmpty) return chip;
+      return GestureDetector(onTap: () => _open(rel.url), child: chip);
+    }
     switch (android) {
       case 'built':
         final url = (_row['android_artifact_url'] ?? '').toString();

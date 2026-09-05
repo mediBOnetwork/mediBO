@@ -477,6 +477,14 @@ class DevQueueService {
   Future<Map<String, dynamic>> ctlGet() async =>
       _asMap(await _c.rpc('dev_ctl_get'));
 
+  /// CHANGE #1401 — the Runner card's re-login tap, the SAME RPC the Cron
+  /// health panel calls, so the two surfaces can never start different logins.
+  /// The backend starts `claude auth login` on the VM and answers with the
+  /// whole claude_auth block again; the caller renders what comes back and
+  /// guesses nothing about the states in between.
+  Future<Map<String, dynamic>> claudeAuthRelogin() async =>
+      _asMap(await _c.rpc('claude_auth_relogin_request'));
+
   /// Flip one toggle (vm|claude|workflow → on|off). Returns the backend verdict
   /// (for 'vm' it carries call_edge:true + action so the caller invokes the fn).
   Future<Map<String, dynamic>> ctlSet(String key, String value) async => _asMap(

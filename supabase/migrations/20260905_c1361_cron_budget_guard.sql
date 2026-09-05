@@ -686,3 +686,50 @@ grant  execute on function public._cron_is_night()                   to service_
 -- reaches it at all.
 revoke execute on function public.cron_budget_card() from public, anon;
 grant  execute on function public.cron_budget_card() to authenticated, service_role;
+
+-- ── 11. one planner, not two ────────────────────────────────────────────────
+-- Adding catalogue_refresh_plan(p_mode text) beside the original
+-- catalogue_refresh_plan() left an OVERLOADED name, which rg_overload_risks()
+-- rates critical and rightly so: cron_task.work_sql calls it as
+-- `catalogue_refresh_plan()` and with both present that call is ambiguous —
+-- which of the two runs is then down to resolution order rather than intent,
+-- and the wrong one is a full catalogue sweep at 11:00 IST. The new signature
+-- has a DEFAULT, so the no-argument call still works and means "let the clock
+-- decide", which is exactly what the old one should have been doing.
+drop function if exists public.catalogue_refresh_plan();
+
+-- ── 12. night throughput ────────────────────────────────────────────────────
+-- The night window is three hours and the tick takes ONE unit per interval, so
+-- the interval decides how much actually drains. At 300 s that is 36 units a
+-- night against a 66-unit full plan — a full cycle would take two nights.
+--
+-- It cannot simply be made fast, because the budget rule applies to this task
+-- like every other: units measure 19-32 s, so anything under ~160 s would park
+-- it the first time a unit ran long, and a 60 s interval would hit the 20 s
+-- absolute ceiling immediately. 240 s gives a 48 s budget — a comfortable
+-- margin over the worst unit measured (32 s) — and drains ~45 units per window,
+-- so a full cycle finishes inside one night. Daytime cost is unchanged: the
+-- task is night_only, so in daylight this interval only decides how often it
+-- re-checks the clock and defers.
+update public.cron_task
+   set base_interval_s = 240
+ where name = 'catalogue_cache_refresh';
+
+-- ── 13. the dispatcher's own budget ─────────────────────────────────────────
+-- Found while verifying this change: the worst offender on the box is not a
+-- TASK at all, it is the tick that runs them. cron_dispatch is scheduled
+-- '* * * * *' and its last completed tick took 99,200 ms — 165% of its own
+-- minute — against the 120 s statement_timeout pg_cron wraps the call in. At
+-- 11:12 on 5 Sep it duly lost the race: "canceling statement due to statement
+-- timeout". That cancel aborts the WHOLE transaction, so the cursor update and
+-- every task's next_run_at re-arm are rolled back, and the next tick starts on
+-- the same task and dies the same way. cron_dispatch's own comments name that
+-- as the #305 wedge; tick_hard_ms was added to prevent it and then set at
+-- 100,000 ms, which leaves 20 s for the reserve AND the guard sweep AND the
+-- final bookkeeping. That is not margin, it is a coin toss under load.
+--
+-- 75,000 ms leaves 45 s of headroom under the cap. It costs nothing: a
+-- truncated tick already resumes from its cursor on the next minute, so a
+-- shorter wall means more ticks doing less each, not less work done. The rule
+-- this whole change is about, applied to the thing that enforces it.
+update public.cron_guard_config set tick_hard_ms = 75000 where id;

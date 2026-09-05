@@ -581,13 +581,32 @@ on conflict (key) do update set
 
 create or replace function public.runner_ops_alert(p_kind text, p_vars jsonb default '{}'::jsonb)
 returns jsonb language plpgsql security definer set search_path to 'public' as $$
-declare o jsonb; v jsonb;
+declare o jsonb; v jsonb; v_last timestamptz; v_mins int;
 begin
   o := _ops_cfg();
   if not coalesce((o#>>'{alerts,enabled}')::boolean, true) then
     return jsonb_build_object('ok', false, 'reason', 'alerts_disabled');
   end if;
+
+  -- THE CALLER IS A ONE-MINUTE TICK, so "usage is over 90%" is true sixty times
+  -- an hour and the route's own dedupe is not enough on its own: notify() still
+  -- runs the whole ladder and still writes a notification_log row — and that row
+  -- is stamped with the template's COST even when the send was deduped away.
+  -- Sixty phantom rows an hour, each carrying a price. So the cooldown is kept
+  -- here too, before anything is attempted, keyed by alert kind.
+  select coalesce(dedupe_minutes, 45) into v_mins from wa_event_routes where event_key = p_kind;
+  v_last := nullif(o#>>array['alerts','sent',p_kind],'')::timestamptz;
+  if v_last is not null and v_last > now() - make_interval(mins => greatest(coalesce(v_mins,45),1)) then
+    return jsonb_build_object('ok', false, 'reason', 'cooling_down', 'kind', p_kind,
+                              'last_at', v_last);
+  end if;
+
   v := notify(p_kind, null, coalesce(p_vars,'{}'::jsonb));
+  -- Recorded whatever the ladder decided: a queued alert has been ACCOUNTED
+  -- FOR, and re-queueing the same sentence every minute is the same noise by a
+  -- different door.
+  perform _ops_put(array['alerts','sent'], coalesce(o#>'{alerts,sent}','{}'::jsonb)
+                   || jsonb_build_object(p_kind, now()::text));
   return jsonb_build_object('ok', true, 'kind', p_kind, 'notify', v);
 exception when others then
   return jsonb_build_object('ok', false, 'reason', sqlerrm);

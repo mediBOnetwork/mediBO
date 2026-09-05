@@ -392,6 +392,15 @@ Current files and what they hold down:
   control-plane RPCs go to the dev client, productionRpcs (production's own cron,
   DB lane, regression guard, diagnostics) and storage stay on production.
 
+- `journey_bot_test.dart` — the Journey bot panel is a PRINTER: the headline,
+  every chip count, each row's scenario label and verdict word, the nine
+  pipeline stages, the role matrix, the deploy gate's sentence and each gap's
+  repro command are `autotest_home()` strings (the fixture's headline, chips
+  and scenario labels deliberately disagree with its own rows, so a card that
+  counted or title-cased anything fails), rows render in payload order,
+  absence is the backend's empty line rather than a dash, and an unknown tone
+  stays neutral instead of throwing.
+
 The suite runs on the Dart VM in ~2s. Keep it that way: no network, no goldens,
 no Supabase, no camera — mock RPC payloads inline. If a widget resists mocking,
 extract its decisions into a pure class and test that.

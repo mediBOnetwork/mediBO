@@ -10,6 +10,27 @@
 --   • WHAT a failure is worth   — a feature_gaps row, filed by TRIGGER
 -- Adding a role, a hostile variant or a stage is an INSERT, never a deploy.
 
+-- WHICH DATABASE. #1761 split the schema in two: the dev-queue control plane
+-- (medibo-dev) and production. migration_replay.sh replays a file on BOTH when
+-- it names any control-plane table, and this one names feature_registry,
+-- feature_gaps, qa_test_identities and ui_copy — all of which exist on the
+-- control plane as pre-#634 copies with none of the test-contract columns. So
+-- it died there at `column "test_roles" does not exist` while having applied
+-- perfectly on production, and the batch was refused for a half-applied schema.
+--
+-- The journey bot reads production (dev_queue_service routes autotest_home and
+-- test_coverage_home there for exactly this reason), so this file is
+-- production-shaped and says so out loud rather than half-applying anywhere.
+select coalesce((
+  select true from information_schema.columns
+   where table_schema = 'public' and table_name = 'feature_registry'
+     and column_name = 'test_roles'), false) as c635_is_prod \gset
+\if :c635_is_prod
+\else
+\echo '[c635] no #634 test contracts in this database — the journey bot lives on production; nothing to do here.'
+\quit
+\endif
+
 -- ─────────────────────────────────────────────────────────────────────────
 -- 1. THE ROLE UNIVERSE (spec 2)
 -- Every role the bot drives. A feature's test_roles are the roles that SHOULD
@@ -748,38 +769,12 @@ begin
     'detail', coalesce(r.note, '') );
 end $function$;
 
--- preview_mark(promoted) now asks the gate. deployed is never blocked — the
--- build IS live on preview; only the promotion to "this is the change Om is
--- told shipped" waits on the smoke.
-drop function if exists public.preview_mark(bigint, text);
-create or replace function public.preview_mark(p_command_id bigint, p_status text,
-                                               p_commit text default null)
-returns jsonb language plpgsql security definer set search_path to 'public' as $function$
-declare v_commit text; v_no int; v_gate jsonb;
-begin
-  if coalesce(auth.jwt()->>'role','') <> 'service_role' then
-    raise exception 'preview_mark: runner only';
-  end if;
-  if p_status not in ('deployed','promoted') then raise exception 'preview_mark: bad status'; end if;
-
-  if p_status = 'promoted' then
-    -- dev_commands carries the change number; the COMMIT lives on the deploy
-    -- queue entry this command pushed, which is what the smoke was run against.
-    select c.web_deploy_no into v_no from public.dev_commands c where c.id = p_command_id;
-    v_commit := coalesce(p_commit,
-      (select q.commit_sha from public.deploy_queue q
-        where q.command_id = p_command_id order by q.id desc limit 1));
-    v_gate := public.test_smoke_gate(v_commit, v_no);
-    if not coalesce((v_gate->>'ok')::boolean, false) then
-      return jsonb_build_object('ok', false, 'blocked', true, 'status','deployed',
-        'gate', v_gate,
-        'message', coalesce(v_gate->>'label','Critical-path smoke did not pass'));
-    end if;
-  end if;
-
-  update public.dev_commands set preview_status = p_status where id = p_command_id;
-  return jsonb_build_object('ok', true, 'status', p_status);
-end $function$;
+-- The PROMOTE side of this gate lives in its own migration
+-- (20260905181000_c635_promote_gate.sql). It has to: preview_mark writes
+-- dev_commands, which #1761 moved to the CONTROL PLANE, while test_runs — the
+-- thing that knows whether the smoke passed — stayed here on production. One
+-- file cannot span two databases, so the verdict is computed here, carried by
+-- the merge worker, and enforced there.
 
 -- The nightly full suite, on the #305 dispatcher. Not a 40-feature sample:
 -- the whole registry, every role, every hostile variant.

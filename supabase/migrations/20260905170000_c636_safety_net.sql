@@ -700,3 +700,356 @@ begin
   return jsonb_build_object('ok', true, 'probed', v_probed, 'proven', v_proven,
     'cleared', v_cleared, 'blocked', v_blocked, 'failed', v_fail, 'gaps', v_gaps);
 end $fn$;
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- PART 2 — PROPERTY FUZZING
+--
+-- Inputs are generated from each RPC's own signature, so a new argument is
+-- fuzzed the day it is added. Every case is a pure function of
+-- (seed, proname, variant, argument position), which is what makes a failure
+-- replayable: the stored args_sql IS the reproduction.
+-- ═════════════════════════════════════════════════════════════════════════════
+create table if not exists public.autotest_fuzz_value (
+  id         bigserial primary key,
+  type_class text not null,          -- text | int | numeric | bool | uuid | date | ts | jsonb | array | other
+  label      text not null,          -- what makes it hostile, in words
+  literal    text not null,          -- the SQL that produces it, cast included
+  hostility  text not null default 'edge'
+             check (hostility in ('null','edge','wrong_type','foreign_id','unicode','huge')),
+  enabled    boolean not null default true,
+  unique (type_class, label)
+);
+
+create table if not exists public.autotest_fuzz_exempt (
+  pattern    text primary key,
+  reason     text not null,
+  added_at   timestamptz not null default now()
+);
+
+create table if not exists public.autotest_fuzz_case (
+  id         bigserial primary key,
+  run_id     bigint,
+  seed       bigint not null,
+  variant    integer not null,
+  proname    text not null,
+  role_key   text not null,
+  args_sql   text not null default '',
+  args_label text not null default '',
+  hostility  text[] not null default '{}',
+  created_at timestamptz not null default now(),
+  unique (run_id, proname, role_key, variant)
+);
+
+create table if not exists public.autotest_fuzz_result (
+  case_id    bigint primary key references public.autotest_fuzz_case(id) on delete cascade,
+  run_id     bigint,
+  outcome    text not null,   -- answered | refused | input_rejected | probe_blocked | crash
+  sqlstate   text,
+  message    text,
+  verdict    text not null,   -- pass | fail
+  severity   text,
+  assertion  text,
+  ran_at     timestamptz not null default now()
+);
+create index if not exists autotest_fuzz_result_verdict_idx
+  on public.autotest_fuzz_result (verdict, severity);
+
+alter table public.autotest_fuzz_value  enable row level security;
+alter table public.autotest_fuzz_exempt enable row level security;
+alter table public.autotest_fuzz_case   enable row level security;
+alter table public.autotest_fuzz_result enable row level security;
+
+do $$
+declare t text;
+begin
+  foreach t in array array['autotest_fuzz_value','autotest_fuzz_exempt',
+                           'autotest_fuzz_case','autotest_fuzz_result','autotest_run'] loop
+    execute format('grant select, insert, update, delete on public.%I to authenticated, service_role', t);
+    execute format($p$ drop policy if exists %I on public.%I $p$, t || '_super', t);
+    execute format($p$ create policy %I on public.%I for all to authenticated, service_role
+                       using (public.get_my_role() = 'super_admin' or public._is_service_role())
+                       with check (public.get_my_role() = 'super_admin' or public._is_service_role()) $p$,
+                   t || '_super', t);
+  end loop;
+end $$;
+grant usage, select on sequence public.autotest_fuzz_case_id_seq to authenticated, service_role;
+grant usage, select on sequence public.autotest_run_id_seq       to authenticated, service_role;
+
+insert into public.autotest_fuzz_value (type_class, label, literal, hostility) values
+  ('text','null',              'null::text',                                   'null'),
+  ('text','empty',             '''''::text',                                   'edge'),
+  ('text','blank',             '''   ''::text',                                'edge'),
+  ('text','unicode',           '''ਪੈਰਾਸਿਟਾਮੋਲ 💊 ₹ ﷽''::text',                  'unicode'),
+  ('text','quote_and_backslash','''o''''brien \ %'' ::text',                   'edge'),
+  ('text','huge',              'repeat(''x'', 100000)::text',                  'huge'),
+  ('text','sql_shaped',        ''''' or 1=1 --''::text',                       'wrong_type'),
+  ('text','uuid_shaped',       '''00000000-0000-0000-0000-000000000000''::text','foreign_id'),
+  ('int','null',               'null::integer',                                'null'),
+  ('int','zero',               '0::integer',                                   'edge'),
+  ('int','negative',           '-1::integer',                                  'edge'),
+  ('int','min',                '(-2147483648)::integer',                       'huge'),
+  ('int','max',                '2147483647::integer',                          'huge'),
+  ('numeric','null',           'null::numeric',                                'null'),
+  ('numeric','zero',           '0::numeric',                                   'edge'),
+  ('numeric','negative_money', '(-999999.99)::numeric',                        'edge'),
+  ('numeric','huge',           '1e18::numeric',                                'huge'),
+  ('numeric','fraction',       '0.000001::numeric',                            'edge'),
+  ('bool','null',              'null::boolean',                                'null'),
+  ('bool','true',              'true',                                         'edge'),
+  ('bool','false',             'false',                                        'edge'),
+  ('uuid','null',              'null::uuid',                                   'null'),
+  ('uuid','nil',               '''00000000-0000-0000-0000-000000000000''::uuid','foreign_id'),
+  ('uuid','stranger',          '''ffffffff-ffff-4fff-8fff-ffffffffffff''::uuid','foreign_id'),
+  ('date','null',              'null::date',                                   'null'),
+  ('date','epoch',             '''1970-01-01''::date',                         'edge'),
+  ('date','far_future',        '''9999-12-31''::date',                         'huge'),
+  ('ts','null',                'null::timestamptz',                            'null'),
+  ('ts','epoch',               '''1970-01-01''::timestamptz',                  'edge'),
+  ('ts','far_future',          '''9999-12-31''::timestamptz',                  'huge'),
+  ('jsonb','null',             'null::jsonb',                                  'null'),
+  ('jsonb','empty_object',     '''{}''::jsonb',                                'edge'),
+  ('jsonb','empty_array',      '''[]''::jsonb',                                'edge'),
+  ('jsonb','wrong_shape',      '''{"__unexpected__": [1,2,3]}''::jsonb',       'wrong_type'),
+  ('jsonb','unicode',          '''{"note":"ਪੈਰਾ 💊"}''::jsonb',                 'unicode'),
+  ('array','null',             'null',                                         'null'),
+  ('array','empty',            '''{}''',                                       'edge'),
+  ('other','null',             'null',                                         'null')
+on conflict (type_class, label) do update
+  set literal = excluded.literal, hostility = excluded.hostility;
+
+insert into public.autotest_fuzz_exempt (pattern, reason) values
+  ('sleep',            'Would stall the batch inside one transaction.'),
+  ('dblink',           'Escapes the subtransaction — a rollback cannot undo it.'),
+  ('^pg_',             'Server builtin, not a mediBO surface.'),
+  ('_autotest_|^autotest_', 'The harness never fuzzes itself.'),
+  ('^rg_baseline',     'Re-baselining the regression guard would bless a regression.')
+on conflict (pattern) do update set reason = excluded.reason;
+
+-- The argument list for one (rpc, seed, variant). Pure: the same three inputs
+-- always produce the same SQL, which is what "seeds recorded so any failure is
+-- replayable exactly" actually means.
+create or replace function public._autotest_fuzz_args(
+  p_proname text, p_seed bigint, p_variant integer)
+returns jsonb
+language sql stable security definer set search_path to 'public' as $fn$
+  with t as (
+    select format_type(a.oid, null) as tname, a.ord
+      from (select p.proargtypes
+              from pg_proc p
+              join pg_namespace n on n.oid = p.pronamespace and n.nspname = 'public'
+             where p.proname = p_proname and p.prokind = 'f'
+             order by p.oid limit 1) pr
+      cross join lateral unnest(pr.proargtypes) with ordinality as a(oid, ord)
+  ), cls as (
+    select ord, tname,
+           case
+             when tname like '%[]'                              then 'array'
+             when tname in ('text','character varying','character','name','citext') then 'text'
+             when tname in ('smallint','integer','bigint')       then 'int'
+             when tname in ('numeric','real','double precision') then 'numeric'
+             when tname = 'boolean'                              then 'bool'
+             when tname = 'uuid'                                 then 'uuid'
+             when tname = 'date'                                 then 'date'
+             when tname like 'timestamp%' or tname like 'time%'  then 'ts'
+             when tname in ('jsonb','json')                      then 'jsonb'
+             else 'other'
+           end as type_class
+      from t
+  ), pick as (
+    select c.ord, c.tname, c.type_class, v.literal, v.label, v.hostility,
+           row_number() over (
+             partition by c.ord
+             order by hashtextextended(
+               p_proname || ':' || p_seed || ':' || p_variant || ':' || c.ord || ':' || v.id, 0)
+           ) as rn
+      from cls c
+      join public.autotest_fuzz_value v
+        on v.type_class = c.type_class and v.enabled
+  ), one as (select * from pick where rn = 1)
+  select jsonb_build_object(
+    'sql', coalesce(string_agg(
+             case when type_class in ('array','other')
+                  then literal || '::' || tname else literal end, ', ' order by ord), ''),
+    'label', coalesce(string_agg(tname || '=' || label, ', ' order by ord), 'no arguments'),
+    'hostility', coalesce(to_jsonb(array_agg(distinct hostility)), '[]'::jsonb))
+    from one
+$fn$;
+
+create or replace function public.autotest_fuzz_plan(
+  p_run_id bigint default null, p_seed bigint default null,
+  p_rpcs integer default 120, p_variants integer default 3,
+  p_roles text[] default null)
+returns jsonb
+language plpgsql security definer set search_path to 'public' as $fn$
+declare v_seed bigint; v_roles text[]; v_n int := 0;
+begin
+  perform public._dev_guard();
+  v_seed := coalesce(p_seed, (extract(epoch from clock_timestamp()) * 1000)::bigint);
+
+  v_roles := coalesce(p_roles, array(
+    select r.role_key from public.autotest_role r
+     where r.enabled and (r.is_anon or public._autotest_identity(r.role_key) is not null)
+     order by r.sort));
+  if v_roles is null or cardinality(v_roles) = 0 then
+    v_roles := array['anon'];
+  end if;
+
+  insert into public.autotest_fuzz_case
+    (run_id, seed, variant, proname, role_key, args_sql, args_label, hostility)
+  select p_run_id, v_seed, g.variant, c.proname, rk.role_key,
+         a.j->>'sql', a.j->>'label',
+         coalesce(array(select jsonb_array_elements_text(a.j->'hostility')), '{}'::text[])
+    from (
+      select ra.proname
+        from public.autotest_rpc_audience ra
+       where not exists (select 1 from public.autotest_fuzz_exempt e
+                          where ra.proname ~ e.pattern)
+       order by hashtextextended(ra.proname, v_seed)
+       limit greatest(coalesce(p_rpcs, 120), 0)
+    ) c
+    cross join generate_series(1, greatest(coalesce(p_variants, 3), 1)) g(variant)
+    cross join unnest(v_roles) rk(role_key)
+    cross join lateral (select public._autotest_fuzz_args(c.proname, v_seed, g.variant) as j) a
+  on conflict (run_id, proname, role_key, variant) do nothing;
+
+  get diagnostics v_n = row_count;
+  return jsonb_build_object('ok', true, 'seed', v_seed, 'cases', v_n,
+                            'roles', to_jsonb(v_roles));
+end $fn$;
+
+-- Negative money / stock ANYWHERE in a returned payload. The oracle is the key
+-- name, not the position, so a new field is covered the day it is added.
+create or replace function public._autotest_negative_money(p_text text)
+returns jsonb
+language plpgsql immutable set search_path to 'public' as $fn$
+declare v jsonb; v_hits jsonb;
+begin
+  begin v := p_text::jsonb; exception when others then return null; end;
+  if v is null or jsonb_typeof(v) not in ('object','array') then return null; end if;
+  select jsonb_agg(kv) into v_hits
+    from jsonb_path_query(v, '$.**.keyvalue()') kv
+   where kv->>'key' ~* '(amount|total|price|qty|quantity|stock|balance|due|paid|payable|mrp|rate|count)'
+     and jsonb_typeof(kv->'value') = 'number'
+     and (kv->>'value')::numeric < 0;
+  return v_hits;
+exception when others then return null;
+end $fn$;
+
+create or replace function public.autotest_fuzz_exec(
+  p_run_id bigint default null, p_limit integer default null)
+returns jsonb
+language plpgsql security invoker set search_path to 'public' as $fn$
+declare
+  v_max int; v_budget int; v_deadline timestamptz; v_c record; v_res jsonb;
+  v_state text; v_msg text; v_class text; v_outcome text; v_verdict text;
+  v_sev text; v_assert text; v_neg jsonb;
+  v_ran int := 0; v_fail int := 0; v_gaps int := 0; v_partial boolean := false;
+begin
+  perform public._dev_guard();
+  select coalesce(p_limit, fuzz_batch), fuzz_budget_ms
+    into v_max, v_budget from public.autotest_config where id = 1;
+  v_deadline := clock_timestamp() + make_interval(secs => greatest(coalesce(v_budget,6000),1000) / 1000.0);
+
+  for v_c in
+    select c.* from public.autotest_fuzz_case c
+     where (p_run_id is null or c.run_id is not distinct from p_run_id)
+       and not exists (select 1 from public.autotest_fuzz_result r where r.case_id = c.id)
+     order by c.id
+     limit greatest(coalesce(v_max, 60), 0)
+  loop
+    if clock_timestamp() > v_deadline then v_partial := true; exit; end if;
+
+    v_res     := public._autotest_call_as(v_c.proname, v_c.role_key, nullif(v_c.args_sql, ''));
+    v_state   := coalesce(v_res->>'sqlstate', '');
+    v_msg     := coalesce(v_res->>'message', '');
+    v_class   := left(v_state, 2);
+    v_verdict := 'pass'; v_sev := null; v_assert := null;
+
+    if v_res->>'outcome' = 'probe_blocked' then
+      v_outcome := 'probe_blocked';
+    elsif v_res->>'outcome' = 'reached' or v_state = '00000' then
+      v_outcome := 'answered';
+      -- A3 — no negative money or stock in an answer.
+      v_neg := public._autotest_negative_money(v_msg);
+      if v_neg is not null then
+        v_verdict := 'fail'; v_sev := 'critical'; v_assert := 'no_negative_money_or_stock';
+        v_msg := v_msg || ' :: NEGATIVE ' || v_neg::text;
+      -- A4 — a foreign id must not hand a non-admin an ok:true answer.
+      elsif 'foreign_id' = any (v_c.hostility)
+            and v_c.role_key not in ('admin','super_admin')
+            and v_msg ~ '"ok"\s*:\s*true' and length(v_msg) > 120 then
+        v_verdict := 'fail'; v_sev := 'high'; v_assert := 'no_cross_tenant_leak';
+      end if;
+    elsif v_state = 'P0001' then
+      v_outcome := 'refused';                       -- a deliberate RAISE: correct
+    elsif v_class = 'XX' then
+      v_outcome := 'crash'; v_verdict := 'fail'; v_sev := 'critical';
+      v_assert := 'no_500s';                        -- A1
+    elsif v_state = '57014' then
+      v_outcome := 'timeout'; v_verdict := 'fail'; v_sev := 'high';
+      v_assert := 'no_500s';
+    elsif v_class in ('22','23','42','2F','39','40','21') then
+      if 'wrong_type' = any (v_c.hostility) and v_class in ('22','42') then
+        v_outcome := 'input_rejected';              -- the boundary refused: correct
+      else
+        v_outcome := 'crash'; v_verdict := 'fail'; v_sev := 'high';
+        v_assert := 'no_unhandled_input';           -- A2
+      end if;
+    else
+      v_outcome := 'refused';
+    end if;
+
+    insert into public.autotest_fuzz_result
+      (case_id, run_id, outcome, sqlstate, message, verdict, severity, assertion)
+    values (v_c.id, v_c.run_id, v_outcome, nullif(v_state,''), left(v_msg, 1000),
+            v_verdict, v_sev, v_assert)
+    on conflict (case_id) do update
+      set outcome = excluded.outcome, sqlstate = excluded.sqlstate,
+          message = excluded.message, verdict = excluded.verdict,
+          severity = excluded.severity, assertion = excluded.assertion,
+          ran_at = now();
+
+    v_ran := v_ran + 1;
+    if v_verdict = 'fail' then v_fail := v_fail + 1; end if;
+  end loop;
+
+  -- Findings carry the seed and the exact call, so a fix can be re-run byte for
+  -- byte: select public._autotest_call_as('<rpc>','<role>','<args_sql>').
+  for v_c in
+    select c.proname, c.role_key, c.seed, c.variant, c.args_sql, c.args_label,
+           r.sqlstate, r.message, r.severity, r.assertion
+      from public.autotest_fuzz_result r
+      join public.autotest_fuzz_case c on c.id = r.case_id
+     where r.verdict = 'fail'
+       and (p_run_id is null or r.run_id is not distinct from p_run_id)
+     order by (r.severity = 'critical') desc, c.proname
+     limit 60
+  loop
+    perform public.feature_gap_add(
+      (select gap_surface from public.autotest_config where id = 1),
+      format('%s breaks on %s', v_c.proname, v_c.assertion),
+      'broken', coalesce(v_c.severity, 'medium'), 'fuzz',
+      format('as %s · seed %s variant %s · args %s · sqlstate %s · %s',
+             v_c.role_key, v_c.seed, v_c.variant, v_c.args_label,
+             coalesce(v_c.sqlstate,'-'), left(coalesce(v_c.message,''), 400)),
+      format('Replay: select public._autotest_call_as(%L, %L, %L);',
+             v_c.proname, v_c.role_key, v_c.args_sql),
+      'S', null, (select gap_command_id from public.autotest_config where id = 1));
+    v_gaps := v_gaps + 1;
+  end loop;
+
+  if p_run_id is not null then
+    update public.autotest_run
+       set fuzz_total = (select count(*) from public.autotest_fuzz_result
+                          where run_id is not distinct from p_run_id),
+           fuzz_failed = (select count(*) from public.autotest_fuzz_result
+                           where run_id is not distinct from p_run_id and verdict = 'fail'),
+           gaps_written = gaps_written + v_gaps,
+           summary = summary || jsonb_build_object('fuzz', jsonb_build_object(
+             'ran', v_ran, 'failed', v_fail, 'partial', v_partial))
+     where id = p_run_id;
+  end if;
+
+  return jsonb_build_object('ok', true, 'ran', v_ran, 'failed', v_fail,
+    'gaps', v_gaps, 'partial', v_partial);
+end $fn$;

@@ -19,6 +19,7 @@ import '../../design_tokens.dart';
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
 import '../../widgets/backend_error_view.dart';
+import '../../utils/payment_proof.dart';         // CHANGE #637 — the shared private-bucket loader
 import '../../widgets/payment_proof_image.dart'; // CHANGE #637 — the finding's own screenshot
 
 /// `feature_gaps_list(p_surface, p_type, p_severity, p_status, p_sort)`.

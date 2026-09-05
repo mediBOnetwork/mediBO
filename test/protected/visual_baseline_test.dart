@@ -124,6 +124,15 @@ Map<String, dynamic> _home({
       },
     };
 
+/// The toast is a real OverlayEntry with a real 4-second dismissal timer. A
+/// widget test that ends while it is pending fails on a pending timer, which
+/// says nothing about the screen — so every test that provokes one waits it
+/// out rather than pretending the toast is not there.
+Future<void> _letTheToastGo(WidgetTester t) async {
+  await t.pump(const Duration(seconds: 5));
+  await t.pumpAndSettle();
+}
+
 /// A loader that never touches Supabase and never resolves to a real image:
 /// this suite is about the WORDS and the decisions, not about pixels.
 final PaymentProofLoader _noImages = PaymentProofLoader(
@@ -161,6 +170,22 @@ void main() {
   setUpAll(() {
     // RenderLog's 800 ms debounce is a real Timer that would outlive the test.
     RenderLog.flushEnabled = false;
+  });
+
+  // A tall surface, because the assertions are about what the screen PRINTS and
+  // a ListView only builds what fits: on the 800x600 default the second and
+  // third rows are not in the tree at all, so "the backend's word is missing"
+  // and "the row was never built" would look identical.
+  setUp(() {
+    final view = TestWidgetsFlutterBinding.ensureInitialized().platformDispatcher.views.first;
+    view.physicalSize = const Size(1200, 4000);
+    view.devicePixelRatio = 1.0;
+  });
+
+  tearDown(() {
+    final view = TestWidgetsFlutterBinding.ensureInitialized().platformDispatcher.views.first;
+    view.resetPhysicalSize();
+    view.resetDevicePixelRatio();
   });
 
   group('Visual baselines is a printer', () {
@@ -252,6 +277,7 @@ void main() {
       // The screen never marks a row approved by itself: it re-asks, and the
       // NEXT payload is what it draws.
       expect(loads.length, 2);
+      await _letTheToastGo(t);
     });
 
     testWidgets('approve-all carries the run id the payload named', (t) async {
@@ -263,6 +289,7 @@ void main() {
       await t.pump();
       await t.pumpAndSettle();
       expect(runs, [91]);
+      await _letTheToastGo(t);
     });
 
     testWidgets('a refusal prints the backend\'s own message', (t) async {
@@ -278,7 +305,7 @@ void main() {
       await t.pump();
       await t.pump(const Duration(milliseconds: 100));
       expect(find.text('Visual baselines are super-admin only.'), findsOneWidget);
-      await t.pumpAndSettle();
+      await _letTheToastGo(t);
     });
   });
 

@@ -3,9 +3,11 @@ import 'package:flutter/material.dart';
 import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
+import '../../../utils/payment_proof.dart';
 import '../../../widgets/payment_proof_image.dart';
 import 'dev_queue_common.dart';
 import 'dev_queue_service.dart';
+import 'visual_api.dart';
 
 /// CHANGE #637 — the visual-regression review queue, and it is a PRINTER.
 ///
@@ -65,8 +67,9 @@ class VisualBaselinesScreen extends StatefulWidget {
 }
 
 class _VisualBaselinesScreenState extends State<VisualBaselinesScreen> {
-  DevQueueService? _svcCache;
-  DevQueueService get _svc => _svcCache ??= (widget.service ?? DevQueueService());
+  VisualBaselinesApi? _apiCache;
+  VisualBaselinesApi get _api =>
+      _apiCache ??= VisualBaselinesApi(widget.service ?? DevQueueService());
 
   Map<String, dynamic> _payload = const {};
   String _filter = 'review';
@@ -88,7 +91,7 @@ class _VisualBaselinesScreenState extends State<VisualBaselinesScreen> {
     try {
       final p = widget.load != null
           ? await widget.load!(_filter)
-          : await _svc.visualBaselineHome(filter: _filter);
+          : await _api.home(_filter);
       if (!mounted) return;
       setState(() {
         _payload = p;
@@ -249,8 +252,7 @@ class _VisualBaselinesScreenState extends State<VisualBaselinesScreen> {
                   ? null
                   : () => _act(() => widget.approveRun != null
                       ? widget.approveRun!((approveAll['run_id'] as num).toInt())
-                      : _svc.visualBaselineApproveRun(
-                          (approveAll['run_id'] as num).toInt())),
+                      : _api.approveRun((approveAll['run_id'] as num).toInt())),
               style: ElevatedButton.styleFrom(
                 backgroundColor: kBrand,
                 foregroundColor: Colors.white,
@@ -275,7 +277,7 @@ class _VisualBaselinesScreenState extends State<VisualBaselinesScreen> {
                   ? null
                   : () => _act(() => widget.runRequest != null
                       ? widget.runRequest!('visual')
-                      : _svc.visualRunRequest(lane: 'visual')),
+                      : _api.runRequest('visual')),
               style: OutlinedButton.styleFrom(
                 side: const BorderSide(color: kBrand),
                 shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
@@ -392,8 +394,7 @@ class _VisualBaselinesScreenState extends State<VisualBaselinesScreen> {
                       ? null
                       : () => _act(() => widget.approve != null
                           ? widget.approve!((r['shot_id'] as num).toInt())
-                          : _svc.visualBaselineApprove(
-                              (r['shot_id'] as num).toInt())),
+                          : _api.approve((r['shot_id'] as num).toInt())),
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: kBrand),
                     shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),

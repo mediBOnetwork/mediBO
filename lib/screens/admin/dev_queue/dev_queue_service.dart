@@ -2,6 +2,8 @@ import 'dart:typed_data';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../services/dev_console.dart';
+
 /// Thin RPC layer for the Dev Queue tab.
 ///
 /// THE APP RENDERS. IT NEVER DECIDES. — every method here does exactly one
@@ -9,10 +11,52 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 /// merging, no client-side sorting, no invented fields. The screens render
 /// what these return, verbatim.
 class DevQueueService {
-  DevQueueService({SupabaseClient? client})
-    : _c = client ?? Supabase.instance.client;
+  /// CHANGE #1761 — the dev-queue control plane lives on its own project
+  /// (medibo-dev). RPCs go there through [DevConsole]; the few that read
+  /// PRODUCTION's own health (its cron, its DB lane, its regression guard, its
+  /// app diagnostics) stay on production, and so do storage and edge functions.
+  /// [client] pins the control-plane client (tests).
+  DevQueueService({
+    SupabaseClient? client,
+    SupabaseClient? storageClient,
+    DevConsole? console,
+  })  : _fixed = client,
+        _storage = storageClient,
+        _console = console ?? DevConsole.instance;
 
-  final SupabaseClient _c;
+  final SupabaseClient? _fixed;
+  final SupabaseClient? _storage;
+  final DevConsole _console;
+
+  /// Resolved lazily: a test that pins [client] never touches
+  /// `Supabase.instance`, and falls back to that pinned client for storage.
+  SupabaseClient get _prod => _storage ?? _fixed ?? Supabase.instance.client;
+
+  /// RPCs that describe PRODUCTION itself and therefore run there.
+  static const Set<String> productionRpcs = {
+    'cron_health',
+    'cron_budget_card',
+    'db_health_status',
+    'db_admission_set',
+    'rg_guard_card',
+    'call_setup_status',
+    'auth_diag_list',
+  };
+
+  /// The control-plane client (medibo-dev): minted on first use, re-minted
+  /// only when the backend-issued ticket is about to expire.
+  Future<SupabaseClient> rpcClient() async => _fixed ?? await _console.client();
+
+  /// Production: buckets (`dev-cmd-uploads`, `dev-cmd-proofs`), edge functions,
+  /// and the [productionRpcs].
+  SupabaseClient get storageClient => _prod;
+
+  /// Which project a named RPC is sent to — the one routing decision in Dart.
+  Future<SupabaseClient> clientFor(String fn) async =>
+      productionRpcs.contains(fn) ? _prod : await rpcClient();
+
+  Future<dynamic> _rpc(String fn, {Map<String, dynamic>? params}) async =>
+      (await clientFor(fn)).rpc(fn, params: params);
 
   Map<String, dynamic> _asMap(dynamic raw) {
     final v = raw is List ? (raw.isEmpty ? null : raw.first) : raw;
@@ -35,7 +79,7 @@ class DevQueueService {
     int? limit,
     String? updatedSince,
   }) async {
-    final raw = await _c.rpc(
+    final raw = await _rpc(
       'dev_cmd_list',
       params: {
         'p_status': status,
@@ -52,33 +96,33 @@ class DevQueueService {
   /// pulling `dev_cmd_list(limit: 500)` and searching it, which shipped every
   /// other command's build log to draw one page.
   Future<Map<String, dynamic>> get(int id) async =>
-      _asMap(await _c.rpc('dev_cmd_get', params: {'p_id': id}));
+      _asMap(await _rpc('dev_cmd_get', params: {'p_id': id}));
 
   /// A page of the message thread. Media comes back as URLs only.
   Future<Map<String, dynamic>> messages(int id, {int limit = 50, int? afterId}) async =>
-      _asMap(await _c.rpc('dev_cmd_messages',
+      _asMap(await _rpc('dev_cmd_messages',
           params: {'p_id': id, 'p_limit': limit, 'p_after_id': afterId}));
   /// CHANGE #656 — the model/effort picker is DATA. Labels, values, defaults
   /// and the section titles all arrive from dev_model_options(); the sheet
   /// renders them verbatim and never spells a model id or a label in Dart.
   Future<Map<String, dynamic>> modelOptions() async =>
-      _asMap(await _c.rpc('dev_model_options'));
+      _asMap(await _rpc('dev_model_options'));
 
   Future<Map<String, dynamic>> spec(int id) async =>
-      _asMap(await _c.rpc('dev_cmd_spec', params: {'p_id': id}));
+      _asMap(await _rpc('dev_cmd_spec', params: {'p_id': id}));
 
   /// CHANGE #571 — the command's OWN spec checklist. Every item, its status,
   /// its status label and its tone are decided by the backend; the screen
   /// prints them. An open item is why a completion was refused.
   Future<Map<String, dynamic>> specItems(int id) async =>
-      _asMap(await _c.rpc('dev_cmd_spec_items', params: {'p_id': id}));
+      _asMap(await _rpc('dev_cmd_spec_items', params: {'p_id': id}));
 
   // ── Bug-Loop Prevention: QA findings + journeys ──────────────────────────
   /// One render-ready payload for a command's QA state: findings[] (severity,
   /// tone, status all server-decided) + journey runs[] with evidence. The
   /// detail screen draws this verbatim — nothing computed here.
   Future<Map<String, dynamic>> qaDetail(int id) async =>
-      _asMap(await _c.rpc('dev_cmd_qa_detail', params: {'p_id': id}));
+      _asMap(await _rpc('dev_cmd_qa_detail', params: {'p_id': id}));
 
   /// The known build areas (backend-decided list + labels) for the bug-report
   /// area picker. Rendered verbatim — the app never invents an area name.
@@ -86,20 +130,20 @@ class DevQueueService {
   /// the headline, the last dispatcher tick, every registered task's state and
   /// the guard log all arrive as backend strings.
   Future<Map<String, dynamic>> cronHealth() async =>
-      _asMap(await _c.rpc('cron_health'));
+      _asMap(await _rpc('cron_health'));
 
   /// CHANGE #301 — the database coordination lane: connections, the longest
   /// open transaction, statement timeouts, who is holding an exclusive or
   /// heavy-read slot, and the watchdog's own alerts. Every word is built in
   /// `db_health_status()`; the section renders it in payload order.
   Future<Map<String, dynamic>> dbHealth() async =>
-      _asMap(await _c.rpc('db_health_status'));
+      _asMap(await _rpc('db_health_status'));
 
   /// CMD #368 — save one admission-control threshold (or the on/off switch).
   /// The backend clamps every value to its own bounds and returns the stored
   /// block; the caller reloads rather than trusting what it sent.
   Future<Map<String, dynamic>> admissionSet(Map<String, dynamic> patch) async =>
-      _asMap(await _c.rpc('db_admission_set', params: {'p_patch': patch}));
+      _asMap(await _rpc('db_admission_set', params: {'p_patch': patch}));
 
   /// CHANGE #324 — the deploy lane, now a merge queue: who holds the lane and
   /// for how long, what is waiting to be batched, the batch in flight, wait
@@ -108,27 +152,27 @@ class DevQueueService {
   /// string is built in `deploy_lane_status()`; the section renders it in
   /// payload order.
   Future<Map<String, dynamic>> deployLane({int limit = 12}) async =>
-      _asMap(await _c.rpc('deploy_lane_status', params: {'p_limit': limit}));
+      _asMap(await _rpc('deploy_lane_status', params: {'p_limit': limit}));
 
   /// CHANGE #327 — the Build lane: what waited on a FILE.
   /// Its own RPC beside the other two lanes, so a refused read of one never
   /// blanks the others. Every label, count sentence and empty hint is built in
   /// `build_contention_status()`; the section renders it in payload order.
   Future<Map<String, dynamic>> buildLane({int days = 7}) async =>
-      _asMap(await _c.rpc('build_contention_status', params: {'p_days': days}));
+      _asMap(await _rpc('build_contention_status', params: {'p_days': days}));
 
   /// CHANGE #530 — the boot doctor's verdict per runner: what a crash left
   /// behind, what was repaired, and which runners are refusing to claim. Its
   /// own RPC beside the three lanes, so a refused read of one never blanks the
   /// others. Every word and tone is built by `runner_boot_status()`.
   Future<Map<String, dynamic>> runnerBoot({int limit = 12}) async =>
-      _asMap(await _c.rpc('runner_boot_status', params: {'p_limit': limit}));
+      _asMap(await _rpc('runner_boot_status', params: {'p_limit': limit}));
 
   /// CHANGE #1268 — one agent id per live session, one building command per
   /// agent. Its own RPC beside the lanes, so a refused read never blanks them.
   /// Every label, tone and caption is built by `dev_agent_sessions_status()`.
   Future<Map<String, dynamic>> runnerSessions() async =>
-      _asMap(await _c.rpc('dev_agent_sessions_status'));
+      _asMap(await _rpc('dev_agent_sessions_status'));
 
   /// CHANGE #916 — the regression guard, which until now had no surface at
   /// all: its only way to reach Om was to file an urgent "RG red after #N"
@@ -137,32 +181,32 @@ class DevQueueService {
   /// `rg_guard_card()`; the section renders them in payload order. Read-only —
   /// it never runs the guard, so opening the screen costs no catalogue scan.
   Future<Map<String, dynamic>> guardCard({int runs = 8}) async =>
-      _asMap(await _c.rpc('rg_guard_card', params: {'p_runs': runs}));
+      _asMap(await _rpc('rg_guard_card', params: {'p_runs': runs}));
 
   /// CHANGE #404 — is masked calling actually on, and what is still missing
   /// before real calls flow. Render-ready: every word and tone on the card is
   /// built by this RPC.
   Future<Map<String, dynamic>> maskedCalling() async =>
-      _asMap(await _c.rpc('call_setup_status'));
+      _asMap(await _rpc('call_setup_status'));
 
   /// CHANGE #275 — every Google sign-in failure recorded on a real device,
   /// newest first, already rendered by the backend.
   Future<Map<String, dynamic>> authDiagList({int limit = 50}) async =>
-      _asMap(await _c.rpc('auth_diag_list', params: {'p_limit': limit}));
+      _asMap(await _rpc('auth_diag_list', params: {'p_limit': limit}));
 
   Future<List<Map<String, dynamic>>> areasGet() async =>
-      _asList(await _c.rpc('dev_areas_get'));
+      _asList(await _rpc('dev_areas_get'));
 
   /// The journey library: every enabled journey, optionally scoped to an area.
   /// Rendered verbatim in the Journey Library screen.
   Future<List<Map<String, dynamic>>> journeysGet({String? area}) async =>
-      _asList(await _c.rpc('journeys_get', params: {'p_area': area}));
+      _asList(await _rpc('journeys_get', params: {'p_area': area}));
 
   /// File a bug → backend creates a linked fix command + journey stub and
   /// returns the created command id. The app only sends the text + area.
   Future<Map<String, dynamic>> bugReport(String text, String area) async =>
       _asMap(
-        await _c.rpc(
+        await _rpc(
           'bug_report',
           params: {'p_text': text, 'p_area': area, 'p_from_command': null},
         ),
@@ -171,11 +215,11 @@ class DevQueueService {
   /// Waive a failed QA gate with the deploy PIN. Backend re-checks the PIN and
   /// returns its verdict, rendered verbatim.
   Future<Map<String, dynamic>> qaWaive(int id, String pin) async => _asMap(
-    await _c.rpc('qa_waive', params: {'p_command_id': id, 'p_pin': pin}),
+    await _rpc('qa_waive', params: {'p_command_id': id, 'p_pin': pin}),
   );
 
   Future<List<Map<String, dynamic>>> templates() async {
-    final raw = await _c.rpc('dev_cmd_template_list');
+    final raw = await _rpc('dev_cmd_template_list');
     final list = raw is List ? raw : (raw is Map ? (raw['rows'] ?? []) : []);
     return (list as List)
         .whereType<Map>()
@@ -188,7 +232,7 @@ class DevQueueService {
     List<Map<String, dynamic>> items, {
     bool force = false,
   }) async => _asMap(
-    await _c.rpc(
+    await _rpc(
       'dev_cmd_bulk_add',
       params: {'p_items': items, 'p_force': force},
     ),
@@ -203,7 +247,7 @@ class DevQueueService {
     int? count,
     Map<String, dynamic> opts,
   ) async => _asMap(
-    await _c.rpc(
+    await _rpc(
       'draft_create',
       params: {
         'p_spec': spec,
@@ -217,7 +261,7 @@ class DevQueueService {
   /// The full draft row (status/questions/emit_multi/receipt) — rendered
   /// verbatim by the Questions screen. Polled while status is `generating`.
   Future<Map<String, dynamic>> draftGet(int id) async =>
-      _asMap(await _c.rpc('draft_get', params: {'p_id': id}));
+      _asMap(await _rpc('draft_get', params: {'p_id': id}));
 
   /// Submit the answers → the backend deterministically composes the final
   /// command(s) and adds them to the queue. Returns {result, receipt}. The app
@@ -229,7 +273,7 @@ class DevQueueService {
     bool acceptSplit = true,
     bool savePrefs = true,
   }) async => _asMap(
-    await _c.rpc(
+    await _rpc(
       'draft_submit',
       params: {
         'p_id': id,
@@ -244,49 +288,49 @@ class DevQueueService {
   /// Dev Queue screen so Om can open a ready draft without waiting on the
   /// blocking loader.
   Future<Map<String, dynamic>> draftsInbox() async =>
-      _asMap(await _c.rpc('drafts_inbox'));
+      _asMap(await _rpc('drafts_inbox'));
 
   /// CHANGE #349 — the labelled tools surface. One payload: the groups, the
   /// labels, the descriptions, the icon keys and the drafts badge. A tool the
   /// registry does not list is not in it, which is the whole gate.
   Future<Map<String, dynamic>> devTools() async =>
-      _asMap(await _c.rpc('dev_tools'));
+      _asMap(await _rpc('dev_tools'));
 
   Future<void> draftCancel(int id) async =>
-      _c.rpc('draft_cancel', params: {'p_id': id});
+      _rpc('draft_cancel', params: {'p_id': id});
 
   Future<void> reorder(List<int> ids) async =>
-      _c.rpc('dev_cmd_reorder', params: {'p_ids': ids});
+      _rpc('dev_cmd_reorder', params: {'p_ids': ids});
 
   Future<void> update(int id, Map<String, dynamic> patch) async =>
-      _c.rpc('dev_cmd_update', params: {'p_id': id, 'p_patch': patch});
+      _rpc('dev_cmd_update', params: {'p_id': id, 'p_patch': patch});
 
   Future<void> pause(int id) async =>
-      _c.rpc('dev_cmd_pause', params: {'p_id': id});
+      _rpc('dev_cmd_pause', params: {'p_id': id});
   Future<void> resume(int id) async =>
-      _c.rpc('dev_cmd_resume', params: {'p_id': id});
+      _rpc('dev_cmd_resume', params: {'p_id': id});
   Future<void> cancel(int id) async =>
-      _c.rpc('dev_cmd_cancel', params: {'p_id': id});
+      _rpc('dev_cmd_cancel', params: {'p_id': id});
   Future<void> delete(int id) async =>
-      _c.rpc('dev_cmd_delete', params: {'p_id': id});
-  Future<void> deleteCancelled() async => _c.rpc('dev_cmd_delete_cancelled');
+      _rpc('dev_cmd_delete', params: {'p_id': id});
+  Future<void> deleteCancelled() async => _rpc('dev_cmd_delete_cancelled');
   Future<void> approve(int id) async =>
-      _c.rpc('dev_cmd_approve', params: {'p_id': id});
+      _rpc('dev_cmd_approve', params: {'p_id': id});
   Future<void> reject(int id, String reason) async =>
-      _c.rpc('dev_cmd_reject', params: {'p_id': id, 'p_reason': reason});
+      _rpc('dev_cmd_reject', params: {'p_id': id, 'p_reason': reason});
   Future<void> requestAndroid(int id, {String buildType = 'apk'}) async =>
-      _c.rpc(
+      _rpc(
         'dev_cmd_request_android',
         params: {'p_id': id, 'p_build_type': buildType},
       );
   Future<void> requestDebug(int id) async =>
-      _c.rpc('dev_cmd_request_debug', params: {'p_id': id});
+      _rpc('dev_cmd_request_debug', params: {'p_id': id});
   Future<void> reply(
     int id,
     String body, {
     List<String> images = const [],
     List<Map<String, dynamic>> attachments = const [],
-  }) async => _c.rpc(
+  }) async => _rpc(
     'dev_cmd_reply',
     params: {
       'p_command_id': id,
@@ -320,7 +364,7 @@ class DevQueueService {
       kind = 'pdf';
       mime = 'application/pdf';
     }
-    await _c.storage
+    await _prod.storage
         .from(uploadsBucket)
         .uploadBinary(
           path,
@@ -334,10 +378,10 @@ class DevQueueService {
   /// (video / pdf / doc). Generated on demand each view — never persisted —
   /// so a tight expiry cannot break a stored link. (CHANGE #92 hardening.)
   Future<String> attachmentUrl(String path) =>
-      _c.storage.from(uploadsBucket).createSignedUrl(path, 900);
+      _prod.storage.from(uploadsBucket).createSignedUrl(path, 900);
 
   Future<Map<String, dynamic>> rollback(int id) async =>
-      _asMap(await _c.rpc('dev_cmd_rollback', params: {'p_id': id}));
+      _asMap(await _rpc('dev_cmd_rollback', params: {'p_id': id}));
 
   /// Upload one admin-picked image to the private dev-cmd-uploads bucket and
   /// return the stored path. The backend keys attachments by these paths; the
@@ -353,7 +397,7 @@ class DevQueueService {
         : ext == 'webp'
         ? 'image/webp'
         : 'image/jpeg';
-    await _c.storage
+    await _prod.storage
         .from(uploadsBucket)
         .uploadBinary(
           path,
@@ -364,24 +408,24 @@ class DevQueueService {
   }
 
   Future<void> templateSave(String name, String spec) async =>
-      _c.rpc('dev_cmd_template_save', params: {'p_name': name, 'p_spec': spec});
+      _rpc('dev_cmd_template_save', params: {'p_name': name, 'p_spec': spec});
 
   /// Signed URL for a screenshot stored in the dev-cmd-proofs bucket.
   /// 15-minute expiry, generated on demand each view. (CHANGE #92 hardening.)
   Future<String> proofUrl(String path) =>
-      _c.storage.from('dev-cmd-proofs').createSignedUrl(path, 900);
+      _prod.storage.from('dev-cmd-proofs').createSignedUrl(path, 900);
 
   /// Rolling-window session token/cost usage vs the configurable budget —
   /// rendered verbatim (all strings + percent come from the backend).
   Future<Map<String, dynamic>> sessionUsage() async =>
-      _asMap(await _c.rpc('dev_cmd_session_usage'));
+      _asMap(await _rpc('dev_cmd_session_usage'));
 
   /// Ask the VM to pull a FRESH usage reading now (fired when the panel opens).
   /// The app only records the intent; the VM poller does the rate-limited fetch
   /// and pushes the result, which the next sessionUsage() render picks up.
   Future<void> requestUsageRefresh() async {
     try {
-      await _c.rpc('dev_request_usage_refresh');
+      await _rpc('dev_request_usage_refresh');
     } catch (_) {
       /* best-effort signal; the background poller still refreshes */
     }
@@ -392,7 +436,7 @@ class DevQueueService {
   /// orchestrator last published (active_workers, workers[], quota, load,
   /// shrink) — render-ready. The app never infers pool shape; it draws this.
   Future<Map<String, dynamic>> poolGet() async =>
-      _asMap(await _c.rpc('pool_get'));
+      _asMap(await _rpc('pool_get'));
 
   /// Change one or more pool-config fields (cap / auto / billing_mode /
   /// idle_shutdown_min). PIN-gated by the backend — the app only passes the
@@ -401,20 +445,20 @@ class DevQueueService {
     Map<String, dynamic> patch,
     String pin,
   ) async => _asMap(
-    await _c.rpc('pool_set', params: {'p_patch': patch, 'p_pin': pin}),
+    await _rpc('pool_set', params: {'p_patch': patch, 'p_pin': pin}),
   );
 
   /// The files a command currently holds a lease on, while it builds — rendered
   /// verbatim as path chips in the row detail. Empty list when nothing locked.
   Future<List<Map<String, dynamic>>> leaseList(int commandId) async =>
-      _asList(await _c.rpc('lease_list', params: {'p_command_id': commandId}));
+      _asList(await _rpc('lease_list', params: {'p_command_id': commandId}));
 
   // ── Portable Memory plane (#182) ─────────────────────────────────────────
   /// The full agent-memory list: {screen_title, subtitle, labels, scopes,
   /// sections_hint, rows[]} — every string backend-owned, rendered verbatim by
   /// the Memory screen. One RPC, render-ready.
   Future<Map<String, dynamic>> memoryList() async =>
-      _asMap(await _c.rpc('memory_list'));
+      _asMap(await _rpc('memory_list'));
 
   /// Upsert one rule (scope+section). Backend bumps version + audits. Returns
   /// the verdict ({ok, message, version}) rendered verbatim.
@@ -424,7 +468,7 @@ class DevQueueService {
     String body,
     int priority,
   ) async => _asMap(
-    await _c.rpc(
+    await _rpc(
       'memory_put',
       params: {
         'p_scope': scope,
@@ -437,16 +481,16 @@ class DevQueueService {
 
   /// Delete one rule by id. Backend audits. Returns {ok, message}.
   Future<Map<String, dynamic>> memoryDelete(String id) async =>
-      _asMap(await _c.rpc('memory_delete', params: {'p_id': id}));
+      _asMap(await _rpc('memory_delete', params: {'p_id': id}));
 
   // ── Permanent Conversations plane (#183) ─────────────────────────────────
   /// All threads, render-ready ({screen_title, labels, rows[]}). One RPC.
   Future<Map<String, dynamic>> threadList() async =>
-      _asMap(await _c.rpc('thread_list'));
+      _asMap(await _rpc('thread_list'));
 
   /// One thread's full history ({thread, messages[]}) — rendered verbatim.
   Future<Map<String, dynamic>> threadOpen(String id) async =>
-      _asMap(await _c.rpc('thread_open', params: {'p_id': id}));
+      _asMap(await _rpc('thread_open', params: {'p_id': id}));
 
   /// Semantic search across ALL threads. Embeds the query via the `embed` edge
   /// function (gte-small, 384-dim, no GCP) then runs pgvector cosine search. If
@@ -455,14 +499,14 @@ class DevQueueService {
   Future<Map<String, dynamic>> conversationSearch(String query) async {
     List<dynamic>? emb;
     try {
-      final res = await _c.functions.invoke('embed', body: {'input': query});
+      final res = await _prod.functions.invoke('embed', body: {'input': query});
       final d = res.data;
       if (d is Map && d['embedding'] is List) emb = d['embedding'] as List;
     } catch (_) {
       /* fall back to full-text below */
     }
     return _asMap(
-      await _c.rpc(
+      await _rpc(
         'conversation_search',
         params: {'p_query': query, 'p_embedding': emb, 'p_limit': 20},
       ),
@@ -471,11 +515,11 @@ class DevQueueService {
 
   /// Mark a thread to be resumed by the next agent session. Returns the verdict.
   Future<Map<String, dynamic>> threadMarkResume(String id) async =>
-      _asMap(await _c.rpc('thread_mark_resume', params: {'p_id': id}));
+      _asMap(await _rpc('thread_mark_resume', params: {'p_id': id}));
 
   // ── Runner control plane ────────────────────────────────────────────────
   Future<Map<String, dynamic>> ctlGet() async =>
-      _asMap(await _c.rpc('dev_ctl_get'));
+      _asMap(await _rpc('dev_ctl_get'));
 
   /// CHANGE #1593 — the autoscaler's decision, taken again NOW.
   ///
@@ -485,7 +529,7 @@ class DevQueueService {
   /// for the next probe. It decides nothing here: every word, the brake name
   /// and the deciding metric arrive in the payload.
   Future<Map<String, dynamic>> autoscaleState() async =>
-      _asMap(await _c.rpc('runner_autoscale_state'));
+      _asMap(await _rpc('runner_autoscale_state'));
 
   /// CHANGE #1401 — the Runner card's re-login tap, the SAME RPC the Cron
   /// health panel calls, so the two surfaces can never start different logins.
@@ -493,12 +537,12 @@ class DevQueueService {
   /// whole claude_auth block again; the caller renders what comes back and
   /// guesses nothing about the states in between.
   Future<Map<String, dynamic>> claudeAuthRelogin() async =>
-      _asMap(await _c.rpc('claude_auth_relogin_request'));
+      _asMap(await _rpc('claude_auth_relogin_request'));
 
   /// Flip one toggle (vm|claude|workflow → on|off). Returns the backend verdict
   /// (for 'vm' it carries call_edge:true + action so the caller invokes the fn).
   Future<Map<String, dynamic>> ctlSet(String key, String value) async => _asMap(
-    await _c.rpc('dev_ctl_set', params: {'p_key': key, 'p_value': value}),
+    await _rpc('dev_ctl_set', params: {'p_key': key, 'p_value': value}),
   );
 
   /// Start/stop/status the builder VM via the vm-control edge function (carries
@@ -512,7 +556,7 @@ class DevQueueService {
   /// print the backend's guidance verbatim instead of a generic Dart fallback.
   Future<Map<String, dynamic>> vmControl(String action) async {
     try {
-      final res = await _c.functions.invoke(
+      final res = await _prod.functions.invoke(
         'vm-control',
         body: {'action': action},
       );
@@ -530,11 +574,11 @@ class DevQueueService {
   /// present) plus usd_inr and the source note — rendered read-only in the
   /// Rates sheet. Prices come from here, never from Dart literals.
   Future<Map<String, dynamic>> ratesGet() async =>
-      _asMap(await _c.rpc('dev_rates_get'));
+      _asMap(await _rpc('dev_rates_get'));
 
   // ── GCP Control plane (all render-ready from the live backend) ────────────
   Future<Map<String, dynamic>> gcpGet() async =>
-      _asMap(await _c.rpc('dev_gcp_get'));
+      _asMap(await _rpc('dev_gcp_get'));
 
   /// Run the monthly cloud waste scan NOW via the `cloud-waste-scan` edge
   /// function (carries the user's JWT; the function re-checks super_admin and
@@ -542,7 +586,7 @@ class DevQueueService {
   /// READ-ONLY — it lists, prices and deletes nothing. Returns the same
   /// rendered payload `dev_gcp_get().waste` serves.
   Future<Map<String, dynamic>> wasteScan() async {
-    final res = await _c.functions
+    final res = await _prod.functions
         .invoke('cloud-waste-scan', body: {'action': 'run'});
     final d = res.data;
     return d is Map ? Map<String, dynamic>.from(d) : <String, dynamic>{};
@@ -552,28 +596,28 @@ class DevQueueService {
   /// restart_vm carries the PIN. Enqueues an urgent gcp command; returns {id,...}.
   Future<Map<String, dynamic>> gcpAction(String action, {String? pin}) async =>
       _asMap(
-        await _c.rpc(
+        await _rpc(
           'dev_gcp_action',
           params: {'p_action': action, 'p_pin': pin},
         ),
       );
 
   Future<List<Map<String, dynamic>>> secretList() async =>
-      _asList(await _c.rpc('secret_list'));
+      _asList(await _rpc('secret_list'));
   Future<void> secretSet(String name, String value) async =>
-      _c.rpc('secret_set', params: {'p_name': name, 'p_value': value});
+      _rpc('secret_set', params: {'p_name': name, 'p_value': value});
 
   Future<Map<String, dynamic>> pinSet(String oldPin, String newPin) async =>
       _asMap(
-        await _c.rpc('sec_pin_set', params: {'p_old': oldPin, 'p_new': newPin}),
+        await _rpc('sec_pin_set', params: {'p_old': oldPin, 'p_new': newPin}),
       );
   Future<Map<String, dynamic>> freeze() async =>
-      _asMap(await _c.rpc('sec_freeze'));
+      _asMap(await _rpc('sec_freeze'));
   Future<Map<String, dynamic>> unfreeze(String pin) async =>
-      _asMap(await _c.rpc('sec_unfreeze', params: {'p_pin': pin}));
+      _asMap(await _rpc('sec_unfreeze', params: {'p_pin': pin}));
   Future<Map<String, dynamic>> budgetCapSet(num cap, String pin) async =>
       _asMap(
-        await _c.rpc(
+        await _rpc(
           'sec_budget_cap_set',
           params: {'p_cap': cap, 'p_pin': pin},
         ),
@@ -583,27 +627,27 @@ class DevQueueService {
     String? search,
     int limit = 100,
   }) async => _asList(
-    await _c.rpc(
+    await _rpc(
       'sec_audit_list',
       params: {'p_limit': limit, 'p_search': search},
     ),
   );
 
   Future<void> scheduleSave(Map<String, dynamic> row) async =>
-      _c.rpc('gcp_schedule_save', params: {'p': row});
+      _rpc('gcp_schedule_save', params: {'p': row});
   Future<void> scheduleDelete(int id) async =>
-      _c.rpc('gcp_schedule_delete', params: {'p_id': id});
+      _rpc('gcp_schedule_delete', params: {'p_id': id});
 
   // ── Play Store (CHANGE #280) ───────────────────────────────────────────
   // Two calls, no client logic: the screen payload, and the button.
   Future<Map<String, dynamic>> playState({int limit = 20}) async =>
-      _asMap(await _c.rpc('play_state', params: {'p_limit': limit}));
+      _asMap(await _rpc('play_state', params: {'p_limit': limit}));
 
   Future<Map<String, dynamic>> playPublishRequest({
     String track = 'production',
     String? notes,
   }) async => _asMap(
-    await _c.rpc(
+    await _rpc(
       'play_publish_request',
       params: {'p_track': track, 'p_notes': notes},
     ),
@@ -614,16 +658,16 @@ class DevQueueService {
   // tapped at all is `can_test` / `can_promote` inside playState() — never a
   // rule computed here.
   Future<Map<String, dynamic>> playTestRequest({String? notes}) async =>
-      _asMap(await _c.rpc('play_test_request', params: {'p_notes': notes}));
+      _asMap(await _rpc('play_test_request', params: {'p_notes': notes}));
 
   Future<Map<String, dynamic>> playPromoteRequest({String? notes}) async =>
-      _asMap(await _c.rpc('play_promote_request', params: {'p_notes': notes}));
+      _asMap(await _rpc('play_promote_request', params: {'p_notes': notes}));
 
   Future<Map<String, dynamic>> playAutoPublishSet(bool on) async =>
-      _asMap(await _c.rpc('play_autopublish_set', params: {'p_on': on}));
+      _asMap(await _rpc('play_autopublish_set', params: {'p_on': on}));
 
   Future<Map<String, dynamic>> playRefreshRequest() async =>
-      _asMap(await _c.rpc('play_refresh_request'));
+      _asMap(await _rpc('play_refresh_request'));
 
   List<Map<String, dynamic>> _asList(dynamic v) =>
       (v as List?)

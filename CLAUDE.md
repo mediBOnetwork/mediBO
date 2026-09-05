@@ -375,6 +375,14 @@ Current files and what they hold down:
   dashed, tone is one lookup with an unknown tone staying neutral, and rows
   render in payload order.
 
+- `dev_console_test.dart` — the Dev Queue talks to the CONTROL PLANE (medibo-dev,
+  CHANGE #1761), never to production, and Dart holds no dev URL or key: the ticket
+  (url, anon key, token, exp) is dev_console_token()'s payload and the only decision
+  in Dart is WHEN to re-mint (from the backend's exp); one mint per ticket life; a
+  refused mint rethrows the backend's own message; routing is a name lookup —
+  control-plane RPCs go to the dev client, productionRpcs (production's own cron,
+  DB lane, regression guard, diagnostics) and storage stay on production.
+
 The suite runs on the Dart VM in ~2s. Keep it that way: no network, no goldens,
 no Supabase, no camera — mock RPC payloads inline. If a widget resists mocking,
 extract its decisions into a pure class and test that.

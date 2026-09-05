@@ -775,45 +775,50 @@ end $$;
 grant usage, select on sequence public.autotest_fuzz_case_id_seq to authenticated, service_role;
 grant usage, select on sequence public.autotest_run_id_seq       to authenticated, service_role;
 
+-- Literals are stored WITHOUT their cast. The generator appends the argument's
+-- REAL type, because a corpus that hardcodes `::integer` calls a bigint
+-- function with an integer and gets '42883 function does not exist' — a
+-- harness bug the fuzzer then files as a product bug. Measured: 8 of 8 first
+-- findings were this.
 insert into public.autotest_fuzz_value (type_class, label, literal, hostility) values
-  ('text','null',              'null::text',                                   'null'),
-  ('text','empty',             '''''::text',                                   'edge'),
-  ('text','blank',             '''   ''::text',                                'edge'),
-  ('text','unicode',           '''ਪੈਰਾਸਿਟਾਮੋਲ 💊 ₹ ﷽''::text',                  'unicode'),
-  ('text','quote_and_backslash','''o''''brien \ %'' ::text',                   'edge'),
-  ('text','huge',              'repeat(''x'', 100000)::text',                  'huge'),
-  ('text','sql_shaped',        ''''' or 1=1 --''::text',                       'wrong_type'),
-  ('text','uuid_shaped',       '''00000000-0000-0000-0000-000000000000''::text','foreign_id'),
-  ('int','null',               'null::integer',                                'null'),
-  ('int','zero',               '0::integer',                                   'edge'),
-  ('int','negative',           '-1::integer',                                  'edge'),
-  ('int','min',                '(-2147483648)::integer',                       'huge'),
-  ('int','max',                '2147483647::integer',                          'huge'),
-  ('numeric','null',           'null::numeric',                                'null'),
-  ('numeric','zero',           '0::numeric',                                   'edge'),
-  ('numeric','negative_money', '(-999999.99)::numeric',                        'edge'),
-  ('numeric','huge',           '1e18::numeric',                                'huge'),
-  ('numeric','fraction',       '0.000001::numeric',                            'edge'),
-  ('bool','null',              'null::boolean',                                'null'),
-  ('bool','true',              'true',                                         'edge'),
-  ('bool','false',             'false',                                        'edge'),
-  ('uuid','null',              'null::uuid',                                   'null'),
-  ('uuid','nil',               '''00000000-0000-0000-0000-000000000000''::uuid','foreign_id'),
-  ('uuid','stranger',          '''ffffffff-ffff-4fff-8fff-ffffffffffff''::uuid','foreign_id'),
-  ('date','null',              'null::date',                                   'null'),
-  ('date','epoch',             '''1970-01-01''::date',                         'edge'),
-  ('date','far_future',        '''9999-12-31''::date',                         'huge'),
-  ('ts','null',                'null::timestamptz',                            'null'),
-  ('ts','epoch',               '''1970-01-01''::timestamptz',                  'edge'),
-  ('ts','far_future',          '''9999-12-31''::timestamptz',                  'huge'),
-  ('jsonb','null',             'null::jsonb',                                  'null'),
-  ('jsonb','empty_object',     '''{}''::jsonb',                                'edge'),
-  ('jsonb','empty_array',      '''[]''::jsonb',                                'edge'),
-  ('jsonb','wrong_shape',      '''{"__unexpected__": [1,2,3]}''::jsonb',       'wrong_type'),
-  ('jsonb','unicode',          '''{"note":"ਪੈਰਾ 💊"}''::jsonb',                 'unicode'),
-  ('array','null',             'null',                                         'null'),
-  ('array','empty',            '''{}''',                                       'edge'),
-  ('other','null',             'null',                                         'null')
+  ('text','null',              'null',                                  'null'),
+  ('text','empty',             '''''',                                  'edge'),
+  ('text','blank',             '''   ''',                               'edge'),
+  ('text','unicode',           '''ਪੈਰਾਸਿਟਾਮੋਲ 💊 ₹ ﷽''',                 'unicode'),
+  ('text','quote_and_backslash','''o''''brien \ %''',                  'edge'),
+  ('text','huge',              'repeat(''x'', 100000)',                 'huge'),
+  ('text','sql_shaped',        ''''' or 1=1 --''',                      'wrong_type'),
+  ('text','uuid_shaped',       '''00000000-0000-0000-0000-000000000000''','foreign_id'),
+  ('int','null',               'null',                                  'null'),
+  ('int','zero',               '0',                                     'edge'),
+  ('int','negative',           '(-1)',                                  'edge'),
+  ('int','min',                '(-2147483648)',                         'huge'),
+  ('int','max',                '2147483647',                            'huge'),
+  ('numeric','null',           'null',                                  'null'),
+  ('numeric','zero',           '0',                                     'edge'),
+  ('numeric','negative_money', '(-999999.99)',                          'edge'),
+  ('numeric','huge',           '1e18',                                  'huge'),
+  ('numeric','fraction',       '0.000001',                              'edge'),
+  ('bool','null',              'null',                                  'null'),
+  ('bool','true',              'true',                                  'edge'),
+  ('bool','false',             'false',                                 'edge'),
+  ('uuid','null',              'null',                                  'null'),
+  ('uuid','nil',               '''00000000-0000-0000-0000-000000000000''','foreign_id'),
+  ('uuid','stranger',          '''ffffffff-ffff-4fff-8fff-ffffffffffff''','foreign_id'),
+  ('date','null',              'null',                                  'null'),
+  ('date','epoch',             '''1970-01-01''',                        'edge'),
+  ('date','far_future',        '''9999-12-31''',                        'huge'),
+  ('ts','null',                'null',                                  'null'),
+  ('ts','epoch',               '''1970-01-01''',                        'edge'),
+  ('ts','far_future',          '''9999-12-31''',                        'huge'),
+  ('jsonb','null',             'null',                                  'null'),
+  ('jsonb','empty_object',     '''{}''',                                'edge'),
+  ('jsonb','empty_array',      '''[]''',                                'edge'),
+  ('jsonb','wrong_shape',      '''{"__unexpected__": [1,2,3]}''',       'wrong_type'),
+  ('jsonb','unicode',          '''{"note":"ਪੈਰਾ 💊"}''',                 'unicode'),
+  ('array','null',             'null',                                  'null'),
+  ('array','empty',            '''{}''',                                'edge'),
+  ('other','null',             'null',                                  'null')
 on conflict (type_class, label) do update
   set literal = excluded.literal, hostility = excluded.hostility;
 
@@ -867,9 +872,7 @@ language sql stable security definer set search_path to 'public' as $fn$
         on v.type_class = c.type_class and v.enabled
   ), one as (select * from pick where rn = 1)
   select jsonb_build_object(
-    'sql', coalesce(string_agg(
-             case when type_class in ('array','other')
-                  then literal || '::' || tname else literal end, ', ' order by ord), ''),
+    'sql', coalesce(string_agg('(' || literal || ')::' || tname, ', ' order by ord), ''),
     'label', coalesce(string_agg(tname || '=' || label, ', ' order by ord), 'no arguments'),
     'hostility', coalesce(to_jsonb(array_agg(distinct hostility)), '[]'::jsonb))
     from one
@@ -988,8 +991,13 @@ begin
     elsif v_state = '57014' then
       v_outcome := 'timeout'; v_verdict := 'fail'; v_sev := 'high';
       v_assert := 'no_500s';
-    elsif v_class in ('22','23','42','2F','39','40','21') then
-      if 'wrong_type' = any (v_c.hostility) and v_class in ('22','42') then
+    elsif v_state in ('42P01','42883','42501','42704','3F000','42P02') then
+      -- The impersonated role cannot SEE the object (schema cron, an internal
+      -- table). That is the guard working, not the RPC crashing: filing it as
+      -- an unhandled input is how a fuzzer teaches people to ignore it.
+      v_outcome := 'not_visible';
+    elsif v_class in ('22','23','2F','39','40','21') then
+      if 'wrong_type' = any (v_c.hostility) and v_class = '22' then
         v_outcome := 'input_rejected';              -- the boundary refused: correct
       else
         v_outcome := 'crash'; v_verdict := 'fail'; v_sev := 'high';

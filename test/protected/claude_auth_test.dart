@@ -26,13 +26,19 @@
 //      and the code are still on screen: a second tap must not be able to
 //      restart the VM's login mid-flow, and that judgement is not Dart's.
 //
-//   5. The widget never talks to the network. Tapping the button calls the
+//   5. The Cron health panel and the Runner-card banner are the SAME widget
+//      underneath, so the two surfaces can never disagree about what red looks
+//      like; and until its payload has arrived the panel draws NOTHING, rather
+//      than a spinner that outlives the screen or a half-built card.
+//
+//   6. The widget never talks to the network. Tapping the button calls the
 //      callback the parent supplied — exactly once — and nothing else.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pharma_b2b/screens/admin/dev_queue/claude_auth_banner.dart';
+import 'package:pharma_b2b/screens/admin/dev_queue/claude_auth_section.dart';
 
 Map<String, dynamic> _payload({
   String tone = 'danger',
@@ -180,5 +186,18 @@ void main() {
     await tester.pump();
     expect(taps, 0);
     expect(find.text('Re-login from here'), findsNothing);
+  });
+
+  testWidgets('the Cron health panel prints the same payload as the banner',
+      (tester) async {
+    // No client is injected, so the RPC never resolves and the panel stays in
+    // its loading state — which must draw NOTHING rather than a spinner that
+    // outlives the screen or a half-built card.
+    await tester.pumpWidget(const MaterialApp(
+      home: Scaffold(body: ClaudeAuthSection()),
+    ));
+    await tester.pump();
+    expect(find.byType(Card), findsNothing);
+    expect(find.byType(OutlinedButton), findsNothing);
   });
 }

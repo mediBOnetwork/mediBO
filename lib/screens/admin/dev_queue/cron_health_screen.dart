@@ -4,6 +4,7 @@ import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/render_log.dart';
 import 'build_lane_section.dart';
+import 'claude_auth_section.dart';
 import 'masked_calling_section.dart';
 import 'runner_boot_section.dart';
 import 'db_lane_section.dart';
@@ -306,6 +307,15 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
                       SizedBox(height: Ds.space.x24),
                       MaskedCallingSection(data: _calls),
                     ],
+                    // CHANGE #1369 — and its own condition again, one
+                    // resource further out than any lane: the lanes all assume
+                    // a worker that can START. On 5 Sep none could, the login
+                    // having expired, and there was nowhere in the app to say
+                    // so. This panel is also the only CONTROL on this screen,
+                    // because the one failure Om cannot fix from his phone is
+                    // the one that stops every runner.
+                    SizedBox(height: Ds.space.x24),
+                    const ClaudeAuthSection(),
                     // CHANGE #530 — and its own condition again: a runner
                     // refusing to claim after a crash is the same question the
                     // lanes answer, in a fourth resource.

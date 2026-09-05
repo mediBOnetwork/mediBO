@@ -1034,3 +1034,54 @@ values ('autotest_nightly', 900, 'poll',
         false, true,
         'CHANGE #634 — asks the VM for a nightly bot run. The VM claims it with test_run_request_claim(). Enable once the journey library (parts 2-6) is real.')
 on conflict (name) do nothing;
+
+-- The Retry button's word. It is the one string the coverage screen needs when
+-- the RPC itself failed and there is no payload to print from.
+insert into public.ui_copy (key, value)
+values ('dev_queue.retry', to_jsonb('Retry'::text))
+on conflict (key) do nothing;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 11. THE DOOR — Test coverage is a registered dev tool
+-- ─────────────────────────────────────────────────────────────────────────
+-- #349 made the Dev Queue's tools a REGISTRY, not a row of glyphs: dev_tools()
+-- admits what is registered here and the app opens what it has a screen for.
+-- Registering the ledger is therefore the whole of its wiring — and because it
+-- is a feature, it needs a contract of its own, written here rather than left
+-- for the seed above (which has already run by this point in the file).
+-- The row shape is #349's, verbatim, and that is not cosmetic: the protected
+-- guard dev_tools_registry_test reads every migration for
+-- ('<route_key>', <sort>, 'medibo', … 'dev_tools') and asserts that set equals
+-- what the build can open. A row written in some other column order would be
+-- invisible to it, and a tool nobody can prove is openable is exactly the #349
+-- defect that guard exists to retire.
+insert into public.feature_registry
+  (feature_key, label, description, group_label, icon_key, route_key,
+   sort_order, owner, partner_eligible, default_access, is_active, category,
+   surface, roles_allowed, deep_link, search_terms, badge_source, badge_noun)
+values
+  ('devtool.test_coverage','Test coverage',
+   'Which features carry a test contract, and what has never been tested',
+   'Proof & QA','science',
+   'test_coverage',15,'medibo',false,'none',true,'system','dev_tools',
+   array['super_admin'],null,'test coverage contract bot autotest never tested',null,null)
+on conflict (feature_key) do update
+   set label = excluded.label, description = excluded.description,
+       group_label = excluded.group_label, icon_key = excluded.icon_key,
+       route_key = excluded.route_key, surface = excluded.surface,
+       is_active = true;
+
+update public.feature_registry
+   set test_entry  = '/admin/go/test_coverage',
+       test_roles  = array['super_admin']::text[],
+       test_steps  = jsonb_build_array(
+         jsonb_build_object('kind','auth','role','super_admin'),
+         jsonb_build_object('kind','goto','path','/admin/go/test_coverage'),
+         jsonb_build_object('kind','settle','ms', 6000)),
+       test_expect = jsonb_build_object('kind','visible','source','render_log',
+                                        'key','c325_deep_link','equals','test_coverage'),
+       test_automatable = true,
+       test_contract_at = now()
+ where feature_key = 'devtool.test_coverage';
+
+select public.test_coverage_refresh();

@@ -199,6 +199,11 @@ class DevQueueService {
 
   /// The journey library: every enabled journey, optionally scoped to an area.
   /// Rendered verbatim in the Journey Library screen.
+  /// CHANGE #634 — the coverage ledger. One RPC, one payload, printed as it
+  /// arrives: this method merges nothing and defaults nothing.
+  Future<Map<String, dynamic>> testCoverageHome({String filter = 'all'}) async =>
+      _asMap(await _c.rpc('test_coverage_home', params: {'p_filter': filter}));
+
   Future<List<Map<String, dynamic>>> journeysGet({String? area}) async =>
       _asList(await _rpc('journeys_get', params: {'p_area': area}));
 

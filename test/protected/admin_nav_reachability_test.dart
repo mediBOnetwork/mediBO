@@ -72,6 +72,29 @@ void main() {
         .allMatches(staffSrc)
         .map((m) => m.group(1)!));
 
+  /// CHANGE #634 — the third kind of door: a registered Dev Queue tool.
+  ///
+  /// The shell used to hold one `case` per tool, and that is exactly how
+  /// devtool.test_mode went missing in #468 — the tools sheet drops a key the
+  /// build cannot open, so a tool with no case here was reachable from
+  /// nowhere. The shell now delegates every key in [kDevToolKeys] to
+  /// `openDevTool`, which knows all of them, so the door is the SET rather
+  /// than a case label. Read from source rather than imported: importing
+  /// dev_queue_screen.dart would drag the web-only libraries the shell pulls
+  /// in into a Dart VM test, which is the trap #635 documents.
+  final devToolKeys = () {
+    final src = _read('lib/screens/admin/dev_queue/dev_queue_screen.dart');
+    final block = RegExp(r'const Set<String> kDevToolKeys = <String>\{(.*?)\};',
+            dotAll: true)
+        .firstMatch(src);
+    return block == null
+        ? <String>{}
+        : RegExp(r"'([a-z0-9_]+)'")
+            .allMatches(block.group(1)!)
+            .map((m) => m.group(1)!)
+            .toSet();
+  }();
+
   /// ...and the routes whose door is DATA, not Dart: `shellOpenFulfillStage`
   /// sends them to AdminFulfillmentScreen on the stage the backend pairs them
   /// with, so there is deliberately no `case` and no arm to find. The list is
@@ -79,8 +102,20 @@ void main() {
   final handled = <String>{
     ...shellCases,
     ...shardArms,
+    ...devToolKeys,
     ...kFulfillRedirectedRoutes,
   };
+
+  test('CHANGE #634 — the shell really does delegate to openDevTool', () {
+    // The door above is only real if the shell asks for it. Without this, a
+    // refactor that dropped the delegation would leave this file quietly
+    // asserting that twelve tools are reachable when none of them is.
+    expect(devToolKeys, isNotEmpty,
+        reason: 'kDevToolKeys could not be read — the door set is empty');
+    expect(shellSrc, contains('kDevToolKeys.contains(route)'),
+        reason: 'the shell no longer delegates dev-tool routes to openDevTool, '
+            'so every key in kDevToolKeys is now a tile with no door');
+  });
 
   test('the router still has a switch (the regex still matches)', () {
     expect(shellCases, isNotEmpty,

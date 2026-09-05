@@ -51,6 +51,133 @@ class InquiryBadge {
   }
 }
 
+
+/// CHANGE #535 (#527 gap 60) — the part-quantity row on the public inquiry
+/// form.
+///
+/// The supplier who can send 40 of the 100 asked for used to have exactly two
+/// answers: "Available" (and the PO took all 100 from them) or "Not
+/// available" (and the whole line went elsewhere). The backend already knows
+/// better — `submit_inquiry_form` validates `offered_qty` against the asked
+/// quantity, the PO takes the offered figure and `_inquiry_cascade_remainder`
+/// sends only the remainder onwards. This is the input for it.
+///
+/// Every word is `item['partial_qty']`'s: label, hint and asked_label are
+/// written by `_inquiry_partial_qty_items()` through `uic`/`uicf`, so the copy
+/// changes with an UPDATE and never a deploy. A payload with no `partial_qty`
+/// (an older backend) renders NOTHING — `maybe()` returns null and the caller
+/// falls back to exactly the pre-#535 layout.
+class InquiryPartialQtyField extends StatelessWidget {
+  final Map<String, dynamic> partialQty;
+  final TextEditingController controller;
+  final VoidCallback? onChanged;
+
+  const InquiryPartialQtyField({
+    super.key,
+    required this.partialQty,
+    required this.controller,
+    this.onChanged,
+  });
+
+  /// True only when the backend decorated this item AND turned the field on.
+  static bool enabledFor(Map<String, dynamic> item) {
+    final pq = item['partial_qty'];
+    return pq is Map && pq['enabled'] == true;
+  }
+
+  /// The row for [item], or null when the payload never asked for one.
+  static Widget? maybe(
+    Map<String, dynamic> item,
+    TextEditingController controller, {
+    VoidCallback? onChanged,
+  }) {
+    if (!enabledFor(item)) return null;
+    return InquiryPartialQtyField(
+      partialQty: Map<String, dynamic>.from(item['partial_qty'] as Map),
+      controller: controller,
+      onChanged: onChanged,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final label = (partialQty['label'] as String?) ?? '';
+    final askedLabel = (partialQty['asked_label'] as String?) ?? '';
+    final hint = (partialQty['hint'] as String?) ?? '';
+    return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+      Expanded(
+        flex: 3,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(label, style: Ds.t.bodyStrong),
+            if (askedLabel.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x4),
+              Text(askedLabel, style: Ds.t.caption),
+            ],
+          ],
+        ),
+      ),
+      SizedBox(width: Ds.space.x12),
+      // Proportional, never a hard-coded pixel width — the same share of the
+      // row the rate field takes, at 360, 414 and 1280.
+      Expanded(
+        flex: 2,
+        child: TextField(
+          key: const Key('c535_qty_field'),
+          controller: controller,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          textAlign: TextAlign.right,
+          style: Ds.t.body,
+          onChanged: (_) => onChanged?.call(),
+          decoration: InputDecoration(
+            isDense: true,
+            hintText: hint,
+            hintStyle: Ds.t.caption,
+            contentPadding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x12, vertical: Ds.space.x12),
+            filled: true,
+            fillColor: Ds.c.bg,
+            border: OutlineInputBorder(
+                borderRadius: Ds.r.rButton,
+                borderSide: BorderSide(color: Ds.c.divider)),
+            enabledBorder: OutlineInputBorder(
+                borderRadius: Ds.r.rButton,
+                borderSide: BorderSide(color: Ds.c.divider)),
+            focusedBorder: OutlineInputBorder(
+                borderRadius: Ds.r.rButton,
+                borderSide: BorderSide(color: Ds.c.brand)),
+          ),
+        ),
+      ),
+    ]);
+  }
+}
+
+/// CHANGE #535 — the answer map one item contributes to
+/// `submit_inquiry_form(p_answers)`.
+///
+/// Pure on purpose: an untouched optional field is ABSENT from the map, never
+/// sent as `0` or `''`. The backend reads a missing `offered_qty` as "the whole
+/// quantity", so a Dart-side default of zero would silently turn every full
+/// answer into a refusal.
+Map<String, dynamic> buildInquiryAnswer({
+  required int inquiryId,
+  required String answer,
+  String? rate,
+  String? offeredQty,
+}) {
+  final r = rate?.trim() ?? '';
+  final q = offeredQty?.trim() ?? '';
+  return <String, dynamic>{
+    'inquiry_id': inquiryId,
+    'answer': answer,
+    if (r.isNotEmpty) 'rate': r,
+    if (q.isNotEmpty) 'offered_qty': q,
+  };
+}
+
 class InquiryFormScreen extends StatefulWidget {
   final String token;
 
@@ -89,6 +216,9 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
   // MRP (#29). Every label, hint and error below arrives from
   // inquiry_rate_capture(); nothing here is worded in Dart.
   final Map<int, TextEditingController> _rateCtl = {};
+  // CHANGE #535 (#527 gap 60) — the part quantity the supplier can actually
+  // send, one controller per item, kept and disposed exactly like _rateCtl.
+  final Map<int, TextEditingController> _qtyCtl = {};
   Map<String, dynamic> _rateCapture = const {};
   // CHANGE #687 — get_inquiry_form().deadline, printed by ResponseDeadline.
   Map<String, dynamic> _deadline = const {};
@@ -123,6 +253,10 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
       ctl.dispose();
     }
     _rateCtl.clear();
+    for (final ctl in _qtyCtl.values) {
+      ctl.dispose();
+    }
+    _qtyCtl.clear();
     super.dispose();
   }
 
@@ -349,16 +483,46 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
     return raw.isEmpty ? null : raw;
   }
 
+  // CHANGE #535 — the part quantity the supplier typed, or null when they left
+  // the field alone. Blank means the whole quantity to the backend; it must
+  // never arrive as 0.
+  String? _qtyFor(int id) {
+    final raw = _qtyCtl[id]?.text.trim() ?? '';
+    return raw.isEmpty ? null : raw;
+  }
+
   bool get _rateCaptureOn => _rateCapture['enabled'] == true;
   bool get _rateRequired => _rateCapture['required'] == true;
   String get _rateAnswer => (_rateCapture['answer'] as String?) ?? 'Available';
 
-  /// The rate row, rendered under an item the supplier has marked available.
-  /// Absent for every other answer — a rate without stock means nothing.
+  /// The trailing block under an item the supplier has marked available: the
+  /// rate row (#353) and, since CHANGE #535, the part-quantity row (#527 gap
+  /// 60). Absent for every other answer — neither a rate nor a part quantity
+  /// means anything without stock.
+  ///
+  /// Each row is gated by its OWN backend flag, so a build talking to an older
+  /// backend (no `partial_qty` on the item) renders exactly what it rendered
+  /// before, and a backend that turns rate capture off still gets the quantity
+  /// field.
   Widget? _rateField(Map<String, dynamic> item) {
-    if (!_rateCaptureOn) return null;
     final id = (item['inquiry_id'] as num).toInt();
     if (_selections[id] != _rateAnswer) return null;
+    final rate = _rateCaptureOn ? _rateRow(id) : null;
+    final qty = InquiryPartialQtyField.maybe(
+      item,
+      _qtyCtl.putIfAbsent(id, () => TextEditingController()),
+      onChanged: () => setState(() {}),
+    );
+    if (rate == null) return qty;
+    if (qty == null) return rate;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [rate, SizedBox(height: Ds.space.x12), qty],
+    );
+  }
+
+  Widget _rateRow(int id) {
     final ctl = _rateCtl.putIfAbsent(id, () => TextEditingController());
     final prefix = (_rateCapture['prefix'] as String?) ?? '';
     return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
@@ -417,12 +581,14 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
         .map((i) {
           final id = (i['inquiry_id'] as num).toInt();
           final answer = _selections[id] ?? '';
-          final rate = answer == _rateAnswer ? _rateFor(id) : null;
-          return <String, dynamic>{
-            'inquiry_id': id,
-            'answer': answer,
-            if (rate != null) 'rate': rate,
-          };
+          final available = answer == _rateAnswer;
+          return buildInquiryAnswer(
+            inquiryId: id,
+            answer: answer,
+            rate: available ? _rateFor(id) : null,
+            // CHANGE #535 — omitted when the field was never touched.
+            offeredQty: available ? _qtyFor(id) : null,
+          );
         })
         .where((a) => (a['answer'] as String).isNotEmpty)
         .toList();

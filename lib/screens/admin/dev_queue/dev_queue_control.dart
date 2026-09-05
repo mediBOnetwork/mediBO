@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
+import 'dev_queue_branch.dart';
 import 'dev_queue_common.dart';
 import 'dev_queue_context.dart';
 import 'dev_queue_health.dart';
@@ -438,6 +439,15 @@ class _DevQueueControlState extends State<DevQueueControl> {
             service: widget.service,
             onChanged: _load,
           ),
+          // CHANGE #1470 — the build branch rides the payload this card already
+          // fetches. has:false draws nothing at all.
+          if (((_snap['build_branch'] as Map?)?['has'] ?? false) == true) ...[
+            _divider(),
+            BuildBranchCard(
+              branch: (_snap['build_branch'] as Map?)?.cast<String, dynamic>() ??
+                  const {},
+            ),
+          ],
           if (_health.isNotEmpty) ...[
             _divider(),
             RunnerHealthCard(health: _health),

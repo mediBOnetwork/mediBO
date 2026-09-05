@@ -77,6 +77,12 @@ class DevQueueControl extends StatefulWidget {
 
 class _DevQueueControlState extends State<DevQueueControl> {
   Timer? _poll;
+  // CHANGE #1401 — the one-shot re-reads a refresh or a re-login schedules.
+  // They are HELD so dispose can cancel them: each callback is mounted-guarded,
+  // so an escaped timer was harmless in the app, but a widget test that taps
+  // Re-login fails on "A Timer is still pending" unless it pumps the full 30s.
+  // Owning them keeps the card's teardown complete rather than merely safe.
+  final List<Timer> _reReads = [];
   Map<String, dynamic> _snap = const {};
   Map<String, dynamic> _usage = const {};
   final Set<String> _busy = {}; // keys mid-flip
@@ -104,6 +110,10 @@ class _DevQueueControlState extends State<DevQueueControl> {
   @override
   void dispose() {
     _poll?.cancel();
+    for (final t in _reReads) {
+      t.cancel();
+    }
+    _reReads.clear();
     _mini?.remove();
     _mini = null;
     super.dispose();
@@ -147,10 +157,18 @@ class _DevQueueControlState extends State<DevQueueControl> {
   void _refreshUsage() {
     widget.service.requestUsageRefresh();
     _load();
-    for (final s in const [2, 5, 9]) {
-      Timer(Duration(seconds: s), () {
-        if (mounted && _expanded) _load();
-      });
+    _reReadAfter(const [2, 5, 9], whileExpanded: true);
+  }
+
+  /// Re-read the card a few times over the next seconds, and KEEP the timers so
+  /// dispose can cancel them. A backend that takes a moment to settle (a usage
+  /// refresh on the VM, a login pane opening) is caught by re-asking, never by
+  /// guessing at the states in between.
+  void _reReadAfter(List<int> seconds, {bool whileExpanded = false}) {
+    for (final s in seconds) {
+      _reReads.add(Timer(Duration(seconds: s), () {
+        if (mounted && (!whileExpanded || _expanded)) _load();
+      }));
     }
   }
 
@@ -204,11 +222,7 @@ class _DevQueueControlState extends State<DevQueueControl> {
     } finally {
       if (mounted) setState(() => _reloginBusy = false);
     }
-    for (final s in const [5, 15, 30]) {
-      Timer(Duration(seconds: s), () {
-        if (mounted) _load();
-      });
-    }
+    _reReadAfter(const [5, 15, 30]);
   }
 
   bool _isOn(String k) => (_desired[k] ?? 'off') == 'on';

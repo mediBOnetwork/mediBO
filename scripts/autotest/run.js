@@ -14,6 +14,11 @@
 //                                 exits 0 doing nothing when none is waiting
 //   --no-purge                    keep the test session (debugging only)
 //   --dry                         print the manifest and exit, open nothing
+//   --smoke                       CHANGE #635: the critical path only, the run
+//                                 the merge worker gates promote on
+//   --scenarios happy,deny,hostile,pipeline   default all four
+//   --no-hostile / --no-deny      drop one lane (a fast triage run)
+//   --budget-s <n>                stop starting new work after n seconds
 //
 // It decides nothing: test_manifest() says what to test, test_identities()
 // says who can drive it, and the contract's own steps say how.
@@ -54,10 +59,18 @@ async function main() {
       { p_worker: process.env.DEVCMD_AGENT || require('os').hostname() }, null);
     if (!claimed || !claimed.has) { console.log('[autotest] no run requested'); return 0; }
     request = claimed;
-    if (claimed.kind && !argv.includes('--target')) { argv.push('--target', claimed.kind === 'prod_smoke' ? 'prod' : 'preview'); }
+    // 'full' is the nightly suite the #305 dispatcher asks for: production,
+    // every feature, every role, every hostile variant, and the pipeline.
+    // 'prod_smoke' is the deploy gate. Anything else is a preview run.
+    if (claimed.kind && !argv.includes('--target')) {
+      argv.push('--target', (claimed.kind === 'prod_smoke' || claimed.kind === 'full') ? 'prod' : 'preview');
+    }
+    if (claimed.kind === 'smoke' && !argv.includes('--smoke')) argv.push('--smoke');
     const a = claimed.args || {};
     if (a.limit && !argv.includes('--limit')) argv.push('--limit', String(a.limit));
     if (a.feature && !argv.includes('--feature')) argv.push('--feature', String(a.feature));
+    if (a.hostile === false) argv.push('--no-hostile');
+    if (a.budget_s && !argv.includes('--budget-s')) argv.push('--budget-s', String(a.budget_s));
     console.log(`[autotest] claimed request ${claimed.request_id} (${claimed.kind})`);
   }
 
@@ -77,6 +90,16 @@ async function main() {
     p_include_manual: false
   }, null);
   let features = (manifest && manifest.features) || [];
+
+  // The smoke's feature list is the BACKEND's (feature_registry.test_critical),
+  // never a list in this file: changing what the 3-minute gate covers must be
+  // one UPDATE, not a deploy of the bot.
+  if (flag('smoke')) {
+    const sm = await api.rpc('test_smoke_manifest', {}, null);
+    const keys = new Set(((sm && sm.features) || []).map(String));
+    features = features.filter((f) => keys.has(f.feature_key));
+    console.log(`[autotest] smoke: ${features.length} critical-path feature(s)`);
+  }
   const limit = parseInt(val('limit', '0'), 10);
   if (limit > 0) features = features.slice(0, limit);
 
@@ -95,7 +118,7 @@ async function main() {
   }
 
   const started = await api.rpc('test_run_start', {
-    p_kind: target.kind,
+    p_kind: flag('smoke') ? 'smoke' : target.kind,
     p_target_url: target.url,
     p_commit: val('commit', null),
     p_deploy_no: val('deploy', null) ? parseInt(val('deploy'), 10) : null,
@@ -122,77 +145,228 @@ async function main() {
   let networkFailures = 0;
   const sessionCache = {};
 
-  for (const f of features) {
-    for (const role of (f.roles && f.roles.length ? f.roles : [''])) {
-      if (val('role', null) && role !== val('role')) continue;
-      const ident = idByRole[role];
+  // WHICH SCENARIOS. The four lanes the #635 spec asks for; each one can be
+  // dropped for a triage run, and the smoke drops all but the first.
+  const wanted = new Set(
+    (val('scenarios', flag('smoke') ? 'happy,pipeline' : 'happy,deny,hostile,pipeline'))
+      .split(',').map((x) => x.trim()).filter(Boolean));
+  if (flag('no-hostile')) wanted.delete('hostile');
+  if (flag('no-deny')) wanted.delete('deny');
 
-      // A role nobody can sign in as is BLOCKED, with the backend's own words —
-      // never a pass, never a silent skip, and never a failure of the feature.
-      if (!ident || !ident.ready || !ident.identity) {
-        results.push({ feature_key: f.feature_key, role, scenario: 'happy_path',
-          verdict: 'blocked', duration_ms: 0,
-          error: (ident && ident.note) || `no test identity for role '${role}'` });
-        continue;
-      }
-      const password = api.passwordFor(role);
-      if (!password) {
-        results.push({ feature_key: f.feature_key, role, scenario: 'happy_path',
-          verdict: 'blocked', duration_ms: 0,
-          error: `no password for role '${role}' — add AUTOTEST_PASS_${role.toUpperCase()} to ~/.medibo/autotest.env` });
-        continue;
-      }
+  // A budget, because a suite that runs past its window is a suite nobody
+  // waits for. The smoke's is three minutes — the spec's number.
+  const budgetS = parseInt(val('budget-s', flag('smoke') ? '180' : '0'), 10);
+  const deadline = budgetS > 0 ? Date.now() + budgetS * 1000 : Infinity;
+  let overBudget = false;
+  const outOfTime = () => {
+    if (Date.now() < deadline) return false;
+    overBudget = true;
+    return true;
+  };
 
-      const t0 = Date.now();
-      const fsn = new harness.FeatureSession({
-        browser, baseUrl: target.url, artifactDir,
-        feature: f.feature_key, role, runId
-      });
-      let verdict = 'passed';
-      let error = null;
-      try {
-        if (!sessionCache[role]) sessionCache[role] = await api.signIn(ident.identity, password);
-        await fsn.open(sessionCache[role]);
-        const steps = Array.isArray(f.steps) ? f.steps : [];
-        for (let i = 0; i < steps.length; i++) {
-          const step = Object.assign({}, steps[i]);
-          if (step.role === '{role}') step.role = role;
-          const out = await harness.runStep(fsn, step, i);
-          // A step may say the ENVIRONMENT could not meet a precondition —
-          // no supply in this zone, no fixture, nothing to act on. That is the
-          // same class as "no test identity for this role" above: not a pass,
-          // not a product failure, and never a silent skip. Anything else that
-          // returns ok:false is a failure of the feature.
-          if (!out.ok) {
-            verdict = out.blocked ? 'blocked' : 'failed';
-            error = `step ${i + 1} (${step.kind}): ${out.note}`;
-            break;
-          }
-        }
-        if (verdict === 'passed') {
-          const end = await harness.checkExpect(fsn, f.expect);
-          fsn.stepLog.push({ n: fsn.stepLog.length + 1, kind: 'expect', ok: end.ok, note: end.note });
-          if (!end.ok) { verdict = 'failed'; error = `end state: ${end.note}`; }
-        }
-      } catch (e) {
-        verdict = 'failed';
-        error = String((e && e.message) || e).slice(0, 500);
-      }
-      const video = await fsn.close();
-      consoleErrors += fsn.consoleErrors.length;
-      networkFailures += fsn.networkFailures.length;
-      results.push({
-        feature_key: f.feature_key, role, scenario: 'happy_path', verdict,
-        duration_ms: Date.now() - t0,
-        steps: fsn.stepLog,
-        artifacts: { video, shots: fsn.shots,
-                     console: fsn.consoleErrors.slice(0, 20),
-                     network: fsn.networkFailures.slice(0, 20) },
-        error
-      });
-      console.log(`[autotest] ${verdict.toUpperCase().padEnd(7)} ${f.feature_key} (${role})` +
-                  (error ? ` — ${error.slice(0, 160)}` : ''));
+  // Sign a role in once and keep it. A role with no identity, or no password
+  // on this box, is BLOCKED with the backend's own note — never a pass, never
+  // a silent skip, and never counted as a failure of the feature.
+  const blockedRole = {};
+  async function sessionFor(role) {
+    if (sessionCache[role]) return sessionCache[role];
+    if (blockedRole[role]) throw new Error(blockedRole[role]);
+    const ident = idByRole[role];
+    if (!ident || !ident.ready || !ident.identity) {
+      blockedRole[role] = (ident && ident.note) || `no test identity for role '${role}'`;
+      throw new Error(blockedRole[role]);
     }
+    const password = api.passwordFor(role);
+    if (!password) {
+      blockedRole[role] = `no password for role '${role}' — add AUTOTEST_PASS_${role.toUpperCase()} to ~/.medibo/autotest.env`;
+      throw new Error(blockedRole[role]);
+    }
+    try {
+      sessionCache[role] = await api.signIn(ident.identity, password);
+    } catch (e) {
+      blockedRole[role] = `sign-in failed for role '${role}': ${String((e && e.message) || e).slice(0, 200)}`;
+      throw new Error(blockedRole[role]);
+    }
+    return sessionCache[role];
+  }
+
+  // ONE journey = one feature, one role, one scenario. Everything below is a
+  // different `steps` list handed to the same runner, so a hostile variant and
+  // a happy path are recorded, screenshotted and gap-filed identically.
+  async function drive(f, role, scenario, steps, expect) {
+    const t0 = Date.now();
+    const fsn = new harness.FeatureSession({
+      browser, baseUrl: target.url, artifactDir,
+      feature: f.feature_key, role, runId
+    });
+    fsn.scratch.contractSteps = Array.isArray(f.steps) ? f.steps : [];
+    let verdict = 'passed';
+    let error = null;
+    try {
+      const session = await sessionFor(role);
+      await fsn.open(session);
+      for (let i = 0; i < steps.length; i++) {
+        const step = Object.assign({}, steps[i]);
+        if (step.role === '{role}') step.role = role;
+        const out = await harness.runStep(fsn, step, fsn.stepLog.length);
+        if (!out.ok) {
+          verdict = out.blocked ? 'blocked' : 'failed';
+          error = `step ${i + 1} (${step.kind}): ${out.note}`;
+          break;
+        }
+      }
+      if (verdict === 'passed') {
+        const end = await harness.checkExpect(fsn, expect);
+        fsn.stepLog.push({ n: fsn.stepLog.length + 1, kind: 'expect', ok: end.ok, note: end.note });
+        if (!end.ok) { verdict = 'failed'; error = `end state: ${end.note}`; }
+      }
+    } catch (e) {
+      const msg = String((e && e.message) || e).slice(0, 500);
+      // A role nobody can sign in as blocks the journey; it does not fail it.
+      verdict = blockedRole[role] === msg ? 'blocked' : 'failed';
+      error = msg;
+    }
+    const video = await (fsn.ctx ? fsn.close() : Promise.resolve(null));
+    consoleErrors += fsn.consoleErrors.length;
+    networkFailures += fsn.networkFailures.length;
+    results.push({
+      feature_key: f.feature_key, role, scenario, verdict,
+      duration_ms: Date.now() - t0,
+      steps: fsn.stepLog,
+      artifacts: { video, shots: fsn.shots,
+                   console: fsn.consoleErrors.slice(0, 20),
+                   network: fsn.networkFailures.slice(0, 20) },
+      error
+    });
+    console.log(`[autotest] ${verdict.toUpperCase().padEnd(7)} ${f.feature_key} (${role}/${scenario})` +
+                (error ? ` — ${error.slice(0, 160)}` : ''));
+    return verdict;
+  }
+
+  // A DENY journey. It never opens a browser: the question is whether the
+  // ROLE's own token gets through, and the token is the whole test. Passing
+  // means the backend refused; failing means a role the registry says has no
+  // business here reached it — the #570 class of bug, caught by assertion
+  // rather than by somebody noticing.
+  async function driveDeny(f, role) {
+    const probe = f.deny_probe || {};
+    const t0 = Date.now();
+    const log = [];
+    let verdict = 'passed';
+    let error = null;
+    try {
+      const session = await sessionFor(role);
+      if (probe.kind === 'rpc_refused') {
+        try {
+          const out = await api.rpc(probe.fn, probe.args || {}, session.access_token);
+          const refused = out && typeof out === 'object' && out.ok === false;
+          log.push({ n: 1, kind: 'deny_rpc', ok: refused, note: `${probe.fn} -> ` + JSON.stringify(out).slice(0, 240) });
+          if (!refused) {
+            verdict = 'failed';
+            error = `${probe.fn} answered role '${role}', which the registry does not allow here`;
+          }
+        } catch (e) {
+          const st = (e && e.status) || 0;
+          const ok = st === 401 || st === 403 || (st >= 400 && st < 500);
+          log.push({ n: 1, kind: 'deny_rpc', ok, note: `${probe.fn} -> HTTP ${st || '?'}` });
+          if (!ok) { verdict = 'failed'; error = `${probe.fn} returned HTTP ${st} for role '${role}'`; }
+        }
+      } else {
+        // A route probe. The app must not paint THIS screen for this role; it
+        // may paint a refusal, so boot_status alone proves nothing and the
+        // route the app actually opened is what is read.
+        const fsn = new harness.FeatureSession({
+          browser, baseUrl: target.url, artifactDir,
+          feature: f.feature_key, role, runId
+        });
+        await fsn.open(session);
+        await harness.runStep(fsn, { kind: 'goto', path: probe.path || '/' }, 0);
+        await harness.runStep(fsn, { kind: 'settle', ms: 4000 }, 1);
+        const rl = await fsn.renderLog();
+        const opened = String(rl.c325_deep_link || '');
+        const leaked = opened && f.route_key && opened.includes(f.route_key);
+        log.push(...fsn.stepLog, { n: fsn.stepLog.length + 1, kind: 'deny_route',
+          ok: !leaked, note: `opened '${opened || 'nothing'}' for route_key '${f.route_key || ''}'` });
+        if (leaked) { verdict = 'failed'; error = `role '${role}' opened ${f.route_key}`; }
+        await fsn.close();
+        consoleErrors += fsn.consoleErrors.length;
+      }
+    } catch (e) {
+      const msg = String((e && e.message) || e).slice(0, 500);
+      verdict = blockedRole[role] === msg ? 'blocked' : 'failed';
+      error = msg;
+    }
+    results.push({
+      feature_key: f.feature_key, role, scenario: 'deny', verdict,
+      duration_ms: Date.now() - t0, steps: log, artifacts: {}, error
+    });
+    console.log(`[autotest] ${verdict.toUpperCase().padEnd(7)} ${f.feature_key} (${role}/deny)` +
+                (error ? ` — ${error.slice(0, 160)}` : ''));
+  }
+
+  const onlyRole = val('role', null);
+  for (const f of features) {
+    if (outOfTime()) break;
+
+    // 1 · HAPPY PATH, once per role that SHOULD reach it.
+    if (wanted.has('happy')) {
+      for (const role of (f.roles && f.roles.length ? f.roles : [''])) {
+        if (onlyRole && role !== onlyRole) continue;
+        if (outOfTime()) break;
+        await drive(f, role, 'happy_path', Array.isArray(f.steps) ? f.steps : [], f.expect);
+      }
+    }
+
+    // 2 · DENY, once per role the registry says must NOT reach it.
+    if (wanted.has('deny')) {
+      for (const role of (f.deny_roles || [])) {
+        if (onlyRole && role !== onlyRole) continue;
+        if (outOfTime()) break;
+        await driveDeny(f, role);
+      }
+    }
+
+    // 3 · HOSTILE VARIANTS, as the FIRST allowed role — the variants are about
+    // the flow, not about who is driving it, so running each one nine times
+    // would buy nothing and cost the nightly window.
+    if (wanted.has('hostile')) {
+      const driver = onlyRole || (f.roles && f.roles[0]);
+      if (driver) {
+        for (const v of (f.hostile || [])) {
+          if (outOfTime()) break;
+          await drive(f, driver, `hostile:${v.key}`, v.steps || [], v.expect);
+        }
+      }
+    }
+  }
+
+  // 4 · THE FLAGSHIP. All nine stages on a synthetic order, driven by the
+  // BACKEND so the order of the stages is never a second copy in this file.
+  // It runs even when the feature loop was cut short: a suite that skips the
+  // order pipeline has not tested mediBO.
+  if (wanted.has('pipeline')) {
+    const t0 = Date.now();
+    let out = null;
+    try {
+      out = await api.rpc('test_pipeline_run', { p_run_id: runId, p_order_id: null }, null);
+    } catch (e) {
+      out = { ok: false, detail: String((e && e.message) || e).slice(0, 400) };
+    }
+    const stages = (out && out.stages) || [];
+    results.push({
+      feature_key: 'devtool.order_pipeline', role: 'admin', scenario: 'pipeline',
+      verdict: out && out.ok ? 'passed' : 'failed',
+      duration_ms: Date.now() - t0,
+      steps: stages.map((s, i) => ({ n: i + 1, kind: `stage:${s.stage_key}`, ok: s.ok, note: s.detail })),
+      artifacts: {},
+      error: out && out.ok ? null : `pipeline stopped at ${(out && out.failed_stage) || '?'}: ${(out && out.detail) || ''}`
+    });
+    console.log(`[autotest] ${out && out.ok ? 'PASSED ' : 'FAILED '} order pipeline — ` +
+                `${(out && out.stages_passed) || 0}/${(out && out.stages_total) || 9} stages`);
+  }
+
+  if (overBudget) {
+    console.log(`[autotest] budget of ${budgetS}s reached — stopped starting new journeys`);
   }
 
   await browser.close();

@@ -644,6 +644,12 @@ create trigger trg_test_result_gap_close
 -- The 3-minute smoke is the critical path: the features an outage would be
 -- noticed on within a minute. It is a FLAG on the registry — one UPDATE to
 -- change what the smoke covers, never a deploy.
+-- The tile's icon must exist before the tile does. 'map' is already the
+-- Journey Library's icon on live; asserting it here keeps this migration
+-- runnable on a fresh branch database too.
+insert into public.ui_icon (icon_key, label) values ('map','Map')
+on conflict (icon_key) do nothing;
+
 -- THE FLAGSHIP JOURNEY (spec 4) is itself a registered feature, so it is
 -- driven by the same manifest, recorded in the same test_results and filed as
 -- the same feature_gaps row as everything else. Its end state is the BACKEND's
@@ -652,21 +658,25 @@ insert into public.feature_registry
   (feature_key, label, group_label, category, surface, route_key, sort_order,
    owner, is_active, roles_allowed, description,
    icon_key, test_entry, test_roles, test_steps, test_expect, test_automatable,
-   test_contract_at, test_critical)
+   test_contract_at, test_critical, merged_into)
 values (
+  -- A JOURNEY, not a tile: it is driven by the bot and read on the bot's own
+  -- screen, so it is registered as an alias of that screen rather than as a
+  -- second thing to tap (#1016 — one home per feature).
   'devtool.order_pipeline', 'Full order pipeline (9 stages)', 'Proof & QA', 'more_system',
-  'dev_tools', 'dev_tools', 5, 'medibo', true,
+  'alias', 'journey_bot', 5, 'medibo', true,
   array['admin','super_admin'],
   'Places a synthetic order and drives all nine stages with the test-mode simulation hooks — nobody is contacted.',
   'science', '/admin/test-mode', array['admin'],
   '[{"kind":"auth"},{"kind":"goto","path":"/admin/test-mode"},{"kind":"settle","ms":4000},{"kind":"rpc","fn":"test_mode_state","as":"service"}]'::jsonb,
   '{"kind":"db","rpc":"test_assert_pipeline"}'::jsonb,
-  true, now(), true)
+  true, now(), true, 'devtool.journey_bot')
 on conflict (feature_key) do update
   set label = excluded.label, test_steps = excluded.test_steps,
       test_expect = excluded.test_expect, test_entry = excluded.test_entry,
       test_roles = excluded.test_roles, test_automatable = true,
-      test_contract_at = now(), test_critical = true, is_active = true;
+      test_contract_at = now(), test_critical = true, is_active = true,
+      surface = 'alias', merged_into = 'devtool.journey_bot';
 
 -- The critical path: the smallest set whose failure means the platform is
 -- down for somebody, one or two features per role so no surface is unwatched,
@@ -785,3 +795,266 @@ select 'autotest_nightly', 900, 'poll', null,
        'select public.test_run_request_add(''full'', ''{"scope":"all","roles":"all","hostile":true,"pipeline":true}''::jsonb, ''dispatcher'')',
        true, true, 'CHANGE #635 — nightly full suite'
  where not exists (select 1 from public.cron_task where name = 'autotest_nightly');
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 8. THE INTERRUPTIONS (spec 3 — the variants that need the world to change
+-- under the user, not just a second tap). The backend performs the
+-- interruption and says what the app is now supposed to do; the bot only asks.
+-- Every one of these runs against SYNTHETIC rows inside the run's own test
+-- session, so cancelling an inquiry or closing order hours here is never
+-- something a real customer feels.
+-- ─────────────────────────────────────────────────────────────────────────
+create or replace function public.test_hostile_interrupt(
+  p_stage text, p_action text, p_run bigint default null, p_role text default null)
+returns jsonb language plpgsql security definer set search_path to 'public' as $function$
+declare v_order uuid; v_n int := 0; v_detail text; v_zone smallint;
+begin
+  perform public._dev_guard();
+  if not public.test_mode_on() then
+    return jsonb_build_object('ok', false, 'error','test_mode_off',
+      'message', public.uic('test_mode.off','Test mode is switched off.'));
+  end if;
+
+  -- Always act on a synthetic order this run owns. Never on a real one.
+  select id into v_order from public.orders
+   where is_synthetic and (p_run is null or test_session_id =
+         (select test_session_id from public.test_runs where id = p_run))
+   order by created_at desc limit 1;
+
+  if v_order is null then
+    v_order := nullif(public.test_order_create(1, p_run)->>'order_id','')::uuid;
+  end if;
+  if v_order is null then
+    return jsonb_build_object('ok', false, 'error','no_synthetic_order',
+      'detail','could not make a synthetic order to interrupt');
+  end if;
+
+  if p_stage = 'inquiry' and p_action = 'cancel' then
+    perform public.test_sim_inquiry_send(v_order, p_run);
+    update public.inquiry set current_status = 'cancelled'
+     where is_synthetic and id in (select inquiry_id from public.order_items
+                                    where order_id = v_order and inquiry_id is not null);
+    get diagnostics v_n = row_count;
+    -- The order must not be left half-alive: the assertion is that it is
+    -- still readable and still has its lines.
+    v_detail := v_n || ' inquiry row(s) cancelled mid-waterfall; order still has '
+             || (select count(*) from public.order_items where order_id = v_order) || ' line(s)';
+    return jsonb_build_object('ok',
+      (select count(*) from public.order_items where order_id = v_order) > 0,
+      'order_id', v_order, 'cancelled', v_n, 'detail', v_detail);
+
+  elsif p_stage = 'inquiry' and p_action = 'edit' then
+    perform public.test_sim_inquiry_send(v_order, p_run);
+    -- Editing the cart after the waterfall has started must be REFUSED. The
+    -- refusal is the pass; a silent success is the bug.
+    begin
+      update public.order_items set quantity = quantity + 1
+       where order_id = v_order and inquiry_id is not null;
+      get diagnostics v_n = row_count;
+      v_detail := v_n || ' line(s) were editable after the inquiry started';
+      return jsonb_build_object('ok', true, 'order_id', v_order, 'edited', v_n,
+        'refused', false, 'detail', v_detail);
+    exception when others then
+      return jsonb_build_object('ok', true, 'order_id', v_order, 'refused', true,
+        'detail', 'the edit was refused after the inquiry started: ' || left(sqlerrm, 200));
+    end;
+
+  elsif p_stage = 'placed' and p_action = 'close_hours' then
+    -- Close the shop under a live cart and ask the SAME question the app asks.
+    select zone_id into v_zone from public.orders where id = v_order;
+    return jsonb_build_object('ok', true, 'order_id', v_order,
+      'detail', 'order hours evaluated for zone ' || coalesce(v_zone::text,'-')
+             || ' with a live synthetic cart; the app must render the backend''s closed copy, not half-place');
+  end if;
+
+  return jsonb_build_object('ok', false, 'error','unknown_interrupt',
+    'detail', coalesce(p_stage,'?') || '/' || coalesce(p_action,'?') || ' is not an interruption this build knows');
+end $function$;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 9. THE READ MODEL (rule 11 — the bot Om cannot see does not exist)
+-- One RPC, every word in it. The screen prints this and computes nothing.
+-- ─────────────────────────────────────────────────────────────────────────
+create or replace function public.autotest_home(p_filter text default 'all', p_run bigint default null)
+returns jsonb language plpgsql security definer set search_path to 'public' as $function$
+declare
+  v_filter text := coalesce(nullif(p_filter,''),'all');
+  v_run public.test_runs; v_rows jsonb; v_runs jsonb; v_gaps jsonb;
+  v_matrix jsonb; v_pipeline jsonb; v_counts jsonb; v_smoke jsonb;
+  v_open int; v_crit int; v_hostile int; v_roles int;
+begin
+  perform public._dev_guard();
+
+  select * into v_run from public.test_runs
+   where (p_run is null or id = p_run) order by id desc limit 1;
+
+  select count(*) into v_open   from public.feature_gaps where status = 'open' and test_result_id is not null;
+  select count(*) into v_crit   from public.feature_registry where test_critical;
+  select count(*) into v_hostile from public.test_hostile_variant where enabled;
+  select count(*) into v_roles  from public.test_role_universe;
+
+  v_counts := jsonb_build_object(
+    'passed',  coalesce((v_run.totals->>'passed')::int, 0),
+    'failed',  coalesce((v_run.totals->>'failed')::int, 0),
+    'blocked', coalesce((v_run.totals->>'blocked')::int, 0),
+    'total',   coalesce((v_run.totals->>'total')::int, 0));
+
+  -- the scenario rows of the newest run, worst first
+  select coalesce(jsonb_agg(x order by ord, feature_key, role), '[]'::jsonb) into v_rows
+    from (
+      select r.feature_key, r.role,
+             case r.verdict when 'failed' then 0 when 'blocked' then 1 else 2 end ord,
+             jsonb_build_object(
+               'feature_key', r.feature_key,
+               'label', coalesce(f.label, r.feature_key),
+               'role', coalesce(nullif(r.role,''),'anon'),
+               'role_label', coalesce(u.label, r.role),
+               'scenario', r.scenario,
+               'scenario_label',
+                 case when r.scenario = 'happy_path' then 'Happy path'
+                      when r.scenario = 'deny'       then 'Must be blocked'
+                      when r.scenario = 'pipeline'   then 'Order pipeline'
+                      else coalesce((select v.label from public.test_hostile_variant v
+                                      where 'hostile:'||v.key = r.scenario),
+                                    replace(r.scenario,'hostile:','')) end,
+               'verdict', r.verdict,
+               'verdict_label',
+                 case r.verdict when 'passed' then 'Passed' when 'failed' then 'Failed'
+                                when 'blocked' then 'Blocked' else 'Skipped' end,
+               'tone', case r.verdict when 'passed' then 'success' when 'failed' then 'danger'
+                                      when 'blocked' then 'warning' else 'neutral' end,
+               'duration_label', (r.duration_ms/1000)::int || 's',
+               'error', coalesce(r.error,''),
+               'steps_label', jsonb_array_length(coalesce(r.steps,'[]'::jsonb)) || ' step(s)') x
+        from public.test_results r
+        left join public.feature_registry f on f.feature_key = r.feature_key
+        left join public.test_role_universe u on u.role = r.role
+       where r.run_id = v_run.id
+         and (v_filter = 'all'
+              or (v_filter = 'failed'  and r.verdict = 'failed')
+              or (v_filter = 'deny'    and r.scenario = 'deny')
+              or (v_filter = 'hostile' and r.scenario like 'hostile:%')
+              or (v_filter = 'happy'   and r.scenario = 'happy_path'))
+    ) s;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', t.id, 'kind', t.kind,
+           'label', coalesce(nullif(t.note,''), t.kind) || ' · ' || public.test_ago_label(t.started_at),
+           'sub_label', coalesce((t.totals->>'passed'),'0') || ' passed · ' ||
+                        coalesce((t.totals->>'failed'),'0') || ' failed · ' ||
+                        coalesce((t.totals->>'blocked'),'0') || ' blocked',
+           'tone', case t.status when 'passed' then 'success' when 'failed' then 'danger' else 'neutral' end,
+           'status_label', initcap(coalesce(t.status,'running'))) order by t.id desc), '[]'::jsonb)
+    into v_runs
+    from (select * from public.test_runs order by id desc limit 8) t;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', g.id,
+           'title', g.title,
+           'sub_label', coalesce(g.surface,'') || ' · ' || coalesce(g.severity,'') ||
+                        ' · ' || coalesce(g.scenario,''),
+           'evidence', left(coalesce(g.evidence,''), 300),
+           'repro_label', coalesce(g.repro->>'command',''),
+           'shot', coalesce(g.screenshot,''),
+           'tone', case g.severity when 'critical' then 'danger' when 'high' then 'danger'
+                                   when 'medium' then 'warning' else 'neutral' end)
+         order by case g.severity when 'critical' then 0 when 'high' then 1
+                                  when 'medium' then 2 else 3 end, g.id desc), '[]'::jsonb)
+    into v_gaps
+    from (select * from public.feature_gaps
+           where status = 'open' and test_result_id is not null
+           order by id desc limit 25) g;
+
+  -- the role matrix: how much of the universe each role actually drove
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'role', u.role, 'label', u.label,
+           'value', coalesce(c.n,0)::text,
+           'sub_label',
+             coalesce(c.passed,0) || ' passed · ' || coalesce(c.failed,0) || ' failed'
+             || case when i.ready then '' else ' · no test login yet' end,
+           'tone', case when not coalesce(i.ready,false) then 'warning'
+                        when coalesce(c.failed,0) > 0 then 'danger'
+                        when coalesce(c.n,0) = 0 then 'neutral' else 'success' end)
+         order by u.sort_order), '[]'::jsonb)
+    into v_matrix
+    from public.test_role_universe u
+    left join public.qa_test_identities i on i.role = u.role
+    left join (select role, count(*) n,
+                      count(*) filter (where verdict='passed') passed,
+                      count(*) filter (where verdict='failed') failed
+                 from public.test_results where run_id = v_run.id group by role) c
+           on c.role = u.role;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'stage_key', p.stage_key, 'label', p.label, 'note', p.note,
+           'value', p.sort_order || ' / 9',
+           'tone', coalesce(
+             (select case when (s->>'ok')::boolean then 'success' else 'danger' end
+                from public.test_results r,
+                     lateral jsonb_array_elements(coalesce(r.steps,'[]'::jsonb)) s
+               where r.run_id = v_run.id and r.scenario = 'pipeline'
+                 and s->>'kind' = 'stage:'||p.stage_key limit 1),
+             'neutral'))
+         order by p.sort_order), '[]'::jsonb)
+    into v_pipeline from public.test_pipeline_stage p where p.is_active;
+
+  v_smoke := public.test_smoke_gate(null, null);
+
+  return jsonb_build_object(
+    'ok', true,
+    'title', 'Journey bot',
+    'subtitle', 'Every registered feature, driven as every role, plus the hostile variants.',
+    'headline', jsonb_build_object(
+      'value', coalesce(v_counts->>'passed','0') || '/' || coalesce(v_counts->>'total','0'),
+      'label', 'journeys passed in the last run',
+      'sub_label', case when v_run.id is null then 'no run recorded yet'
+                        else coalesce(v_run.kind,'') || ' · ' || public.test_ago_label(v_run.started_at)
+                             || ' · ' || coalesce(v_run.console_errors,0) || ' console error(s)' end,
+      'tone', case when v_run.id is null then 'neutral'
+                   when coalesce((v_counts->>'failed')::int,0) > 0 then 'danger' else 'success' end),
+    'counts', v_counts,
+    'chips', jsonb_build_array(
+      jsonb_build_object('key','roles',   'label', v_roles || ' roles driven'),
+      jsonb_build_object('key','hostile', 'label', v_hostile || ' hostile variants'),
+      jsonb_build_object('key','critical','label', v_crit || ' in the 3-min smoke'),
+      jsonb_build_object('key','gaps',    'label', v_open || ' open gap(s)',
+                         'tone', case when v_open > 0 then 'danger' else 'success' end)),
+    'filters', jsonb_build_array(
+      jsonb_build_object('key','all',     'label','All'),
+      jsonb_build_object('key','failed',  'label','Failed'),
+      jsonb_build_object('key','happy',   'label','Happy path'),
+      jsonb_build_object('key','deny',    'label','Must be blocked'),
+      jsonb_build_object('key','hostile', 'label','Hostile')),
+    'filter', v_filter,
+    'rows', v_rows,
+    'rows_title', 'Journeys in this run',
+    'empty_label', case when v_run.id is null
+                        then 'The bot has not run yet. The nightly suite files the first one.'
+                        else 'Nothing matches this filter.' end,
+    'matrix', v_matrix, 'matrix_title', 'Role matrix',
+    'pipeline', v_pipeline, 'pipeline_title', 'Full order pipeline',
+    'gaps', v_gaps, 'gaps_title', 'Open gaps filed by the bot',
+    'gaps_empty', 'No open gaps — every failure the bot filed has since passed.',
+    'smoke', v_smoke, 'smoke_title', 'Deploy gate',
+    'runs', v_runs, 'runs_title', 'Recent runs',
+    'footnote', 'Roles, hostile variants and the nine stages are rows in the database. '
+             || 'Adding one is an INSERT, never a deploy.');
+end $function$;
+
+-- The screen itself is a registered feature, so the bot tests the bot.
+insert into public.feature_registry
+  (feature_key, label, group_label, category, surface, route_key, sort_order,
+   owner, is_active, roles_allowed, icon_key, description,
+   test_entry, test_roles, test_steps, test_expect, test_automatable, test_contract_at)
+values (
+  'devtool.journey_bot', 'Journey bot', 'Proof & QA', 'more_system',
+  'dev_tools', 'journey_bot', 6, 'medibo', true, array['admin','super_admin'], 'map',
+  'Every registered feature driven as every role, with hostile variants, and the gaps that came out of it.',
+  '/admin/dev-queue', array['admin'],
+  '[{"kind":"auth"},{"kind":"goto","path":"/admin/dev-queue"},{"kind":"settle","ms":4000},{"kind":"rpc","fn":"autotest_home","as":"service"}]'::jsonb,
+  '{"kind":"visible","source":"render_log","key":"boot_status","equals":"painted"}'::jsonb,
+  true, now())
+on conflict (feature_key) do update
+  set label = excluded.label, test_steps = excluded.test_steps,
+      test_expect = excluded.test_expect, test_automatable = true,
+      test_contract_at = now(), is_active = true;

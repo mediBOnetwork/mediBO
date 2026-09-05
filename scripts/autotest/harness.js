@@ -193,8 +193,178 @@ const STEPS = {
     return { ok: !refused, note: `${step.fn} -> ` + JSON.stringify(out).slice(0, 240) };
   },
 
+  // ── CHANGE #635, the hostile vocabulary ────────────────────────────────
+  // Every kind below exists because a variant row in test_hostile_variant
+  // asks for it. The bot still decides nothing: which features get which of
+  // these is `applies_when`, in SQL.
+
+  // Replay the feature's OWN contract steps, so a hostile variant starts from
+  // the state the happy path reaches instead of an empty page. `stop_after`
+  // stops it part-way — that is what "mid-flow" means.
+  async replay_contract(fs_, step) {
+    const steps = Array.isArray(fs_.scratch.contractSteps) ? fs_.scratch.contractSteps : [];
+    const stop = step.stop_after ? Math.min(step.stop_after, steps.length) : steps.length;
+    for (let i = 0; i < stop; i++) {
+      const s = Object.assign({}, steps[i]);
+      if (s.role === '{role}') s.role = fs_.role;
+      const out = await runStep(fs_, s, fs_.stepLog.length);
+      if (!out.ok) {
+        // The happy path itself could not be reached. That is the happy path's
+        // failure, already recorded against it — the hostile variant has
+        // nothing to say about a screen it never got to.
+        return { ok: false, blocked: true, note: `contract step ${i + 1} (${s.kind}) did not hold: ${out.note}` };
+      }
+    }
+    return { ok: true, note: `replayed ${stop}/${steps.length} contract step(s)` };
+  },
+
+  // Send the SAME write twice. Passing means the second one was refused with
+  // the backend's own words, or was a genuine no-op. Failing means it applied
+  // twice — the double-tap bug, proven rather than eyeballed.
+  async rpc_twice(fs_, step) {
+    const target = pickRpc(fs_, step);
+    if (!target) return { ok: false, blocked: true, note: 'the contract has no user rpc to repeat' };
+    const args = argsFor(fs_, target);
+    let a, b;
+    try { a = await api.rpc(target.fn, args, fs_.token); }
+    catch (e) { return { ok: false, blocked: true, note: `first ${target.fn} did not go through: ${short(e)}` }; }
+    try { b = await api.rpc(target.fn, args, fs_.token); }
+    catch (e) {
+      // A 4xx on the SECOND call is a refusal, which is the good outcome.
+      const st = e && e.status;
+      return st && st >= 400 && st < 500
+        ? { ok: true, note: `${target.fn} refused the repeat with HTTP ${st}` }
+        : { ok: false, note: `${target.fn} repeat blew up: ${short(e)}` };
+    }
+    const refused = b && typeof b === 'object' && b.ok === false;
+    const same = JSON.stringify(idOf(a)) === JSON.stringify(idOf(b));
+    if (refused) return { ok: true, note: `${target.fn} refused the repeat: ${msgOf(b)}` };
+    if (same) return { ok: true, note: `${target.fn} was idempotent — the repeat returned the same record` };
+    return { ok: false, note:
+      `${target.fn} APPLIED TWICE — first ${JSON.stringify(idOf(a))}, repeat ${JSON.stringify(idOf(b))}` };
+  },
+
+  // Empty and enormous. Passing means a refusal the backend worded; failing
+  // means a 5xx, which is the app crashing on input a user can type.
+  async rpc_fuzz(fs_, step) {
+    const target = pickRpc(fs_, step);
+    if (!target) return { ok: false, blocked: true, note: 'the contract has no user rpc to fuzz' };
+    const base = argsFor(fs_, target);
+    let args;
+    if (step.mode === 'empty') {
+      args = {};
+      for (const k of Object.keys(base)) args[k] = typeof base[k] === 'string' ? '' : null;
+    } else {
+      const big = 'A'.repeat(Math.min(step.size || 20000, 100000));
+      args = Object.assign({}, base);
+      for (const k of Object.keys(args)) if (typeof args[k] === 'string') args[k] = big;
+      if (!Object.keys(args).length) args = { p_q: big };
+    }
+    try {
+      const out = await api.rpc(target.fn, args, fs_.token);
+      const refused = out && typeof out === 'object' && out.ok === false;
+      return { ok: true, note: refused
+        ? `${target.fn} refused ${step.mode} input: ${msgOf(out)}`
+        : `${target.fn} accepted ${step.mode} input without erroring` };
+    } catch (e) {
+      const st = (e && e.status) || 0;
+      if (st >= 400 && st < 500) return { ok: true, note: `${target.fn} refused ${step.mode} input with HTTP ${st}` };
+      return { ok: false, note: `${target.fn} returned HTTP ${st || '?'} on ${step.mode} input: ${short(e)}` };
+    }
+  },
+
+  async go_back(fs_) {
+    try { await fs_.page.goBack({ waitUntil: 'domcontentloaded', timeout: 30000 }); }
+    catch (e) { return { ok: false, note: `back button threw: ${short(e)}` }; }
+    await fs_.page.waitForTimeout(2000);
+    return { ok: true, note: 'went back one entry' };
+  },
+
+  async reload(fs_) {
+    try { await fs_.page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 }); }
+    catch (e) { return { ok: false, note: `reload threw: ${short(e)}` }; }
+    return { ok: true, note: 'reloaded' };
+  },
+
+  // Corrupt the stored session the way an expired token looks to the app, then
+  // the variant reloads. The app must land on its login surface, not a white
+  // screen — which is what still_painted asserts afterwards.
+  async expire_session(fs_) {
+    const key = `sb-${api.PROJECT_REF}-auth-token`;
+    try {
+      await fs_.page.evaluate((k) => {
+        try {
+          const raw = localStorage.getItem(k);
+          if (!raw) return;
+          const j = JSON.parse(raw);
+          j.expires_at = 1;
+          j.access_token = String(j.access_token || '').slice(0, 12) + '.expired.signature';
+          localStorage.setItem(k, JSON.stringify(j));
+        } catch (_) {}
+      }, key);
+    } catch (e) { return { ok: false, note: `could not reach localStorage: ${short(e)}` }; }
+    return { ok: true, note: 'stored session expired' };
+  },
+
+  async offline(fs_) { await fs_.ctx.setOffline(true); return { ok: true, note: 'network off' }; },
+  async online(fs_)  { await fs_.ctx.setOffline(false); return { ok: true, note: 'network on' }; },
+
+  // A write attempted with the network down. It must fail like a network
+  // failure, not take the page with it.
+  async rpc_offline(fs_, step) {
+    const target = pickRpc(fs_, step);
+    if (!target) return { ok: true, note: 'no user rpc to attempt offline' };
+    try {
+      await fs_.page.evaluate(async (fn) => { try { await fetch('/rest/v1/rpc/' + fn, { method: 'POST' }); } catch (_) {} }, target.fn);
+    } catch (_) {}
+    return { ok: true, note: `attempted ${target.fn} with the network down` };
+  },
+
+  // A pipeline stage interrupted from underneath the user. The backend owns
+  // what the interruption IS (test_mode_action); the bot only asks for it and
+  // reports the answer.
+  async pipeline_interrupt(fs_, step) {
+    const out = await api.rpc('test_hostile_interrupt', {
+      p_stage: step.stage || '', p_action: step.action || '',
+      p_run: fs_.runId, p_role: fs_.role }, null);
+    if (!out || out.ok !== true) {
+      return { ok: false, note: `interrupt ${step.stage}/${step.action}: ` + JSON.stringify(out).slice(0, 300) };
+    }
+    fs_.scratch.lastInterrupt = out;
+    return { ok: true, note: (out.detail || JSON.stringify(out)).slice(0, 300) };
+  },
+
   // Journey-specific steps register themselves here (see journeys/).
 };
+
+// ── helpers the hostile steps share ───────────────────────────────────────
+function short(e) { return String((e && e.message) || e).slice(0, 300); }
+function msgOf(o) { return String((o && (o.message || o.error)) || JSON.stringify(o)).slice(0, 240); }
+// What a write returned that IDENTIFIES the thing it created. Comparing whole
+// payloads would call a timestamp a duplicate.
+function idOf(o) {
+  if (!o || typeof o !== 'object') return o;
+  const out = {};
+  for (const k of ['id', 'order_id', 'payment_id', 'invoice_no', 'order_code', 'row_id', 'entry_id']) {
+    if (o[k] !== undefined) out[k] = o[k];
+  }
+  return Object.keys(out).length ? out : (o.ok === false ? { refused: true } : null);
+}
+// The rpc a hostile variant means when it says use:"last_rpc" — the contract's
+// own last user-token call, which is the write the happy path ends on.
+function pickRpc(fs_, step) {
+  if (step.fn) return { fn: step.fn, args: step.args || {} };
+  const steps = Array.isArray(fs_.scratch.contractSteps) ? fs_.scratch.contractSteps : [];
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const s = steps[i];
+    if (s && s.kind === 'rpc' && s.as !== 'service') return s;
+  }
+  return null;
+}
+function argsFor(fs_, step) {
+  return Object.assign({}, step.args || {},
+    (fs_.scratch.rpcArgs && fs_.scratch.rpcArgs[step.fn]) || {});
+}
 
 function registerStep(kind, fn) { STEPS[kind] = fn; }
 
@@ -242,6 +412,27 @@ async function checkExpect(fs_, expect) {
     const out = await api.rpc(expect.rpc, { p_run_id: fs_.runId }, null);
     return { ok: Boolean(out && out.ok),
              note: (out && (out.detail || JSON.stringify(out))) || 'no answer' };
+  }
+  // CHANGE #635 — the three hostile end states.
+  // `survives` is already decided by the steps (rpc_twice says which of
+  // refused/idempotent happened); reaching here means none of them failed.
+  if (expect.kind === 'survives' || expect.kind === 'graceful_refusal') {
+    const bad = fs_.stepLog.filter((s) => s.ok === false);
+    return bad.length
+      ? { ok: false, note: bad.map((b) => `${b.kind}: ${b.note}`).join(' · ').slice(0, 400) }
+      : { ok: true, note: 'the app refused or absorbed it without breaking' };
+  }
+  // The one thing a canvas app must never do, and the one thing that IS
+  // readable from outside it: the app's own record that it is still painting.
+  if (expect.kind === 'still_painted') {
+    const r = await fs_.waitForRenderKey('boot_status', 'painted', expect.timeout_ms || 30000);
+    if (!r.ok) {
+      return { ok: false, note: `boot_status never returned to painted (saw ${r.value === undefined ? 'nothing' : r.value})` };
+    }
+    const fatal = fs_.consoleErrors.filter((e) => /uncaught|unhandled|null check operator|type '.*' is not a subtype/i.test(e));
+    return fatal.length
+      ? { ok: false, note: `still painted, but the console threw: ${fatal[0].slice(0, 240)}` }
+      : { ok: true, note: 'still painted, console clean' };
   }
   return { ok: false, note: `unknown end-state kind '${expect.kind}'` };
 }

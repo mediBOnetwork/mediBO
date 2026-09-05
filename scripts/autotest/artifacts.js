@@ -43,15 +43,14 @@ function putOnce(url, buf, headers) {
 /// Upload one file. Returns {bucket, path} — never a URL: a URL that outlives
 /// this process would be either public or expired, and both are wrong.
 async function upload(localFile, objectPath, contentType) {
-  const key = process.env.AUTOTEST_SERVICE_KEY || '';
   const buf = fs.readFileSync(localFile);
   const url = `${api.SUPA_URL}/storage/v1/object/${BUCKET}/${objectPath}`;
-  const headers = {
-    apikey: key || api.ANON_KEY,
-    Authorization: `Bearer ${key || api.ANON_KEY}`,
+  // The bucket is private and its write policy is admin/super_admin only, so
+  // this is the service role or it is nothing — see api.serviceHeaders.
+  const headers = api.serviceHeaders({
     'Content-Type': contentType || 'image/png',
     'x-upsert': 'true'
-  };
+  });
   try {
     await putOnce(url, buf, headers);
   } catch (e) {
@@ -64,12 +63,12 @@ async function upload(localFile, objectPath, contentType) {
 
 /// Download an approved baseline so this run can diff against it.
 function download(objectPath, outFile) {
-  const key = process.env.AUTOTEST_SERVICE_KEY || '';
+  const headers = api.serviceHeaders();
   return new Promise((resolve, reject) => {
     const u = new URL(`${api.SUPA_URL}/storage/v1/object/${BUCKET}/${objectPath}`);
     const req = https.request({
       hostname: u.hostname, path: u.pathname + u.search, method: 'GET',
-      headers: { apikey: key || api.ANON_KEY, Authorization: `Bearer ${key || api.ANON_KEY}` }
+      headers
     }, (res) => {
       if (res.statusCode >= 400) { res.resume(); return resolve(null); }
       const chunks = [];
@@ -89,7 +88,6 @@ function download(objectPath, outFile) {
 /// chooses what to delete — a bot that decided which evidence to destroy is a
 /// different and much worse tool.
 function remove(paths) {
-  const key = process.env.AUTOTEST_SERVICE_KEY || '';
   const list = (paths || []).filter(Boolean);
   if (list.length === 0) return Promise.resolve(0);
   return new Promise((resolve) => {
@@ -97,12 +95,10 @@ function remove(paths) {
     const data = Buffer.from(JSON.stringify({ prefixes: list }));
     const req = https.request({
       hostname: u.hostname, path: u.pathname + u.search, method: 'DELETE',
-      headers: {
-        apikey: key || api.ANON_KEY,
-        Authorization: `Bearer ${key || api.ANON_KEY}`,
+      headers: api.serviceHeaders({
         'Content-Type': 'application/json',
         'Content-Length': data.length
-      }
+      })
     }, (res) => { res.resume(); res.on('end', () => resolve(list.length)); });
     req.on('error', () => resolve(0));
     req.setTimeout(TIMEOUT_MS, () => { req.destroy(); resolve(0); });

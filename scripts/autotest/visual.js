@@ -101,6 +101,10 @@ async function main() {
   const sessionCache = {};
   const shots = [];
   let consoleErrors = 0, networkFailures = 0;
+  // CHANGE #637 — attempted vs kept. A lane that photographs six screens,
+  // fails to store all six and still exits 0 saying "0 shot(s)" is the exact
+  // silent green this command exists to abolish, so the two are counted apart.
+  let attempted = 0, errored = 0;
 
   for (const s of screens) {
     const ident = idByRole[s.role];
@@ -120,6 +124,7 @@ async function main() {
         feature: s.feature_key, role: s.role, runId, viewport: vp
       });
       let rendered = false;
+      attempted += 1;
       try {
         await fsn.open(sessionCache[s.role]);
         // Getting there is not evidence; the ONE settled frame is.
@@ -172,6 +177,7 @@ async function main() {
           ` diff=${m.diff_pct}% blank=${m.blank_pct}% edge=${m.edge_ink_pct}%` +
           (rendered ? '' : ' NOT PAINTED'));
       } catch (e) {
+        errored += 1;
         console.log(`[visual] ERROR   ${s.feature_key} (${s.role}/${vp.key}) — ${String(e.message).slice(0, 160)}`);
       } finally {
         await fsn.close();
@@ -210,8 +216,17 @@ async function main() {
     console.log(`[visual] prune skipped — ${String(e.message).slice(0, 120)}`);
   }
 
-  console.log(`[visual] ${shots.length} shot(s) · ` + JSON.stringify(totals));
+  console.log(`[visual] ${shots.length} shot(s)` +
+    (errored ? ` · ${errored} error(s) of ${attempted} attempted` : '') +
+    ' · ' + JSON.stringify(totals));
   console.log('[visual] review them at Dev Queue ▸ Tools ▸ Visual baselines');
+  // A skip (no test identity for that role) is a fixture gap and stays green.
+  // Attempting screens and keeping NONE of them is a broken lane, and it says
+  // so in its exit code — the only signal the dispatcher and a cron read.
+  if (attempted > 0 && shots.length === 0) {
+    console.log(`[visual] kept nothing from ${attempted} attempt(s) — failing the lane`);
+    return 1;
+  }
   return 0;
 }
 

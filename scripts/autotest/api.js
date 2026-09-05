@@ -46,6 +46,25 @@ const secrets = Object.assign(
 const SERVICE_KEY = secrets.AUTOTEST_SERVICE_KEY || secrets.SERVICE_ROLE_KEY ||
                     secrets.SUPABASE_SERVICE_ROLE_KEY || '';
 
+/// CHANGE #637 — the ONE place the service key turns into headers.
+///
+/// artifacts.js read `process.env.AUTOTEST_SERVICE_KEY` for itself and fell
+/// back to the anon key when it came up empty — and it is ALWAYS empty, because
+/// the key lives in ~/.medibo/autotest.env, a file only this module parses. So
+/// the visual lane uploaded every screenshot as `anon`, storage answered "new
+/// row violates row-level security policy" once per shot, and the run still
+/// exited 0 reporting "0 shot(s)". A missing key is a capability that is OFF.
+/// It is never a quieter key: refuse, in the same words the RPC path already
+/// refuses in, so the reason is on screen the first time instead of eight 403s.
+function serviceHeaders(extra) {
+  if (!SERVICE_KEY) {
+    throw new Error(
+      'autotest: no service key. Put AUTOTEST_SERVICE_KEY in ~/.medibo/autotest.env (chmod 600).');
+  }
+  return Object.assign(
+    { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` }, extra || {});
+}
+
 // Every call is bounded and retried once. The 1 GB database goes busy under
 // load and a POST can sit unanswered: a bot that hangs forever is worse than a
 // bot that reports a slow backend, because nobody ever sees its verdict.
@@ -149,6 +168,6 @@ const DEFAULT_PASSWORDS = {
 
 module.exports = {
   SUPA_URL, ANON_KEY, PROJECT_REF,
-  hasServiceKey: () => Boolean(SERVICE_KEY),
+  hasServiceKey: () => Boolean(SERVICE_KEY), serviceHeaders,
   rpc, signIn, storageEntry, passwordFor, request
 };

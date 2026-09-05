@@ -353,16 +353,22 @@ async function main() {
       out = { ok: false, detail: String((e && e.message) || e).slice(0, 400) };
     }
     const stages = (out && out.stages) || [];
+    // A stage the ENVIRONMENT could not meet (no buyable catalogue on this
+    // database, test mode off) is BLOCKED, exactly like a role with no login:
+    // not a pass, not a product failure, and never a silent skip.
+    const verdict = out && out.ok ? 'passed' : (out && out.blocked ? 'blocked' : 'failed');
     results.push({
       feature_key: 'devtool.order_pipeline', role: 'admin', scenario: 'pipeline',
-      verdict: out && out.ok ? 'passed' : 'failed',
+      verdict,
       duration_ms: Date.now() - t0,
       steps: stages.map((s, i) => ({ n: i + 1, kind: `stage:${s.stage_key}`, ok: s.ok, note: s.detail })),
       artifacts: {},
-      error: out && out.ok ? null : `pipeline stopped at ${(out && out.failed_stage) || '?'}: ${(out && out.detail) || ''}`
+      error: verdict === 'passed' ? null : (out && out.detail) ||
+             `pipeline stopped at ${(out && out.failed_stage) || '?'}`
     });
-    console.log(`[autotest] ${out && out.ok ? 'PASSED ' : 'FAILED '} order pipeline — ` +
-                `${(out && out.stages_passed) || 0}/${(out && out.stages_total) || 9} stages`);
+    console.log(`[autotest] ${verdict.toUpperCase().padEnd(7)} order pipeline — ` +
+                `${(out && out.stages_passed) || 0}/${(out && out.stages_total) || 9} stages` +
+                (verdict === 'passed' ? '' : ` — ${(out && out.detail) || ''}`));
   }
 
   if (overBudget) {

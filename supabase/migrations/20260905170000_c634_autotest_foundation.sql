@@ -857,3 +857,82 @@ as $$
 $$;
 revoke all on function public.test_identities() from public, anon;
 grant execute on function public.test_identities() to authenticated, service_role;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 9. THE BOT'S SESSION IS SCOPED TO THE BOT
+-- ─────────────────────────────────────────────────────────────────────────
+-- test_session_start() opens a GLOBAL session: while it is live, EVERY user's
+-- writes are stamped with it, and test_run_finish() purges everything carrying
+-- that stamp. For a human doing a deliberate ten-minute test that is the point.
+-- For a bot that may run hourly against production it is a way to delete a real
+-- customer's real order.
+--
+-- So a run narrows its own session to 'actors' — the mode #573 already
+-- supports in _test_session_ambient() — and registers exactly the bot's test
+-- logins as those actors. A real customer ordering during a run is not stamped
+-- and cannot be purged. Only a session this function CREATED is narrowed; one
+-- a human already had open is left exactly as they set it.
+create or replace function public.test_run_scope_to_bot(p_session bigint)
+returns jsonb
+language plpgsql security definer set search_path to 'public'
+as $$
+declare v_n int := 0;
+begin
+  if p_session is null then return jsonb_build_object('ok', false, 'error', 'no_session'); end if;
+
+  insert into public.test_session_actor (session_id, user_id, label)
+  select p_session, u.id, t.role
+    from public.qa_test_identities t
+    join auth.users u on lower(u.email) = lower(t.identity)
+   where coalesce(t.identity,'') <> ''
+  on conflict (session_id, user_id) do nothing;
+  get diagnostics v_n = row_count;
+
+  -- Narrowing with no actors would stamp NOTHING and the run would assert on
+  -- an empty session, so the scope only changes once there is somebody in it.
+  if v_n > 0 then
+    update public.test_sessions set scope = 'actors' where id = p_session;
+  end if;
+
+  return jsonb_build_object('ok', v_n > 0, 'actors', v_n,
+                            'scope', (select scope from public.test_sessions where id = p_session));
+end $$;
+revoke all on function public.test_run_scope_to_bot(bigint) from public, anon;
+grant execute on function public.test_run_scope_to_bot(bigint) to service_role;
+
+create or replace function public.test_run_start(
+  p_kind        text default 'preview',
+  p_target_url  text default '',
+  p_commit      text default null,
+  p_deploy_no   int  default null,
+  p_command_id  bigint default null,
+  p_triggered_by text default 'vm',
+  p_note        text default null,
+  p_open_session boolean default true)
+returns jsonb
+language plpgsql security definer set search_path to 'public'
+as $$
+declare v_id bigint; v_key uuid; v_sess jsonb; v_sid bigint; v_scope jsonb := '{}'::jsonb;
+begin
+  perform public._dev_guard();
+  if p_open_session then
+    v_sess := public.test_session_start('autotest ' || coalesce(p_kind,'preview'), null);
+    v_sid  := nullif(v_sess->>'session_id','')::bigint;
+    -- Only a session this call opened is narrowed to the bot's logins.
+    if v_sid is not null and coalesce((v_sess->>'already')::boolean, false) = false then
+      v_scope := public.test_run_scope_to_bot(v_sid);
+    end if;
+  end if;
+
+  insert into public.test_runs (kind, target_url, git_commit, deploy_no, command_id,
+                                test_session_id, triggered_by, note)
+  values (coalesce(nullif(p_kind,''),'preview'), coalesce(p_target_url,''), p_commit,
+          p_deploy_no, p_command_id, v_sid, coalesce(nullif(p_triggered_by,''),'vm'), p_note)
+  returning id, run_key into v_id, v_key;
+
+  return jsonb_build_object('ok', true, 'run_id', v_id, 'run_key', v_key,
+                            'test_session_id', v_sid,
+                            'scope', v_scope,
+                            'session', coalesce(v_sess, '{}'::jsonb));
+end $$;
+grant execute on function public.test_run_start(text,text,text,int,bigint,text,text,boolean) to authenticated, service_role;

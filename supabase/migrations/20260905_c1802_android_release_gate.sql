@@ -30,18 +30,6 @@
 -- table is guarded by to_regclass and the function bodies are plpgsql (never
 -- validated against a table that is not there).
 
--- ── 0. copy lookup ─────────────────────────────────────────────────────────
-create or replace function public._dev_copy(p_key text, p_fallback text)
-returns text language plpgsql stable security definer set search_path to 'public' as $fn$
-declare v text;
-begin
-  begin
-    select value #>> '{}' into v from ui_copy where key = p_key;
-  exception when others then v := null;
-  end;
-  return coalesce(nullif(btrim(coalesce(v,'')), ''), p_fallback);
-end $fn$;
-
 -- ── 1. the columns and the vocabulary ──────────────────────────────────────
 do $mig$
 begin
@@ -59,6 +47,7 @@ begin
     check (android_status = any (array['not_requested','requested','building',
                                        'built','published','failed','skipped']));
 end $mig$;
+
 
 do $mig$
 begin
@@ -88,6 +77,79 @@ begin
        'android_status is {status} but nothing proves it — android_built_at and an artifact (URL or versionCode) are both required.'::text))
   on conflict (key) do nothing;   -- never overwrite wording Om has edited
 end $mig$;
+
+-- ── 7. the phone's own update reminder ─────────────────────────────────────
+-- app_releases lives on PRODUCTION and app_update_check reads it there, but
+-- after #1761 publish_play.sh wrote the row through play_publish_finish on the
+-- CONTROL PLANE, where nothing reads it: 1.3.24 (38) went live on Play while
+-- production's newest app_releases row still said 1.3.23, so every phone was
+-- told it was up to date. The script now calls this function (which devcmd
+-- already routes to production) — and this function has to let the runner in.
+-- The role check was written for a human in the admin UI; the release is made
+-- by a service_role runner that has no auth.uid() at all, so it answered
+-- "Only an admin can publish a release" to the one caller that ever publishes.
+create or replace function public.app_release_publish(
+  p_version_name text, p_version_code integer, p_apk_url text,
+  p_notes text default null, p_mandatory boolean default false,
+  p_platform text default 'android')
+returns jsonb language plpgsql security definer set search_path to 'public' as $fn$
+begin
+  if not (
+        coalesce(auth.jwt()->>'role','') = 'service_role'
+     or get_my_role() in ('admin','super_admin')
+     or (coalesce(current_setting('request.jwt.claims', true), '') = ''
+         and session_user in ('postgres','supabase_admin'))
+  ) then
+    return jsonb_build_object('error','not_authorized','message','Only an admin can publish a release');
+  end if;
+  insert into app_releases(platform, version_name, version_code, apk_url, notes, is_mandatory, released_by)
+  values (coalesce(p_platform,'android'), btrim(p_version_name), p_version_code,
+          nullif(btrim(p_apk_url),''), nullif(btrim(p_notes),''), coalesce(p_mandatory,false), auth.uid())
+  on conflict (platform, version_code) do update
+     set version_name = excluded.version_name, apk_url = excluded.apk_url,
+         notes = excluded.notes, is_mandatory = excluded.is_mandatory, released_at = now();
+  return jsonb_build_object('ok', true, 'message', 'Release ' || p_version_name || ' published');
+end $fn$;
+
+
+-- ── THE CONTROL-PLANE HALF ─────────────────────────────────────────────────
+-- Everything below belongs to medibo-dev, which is where dev_commands lives
+-- after CHANGE #1761. It is wrapped because the merge worker replays every
+-- file on production too, and `declare c dev_commands%rowtype` is the ONE
+-- plpgsql construct resolved at CREATE time: batch 560 died on production at
+-- exactly that line while every other body sailed through, leaving a handful
+-- of dev_cmd_* orphans on the database #1761 had just cleared them off. So the
+-- guard does two jobs — it skips the half that does not belong, and it REMOVES
+-- what the unguarded run left behind, which is why the drops are not dead code.
+do $cp$
+begin
+  if to_regclass('public.dev_commands') is null then
+    drop function if exists public.dev_cmd_android_record(bigint,text,text,timestamptz,text,integer,text);
+    drop function if exists public.dev_cmd_android_skip(bigint,text);
+    drop function if exists public._dev_android_block(bigint);
+    drop function if exists public._dev_android_gate(bigint);
+    drop function if exists public._dev_copy(text,text);
+    drop function if exists public.dev_cmd_finish_state(bigint);
+    drop function if exists public.dev_cmd_complete(bigint,text,integer,jsonb,text,jsonb);
+    drop function if exists public.dev_cmd_complete_fast(bigint,integer,text);
+    return;
+  end if;
+
+  execute $sql$
+-- ── 0. copy lookup ─────────────────────────────────────────────────────────
+create or replace function public._dev_copy(p_key text, p_fallback text)
+returns text language plpgsql stable security definer set search_path to 'public' as $fn$
+declare v text;
+begin
+  begin
+    select value #>> '{}' into v from ui_copy where key = p_key;
+  exception when others then v := null;
+  end;
+  return coalesce(nullif(btrim(coalesce(v,'')), ''), p_fallback);
+end $fn$
+$sql$;
+
+  execute $sql$
 
 -- ── 2. the gate ────────────────────────────────────────────────────────────
 -- Returns the sentence that refuses the completion, or NULL when the row is
@@ -124,7 +186,10 @@ begin
   end if;
 
   return null;   -- 'skipped': waived on the record, with a reason
-end $fn$;
+end $fn$
+$sql$;
+
+  execute $sql$
 
 -- ── 3. what the screen prints ──────────────────────────────────────────────
 create or replace function public._dev_android_block(p_id bigint)
@@ -169,7 +234,10 @@ begin
     'url',       coalesce(r.android_artifact_url, ''),
     'url_label', _dev_copy('dev_queue.android_open', 'Download the APK'),
     'blocker',   coalesce(v_block, ''));
-end $fn$;
+end $fn$
+$sql$;
+
+  execute $sql$
 
 -- ── 4. the two ways a runner answers the gate ──────────────────────────────
 create or replace function public.dev_cmd_android_record(
@@ -209,7 +277,10 @@ begin
                        'artifact_url', p_artifact_url));
   return jsonb_build_object('ok', true, 'android', _dev_android_block(p_id),
                             'blocker', coalesce(_dev_android_gate(p_id), ''));
-end $fn$;
+end $fn$
+$sql$;
+
+  execute $sql$
 
 -- The ONLY way past the gate without a release, and it costs a reason that is
 -- written into the command's own decision log — the same standard every other
@@ -240,10 +311,19 @@ begin
 
   perform _audit('system','dev_cmd_android_skip', p_id::text, jsonb_build_object('reason', v_r));
   return jsonb_build_object('ok', true, 'android', _dev_android_block(p_id));
-end $fn$;
+end $fn$
+$sql$;
 
-grant execute on function public.dev_cmd_android_record(bigint,text,text,timestamptz,text,integer,text) to authenticated, service_role;
-grant execute on function public.dev_cmd_android_skip(bigint,text) to authenticated, service_role;
+  execute $sql$
+
+grant execute on function public.dev_cmd_android_record(bigint,text,text,timestamptz,text,integer,text) to authenticated, service_role
+$sql$;
+
+  execute $sql$
+grant execute on function public.dev_cmd_android_skip(bigint,text) to authenticated, service_role
+$sql$;
+
+  execute $sql$
 
 -- ── 5. the gate, wired into every door a command can leave by ──────────────
 -- Three callers, one sentence. dev_cmd_finish_state so the harness's own
@@ -397,7 +477,10 @@ begin
     'ready_at', r.finish_ready_at,
     'auto_finished', coalesce(r.auto_finished,false),
     'auto_finish_source', coalesce(r.auto_finish_source,''));
-end $function$;
+end $function$
+$sql$;
+
+  execute $sql$
 
 CREATE OR REPLACE FUNCTION public.dev_cmd_complete(p_id bigint, p_result text, p_deploy_no integer DEFAULT NULL::integer, p_screenshots jsonb DEFAULT '[]'::jsonb, p_plain_summary text DEFAULT NULL::text, p_result_actions jsonb DEFAULT NULL::jsonb)
  RETURNS jsonb
@@ -503,7 +586,10 @@ BEGIN
   END IF;
   PERFORM _lease_release_internal(p_id);
   RETURN jsonb_build_object('ok', true, 'rg_last', v_rg, 'bugloop_warn', v_block);
-END $function$;
+END $function$
+$sql$;
+
+  execute $sql$
 
 CREATE OR REPLACE FUNCTION public.dev_cmd_complete_fast(p_id bigint, p_deploy_no integer DEFAULT NULL::integer, p_agent text DEFAULT NULL::text)
  RETURNS jsonb
@@ -581,7 +667,10 @@ begin
   return jsonb_build_object('ok', true, 'phase', 'status', 'id', p_id,
     'status', 'completed', 'change_no', coalesce(p_deploy_no, r.web_deploy_no),
     'rg_last', v_rg, 'next', 'dev_cmd_result_write');
-end $function$;
+end $function$
+$sql$;
+
+  execute $sql$
 
 
 -- ── 6. the detail screen's payload ────────────────────────────────────────
@@ -628,37 +717,7 @@ begin
       -- detail screen. has:false on a row that never asked for one.
       'android',              public._dev_android_block(p_id),
       'finish_blockers',      (public.dev_cmd_finish_state(p_id) -> 'blockers')));
-end $function$;
+end $function$
+$sql$;
 
--- ── 7. the phone's own update reminder ─────────────────────────────────────
--- app_releases lives on PRODUCTION and app_update_check reads it there, but
--- after #1761 publish_play.sh wrote the row through play_publish_finish on the
--- CONTROL PLANE, where nothing reads it: 1.3.24 (38) went live on Play while
--- production's newest app_releases row still said 1.3.23, so every phone was
--- told it was up to date. The script now calls this function (which devcmd
--- already routes to production) — and this function has to let the runner in.
--- The role check was written for a human in the admin UI; the release is made
--- by a service_role runner that has no auth.uid() at all, so it answered
--- "Only an admin can publish a release" to the one caller that ever publishes.
-create or replace function public.app_release_publish(
-  p_version_name text, p_version_code integer, p_apk_url text,
-  p_notes text default null, p_mandatory boolean default false,
-  p_platform text default 'android')
-returns jsonb language plpgsql security definer set search_path to 'public' as $fn$
-begin
-  if not (
-        coalesce(auth.jwt()->>'role','') = 'service_role'
-     or get_my_role() in ('admin','super_admin')
-     or (coalesce(current_setting('request.jwt.claims', true), '') = ''
-         and session_user in ('postgres','supabase_admin'))
-  ) then
-    return jsonb_build_object('error','not_authorized','message','Only an admin can publish a release');
-  end if;
-  insert into app_releases(platform, version_name, version_code, apk_url, notes, is_mandatory, released_by)
-  values (coalesce(p_platform,'android'), btrim(p_version_name), p_version_code,
-          nullif(btrim(p_apk_url),''), nullif(btrim(p_notes),''), coalesce(p_mandatory,false), auth.uid())
-  on conflict (platform, version_code) do update
-     set version_name = excluded.version_name, apk_url = excluded.apk_url,
-         notes = excluded.notes, is_mandatory = excluded.is_mandatory, released_at = now();
-  return jsonb_build_object('ok', true, 'message', 'Release ' || p_version_name || ' published');
-end $fn$;
+end $cp$;

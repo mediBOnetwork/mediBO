@@ -10,6 +10,7 @@ import 'dev_queue_health.dart';
 import 'restart_safety.dart';
 import 'dev_queue_service.dart';
 import 'dev_queue_workers.dart';
+import 'usage_meter.dart';
 import 'vm_toggle_policy.dart';
 
 /// The runner control strip at the top of the Dev Queue tab: three toggles
@@ -417,6 +418,12 @@ class _DevQueueControlState extends State<DevQueueControl> {
         // OUTSIDE the expand gate on purpose: the one state Om must never have
         // to open a panel to discover is "the fleet paused itself".
         _breakerBadge(),
+        // CHANGE #1365 — outside the expand gate, like the breaker above:
+        // a usage sync that has stopped working is exactly the state Om
+        // must not have to open a panel to discover, because the card
+        // otherwise keeps printing a comfortable "synced Nh ago" over a
+        // figure the supervisor is still obeying.
+        _syncFailureBadge(),
         if (_expanded) ...[
           const SizedBox(height: 4),
           _row('vm', c('dev_queue.ctl_vm'), Icons.dns_outlined, _vmChip()),
@@ -437,7 +444,7 @@ class _DevQueueControlState extends State<DevQueueControl> {
           ],
           if ((_usage['has_usage'] ?? false) == true) ...[
             _divider(),
-            _usageMeter(),
+            UsageMeter(usage: _usage, onRates: _openRates),
           ],
           if ((_context['has'] ?? false) == true) ...[
             _divider(),
@@ -454,6 +461,37 @@ class _DevQueueControlState extends State<DevQueueControl> {
   /// Workflow goes back on, because that is what the backend does to the flag.
   /// The widget itself lives in dev_queue_common.dart so the protected suite
   /// can render it against a real payload.
+  /// CHANGE #1365 — "the usage sync is broken" as its own always-visible line.
+  ///
+  /// `fetch_failing`, the sentence and the tone are all
+  /// `dev_cmd_session_usage()`'s: nothing here decides that a fetch has failed,
+  /// and nothing here writes the words. When sync is healthy this draws
+  /// absolutely nothing.
+  Widget _syncFailureBadge() {
+    if ((_usage['fetch_failing'] ?? false) != true) return const SizedBox.shrink();
+    final txt = '${_usage['updated_display'] ?? ''}';
+    if (txt.isEmpty) return const SizedBox.shrink();
+    final tone = statusTone((_usage['updated_tone'] ?? 'failed').toString());
+    return Padding(
+      padding: EdgeInsets.only(top: Ds.space.x8),
+      child: Container(
+        width: double.infinity,
+        padding: EdgeInsets.symmetric(
+            horizontal: Ds.space.x12, vertical: Ds.space.x8),
+        decoration: BoxDecoration(color: tone.bg, borderRadius: Ds.r.rChip),
+        child: Row(children: [
+          Icon(Icons.sync_problem, size: Ds.t.bodySize, color: tone.fg),
+          SizedBox(width: Ds.space.x8),
+          Expanded(
+            child: Text(txt,
+                style: Ds.t.caption
+                    .copyWith(color: tone.fg, fontWeight: FontWeight.w600)),
+          ),
+        ]),
+      ),
+    );
+  }
+
   Widget _breakerBadge() => BreakerBanner(
       breaker: (_snap['breaker'] as Map?)?.cast<String, dynamic>() ?? const {});
 
@@ -583,56 +621,6 @@ class _DevQueueControlState extends State<DevQueueControl> {
     return wf ? c('dev_queue.status_pending') : c('dev_queue.ctl_workflow');
   }
 
-  /// Real Claude usage — the actual session (5h) + weekly + Fable percentages
-  /// pulled from Anthropic's usage endpoint on the VM. Every string + percent
-  /// comes from the backend; the app only draws the bars.
-  Widget _usageMeter() {
-    final limits = (_usage['limits'] as List?) ?? const [];
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        const Icon(Icons.data_usage, size: 18, color: kTextLo),
-        const SizedBox(width: 8),
-        Text(c('dev_queue.usage_label'),
-            style: const TextStyle(
-                fontSize: 14, fontWeight: FontWeight.w600, color: kTextHi)),
-        const Spacer(),
-        _syncChip(),
-      ]),
-      const SizedBox(height: 10),
-      for (final raw in limits) _limitBar(Map<String, dynamic>.from(raw as Map)),
-      const SizedBox(height: 2),
-      Text('${_usage['spend_display'] ?? ''}',
-          style: const TextStyle(fontSize: 11, color: kTextLo)),
-      Text('${_usage['today_display'] ?? ''}',
-          style: const TextStyle(fontSize: 11, color: kTextLo)),
-      const SizedBox(height: 6),
-      Row(children: [
-        Expanded(
-          child: Text(c('dev_queue.plan_note'),
-              style: const TextStyle(
-                  fontSize: 11, fontWeight: FontWeight.w600, color: kBrand)),
-        ),
-        InkWell(
-          onTap: _openRates,
-          borderRadius: BorderRadius.circular(20),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-                color: const Color(0xFFEFF6FF),
-                borderRadius: BorderRadius.circular(20)),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              const Icon(Icons.info_outline, size: 12, color: Color(0xFF1E40AF)),
-              const SizedBox(width: 4),
-              Text(c('dev_queue.rates_open'),
-                  style: const TextStyle(
-                      fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF1E40AF))),
-            ]),
-          ),
-        ),
-      ]),
-    ]);
-  }
-
   /// Read-only "API-equivalent rates" sheet — the official per-model ₹/Mtok
   /// table, fed entirely by dev_rates_get(). ₹ = USD × usd_inr, exactly as the
   /// RPC's own note prescribes; no price is written in Dart.
@@ -694,62 +682,6 @@ class _DevQueueControlState extends State<DevQueueControl> {
         if (hasFast)
           Text('${c('dev_queue.rates_fast_in')}: ₹${inr(r['fast_in'])}   ${c('dev_queue.rates_fast_out')}: ₹${inr(r['fast_out'])}',
               style: const TextStyle(fontSize: 12, color: Color(0xFF92400E))),
-      ]),
-    );
-  }
-
-  /// Freshness indicator for the usage block. The string AND the tone come from
-  /// the backend (updated_display / updated_tone): green when live, amber/red
-  /// when the reading is stale — so a minutes-old number can never look current.
-  Widget _syncChip() {
-    final txt = '${_usage['updated_display'] ?? ''}';
-    if (txt.isEmpty) return const SizedBox.shrink();
-    final tone = statusTone((_usage['updated_tone'] ?? 'completed').toString());
-    final fresh = (_usage['stale'] ?? false) != true;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-          color: tone.bg, borderRadius: BorderRadius.circular(20)),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(fresh ? Icons.check_circle : Icons.sync_problem,
-            size: 12, color: tone.fg),
-        const SizedBox(width: 4),
-        Text(txt,
-            style: TextStyle(
-                fontSize: 11, fontWeight: FontWeight.w600, color: tone.fg)),
-      ]),
-    );
-  }
-
-  Widget _limitBar(Map<String, dynamic> l) {
-    final pct = (l['percent'] as num?)?.toDouble() ?? 0;
-    final tone = statusTone((l['tone'] ?? 'completed').toString());
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Expanded(
-            child: Text('${l['label'] ?? ''}',
-                style: const TextStyle(
-                    fontSize: 13, fontWeight: FontWeight.w600, color: kTextHi)),
-          ),
-          Text('${l['pct_display'] ?? ''}',
-              style: TextStyle(
-                  fontSize: 13, fontWeight: FontWeight.w700, color: tone.fg)),
-        ]),
-        const SizedBox(height: 6),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(6),
-          child: LinearProgressIndicator(
-            value: (pct / 100).clamp(0.0, 1.0),
-            minHeight: 8,
-            backgroundColor: const Color(0xFFF1F2F4),
-            valueColor: AlwaysStoppedAnimation(tone.fg),
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text('${l['resets_display'] ?? ''}',
-            style: const TextStyle(fontSize: 11, color: kTextLo)),
       ]),
     );
   }

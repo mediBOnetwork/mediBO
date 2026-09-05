@@ -102,6 +102,165 @@ import 'user_state.dart';
 import 'widgets/animations.dart';
 
 // Boot entry point: crash-isolated so no single subsystem can white-screen the app.
+/// CHANGE #1365 — the named-route table, hoisted out of `build` so
+/// `onGenerateRoute` can consult it too.
+///
+/// MaterialApp matches `routes:` against the WHOLE `settings.name`, query
+/// string included, so `/admin/dev-queue?panel=runner` matched nothing, fell
+/// through to `onUnknownRoute` and opened the storefront. Every deep link that
+/// carried a parameter did — which is why the Dev Queue runner strip could be
+/// reached by tapping but never opened already-expanded from a URL, and so was
+/// never photographed open. One table, two readers: this map, and the
+/// bare-path fallback at the end of onGenerateRoute.
+final Map<String, WidgetBuilder> kAppRoutes = <String, WidgetBuilder>{
+  '/login':        (_) => const LoginScreen(),
+  // CHANGE #309 — delivery operations (payouts, doorstep claims,
+  // pincode serviceability, rider document expiry, ratings) at a
+  // real URL, for the same reason /partner has one: a headless
+  // session can open it and PROVE it painted, and Om can bookmark
+  // it. It guards nothing — admin_delivery_ops() answers
+  // `allowed:false` for anyone who is not an admin, so the
+  // authorisation lives in the backend where it belongs. The
+  // tappable way in is still the Delivery tab's own entry row.
+  '/admin/delivery-ops': (_) => const AdminDeliveryOpsScreen(),
+  // CHANGE #405 — the wave planner. Registered in feature_registry
+  // with this exact deep_link, so the admin dashboard tile pushes it
+  // straight onto the navigator (CHANGE #395) with no shell edit.
+  '/admin/delivery-waves': (_) => const AdminDeliveryWavesScreen(),
+  // CHANGE #312 — the feature_gaps register, at a real URL for the
+  // same reason /admin/delivery-ops has one: a headless admin
+  // session can open it and PROVE it painted. It guards nothing —
+  // feature_gaps_list() answers not_authorized with its own copy
+  // for anyone who is not an admin. The tappable way in is still
+  // Admin ▸ More ▸ Feature gaps.
+  '/admin/feature-gaps': (_) => buildFeatureGapsScreen(),
+  // CHANGE #1197 — the Dev Queue gets a real URL.
+  //
+  // It was reachable ONLY by tapping a tile in the admin shell, so
+  // no headless verifier could ever open it: every Dev Queue change
+  // shipped without a screenshot of the screen it changed, and the
+  // browser journeys that need it stayed PENDING. The screen keeps
+  // its own super-admin gate (and every RPC it calls is gated
+  // server-side by _dev_guard), so this adds a way in, not a way
+  // around.
+  '/admin/dev-queue': (_) => const _SuperOnly(child: DevQueueScreen()),
+  // CHANGE #657 — '/partner' is GONE from this map on purpose.
+  // MaterialApp checks `routes:` BEFORE `onGenerateRoute:`, so the
+  // #653 redirect below could never fire while this entry existed:
+  // the old Partner page won every time the URL was opened.
+  // CHANGE #438 — the pharmacy's own staff logins (CHANGE #408) at
+  // a real URL, for the same reason /partner has one: a headless
+  // session can open it and PROVE the screen painted, and the
+  // owner can bookmark it. It guards nothing —
+  // customer_staff_list() answers not_authorized with its own copy
+  // for anyone who is not on that pharmacy, so authorisation stays
+  // in the backend. The tappable way in is still Profile ▸ Staff
+  // logins.
+  '/customer/staff': (_) => const CustomerStaffScreen(),
+  // CHANGE #745 — the two features that left the profile dropdown
+  // get real addresses, so a registry deep_link is a URL and not a
+  // promise. Both screens ask the backend who the viewer is
+  // (wishlist_get / loyalty_my_rewards key on my_customer_id), so
+  // neither route guards anything of its own.
+  '/wishlist':     (_) => const WishlistScreen(),
+  '/rewards':      (_) => const RewardsScreen(),
+  '/customer/profile':   (_) => const ProfileEditScreen(),
+  '/customer/addresses': (_) => const AddressBookScreen(),
+  '/register':     (_) => const LoginScreen(),
+  // CHANGE #631 (PART A) — the delivery-partner registration form.
+  // delivery_partner_register() stamps auth.uid() itself, so the
+  // screen asks for a sign-in rather than inventing an anonymous
+  // path.
+  '/delivery-register': (_) => const DeliveryRegisterScreen(),
+  // Admin > WhatsApp > Templates. wa_templates_screen() refuses
+  // non-admin callers itself, so the screen renders its own
+  // not-authorized state rather than the route guessing a role.
+  '/admin/wa-templates': (_) => const WaTemplatesScreen(),
+  // CHANGE #228 — Admin > WhatsApp > Ops, at a real URL for the
+  // same reason /admin/wa-templates has one: the Template pipeline
+  // section is the page you send someone to when they ask "is that
+  // message live yet?". wa_event_routes_screen / wa_waba_status /
+  // wa_contact_ledger / wa_template_pipeline each refuse non-admin
+  // callers themselves and the screen renders that refusal, so the
+  // route guards nothing.
+  '/admin/wa-ops': (_) => const WaOpsScreen(),
+  // CHANGE #295 — the WhatsApp delivery diagnosis, at a real URL
+  // for the same reason /admin/wa-ops has one: it is the page you
+  // send someone to when they ask "did that message actually
+  // reach anyone?". wa_event_diagnosis() refuses a non-admin
+  // caller itself and the screen renders that refusal, so the
+  // route guards nothing — and a headless admin session can reach
+  // it directly, which is what proves the screen renders.
+  '/admin/wa-diagnosis': (_) => const WaDiagnosisScreen(),
+  // CHANGE #297 — the Notification Centre at a real URL, for the
+  // same reason /admin/wa-diagnosis has one: notify_center()
+  // refuses a non-admin caller itself and the screen renders that
+  // refusal, so the route guards nothing — and a headless admin
+  // session can reach it directly, which is what proves the screen
+  // actually renders.
+  '/admin/notify-center': (_) => const NotifyCenterScreen(),
+  // CHANGE #298 — Push notifications at a real URL, for the same
+  // reason /admin/notify-center has one: push_admin_screen()
+  // refuses a non-admin caller itself, so the route guards
+  // nothing, and a headless admin session can reach the screen
+  // directly — which is what proves it renders.
+  '/admin/push': (_) => const AdminPushScreen(),
+  // CHANGE #298 — the in-app inbox. Every event is readable here
+  // later regardless of which channel delivered it, so it needs
+  // an address of its own, not only the bell.
+  '/notifications': (_) => const NotificationsInboxScreen(),
+  // CHANGE #229 — Order closure at a real URL, same reason
+  // /admin/wa-ops has one: this is the page you send someone to
+  // when they ask "why is that order still open?". The screen's
+  // own RPCs (admin_order_closure_list / _detail) refuse a
+  // non-admin caller and it renders that refusal verbatim, so the
+  // route guards nothing — and a headless admin session can reach
+  // it directly, which is what proves the screen actually renders.
+  '/admin/order-closure': (_) => const AdminOrderClosureScreen(),
+  // CHANGE #173 — the reorder screen as a real URL. The WhatsApp
+  // reorder nudge can link straight here, and it gives the screen
+  // a shareable address like /product/:id has. The screen asks the
+  // backend who the viewer is (reorder_suggestions uses
+  // my_customer_id), so the route needs no role guard of its own.
+  '/reorder':      (_) => const ReorderScreen(),
+  // CHANGE #173 — the admin side of the same suite. Like
+  // /admin/wa-templates above, the RPC refuses non-admin callers
+  // itself and the screen renders that refusal, so the route
+  // guards nothing. It is also reachable without a URL, from the
+  // dashboard's quick-navigation tile.
+  '/admin/reorder': (_) => const ReorderAdminScreen(),
+  // CHANGE #395 — Returns, refunds & cancellation. Same shape as
+  // the templates route above: returns_orders_list() /
+  // order_returns_panel() enforce _returns_guard() themselves, so
+  // the screen renders the backend's own not-authorized copy
+  // rather than the route guessing a role.
+  '/admin/returns': (_) => const ReturnsRefundsScreen(),
+  // CMD #431 — count an arrived parcel against its bill. Same
+  // shape as the routes above: pharmacy_parcel_home() resolves the
+  // caller's own pharmacy and renders its own refusal, so the route
+  // guards nothing. It is also reachable without a URL, from the
+  // "Count parcel" tile on the pharmacy's own account screen.
+  '/pharmacy/parcel-count': (_) => const ParcelCountHomeScreen(),
+  // CHANGE #441 — the owner's night screens (CHANGE #419) at a real
+  // URL, for the same reason /partner and /admin/delivery-ops
+  // have one: a headless session can open it and PROVE the screen
+  // painted, and the owner can bookmark it. It guards nothing:
+  // pharmacy_owner_dashboard()
+  // answers not_a_pharmacy with its own copy for anyone off that
+  // pharmacy, so authorisation stays in the backend. The tappable
+  // way in is still the counter's Owner dashboard tile (#906).
+  '/pharmacy/owner': (_) => const PharmacyOwnerScreen(),
+  '/about-app':    (_) => const AboutScreen(),
+  '/contact':      (_) => const ContactScreen(),
+  '/terms':        (_) => const TermsScreen(),
+  '/privacy':      (_) => const PrivacyScreen(),
+  // Google Play "Delete data" URL — renders legal_get_page('data-deletion').
+  '/data-deletion': (_) => const DataDeletionScreen(),
+  '/refund':       (_) => const RefundScreen(),
+  '/shipping':     (_) => const ShippingScreen(),
+  '/cancellation': (_) => const CancellationScreen(),
+};
+
 void main() {
   runZonedGuarded(() async {
     WidgetsFlutterBinding.ensureInitialized();
@@ -1200,6 +1359,21 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                   );
                 }
               }
+              // CHANGE #1365 — a query string must never throw a route away.
+              // `routes:` is matched on the FULL name, so '/admin/dev-queue'
+              // resolved and '/admin/dev-queue?panel=runner' did not: it fell to
+              // onUnknownRoute and opened the storefront. Re-dispatch on the
+              // bare path and keep the ORIGINAL settings, so `Uri.base` and any
+              // screen that reads its own query parameters still see them.
+              {
+                final q = name.indexOf('?');
+                if (q > 0) {
+                  final builder = kAppRoutes[name.substring(0, q)];
+                  if (builder != null) {
+                    return MaterialPageRoute(settings: settings, builder: builder);
+                  }
+                }
+              }
               return null;
             },
             // Unknown paths (e.g. /c/cardiac) fall through to home shell,
@@ -1207,154 +1381,7 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
             onUnknownRoute: (_) => MaterialPageRoute(
               builder: (_) => _AppRoot(auth: _auth),
             ),
-            routes: {
-              '/login':        (_) => const LoginScreen(),
-              // CHANGE #309 — delivery operations (payouts, doorstep claims,
-              // pincode serviceability, rider document expiry, ratings) at a
-              // real URL, for the same reason /partner has one: a headless
-              // session can open it and PROVE it painted, and Om can bookmark
-              // it. It guards nothing — admin_delivery_ops() answers
-              // `allowed:false` for anyone who is not an admin, so the
-              // authorisation lives in the backend where it belongs. The
-              // tappable way in is still the Delivery tab's own entry row.
-              '/admin/delivery-ops': (_) => const AdminDeliveryOpsScreen(),
-              // CHANGE #405 — the wave planner. Registered in feature_registry
-              // with this exact deep_link, so the admin dashboard tile pushes it
-              // straight onto the navigator (CHANGE #395) with no shell edit.
-              '/admin/delivery-waves': (_) => const AdminDeliveryWavesScreen(),
-              // CHANGE #312 — the feature_gaps register, at a real URL for the
-              // same reason /admin/delivery-ops has one: a headless admin
-              // session can open it and PROVE it painted. It guards nothing —
-              // feature_gaps_list() answers not_authorized with its own copy
-              // for anyone who is not an admin. The tappable way in is still
-              // Admin ▸ More ▸ Feature gaps.
-              '/admin/feature-gaps': (_) => buildFeatureGapsScreen(),
-              // CHANGE #1197 — the Dev Queue gets a real URL.
-              //
-              // It was reachable ONLY by tapping a tile in the admin shell, so
-              // no headless verifier could ever open it: every Dev Queue change
-              // shipped without a screenshot of the screen it changed, and the
-              // browser journeys that need it stayed PENDING. The screen keeps
-              // its own super-admin gate (and every RPC it calls is gated
-              // server-side by _dev_guard), so this adds a way in, not a way
-              // around.
-              '/admin/dev-queue': (_) => const _SuperOnly(child: DevQueueScreen()),
-              // CHANGE #657 — '/partner' is GONE from this map on purpose.
-              // MaterialApp checks `routes:` BEFORE `onGenerateRoute:`, so the
-              // #653 redirect below could never fire while this entry existed:
-              // the old Partner page won every time the URL was opened.
-              // CHANGE #438 — the pharmacy's own staff logins (CHANGE #408) at
-              // a real URL, for the same reason /partner has one: a headless
-              // session can open it and PROVE the screen painted, and the
-              // owner can bookmark it. It guards nothing —
-              // customer_staff_list() answers not_authorized with its own copy
-              // for anyone who is not on that pharmacy, so authorisation stays
-              // in the backend. The tappable way in is still Profile ▸ Staff
-              // logins.
-              '/customer/staff': (_) => const CustomerStaffScreen(),
-              // CHANGE #745 — the two features that left the profile dropdown
-              // get real addresses, so a registry deep_link is a URL and not a
-              // promise. Both screens ask the backend who the viewer is
-              // (wishlist_get / loyalty_my_rewards key on my_customer_id), so
-              // neither route guards anything of its own.
-              '/wishlist':     (_) => const WishlistScreen(),
-              '/rewards':      (_) => const RewardsScreen(),
-              '/customer/profile':   (_) => const ProfileEditScreen(),
-              '/customer/addresses': (_) => const AddressBookScreen(),
-              '/register':     (_) => const LoginScreen(),
-              // CHANGE #631 (PART A) — the delivery-partner registration form.
-              // delivery_partner_register() stamps auth.uid() itself, so the
-              // screen asks for a sign-in rather than inventing an anonymous
-              // path.
-              '/delivery-register': (_) => const DeliveryRegisterScreen(),
-              // Admin > WhatsApp > Templates. wa_templates_screen() refuses
-              // non-admin callers itself, so the screen renders its own
-              // not-authorized state rather than the route guessing a role.
-              '/admin/wa-templates': (_) => const WaTemplatesScreen(),
-              // CHANGE #228 — Admin > WhatsApp > Ops, at a real URL for the
-              // same reason /admin/wa-templates has one: the Template pipeline
-              // section is the page you send someone to when they ask "is that
-              // message live yet?". wa_event_routes_screen / wa_waba_status /
-              // wa_contact_ledger / wa_template_pipeline each refuse non-admin
-              // callers themselves and the screen renders that refusal, so the
-              // route guards nothing.
-              '/admin/wa-ops': (_) => const WaOpsScreen(),
-              // CHANGE #295 — the WhatsApp delivery diagnosis, at a real URL
-              // for the same reason /admin/wa-ops has one: it is the page you
-              // send someone to when they ask "did that message actually
-              // reach anyone?". wa_event_diagnosis() refuses a non-admin
-              // caller itself and the screen renders that refusal, so the
-              // route guards nothing — and a headless admin session can reach
-              // it directly, which is what proves the screen renders.
-              '/admin/wa-diagnosis': (_) => const WaDiagnosisScreen(),
-              // CHANGE #297 — the Notification Centre at a real URL, for the
-              // same reason /admin/wa-diagnosis has one: notify_center()
-              // refuses a non-admin caller itself and the screen renders that
-              // refusal, so the route guards nothing — and a headless admin
-              // session can reach it directly, which is what proves the screen
-              // actually renders.
-              '/admin/notify-center': (_) => const NotifyCenterScreen(),
-              // CHANGE #298 — Push notifications at a real URL, for the same
-              // reason /admin/notify-center has one: push_admin_screen()
-              // refuses a non-admin caller itself, so the route guards
-              // nothing, and a headless admin session can reach the screen
-              // directly — which is what proves it renders.
-              '/admin/push': (_) => const AdminPushScreen(),
-              // CHANGE #298 — the in-app inbox. Every event is readable here
-              // later regardless of which channel delivered it, so it needs
-              // an address of its own, not only the bell.
-              '/notifications': (_) => const NotificationsInboxScreen(),
-              // CHANGE #229 — Order closure at a real URL, same reason
-              // /admin/wa-ops has one: this is the page you send someone to
-              // when they ask "why is that order still open?". The screen's
-              // own RPCs (admin_order_closure_list / _detail) refuse a
-              // non-admin caller and it renders that refusal verbatim, so the
-              // route guards nothing — and a headless admin session can reach
-              // it directly, which is what proves the screen actually renders.
-              '/admin/order-closure': (_) => const AdminOrderClosureScreen(),
-              // CHANGE #173 — the reorder screen as a real URL. The WhatsApp
-              // reorder nudge can link straight here, and it gives the screen
-              // a shareable address like /product/:id has. The screen asks the
-              // backend who the viewer is (reorder_suggestions uses
-              // my_customer_id), so the route needs no role guard of its own.
-              '/reorder':      (_) => const ReorderScreen(),
-              // CHANGE #173 — the admin side of the same suite. Like
-              // /admin/wa-templates above, the RPC refuses non-admin callers
-              // itself and the screen renders that refusal, so the route
-              // guards nothing. It is also reachable without a URL, from the
-              // dashboard's quick-navigation tile.
-              '/admin/reorder': (_) => const ReorderAdminScreen(),
-              // CHANGE #395 — Returns, refunds & cancellation. Same shape as
-              // the templates route above: returns_orders_list() /
-              // order_returns_panel() enforce _returns_guard() themselves, so
-              // the screen renders the backend's own not-authorized copy
-              // rather than the route guessing a role.
-              '/admin/returns': (_) => const ReturnsRefundsScreen(),
-              // CMD #431 — count an arrived parcel against its bill. Same
-              // shape as the routes above: pharmacy_parcel_home() resolves the
-              // caller's own pharmacy and renders its own refusal, so the route
-              // guards nothing. It is also reachable without a URL, from the
-              // "Count parcel" tile on the pharmacy's own account screen.
-              '/pharmacy/parcel-count': (_) => const ParcelCountHomeScreen(),
-              // CHANGE #441 — the owner's night screens (CHANGE #419) at a real
-              // URL, for the same reason /partner and /admin/delivery-ops
-              // have one: a headless session can open it and PROVE the screen
-              // painted, and the owner can bookmark it. It guards nothing:
-              // pharmacy_owner_dashboard()
-              // answers not_a_pharmacy with its own copy for anyone off that
-              // pharmacy, so authorisation stays in the backend. The tappable
-              // way in is still the counter's Owner dashboard tile (#906).
-              '/pharmacy/owner': (_) => const PharmacyOwnerScreen(),
-              '/about-app':    (_) => const AboutScreen(),
-              '/contact':      (_) => const ContactScreen(),
-              '/terms':        (_) => const TermsScreen(),
-              '/privacy':      (_) => const PrivacyScreen(),
-              // Google Play "Delete data" URL — renders legal_get_page('data-deletion').
-              '/data-deletion': (_) => const DataDeletionScreen(),
-              '/refund':       (_) => const RefundScreen(),
-              '/shipping':     (_) => const ShippingScreen(),
-              '/cancellation': (_) => const CancellationScreen(),
-            },
+            routes: kAppRoutes,
           ),
           ),
           ),

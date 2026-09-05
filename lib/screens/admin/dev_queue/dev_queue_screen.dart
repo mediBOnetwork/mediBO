@@ -85,6 +85,34 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
     _tick = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && _hasActive) setState(() => _now = DateTime.now());
     });
+    _openDeepLinkedCommand();
+  }
+
+  /// CHANGE #1802 — `/admin/dev-queue?cmd=1802` opens that command's detail.
+  ///
+  /// A command's detail screen had no address. Every proof of something built
+  /// there — the QA section, the spec checklist, the Android release block —
+  /// had to be reached by TAPPING a card, and a Flutter canvas cannot be
+  /// tapped by the headless capture the runner uses, so the one screen that
+  /// carries the evidence was the one screen that could not be photographed.
+  /// The id travels in the query string, which #1365 already taught the router
+  /// not to throw away.
+  Future<void> _openDeepLinkedCommand() async {
+    final raw = Uri.base.queryParameters['cmd'];
+    final id = int.tryParse(raw ?? '');
+    if (id == null || id <= 0) return;
+    // After the first frame, and after the list has loaded, so the detail
+    // opens over a populated screen rather than a spinner.
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    Map<String, dynamic> row = const {};
+    try {
+      final hit = _rows.firstWhere((r) => asInt(r['id']) == id,
+          orElse: () => const <String, dynamic>{});
+      row = Map<String, dynamic>.from(hit);
+    } catch (_) {/* the detail reads the row itself */}
+    if (!mounted) return;
+    await _openDetail({'id': id, ...row});
   }
 
   @override

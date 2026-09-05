@@ -21,6 +21,7 @@ import '../admin_heartbeat_screen.dart';        // CHANGE #468
 import '../test_mode_screen.dart';             // CHANGE #573, wired #468
 import 'journey_library_screen.dart';
 import 'test_coverage_screen.dart';   // CHANGE #634
+import 'visual_baselines_screen.dart'; // CHANGE #637
 import 'play_store_screen.dart';
 import 'signin_diag_screen.dart';
 import 'memory_screen.dart';
@@ -1164,6 +1165,9 @@ const Set<String> kDevToolKeys = <String>{
   // Journey Library on purpose: journeys are what the bot runs, coverage is
   // the list of what it has never run.
   'test_coverage',
+  // CHANGE #637 — the visual-regression review queue: what every registered
+  // screen looks like now, beside the picture Om approved.
+  'visual_baselines',
   'bug_report',
   'drafts_inbox',
   'cron_health',
@@ -1200,6 +1204,9 @@ bool openDevTool(
       return true;
     case 'test_coverage':
       push(TestCoverageScreen(service: svc));
+      return true;
+    case 'visual_baselines':
+      push(VisualBaselinesScreen(service: svc));
       return true;
     case 'bug_report':
       showBugReportSheet(context, svc);

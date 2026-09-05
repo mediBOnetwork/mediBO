@@ -98,6 +98,9 @@ const Map<String, IconData> kNavIcons = <String, IconData>{
   // CHANGE #745 — the customer's wishlist, now a registry row like the rest.
   'favorite':         Icons.favorite_border_rounded,
   'tools':            Icons.handyman_outlined,
+  // CHANGE #637 — the visual-regression lane: a screen is photographed and
+  // compared with the picture Om approved.
+  'photo':            Icons.photo_camera_outlined,
   // CHANGE #1016 — the More tab of the staff bar.
   'apps':             Icons.apps,
 };

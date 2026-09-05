@@ -23,7 +23,14 @@ Tone _tone(Object? name) =>
 
 class RunnerHealthCard extends StatelessWidget {
   final Map<String, dynamic> health;
-  const RunnerHealthCard({super.key, required this.health});
+
+  /// CHANGE #1593 — "why is it not climbing, right now?". The card's own
+  /// numbers are the LAST probe's; this asks the backend to decide again with
+  /// the current vitals and shows the answer. Absent callback = no affordance,
+  /// so an older screen renders exactly as before.
+  final VoidCallback? onWhy;
+
+  const RunnerHealthCard({super.key, required this.health, this.onWhy});
 
   bool get _has => (health['has'] ?? false) == true;
 
@@ -33,6 +40,11 @@ class RunnerHealthCard extends StatelessWidget {
   List<Map<String, dynamic>> get _metrics => ((health['metrics'] as List?) ?? const [])
       .map((e) => Map<String, dynamic>.from(e as Map))
       .toList();
+
+  /// CHANGE #1593 — the autoscaler's own account of itself. Absent on any
+  /// payload written before this change, and the card simply does not draw it.
+  Map<String, dynamic> get _auto =>
+      (health['autoscale'] as Map?)?.cast<String, dynamic>() ?? const {};
 
   List<Map<String, dynamic>> get _history => ((health['history'] as List?) ?? const [])
       .map((e) => Map<String, dynamic>.from(e as Map))
@@ -55,7 +67,41 @@ class RunnerHealthCard extends StatelessWidget {
         _scorePill(tone),
       ]),
       SizedBox(height: Ds.space.x8),
+      // CHANGE #1593 — this line IS the brake. `next_action` is the probe's own
+      // "holding at N — <why>", so a fleet that is not climbing says which of
+      // the six brakes is holding it rather than repeating that the database is
+      // healthy, which it was for all 48 probes it spent stuck at 3.
       Text('${health['next_action'] ?? ''}', style: Ds.t.caption),
+      // The ladder, when the probe recorded one: where it is, what it has
+      // proven, and the cap it is allowed to reach.
+      if ((_auto['has'] ?? false) == true &&
+          '${_auto['ladder_label'] ?? ''}'.isNotEmpty) ...[
+        SizedBox(height: Ds.space.x4),
+        InkWell(
+          onTap: onWhy,
+          child: Padding(
+            padding: EdgeInsets.symmetric(vertical: Ds.space.x4),
+            child: Row(children: [
+              Icon(Icons.stairs_outlined,
+                  size: Ds.t.captionSize + Ds.space.x4,
+                  color: Ds.c.textSecondary),
+              SizedBox(width: Ds.space.x4),
+              Flexible(
+                child: Text('${_auto['ladder_label']}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Ds.t.caption),
+              ),
+              if (onWhy != null) ...[
+                SizedBox(width: Ds.space.x4),
+                Icon(Icons.help_outline,
+                    size: Ds.t.captionSize + Ds.space.x4,
+                    color: Ds.c.textSecondary),
+              ],
+            ]),
+          ),
+        ),
+      ],
       SizedBox(height: Ds.space.x12),
 
       // ── the three live numbers ──

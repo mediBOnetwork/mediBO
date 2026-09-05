@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
+import 'claude_auth_banner.dart';
 import 'dev_queue_branch.dart';
 import 'dev_queue_common.dart';
 import 'dev_queue_context.dart';
@@ -13,6 +14,28 @@ import 'dev_queue_service.dart';
 import 'dev_queue_workers.dart';
 import 'usage_meter.dart';
 import 'vm_toggle_policy.dart';
+
+/// CHANGE #1401 — the two payload moves the Runner card makes for the Claude
+/// login, kept pure so they can be held down without a Supabase client.
+///
+/// Both are moves, not decisions: what red says, whether a re-login may be
+/// offered and whether the banner draws at all are `claude_auth_status()`'s and
+/// [ClaudeAuthBanner]'s. What can go wrong HERE is plumbing — reading the block
+/// out of the wrong key, or letting a re-login reply (which carries the login
+/// block ALONE) overwrite the snapshot that also holds the toggles, the
+/// breaker, the pool and the queue counts.
+class ClaudeAuthSnap {
+  /// `dev_ctl_get().claude_auth`, verbatim — absent is an empty map, never a
+  /// synthesised one.
+  static Map<String, dynamic> read(Map<String, dynamic> snap) =>
+      (snap['claude_auth'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  /// A `claude_auth_relogin_request()` reply, folded into the snapshot the card
+  /// is already rendering. An empty reply changes nothing at all.
+  static Map<String, dynamic> fold(
+          Map<String, dynamic> snap, Map<String, dynamic> reply) =>
+      reply.isEmpty ? snap : {...snap, 'claude_auth': reply};
+}
 
 /// The runner control strip at the top of the Dev Queue tab: three toggles
 /// (VM / Claude / Workflow) with live status chips. Renders `dev_ctl_get`
@@ -53,6 +76,7 @@ class _DevQueueControlState extends State<DevQueueControl> {
   };
   OverlayEntry? _mini; // the single live mini popup
   bool _vmChecking = false; // a live EC2 read is already in flight
+  bool _reloginBusy = false; // a claude re-login request is already in flight
 
   @override
   void initState() {
@@ -137,6 +161,42 @@ class _DevQueueControlState extends State<DevQueueControl> {
   /// dev_ctl_get poll as the toggles so it can never be a beat behind them.
   Map<String, dynamic> get _health =>
       (_snap['health'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  /// CHANGE #1401 — the Claude login, delivered on the poll this card already
+  /// makes. `dev_ctl_get().claude_auth` is `claude_auth_status()` verbatim, so
+  /// nothing here decides whether the login is healthy, what red says, or
+  /// whether a re-login may be offered at all.
+  Map<String, dynamic> get _claudeAuth => ClaudeAuthSnap.read(_snap);
+
+  /// The one tap, on the card where every other fleet-stopping state is
+  /// already reported. It is the same RPC the Cron health panel calls: the
+  /// backend starts the login on the VM, answers with the whole claude_auth
+  /// block, and publishes the link and the code onto it as the VM scrapes them
+  /// off its own login pane. So this asks, folds the reply into the snapshot
+  /// the card is already rendering, and re-reads — it never guesses at the
+  /// states between "requested" and the link appearing.
+  Future<void> _relogin() async {
+    if (_reloginBusy) return;
+    setState(() => _reloginBusy = true);
+    try {
+      final r = await widget.service.claudeAuthRelogin();
+      if (!mounted) return;
+      // Folded, never assigned: the reply carries the login block alone, and
+      // the toggles, the breaker and the pool on this same snapshot must
+      // survive it untouched.
+      setState(() => _snap = ClaudeAuthSnap.fold(_snap, r));
+    } catch (_) {
+      // Same contract as every badge on this strip: the line degrades, the
+      // card does not.
+    } finally {
+      if (mounted) setState(() => _reloginBusy = false);
+    }
+    for (final s in const [5, 15, 30]) {
+      Timer(Duration(seconds: s), () {
+        if (mounted) _load();
+      });
+    }
+  }
 
   bool _isOn(String k) => (_desired[k] ?? 'off') == 'on';
 
@@ -419,6 +479,15 @@ class _DevQueueControlState extends State<DevQueueControl> {
         // OUTSIDE the expand gate on purpose: the one state Om must never have
         // to open a panel to discover is "the fleet paused itself".
         _breakerBadge(),
+        // CHANGE #1401 — outside the expand gate for the same reason the
+        // breaker above it is: on 5 Sep the VM's Claude login expired and
+        // every runner claimed, registered a NULL pid, spent nothing and
+        // handed its row back — 28 claims in 40 minutes with no surface able
+        // to say why. "No worker can start a session at all" is not a state
+        // Om should have to open a panel to discover. A healthy login draws
+        // NOTHING, so this adds no clutter while it is green.
+        ClaudeAuthBanner(
+            auth: _claudeAuth, busy: _reloginBusy, onRelogin: _relogin),
         // CHANGE #1365 — outside the expand gate, like the breaker above:
         // a usage sync that has stopped working is exactly the state Om
         // must not have to open a panel to discover, because the card

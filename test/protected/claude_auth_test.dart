@@ -33,12 +33,21 @@
 //
 //   6. The widget never talks to the network. Tapping the button calls the
 //      callback the parent supplied — exactly once — and nothing else.
+//
+//   7. CHANGE #1401 — the Runner card's copy of it, which is plumbing rather
+//      than judgement and so is held down here as plumbing: the block is read
+//      off `dev_ctl_get().claude_auth` and nowhere else, an absent one is an
+//      empty map rather than a synthesised login, and a re-login reply — which
+//      carries the login block ALONE — is FOLDED into the card's snapshot, so
+//      the toggles, the breaker, the pool and the queue counts on that same
+//      snapshot survive the tap untouched. An empty reply changes nothing.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pharma_b2b/screens/admin/dev_queue/claude_auth_banner.dart';
 import 'package:pharma_b2b/screens/admin/dev_queue/claude_auth_section.dart';
+import 'package:pharma_b2b/screens/admin/dev_queue/dev_queue_control.dart';
 
 Map<String, dynamic> _payload({
   String tone = 'danger',
@@ -199,5 +208,102 @@ void main() {
     await tester.pump();
     expect(find.byType(Card), findsNothing);
     expect(find.byType(OutlinedButton), findsNothing);
+  });
+
+  // ── CHANGE #1401 — the same banner, on the Runner control card ──────────
+  //
+  // The card renders `dev_ctl_get()` verbatim, and the login block rides that
+  // same poll. Nothing below asks the widget to decide anything: these are the
+  // two payload moves the card makes, and both are the kind that fail silently.
+
+  group('Runner card payload moves', () {
+    // A dev_ctl_get snapshot: the login block sits beside everything else the
+    // card is already drawing, which is exactly why a tap must not replace it.
+    Map<String, dynamic> snap({Map<String, dynamic>? auth}) => {
+          'server_now': '2026-09-05T13:00:00+00:00',
+          'desired_state': {'vm': 'on', 'claude': 'on', 'workflow': 'on'},
+          'controls': {
+            'workflow': {'locked': false}
+          },
+          'breaker': {'has': false},
+          'pool': {'desired': 4},
+          'queue_counts': {'pending': 11},
+          if (auth != null) 'claude_auth': auth,
+        };
+
+    test('the block is read off claude_auth, verbatim', () {
+      final auth = _payload();
+      final read = ClaudeAuthSnap.read(snap(auth: auth));
+      expect(read['title'], 'Runners blocked: Claude login expired');
+      expect(read['tone'], 'danger');
+      expect(read['checked'], 'Checked 4m ago on ip-172-31-41-212');
+      expect((read['relogin'] as Map)['label'], 'Re-login from here');
+    });
+
+    test('an absent block is an empty map, never a synthesised login', () {
+      expect(ClaudeAuthSnap.read(snap()), isEmpty);
+      expect(ClaudeAuthSnap.read(const {}), isEmpty);
+      // A card that read the wrong key would get this — and then print a
+      // reassuring nothing over a fleet that cannot start a session.
+      expect(ClaudeAuthSnap.read({'auth': _payload()}), isEmpty);
+    });
+
+    test('a re-login reply is folded in, not assigned over the snapshot', () {
+      final before = snap(auth: _payload());
+      final reply = _payload(
+        tone: 'warning',
+        title: 'Login started — waiting for the VM',
+        relogin: const {
+          'can': false,
+          'state': 'requested',
+          'state_label': 'Login started — the link appears here in a minute',
+        },
+      );
+
+      final after = ClaudeAuthSnap.fold(before, reply);
+
+      // The login block is the reply's…
+      expect(ClaudeAuthSnap.read(after)['title'],
+          'Login started — waiting for the VM');
+      // …and everything else the card draws off this same snapshot survived.
+      expect((after['desired_state'] as Map)['workflow'], 'on');
+      expect((after['pool'] as Map)['desired'], 4);
+      expect((after['queue_counts'] as Map)['pending'], 11);
+      expect(after['breaker'], isNotNull);
+      // The snapshot it was folded onto is left alone, so a poll that lands
+      // mid-tap cannot resurrect the old login block from a shared map.
+      expect(ClaudeAuthSnap.read(before)['title'],
+          'Runners blocked: Claude login expired');
+    });
+
+    test('an empty reply changes nothing', () {
+      final before = snap(auth: _payload());
+      final after = ClaudeAuthSnap.fold(before, const {});
+      expect(ClaudeAuthSnap.read(after)['title'],
+          'Runners blocked: Claude login expired');
+      expect(after, same(before));
+    });
+
+    testWidgets('the card draws NOTHING while the login is healthy',
+        (tester) async {
+      // The success payload is complete and truthful; the Runner card is a
+      // strip Om reads every day, and a permanent green line on it is how a
+      // real red stops being read.
+      await _pump(tester,
+          ClaudeAuthSnap.read(snap(auth: _payload(tone: 'success'))));
+      expect(find.byType(Icon), findsNothing);
+      expect(find.byType(OutlinedButton), findsNothing);
+      expect(
+          find.text('Runners blocked: Claude login expired'), findsNothing);
+    });
+
+    testWidgets('and prints the backend sentence when it is not', (tester) async {
+      // The card hands the widget a callback exactly as it does live, so the
+      // backend's own button label is what the strip offers.
+      await _pump(tester, ClaudeAuthSnap.read(snap(auth: _payload())),
+          onRelogin: () async {});
+      expect(find.text('Runners blocked: Claude login expired'), findsOneWidget);
+      expect(find.text('Re-login from here'), findsOneWidget);
+    });
   });
 }

@@ -1414,3 +1414,216 @@ begin
                             'gaps', v_gaps, 'phase', coalesce(p_phase,'run'),
                             'worst', v_worst);
 end $fn$;
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- THE RUN — one call, three generators, a test session, then a purge.
+--
+-- SECURITY INVOKER on purpose (see the probe): a definer wrapper here would
+-- silently strip the whole run of its ability to impersonate, and every verdict
+-- would quietly become a guess.
+-- ═════════════════════════════════════════════════════════════════════════════
+create or replace function public.autotest_safety_net_run(
+  p_label text default null, p_seed bigint default null,
+  p_fuzz_rpcs integer default 80, p_variants integer default 2)
+returns jsonb
+language plpgsql security invoker set search_path to 'public' as $fn$
+declare
+  v_run bigint; v_seed bigint; v_session bigint; v_sess jsonb;
+  v_auth jsonb; v_probe jsonb; v_plan jsonb; v_fuzz jsonb;
+  v_inv0 jsonb; v_inv1 jsonb; v_purge jsonb; v_gaps int;
+begin
+  perform public._dev_guard();
+  v_seed := coalesce(p_seed, (extract(epoch from clock_timestamp()) * 1000)::bigint);
+
+  insert into public.autotest_run (kind, label, seed)
+  values ('safety_net',
+          coalesce(nullif(btrim(p_label),''),
+                   to_char(now() at time zone 'Asia/Kolkata','DD Mon HH24:MI') || ' safety net'),
+          v_seed)
+  returning id into v_run;
+
+  -- A test session when test mode allows one. The sandbox already guarantees
+  -- nothing survives a case, so a closed test mode postpones nothing.
+  begin
+    v_sess := public.test_session_start(format('safety net run %s', v_run), 1);
+    if coalesce((v_sess->>'ok')::boolean, false) then
+      v_session := nullif(v_sess->>'session_id','')::bigint;
+      update public.autotest_run set session_id = v_session where id = v_run;
+    end if;
+  exception when others then v_sess := jsonb_build_object('ok', false, 'error', sqlstate);
+  end;
+
+  v_inv0  := public.autotest_invariant_run(v_run, 'baseline');
+  v_auth  := public.autotest_auth_matrix_run(v_run, true);
+  v_probe := public.autotest_auth_matrix_probe(v_run, null);
+  v_plan  := public.autotest_fuzz_plan(v_run, v_seed, p_fuzz_rpcs, p_variants, null);
+  v_fuzz  := public.autotest_fuzz_exec(v_run, null);
+  v_inv1  := public.autotest_invariant_run(v_run, 'after_fuzz');
+
+  if v_session is not null then
+    begin
+      v_purge := public.test_purge(false);
+      perform public.test_session_end(v_session);
+    exception when others then v_purge := jsonb_build_object('ok', false, 'error', sqlstate);
+    end;
+  end if;
+
+  select gaps_written into v_gaps from public.autotest_run where id = v_run;
+
+  update public.autotest_run
+     set finished_at = now(),
+         status = case when coalesce((v_auth->>'failed')::bigint,0) > 0
+                        or coalesce((v_fuzz->>'failed')::int,0) > 0
+                        or coalesce((v_inv1->>'broken')::int,0) > 0
+                       then 'findings' else 'clean' end,
+         summary = summary || jsonb_build_object(
+           'session', coalesce(v_sess,'{}'::jsonb), 'purge', coalesce(v_purge,'{}'::jsonb),
+           'plan', coalesce(v_plan,'{}'::jsonb))
+   where id = v_run;
+
+  return jsonb_build_object('ok', true, 'run_id', v_run, 'seed', v_seed,
+    'auth', v_auth, 'probe', v_probe, 'fuzz', v_fuzz,
+    'invariants_baseline', v_inv0, 'invariants_after_fuzz', v_inv1,
+    'gaps', v_gaps);
+end $fn$;
+
+-- Nightly, on the ONE dispatcher (#273). cron_dispatch is SECURITY INVOKER and
+-- runs as postgres, so the probe keeps its role-switching fidelity here.
+insert into public.cron_task (name, ord, mode, work_sql, enabled, base_interval_s, note)
+values ('c636_safety_net_nightly', 940, 'poll',
+        $w$select public.autotest_safety_net_run('nightly safety net', null, 150, 2)$w$,
+        true, 86400,
+        'CHANGE #636 — auth matrix + property fuzz + invariant oracles, once a night.')
+on conflict (name) do update
+  set work_sql = excluded.work_sql, note = excluded.note, mode = excluded.mode,
+      base_interval_s = excluded.base_interval_s;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- THE SCREEN'S ONE RPC. Every word below is a string, not a number the client
+-- formats: the panel is a printer.
+-- ─────────────────────────────────────────────────────────────────────────────
+insert into public.ui_copy (key, value) values
+  ('safety_net.title',        to_jsonb('Safety net'::text)),
+  ('safety_net.subtitle',     to_jsonb('Tests the system generates for itself — nobody writes these cases.'::text)),
+  ('safety_net.run_label',    to_jsonb('Run the safety net'::text)),
+  ('safety_net.running_label',to_jsonb('Running…'::text)),
+  ('safety_net.never_label',  to_jsonb('Never run yet'::text)),
+  ('safety_net.never_sub',    to_jsonb('Run it once to generate the matrix, the fuzz corpus and the oracle baseline.'::text)),
+  ('safety_net.auth_title',   to_jsonb('Auth matrix'::text)),
+  ('safety_net.fuzz_title',   to_jsonb('Property fuzzing'::text)),
+  ('safety_net.inv_title',    to_jsonb('Invariant oracles'::text)),
+  ('safety_net.empty_row',    to_jsonb('Nothing to answer for.'::text)),
+  ('safety_net.footnote',     to_jsonb('Every case is a pure function of its seed, so a failure replays byte for byte. Nothing a case does survives it — each call runs in a subtransaction that is always rolled back.'::text))
+on conflict (key) do update set value = excluded.value;
+
+create or replace function public.autotest_safety_net_home()
+returns jsonb
+language plpgsql stable security definer set search_path to 'public' as $fn$
+declare v_run public.autotest_run; v_tiles jsonb; v_sections jsonb;
+begin
+  perform public._dev_guard();
+  select * into v_run from public.autotest_run order by id desc limit 1;
+
+  if v_run.id is null then
+    return jsonb_build_object(
+      'has', true, 'has_run', false,
+      'title',    public.uic('safety_net.title','Safety net'),
+      'subtitle', public.uic('safety_net.subtitle',''),
+      'empty_title', public.uic('safety_net.never_label','Never run yet'),
+      'empty_sub',   public.uic('safety_net.never_sub',''),
+      'tiles', '[]'::jsonb, 'sections', '[]'::jsonb,
+      'run_label', public.uic('safety_net.run_label','Run the safety net'),
+      'running_label', public.uic('safety_net.running_label','Running…'),
+      'footnote', public.uic('safety_net.footnote',''));
+  end if;
+
+  v_tiles := jsonb_build_array(
+    jsonb_build_object('key','auth',
+      'label', public.uic('safety_net.auth_title','Auth matrix'),
+      'value', to_char(v_run.auth_total, 'FM999,999,999') || ' checks',
+      'sub',   v_run.auth_failed || ' open',
+      'tone',  case when v_run.auth_failed > 0 then 'danger' else 'success' end),
+    jsonb_build_object('key','fuzz',
+      'label', public.uic('safety_net.fuzz_title','Property fuzzing'),
+      'value', v_run.fuzz_total || ' cases',
+      'sub',   v_run.fuzz_failed || ' broke',
+      'tone',  case when v_run.fuzz_failed > 0 then 'danger' else 'success' end),
+    jsonb_build_object('key','invariants',
+      'label', public.uic('safety_net.inv_title','Invariant oracles'),
+      'value', v_run.inv_total || ' oracles',
+      'sub',   v_run.inv_failed || ' broken',
+      'tone',  case when v_run.inv_failed > 0 then 'danger' else 'success' end),
+    jsonb_build_object('key','gaps',
+      'label', 'Findings filed',
+      'value', v_run.gaps_written || ' gaps',
+      'sub',   'seed ' || v_run.seed,
+      'tone',  case when v_run.gaps_written > 0 then 'warning' else 'success' end));
+
+  v_sections := jsonb_build_array(
+    jsonb_build_object('key','auth',
+      'title', public.uic('safety_net.auth_title','Auth matrix'),
+      'rows', coalesce((
+        select jsonb_agg(jsonb_build_object(
+                 'title', k.proname || ' answers ' || k.role_key,
+                 'sub',   left(k.evidence, 220),
+                 'badge', case k.verdict when 'proven' then 'PROVEN' else upper(k.verdict) end,
+                 'tone',  case when k.severity = 'critical' then 'danger'
+                               when k.severity = 'high'     then 'warning'
+                               else 'info' end) order by (k.severity='critical') desc, k.proname)
+          from (select * from public.autotest_auth_check
+                 where verdict in ('proven','fail')
+                 order by (severity='critical') desc, (verdict='proven') desc, proname
+                 limit 25) k), '[]'::jsonb)),
+    jsonb_build_object('key','fuzz',
+      'title', public.uic('safety_net.fuzz_title','Property fuzzing'),
+      'rows', coalesce((
+        select jsonb_agg(jsonb_build_object(
+                 'title', x.proname || ' · ' || coalesce(x.assertion,'-'),
+                 'sub',   'as ' || x.role_key || ' · seed ' || x.seed || ' v' || x.variant
+                          || ' · ' || x.args_label || ' · ' || coalesce(x.sqlstate,'-')
+                          || ' ' || left(coalesce(x.message,''), 140),
+                 'badge', upper(x.outcome),
+                 'tone',  case when x.severity = 'critical' then 'danger'
+                               when x.severity = 'high'     then 'warning' else 'info' end)
+                 order by (x.severity='critical') desc, x.proname)
+          from (select c.proname, c.role_key, c.seed, c.variant, c.args_label,
+                       r.sqlstate, r.message, r.outcome, r.severity, r.assertion
+                  from public.autotest_fuzz_result r
+                  join public.autotest_fuzz_case c on c.id = r.case_id
+                 where r.verdict = 'fail'
+                 order by (r.severity='critical') desc, c.proname limit 25) x), '[]'::jsonb)),
+    jsonb_build_object('key','invariants',
+      'title', public.uic('safety_net.inv_title','Invariant oracles'),
+      'rows', coalesce((
+        select jsonb_agg(jsonb_build_object(
+                 'title', i.title,
+                 'sub',   r.key || ' · ' || r.violations || ' violation(s) at ' || r.phase
+                          || case when coalesce(r.sample,'') = '' then ''
+                                  else ' · ' || left(r.sample, 200) end,
+                 'badge', upper(r.verdict),
+                 'tone',  case when r.verdict = 'pass' then 'success'
+                               when i.mode = 'enforce' then 'danger' else 'warning' end)
+                 order by (r.verdict <> 'pass') desc, i.sort)
+          from public.autotest_invariant_result r
+          join public.autotest_invariant i on i.key = r.key
+         where r.run_id = v_run.id and r.phase = 'after_fuzz'), '[]'::jsonb)));
+
+  return jsonb_build_object(
+    'has', true, 'has_run', true,
+    'title',    public.uic('safety_net.title','Safety net'),
+    'subtitle', public.uic('safety_net.subtitle',''),
+    'run_label',     public.uic('safety_net.run_label','Run the safety net'),
+    'running_label', public.uic('safety_net.running_label','Running…'),
+    'empty_row',     public.uic('safety_net.empty_row','Nothing to answer for.'),
+    'footnote',      public.uic('safety_net.footnote',''),
+    'run', jsonb_build_object(
+      'label', coalesce(v_run.label,''),
+      'when_label', to_char(v_run.started_at at time zone 'Asia/Kolkata', 'DD Mon YYYY, HH24:MI') || ' IST',
+      'status_label', case v_run.status when 'clean' then 'All clear'
+                                        when 'findings' then 'Findings filed'
+                                        else 'Running' end,
+      'status_tone', case v_run.status when 'clean' then 'success'
+                                       when 'findings' then 'danger' else 'info' end,
+      'seed_label', 'seed ' || v_run.seed),
+    'tiles', v_tiles, 'sections', v_sections);
+end $fn$;

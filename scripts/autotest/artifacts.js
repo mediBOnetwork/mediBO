@@ -85,6 +85,32 @@ function download(objectPath, outFile) {
   });
 }
 
+/// Delete exactly the objects the BACKEND named (visual_prune). This never
+/// chooses what to delete — a bot that decided which evidence to destroy is a
+/// different and much worse tool.
+function remove(paths) {
+  const key = process.env.AUTOTEST_SERVICE_KEY || '';
+  const list = (paths || []).filter(Boolean);
+  if (list.length === 0) return Promise.resolve(0);
+  return new Promise((resolve) => {
+    const u = new URL(`${api.SUPA_URL}/storage/v1/object/${BUCKET}`);
+    const data = Buffer.from(JSON.stringify({ prefixes: list }));
+    const req = https.request({
+      hostname: u.hostname, path: u.pathname + u.search, method: 'DELETE',
+      headers: {
+        apikey: key || api.ANON_KEY,
+        Authorization: `Bearer ${key || api.ANON_KEY}`,
+        'Content-Type': 'application/json',
+        'Content-Length': data.length
+      }
+    }, (res) => { res.resume(); res.on('end', () => resolve(list.length)); });
+    req.on('error', () => resolve(0));
+    req.setTimeout(TIMEOUT_MS, () => { req.destroy(); resolve(0); });
+    req.write(data);
+    req.end();
+  });
+}
+
 /// run-<id>/<feature>/<role>/<viewport>.png — readable at a glance in the
 /// bucket browser, and unique per run so an approved baseline is never
 /// overwritten by the next pass.
@@ -93,4 +119,4 @@ function objectPath(runId, feature, role, name) {
   return `run-${runId}/${slug(feature)}/${slug(role || 'anon')}/${slug(name)}`;
 }
 
-module.exports = { BUCKET, upload, download, objectPath };
+module.exports = { BUCKET, upload, download, remove, objectPath };

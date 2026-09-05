@@ -1328,3 +1328,48 @@ on conflict (name) do update
        night_only = excluded.night_only;
 
 select public.test_coverage_refresh();
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 14. THE STORE MUST NOT GROW FOREVER
+-- ─────────────────────────────────────────────────────────────────────────
+-- A nightly pass photographs every screen at every width. Kept forever that is
+-- a gigabyte a month of pictures nobody will open — and a full disk on the
+-- build VM breaks far more than this lane. So the backend NAMES what may go:
+-- everything from a run older than the last `p_keep`, minus anything an
+-- approved baseline still points at. The VM deletes exactly that list and
+-- decides nothing.
+create or replace function public.visual_prune(p_keep int default 5)
+returns jsonb
+language plpgsql security definer set search_path to 'public'
+as $$
+declare v_keep int := greatest(coalesce(p_keep, 5), 1); v_paths jsonb; v_ids bigint[];
+begin
+  perform public._dev_guard();
+
+  with keep as (
+    select id from public.test_runs where kind = 'visual'
+     order by started_at desc limit v_keep
+  ), old as (
+    select s.* from public.visual_shot s
+     where s.run_id not in (select id from keep)
+  ), doomed as (
+    select o.id, p.path
+      from old o
+      cross join lateral (values (o.path), (o.diff_path)) as p(path)
+     where coalesce(p.path,'') <> ''
+       -- An approved baseline's picture is the one thing that outlives its run.
+       and not exists (select 1 from public.visual_baseline b
+                        where b.path = p.path and b.bucket = o.bucket)
+  )
+  select coalesce(jsonb_agg(distinct to_jsonb(d.path)), '[]'::jsonb),
+         coalesce(array_agg(distinct d.id), array[]::bigint[])
+    into v_paths, v_ids from doomed d;
+
+  delete from public.visual_shot where id = any(v_ids);
+
+  return jsonb_build_object('ok', true, 'bucket', 'test-artifacts',
+                            'paths', v_paths,
+                            'shots_removed', coalesce(array_length(v_ids,1), 0),
+                            'keep_runs', v_keep);
+end $$;
+grant execute on function public.visual_prune(int) to authenticated, service_role;

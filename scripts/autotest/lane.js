@@ -38,6 +38,12 @@ class LaneSession {
     this.ctx = null;
     this.page = null;
     this.scratch = {};
+    // The visual lane drives a feature's contract steps only to GET somewhere,
+    // and harness.runStep photographs every step it runs. Four extra PNGs per
+    // screen per role per width is hundreds of megabytes a night for pictures
+    // nobody opens — and a full disk on this box breaks more than this lane.
+    // While `quiet` is set, a step's screenshot is simply not taken.
+    this.quiet = false;
   }
 
   async open(session) {
@@ -70,7 +76,7 @@ class LaneSession {
   }
 
   async shot(name) {
-    if (!this.page) return null;
+    if (!this.page || this.quiet) return null;
     const file = path.join(this.artifactDir,
       `${slug(this.feature)}__${slug(this.role || 'anon')}__${slug(this.viewport.key)}__` +
       `${String(this.shots.length + 1).padStart(2, '0')}_${slug(name)}.png`);

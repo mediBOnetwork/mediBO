@@ -122,6 +122,8 @@ async function main() {
       let rendered = false;
       try {
         await fsn.open(sessionCache[s.role]);
+        // Getting there is not evidence; the ONE settled frame is.
+        fsn.quiet = true;
         const steps = Array.isArray(s.steps) ? s.steps : [];
         for (let i = 0; i < steps.length; i++) {
           const step = Object.assign({}, steps[i]);
@@ -134,6 +136,7 @@ async function main() {
         }
         rendered = await fsn.painted(20000);
         await fsn.page.waitForTimeout(1500);   // let the last frame settle
+        fsn.quiet = false;
         const file = await fsn.shot('screen');
         consoleErrors += fsn.consoleErrors.length;
         networkFailures += fsn.networkFailures.length;
@@ -197,6 +200,16 @@ async function main() {
       p_note: JSON.stringify((finished && finished.totals) || {}).slice(0, 300)
     }, null);
   }
+  // Old pictures go LAST, and only the ones the backend names: no approved
+  // baseline is ever in that list.
+  try {
+    const prune = await api.rpc('visual_prune', { p_keep: 5 }, null);
+    const gone = await store.remove((prune && prune.paths) || []);
+    if (gone) console.log(`[visual] pruned ${gone} old artifact(s) from ${store.BUCKET}`);
+  } catch (e) {
+    console.log(`[visual] prune skipped — ${String(e.message).slice(0, 120)}`);
+  }
+
   console.log(`[visual] ${shots.length} shot(s) · ` + JSON.stringify(totals));
   console.log('[visual] review them at Dev Queue ▸ Tools ▸ Visual baselines');
   return 0;

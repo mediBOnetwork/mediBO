@@ -295,7 +295,11 @@ fi
 # ── 1. keystore (build path only) ───────────────────────────────────────────
 if [ ! -f android/key.properties ]; then
   log "key.properties absent — restoring the upload keystore from the Vault"
-  bash "$RUNNER/restore_keystore.sh" >>"$LOG" 2>&1 \
+  # CHANGE #1801 — the lane runs from a main WORKTREE (~/mediBO is whatever
+  # branch a worker left checked out, and #1801 found it without this script at
+  # all). restore_keystore.sh defaulted to $HOME/mediBO, so it would restore the
+  # keystore into a tree nobody is building and this one would still die.
+  MEDIBO_REPO="$REPO" bash "$RUNNER/restore_keystore.sh" >>"$LOG" 2>&1 \
     || die "cannot restore the upload keystore from the Vault (ANDROID_UPLOAD_KEYSTORE_B64)"
 fi
 STORE=$(sed -n 's/^storeFile=//p' android/key.properties | head -1)

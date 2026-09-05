@@ -6,10 +6,12 @@
 -- thing that ever moves a run off 'running', and a killed process never calls
 -- it. #634 shipped no sweeper, so the row is immortal.
 --
--- That is not cosmetic. `visual_baseline_home()` reads the latest visual run to
--- decide what the review queue is showing, and `visual_run_request()` refuses a
--- new run while one is in flight — so ONE kill silences the lane forever and
--- the screen keeps reporting a run that stopped an hour ago as live.
+-- That is not cosmetic. `visual_baseline_home()` reads the LATEST visual run
+-- (max(id)) to say what the review queue is showing, so one kill leaves the
+-- screen reporting a run that died an hour ago as still going — permanently,
+-- because nothing else ever writes that row. The request it was claimed by is
+-- stranded at 'claimed' for the same reason: `test_run_request_claim` only ever
+-- moves a request forward.
 --
 -- A run that has not been touched for `stale_after` is ABORTED, not failed: the
 -- lane did not disprove anything, it stopped being alive. The abort carries the

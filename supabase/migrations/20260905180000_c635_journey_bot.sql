@@ -1042,13 +1042,19 @@ begin
 end $function$;
 
 -- The screen itself is a registered feature, so the bot tests the bot.
+-- Column order matters here, not just the values: the protected gate
+-- `dev_tools_registry_test` reads every migration for the shape
+-- (route_key, sort_order, 'medibo', … 'dev_tools') to prove that every tool the
+-- registry admits is one this build can open. Registering the tile in a
+-- different column order would leave it invisible to that gate, which is the
+-- exact defect (#349/#468) the gate exists to retire.
 insert into public.feature_registry
-  (feature_key, label, group_label, category, surface, route_key, sort_order,
-   owner, is_active, roles_allowed, icon_key, description,
+  (feature_key, label, group_label, category, route_key, sort_order, owner,
+   surface, is_active, roles_allowed, icon_key, description,
    test_entry, test_roles, test_steps, test_expect, test_automatable, test_contract_at)
 values (
   'devtool.journey_bot', 'Journey bot', 'Proof & QA', 'more_system',
-  'dev_tools', 'journey_bot', 6, 'medibo', true, array['admin','super_admin'], 'map',
+  'journey_bot', 6, 'medibo', 'dev_tools', true, array['admin','super_admin'], 'map',
   'Every registered feature driven as every role, with hostile variants, and the gaps that came out of it.',
   '/admin/dev-queue', array['admin'],
   '[{"kind":"auth"},{"kind":"goto","path":"/admin/dev-queue"},{"kind":"settle","ms":4000},{"kind":"rpc","fn":"autotest_home","as":"service"}]'::jsonb,

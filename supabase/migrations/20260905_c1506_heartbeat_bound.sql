@@ -215,6 +215,10 @@ begin
 
   select greatest(coalesce((value->'heartbeat'->>'log_cap_chars')::int, 24000), 12000)
     into v_cap from dev_runner_config where key='worker_pool';
+  -- SELECT INTO leaves v_cap NULL when the row is absent (a fresh build branch
+  -- restores the schema, not the config rows), and `v_worst > NULL` is NULL -
+  -- a guard that can never fire. Fall back to the same default the function uses.
+  v_cap := coalesce(v_cap, 24000);
   -- Bounded on purpose: only the rows the heartbeat is actually writing. A
   -- max(length(build_log)) over the whole table would detoast every historical
   -- log - the exact cost this change exists to remove.

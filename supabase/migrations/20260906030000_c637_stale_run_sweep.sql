@@ -1,3 +1,5 @@
+-- replay-target: production
+-- (test_runs and the cron dispatcher are production-side.)
 -- CHANGE #637 — a lane that is killed must not leave a run that never ends.
 --
 -- Found on this command's own database: three visual runs (ids 3, 4, 5) sat at

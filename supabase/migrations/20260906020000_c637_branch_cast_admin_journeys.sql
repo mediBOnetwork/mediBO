@@ -1,3 +1,5 @@
+-- replay-target: production
+-- (wa_event_routes is a production table; the control plane has no send path.)
 -- CHANGE #637 — the two admin journeys this command was blocked behind stop
 -- waiting on a hand-inserted production row.
 --

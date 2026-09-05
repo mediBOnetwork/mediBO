@@ -1,3 +1,6 @@
+-- replay-target: production
+-- (staff_nav_tab is on the control plane too, but its icon_key foreign key points
+--  at ui_icon, which is not — so these rows belong to the app database only.)
 -- CHANGE #637 — the staff IA journey stops reporting an empty lookup table as
 -- a broken navigation.
 --

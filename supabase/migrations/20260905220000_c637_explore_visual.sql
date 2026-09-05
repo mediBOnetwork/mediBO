@@ -1,3 +1,6 @@
+-- replay-target: production
+-- (test_runs / test_results / visual_* / explore_* live on production only; the
+--  feature_registry and ui_copy reads are of the production copies.)
 -- CHANGE #637 — Exploratory LLM tester + visual regression, part 4 of the
 -- self-testing bot. It catches what an assertion cannot.
 --

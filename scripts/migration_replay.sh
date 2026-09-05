@@ -155,7 +155,24 @@ for f in "${pending[@]}"; do
   # told anything. A file that lands on production and dies here is a FAILED
   # batch: half-applied across two databases is exactly the state #1761 left
   # behind and nobody noticed for two days.
-  if [ -n "$DEVDB" ] && ! grep -qEi "(^|[^A-Za-z0-9_])(${CP_RE})([^A-Za-z0-9_]|$)" "$f"; then
+  # CHANGE #637 — the file may SAY where it belongs, and the word beats the
+  # guess. The heuristic reads intent out of table names, and #637 is the
+  # counterexample it cannot survive: the visual/exploratory lane is entirely
+  # production-side (test_runs, test_results, visual_shot) and merely READS
+  # feature_registry and ui_copy, which exist on both databases. Named a
+  # control-plane table, routed to the control plane, dead on `relation
+  # "public.test_runs" does not exist` — and a failed control-plane pass fails
+  # the whole batch, so one mis-guessed file blocks every branch beside it.
+  #   -- replay-target: production     (skip the control-plane pass)
+  #   -- replay-target: control-plane  (take it, whatever the names say)
+  #   -- replay-target: both           (same; the production pass always runs)
+  # Anything else, or nothing at all, keeps the table-name heuristic.
+  target=$(grep -m1 -oEi '^--[[:space:]]*replay-target:[[:space:]]*[a-z-]+' "$f" \
+             | sed -E 's/.*:[[:space:]]*//' | tr 'A-Z' 'a-z')
+  if [ -n "$DEVDB" ] && [ "$target" = "production" ]; then
+    log "$b declares replay-target: production — production only"
+  elif [ -n "$DEVDB" ] && [ -z "$target" ] \
+       && ! grep -qEi "(^|[^A-Za-z0-9_])(${CP_RE})([^A-Za-z0-9_]|$)" "$f"; then
     log "$b names no control-plane table — production only"
   elif [ -n "$DEVDB" ]; then
     already=$(psql "$DEVDB" -Atc "select 1 from public.migration_replay_dev_ledger where file = $(printf "%s" "$b" | sed "s/'/''/g; s/^/'/; s/$/'/")" 2>/dev/null)

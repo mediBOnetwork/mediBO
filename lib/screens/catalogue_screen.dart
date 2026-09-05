@@ -548,26 +548,11 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
                   _go(_route.copy(filters: _route.filters.toggle(g, k, single: single))),
               onClear: () => _go(_route.copy(filters: const CatFilterState())),
             ),
-          // CHANGE #748 — export what is ON SCREEN. The ids are the list this
-          // page is showing, so "my catalogue list" means the filtered list the
-          // buyer is looking at and not the whole 5.6 lakh catalogue.
-          if (_route.showsList &&
-              _extras['export'] is Map &&
-              (_extras['export'] as Map)['show'] == true &&
-              (_list?.items.isNotEmpty ?? false))
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: CatalogueExportAction(
-                  config: Map<String, dynamic>.from(_extras['export'] as Map),
-                  productIds: (_list?.items ?? const [])
-                      .map((p) => int.tryParse(p.id))
-                      .whereType<int>()
-                      .toList(),
-                ),
-              ),
-            ),
+          // CHANGE #1362 — the catalogue export ("Make the PDF") is GONE, on
+          // purpose: it let anyone bulk-download the product list a competitor
+          // would otherwise have to scrape. There is no export widget, no
+          // `export` block in catalogue_extras() and no catalogue_export_*
+          // RPC left to call. Do not reintroduce one here.
           Expanded(child: _body()),
         ],
       ),

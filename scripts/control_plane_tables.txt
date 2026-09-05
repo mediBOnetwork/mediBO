@@ -1,0 +1,87 @@
+# CHANGE #1802 — the tables that live on the CONTROL PLANE (medibo-dev) after
+# CHANGE #1761, one per line. This is the list cutover_1761.sh moved, and it is
+# what scripts/migration_replay.sh uses to decide whether a migration file
+# belongs on the control plane as well as on production.
+#
+# Why a list and not "replay everything on both": medibo-dev is a pg_dump clone
+# that has drifted — 20260905183000_c668_test_cust1_owns_seeded_shop.sql applied
+# cleanly on production and died on medibo-dev at `function identity_norm does
+# not exist`, because that helper was added to production after the clone. A
+# seed for the customer storefront has no business on the control plane at all;
+# a migration that redefines dev_cmd_complete has no business ONLY on production.
+# The distinction is which tables the file touches, so that is what is checked.
+#
+# Adding a table here is what makes future migrations for it reach medibo-dev.
+admins
+agent_memory
+agent_messages
+agent_resume_intent
+agent_threads
+app_releases
+app_settings
+app_version_state
+backup_log
+branch_health
+build_branch
+build_branch_build
+build_branch_config
+build_branch_refusal
+db_guard_config
+deploy_batch
+deploy_lock
+deploy_queue
+deploy_registry
+dev_admission_config
+dev_admission_event
+dev_agent_incident
+dev_agent_session
+dev_audit_log
+dev_changelog
+dev_claude_auth
+dev_command_drafts
+dev_command_messages
+dev_command_spec_item
+dev_command_templates
+dev_commands
+dev_context_event
+dev_context_metrics_cache
+dev_draft_preferences
+dev_fail_rule
+dev_journey_runs
+dev_journeys
+dev_lessons
+dev_qa_scope_config
+dev_rc_event
+dev_resume_ledger
+dev_runner_breaker_event
+dev_runner_config
+dev_runner_health
+dev_selftest_log
+dev_step_fact_rule
+feature_gaps
+feature_registry
+file_leases
+file_predict_rule
+file_shared_surface
+gcp_costs
+gcp_schedules
+god_file_debt
+lease_event
+legal_pages
+migration_replay_ledger
+ops_drill_run
+ops_runbook
+play_config
+play_notes_area
+play_release
+play_track_state
+qa_findings
+qa_test_identities
+runner_action_queue
+runner_boot_event
+runner_session_env
+secret_registry
+staff_nav_tab
+ui_copy
+verify_run_log
+vm_health

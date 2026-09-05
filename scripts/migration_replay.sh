@@ -38,6 +38,28 @@ if [ -f "$DEVDBFILE" ]; then
   # One project, two names, on a box whose cutover never happened: nothing to do.
   [ "$DEVDB" = "$DB" ] && DEVDB=""
 fi
+
+# WHICH files go to the control plane — the tables #1761 moved, and only those.
+# Measured the hard way in batch 559: replaying EVERY file on medibo-dev died on
+# 20260905183000_c668_test_cust1_owns_seeded_shop.sql at `function
+# public.identity_norm(unknown) does not exist`. That file seeds the customer
+# storefront and has no business on the control plane; medibo-dev is a pg_dump
+# clone that has drifted from production's app schema, and chasing that drift is
+# not this script's job. A migration that redefines dev_cmd_complete is the one
+# that must land on both, and it is recognisable by the tables it names.
+CP_TABLES="$REPO/scripts/control_plane_tables.txt"
+[ -f "$CP_TABLES" ] || CP_TABLES="$HOME/mediBO-runner/cutover_1761.tables"
+CP_RE=""
+if [ -n "$DEVDB" ] && [ -f "$CP_TABLES" ]; then
+  CP_RE=$(grep -vE '^[[:space:]]*(#|$)' "$CP_TABLES" | tr -cd 'A-Za-z0-9_\n' | grep -v '^$' | paste -sd'|' -)
+fi
+if [ -n "$DEVDB" ] && [ -z "$CP_RE" ]; then
+  log "WARNING: no control-plane table list ($CP_TABLES) — the control-plane pass is OFF for this batch"
+  "$DEVCMD" rpc rg_alert_raise "$(jq -nc '{p_kind:"migration_replay",p_level:"warn",
+     p_title:"control-plane replay disabled",
+     p_detail:"scripts/control_plane_tables.txt is missing, so migrations were applied to production only"}')" >/dev/null 2>&1 || true
+  DEVDB=""
+fi
 cd "$REPO" || exit 1
 log() { printf '[%s] replay: %s\n' "$(date -u +%FT%TZ)" "$*"; }
 
@@ -133,7 +155,9 @@ for f in "${pending[@]}"; do
   # told anything. A file that lands on production and dies here is a FAILED
   # batch: half-applied across two databases is exactly the state #1761 left
   # behind and nobody noticed for two days.
-  if [ -n "$DEVDB" ]; then
+  if [ -n "$DEVDB" ] && ! grep -qEi "(^|[^A-Za-z0-9_])(${CP_RE})([^A-Za-z0-9_]|$)" "$f"; then
+    log "$b names no control-plane table — production only"
+  elif [ -n "$DEVDB" ]; then
     already=$(psql "$DEVDB" -Atc "select 1 from public.migration_replay_dev_ledger where file = $(printf "%s" "$b" | sed "s/'/''/g; s/^/'/; s/$/'/")" 2>/dev/null)
     if [ "$already" != "1" ]; then
       if psql "$DEVDB" -q -v ON_ERROR_STOP=1 -c "set lock_timeout='30s'" -f "$f" >/tmp/replay_dev_$v.log 2>&1; then

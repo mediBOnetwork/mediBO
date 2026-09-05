@@ -187,9 +187,17 @@ class ToneChip extends StatelessWidget {
         else if (icon != null)
           Icon(icon, size: 13, color: tone.fg),
         if (spinning || icon != null) const SizedBox(width: 5),
-        Text(label,
-            style: TextStyle(
-                fontSize: 12, fontWeight: FontWeight.w600, color: tone.fg)),
+        // CHANGE #1570 — Flexible, so a chip carrying a SENTENCE wraps inside
+        // whatever width its parent gives it instead of overflowing. The Row is
+        // still mainAxisSize.min, so a short label is still hugged; this only
+        // bites when the parent has already constrained the chip (a Flexible
+        // ToneChip in a Row), which is exactly when clipping the backend's own
+        // words would be worst.
+        Flexible(
+          child: Text(label,
+              style: TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w600, color: tone.fg)),
+        ),
       ]),
     );
   }

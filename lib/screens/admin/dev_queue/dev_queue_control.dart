@@ -47,6 +47,7 @@ class DevQueueControl extends StatefulWidget {
     super.key,
     required this.service,
     this.startExpanded = false,
+    this.embedded = false,
   });
 
   /// CHANGE #1197 — open the panel on arrival.
@@ -57,6 +58,18 @@ class DevQueueControl extends StatefulWidget {
   /// render-log key. `/admin/dev-queue?panel=runner` sets this, which makes the
   /// panel provable and gives Om a link that lands straight on it.
   final bool startExpanded;
+
+  /// CHANGE #1570 — draw the CONTENTS only, with no card chrome of its own.
+  ///
+  /// #1367 put the v3 strip ABOVE this card rather than replacing it, and the
+  /// top of Dev Queue has shown two runner cards ever since — overlapping
+  /// headers, two sets of toggles, one of them stale. Neither could simply be
+  /// deleted: v3 knows whether a capability is actually RUNNING, and this card
+  /// owns the breaker, the usage meter, health, the worker grid and context
+  /// economy. So this one moves INSIDE v3 as its footer. Embedded means: no
+  /// Container, no margin, no shadow, and no VM/Claude/Workflow rows — v3
+  /// already draws those three, with `actual` beside `desired`.
+  final bool embedded;
 
   @override
   State<DevQueueControl> createState() => _DevQueueControlState();
@@ -445,24 +458,7 @@ class _DevQueueControlState extends State<DevQueueControl> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: kBorder),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withValues(alpha: 0.05),
-              blurRadius: 8,
-              offset: const Offset(0, 2)),
-        ],
-      ),
-      // The whole card is a tap-to-expand panel: collapsed by default (a slim
-      // summary bar so it never blocks the list), tapped open to reveal the
-      // toggles + real usage. No chevron — the header itself is the control.
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    final body = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         _blockedBanner(),
         InkWell(
           onTap: () {
@@ -496,12 +492,16 @@ class _DevQueueControlState extends State<DevQueueControl> {
         _syncFailureBadge(),
         if (_expanded) ...[
           const SizedBox(height: 4),
-          _row('vm', c('dev_queue.ctl_vm'), Icons.dns_outlined, _vmChip()),
-          _divider(),
-          _row('claude', c('dev_queue.ctl_claude'), Icons.terminal, _claudeChip()),
-          _divider(),
-          _row('workflow', c('dev_queue.ctl_workflow'), Icons.sync, _workflowChip()),
-          _divider(),
+          // The three toggles are v3's when embedded — two sets of switches for
+          // the same three keys is how a card starts disagreeing with itself.
+          if (!widget.embedded) ...[
+            _row('vm', c('dev_queue.ctl_vm'), Icons.dns_outlined, _vmChip()),
+            _divider(),
+            _row('claude', c('dev_queue.ctl_claude'), Icons.terminal, _claudeChip()),
+            _divider(),
+            _row('workflow', c('dev_queue.ctl_workflow'), Icons.sync, _workflowChip()),
+            _divider(),
+          ],
           WorkerGridCard(
             pool: (_snap['pool'] as Map?)?.cast<String, dynamic>() ?? const {},
             disk: _disk,
@@ -530,7 +530,26 @@ class _DevQueueControlState extends State<DevQueueControl> {
             ContextEconomyCard(payload: _context),
           ],
         ],
-      ]),
+      ]);
+    if (widget.embedded) return body;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: kBorder),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 8,
+              offset: const Offset(0, 2)),
+        ],
+      ),
+      // The whole card is a tap-to-expand panel: collapsed by default (a slim
+      // summary bar so it never blocks the list), tapped open to reveal the
+      // toggles + real usage. No chevron — the header itself is the control.
+      child: body,
     );
   }
 

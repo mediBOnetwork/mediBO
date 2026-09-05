@@ -88,6 +88,16 @@ class DeployLaneSection extends StatelessWidget {
               color: kTextHi,
             ),
           ),
+          // CHANGE #1674 — the batch WINDOW. A lane that is deliberately
+          // waiting for a second branch reads as a stall unless it says so,
+          // and the sentence is deploy_lane_status()'s, never Dart's.
+          if (((queue['window_label'] as String?) ?? '').isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(
+              (queue['window_label'] as String?) ?? '',
+              style: Ds.t.caption.copyWith(color: kTextLo),
+            ),
+          ],
           if (waiting.isEmpty) ...[
             SizedBox(height: Ds.space.x4),
             Text(
@@ -110,10 +120,32 @@ class DeployLaneSection extends StatelessWidget {
             SizedBox(height: Ds.space.x16),
             _row(
               (batch['label'] as String?) ?? '',
-              '',
+              ((batch['slowest_label'] as String?) ?? '') == '—'
+                  ? ''
+                  : (batch['slowest_label'] as String?) ?? '',
               (batch['value_label'] as String?) ?? '',
               (batch['tone'] as String?) ?? 'neutral',
             ),
+            // CHANGE #1674 — per-phase timings. "held 891s" never said WHICH
+            // half; each phase names its own seconds and whether the lane was
+            // held for it, and the backend already wrote both into the label.
+            for (final ph in (batch['phases'] as List?) ?? const []) ...[
+              SizedBox(height: Ds.space.x8),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      ((ph as Map)['label'] as String?) ?? '',
+                      style: Ds.t.caption.copyWith(color: kTextLo),
+                    ),
+                  ),
+                  ToneChip(
+                    label: ((ph)['phase'] as String?) ?? '',
+                    tone: toneByName((ph['tone'] as String?) ?? 'neutral'),
+                  ),
+                ],
+              ),
+            ],
           ],
 
           // ── wait vs hold: is the fleet queueing or building? ───────────

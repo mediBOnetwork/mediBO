@@ -747,6 +747,16 @@ class _Row extends StatelessWidget {
         ToneChip(
             label: (row['qa_chip']).toString(),
             tone: toneByName((row['qa_tone'] ?? 'neutral').toString())),
+      // CHANGE #1674 — the GRADE. Every command was xlarge because size_class
+      // was read off the spec's character count, so a two-file fix bought the
+      // same hostile QA as a schema rewrite and nothing on the card said so.
+      // dev_cmd_grade re-grades from the real diff and composes this sentence;
+      // Dart prints it and picks the glyph.
+      if ((row['grade_chip'] ?? '').toString().isNotEmpty)
+        ToneChip(
+            label: (row['grade_chip']).toString(),
+            tone: toneByName((row['grade_tone'] ?? 'info').toString()),
+            icon: Icons.straighten),
       if ((row['preview_chip'] ?? '').toString().isNotEmpty)
         ToneChip(
             label: (row['preview_chip']).toString(),

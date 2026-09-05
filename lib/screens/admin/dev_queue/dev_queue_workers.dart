@@ -48,6 +48,11 @@ class WorkerGridCard extends StatelessWidget {
     final active = asInt(_state['active_workers']);
     final cap = asInt(_config['cap']);
     final shrink = (_state['shrink_display'] ?? '').toString();
+    // CHANGE #1662 — Remote Control flapping. The sentence, and the tone it is
+    // painted in, are dev_rc_health()'s; the card decides nothing, not even
+    // whether there is a problem. Absent key = no banner, never a placeholder.
+    final rcBanner = (_state['rc_banner'] ?? '').toString();
+    final rcTone = (_state['rc_banner_tone'] ?? '').toString();
     final quota = (_state['quota_display'] ?? '').toString();
     final load = (_state['load_display'] ?? '').toString();
     // CHANGE #1149 — "branch: on · 2h 14m" / "branch: off" is the backend's
@@ -108,6 +113,11 @@ class WorkerGridCard extends StatelessWidget {
           ]),
         ),
       ],
+      // Remote Control flapping banner — the backend's own sentence.
+      if (rcBanner.isNotEmpty) ...[
+        SizedBox(height: Ds.space.x8),
+        _RcBanner(text: rcBanner, tone: rcTone),
+      ],
       // Shrink banner (only when the backend supplied a reason string).
       if (shrink.isNotEmpty) ...[
         SizedBox(height: Ds.space.x8),
@@ -167,6 +177,49 @@ class WorkerGridCard extends StatelessWidget {
       builder: (_) => _PoolSettingsSheet(config: _config, service: service),
     );
     if (changed == true) onChanged();
+  }
+}
+
+/// The Remote Control flapping banner (CHANGE #1662).
+///
+/// A session that keeps being opened and closed is a fact the BACKEND counts
+/// (dev_rc_event) and the BACKEND words (dev_rc_health.rc_banner); this widget
+/// only prints it. An unknown tone stays neutral rather than guessing a colour,
+/// so a new tone added server-side can never paint the card wrong.
+class _RcBanner extends StatelessWidget {
+  final String text;
+  final String tone;
+  const _RcBanner({required this.text, required this.tone});
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = switch (tone) {
+      'danger' => Ds.c.dangerSoft,
+      'warning' => Ds.c.warningSoft,
+      'success' => Ds.c.successSoft,
+      _ => Ds.c.infoSoft,
+    };
+    final fg = switch (tone) {
+      'danger' => Ds.c.danger,
+      'warning' => Ds.c.warning,
+      'success' => Ds.c.success,
+      _ => Ds.c.info,
+    };
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x8 + 2, vertical: Ds.space.x8),
+      decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rButton),
+      child: Row(children: [
+        Icon(Icons.link_off, size: Ds.space.x16, color: fg),
+        SizedBox(width: Ds.space.x8),
+        Flexible(
+          child: Text(text,
+              style: Ds.t.caption
+                  .copyWith(fontWeight: FontWeight.w600, color: fg)),
+        ),
+      ]),
+    );
   }
 }
 

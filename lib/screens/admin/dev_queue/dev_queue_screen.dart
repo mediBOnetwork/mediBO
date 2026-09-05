@@ -15,6 +15,7 @@ import 'dev_queue_gcp.dart';
 import 'dev_queue_qa.dart';
 import 'dev_queue_questions.dart';
 import 'cron_health_screen.dart';
+import 'strip_v3/strip_v3_card.dart';
 import '../admin_heartbeat_screen.dart';        // CHANGE #468
 import '../test_mode_screen.dart';             // CHANGE #573, wired #468
 import 'journey_library_screen.dart';
@@ -310,13 +311,26 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
               // cloud icon is now the single entry point (the card was a
               // duplicate that ate screen space).
               SliverToBoxAdapter(
-                child: DevQueueControl(
-                  service: _svc,
-                  // CHANGE #1197 — ?panel=runner lands with the runner panel
-                  // already open, so its contents can be photographed and can
-                  // write their render-log keys at all.
-                  startExpanded: Uri.base.queryParameters['panel'] == 'runner',
-                ),
+                child: Column(children: [
+                  // CHANGE #1367 — the v3 strip sits ABOVE the existing control
+                  // card rather than replacing it, deliberately. v2 owns the
+                  // toggles, the usage meter and the worker grid and all of
+                  // that still works; what it could never show is whether any
+                  // of it is actually RUNNING. So v3 adds exactly that — the
+                  // desired-vs-actual gap, named — and draws nothing at all
+                  // when there is no gap to report (strip_v3_card() returns
+                  // has:false / an empty `blocked`, and the view short-circuits).
+                  // Swapping v2 out wholesale would have put a day's worth of
+                  // working surface behind one build's worth of new code.
+                  const StripV3Card(),
+                  DevQueueControl(
+                    service: _svc,
+                    // CHANGE #1197 — ?panel=runner lands with the runner panel
+                    // already open, so its contents can be photographed and can
+                    // write their render-log keys at all.
+                    startExpanded: Uri.base.queryParameters['panel'] == 'runner',
+                  ),
+                ]),
               ),
               if (_draftBadge > 0)
                 SliverToBoxAdapter(child: _draftsStrip()),

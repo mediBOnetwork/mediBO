@@ -13,11 +13,31 @@
 #   scripts/migration_replay.sh <repo-dir> [dburl-file]
 # Exit 0 = every pending file applied (or nothing pending). Exit 1 = a file
 # failed; the batch must not deploy on top of a half-applied schema.
+#
+# CHANGE #1802 — AND ON THE CONTROL PLANE. #1761 moved dev_commands and every
+# dev_cmd_* / deploy_* / rg_* function to the medibo-dev project, but this
+# script kept replaying on production alone. A migration that redefines
+# dev_cmd_complete therefore landed on the ONE database that no longer has
+# dev_commands, and never reached the database the fleet actually calls:
+# #1758's bounded heartbeat was measured missing from medibo-dev days after it
+# "deployed". Every file is now applied to BOTH, prod first, and the ledger
+# records it only when both took it — so a control-plane migration can never
+# again report success from a database nobody reads. medibo-dev was cloned with
+# pg_dump and has no supabase_migrations schema, so its own ledger is a plain
+# table this script creates on first use; that also means the dev pass starts
+# from THIS batch and never mass-replays the repo's history.
 set -uo pipefail
 REPO="${1:?usage: migration_replay.sh <repo-dir> [dburl-file]}"
 DBFILE="${2:-$HOME/.medibo/dburl}"
 DEVCMD="$HOME/mediBO-runner/devcmd.sh"
 DB="$(cat "$DBFILE")"
+DEVDBFILE="${MEDIBO_DEV_DBURL_FILE:-$HOME/.medibo/dev_dburl}"
+DEVDB=""
+if [ -f "$DEVDBFILE" ]; then
+  DEVDB="$(cat "$DEVDBFILE")"
+  # One project, two names, on a box whose cutover never happened: nothing to do.
+  [ "$DEVDB" = "$DB" ] && DEVDB=""
+fi
 cd "$REPO" || exit 1
 log() { printf '[%s] replay: %s\n' "$(date -u +%FT%TZ)" "$*"; }
 
@@ -89,15 +109,43 @@ done
 [ -z "$token" ] && { log "could not take the exclusive DB lane"; exit 1; }
 trap '"$DEVCMD" dbunlock "$token" >/dev/null 2>&1 || true' EXIT
 
+# The control plane's own ledger. medibo-dev carries no supabase_migrations
+# schema (it was cloned data-only), so this is where "dev already has it" is
+# recorded. Created once, idempotently, and never read by anything but this.
+if [ -n "$DEVDB" ]; then
+  if ! psql "$DEVDB" -q -v ON_ERROR_STOP=1 -c "
+        create table if not exists public.migration_replay_dev_ledger(
+          file text primary key, applied_at timestamptz not null default now())" \
+        >/tmp/replay_devledger.log 2>&1; then
+    log "control plane unreachable ($(head -c 160 /tmp/replay_devledger.log)) — refusing to deploy a half-applied schema"
+    exit 1
+  fi
+fi
+
 rc=0
 for f in "${pending[@]}"; do
   b=$(basename "$f" .sql); v="${b%%_*}"; n="${b#*_}"
-  if psql "$DB" -q -v ON_ERROR_STOP=1 -c "set lock_timeout='30s'" -f "$f" >/tmp/replay_$v.log 2>&1; then
-    "$DEVCMD" rpc migration_replay_record "$(jq -nc --arg v "$v" --arg n "$n" '{p_version:$v,p_name:$n}')" >/dev/null 2>&1
-    log "applied $b"
-  else
+  if ! psql "$DB" -q -v ON_ERROR_STOP=1 -c "set lock_timeout='30s'" -f "$f" >/tmp/replay_$v.log 2>&1; then
     log "FAILED $b: $(grep -m1 -i 'error' /tmp/replay_$v.log)"
     rc=1; break
   fi
+  # CHANGE #1802 — the same file, on the control plane, before the ledger is
+  # told anything. A file that lands on production and dies here is a FAILED
+  # batch: half-applied across two databases is exactly the state #1761 left
+  # behind and nobody noticed for two days.
+  if [ -n "$DEVDB" ]; then
+    already=$(psql "$DEVDB" -Atc "select 1 from public.migration_replay_dev_ledger where file = $(printf "%s" "$b" | sed "s/'/''/g; s/^/'/; s/$/'/")" 2>/dev/null)
+    if [ "$already" != "1" ]; then
+      if psql "$DEVDB" -q -v ON_ERROR_STOP=1 -c "set lock_timeout='30s'" -f "$f" >/tmp/replay_dev_$v.log 2>&1; then
+        psql "$DEVDB" -q -c "insert into public.migration_replay_dev_ledger(file) values ($(printf "%s" "$b" | sed "s/'/''/g; s/^/'/; s/$/'/")) on conflict do nothing" >/dev/null 2>&1
+        log "applied $b on the control plane too"
+      else
+        log "FAILED $b on the CONTROL PLANE: $(grep -m1 -i 'error' /tmp/replay_dev_$v.log)"
+        rc=1; break
+      fi
+    fi
+  fi
+  "$DEVCMD" rpc migration_replay_record "$(jq -nc --arg v "$v" --arg n "$n" '{p_version:$v,p_name:$n}')" >/dev/null 2>&1
+  log "applied $b"
 done
 exit $rc

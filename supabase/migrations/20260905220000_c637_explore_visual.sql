@@ -456,17 +456,32 @@ on conflict (kind, key) do nothing;
 
 alter table public.gap_surface_map enable row level security;
 
+-- #635 asks the same question from a registry NAV surface (_test_gap_surface);
+-- this asks it from a feature key and the role that was driving. They must not
+-- drift, so the last resort here is that function rather than a second opinion.
 create or replace function public.gap_surface_for(p_feature text, p_role text)
 returns text
-language sql stable security definer set search_path to 'public'
+language plpgsql stable security definer set search_path to 'public'
 as $$
-  select coalesce(
-    (select m.surface from public.gap_surface_map m
-      where m.kind = 'role' and m.key = coalesce(nullif(btrim(p_role),''),'~none~')),
-    (select m.surface from public.gap_surface_map m
-      where m.kind = 'prefix' and m.key = split_part(coalesce(p_feature,''), '.', 1)),
-    'platform');
-$$;
+declare v text;
+begin
+  select m.surface into v from public.gap_surface_map m
+   where m.kind = 'role' and m.key = coalesce(nullif(btrim(p_role),''),'~none~');
+  if v is not null then return v; end if;
+
+  select m.surface into v from public.gap_surface_map m
+   where m.kind = 'prefix' and m.key = split_part(coalesce(p_feature,''), '.', 1);
+  if v is not null then return v; end if;
+
+  begin
+    select public._test_gap_surface(
+             (select fr.surface from public.feature_registry fr
+               where fr.feature_key = p_feature), p_role)
+      into v;
+  exception when undefined_function then v := null;
+  end;
+  return coalesce(v, 'platform');
+end $$;
 grant execute on function public.gap_surface_for(text,text) to authenticated, service_role;
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -607,8 +622,12 @@ begin
   -- An OPINION never fails a run. The exploratory lane reports that it looked
   -- (passed) or that it could not look (blocked); only a driver failure is a
   -- failure. This is why explore runs are excluded from the coverage ledger.
-  v_verdict := case when p_verdict = 'blocked' then 'blocked'
-                    when p_verdict = 'error'   then 'failed'
+  -- 'failed' is never used here, and that is deliberate: #635's trigger turns
+  -- a failed result into a "<feature> failed for <role>" gap with a repro, which
+  -- is right for a broken journey and wrong for a judge that could not be
+  -- reached. A lane that could not look reports BLOCKED; an opinion never fails
+  -- anything.
+  v_verdict := case when p_verdict in ('blocked','error') then 'blocked'
                     else 'passed' end;
 
   insert into public.test_results (run_id, feature_key, role, scenario, verdict,
@@ -639,7 +658,7 @@ begin
     -- Filed, or SEEN AGAIN if this same opinion is already open: a lane that
     -- runs nightly must not add a row nightly.
     v_id := (public.gap_file_or_touch(
-               'explore', v_surface, p_feature, coalesce(p_role,''),
+               null, 'explore', v_surface, p_feature, coalesce(p_role,''),
                coalesce(nullif(v_item->>'title',''), 'Exploratory finding'),
                v_type, v_sev,
                v_item->>'evidence', v_item->>'suggestion', p_summary,
@@ -830,7 +849,7 @@ begin
       v_surface := public.gap_surface_for(v_feature, v_role);
 
       v_gap_id := (public.gap_file_or_touch(
-                     'visual', v_surface, v_feature, v_role,
+                     'visual:' || v_vp, 'visual', v_surface, v_feature, v_role,
                      coalesce(v_rule.label,'Visual regression') || ' — ' || v_feature
                        || ' (' || v_vp || ')',
                      v_rule.gap_type, v_rule.gap_severity,
@@ -1396,6 +1415,7 @@ on conflict (key) do nothing;
 
 -- The one place a repeat is recognised, so both lanes behave identically.
 create or replace function public.gap_file_or_touch(
+  p_scenario   text,
   p_source     text,
   p_surface    text,
   p_feature    text,
@@ -1430,13 +1450,21 @@ begin
     insert into public.feature_gaps
       (surface, journey_step, title, type, severity, evidence, suggestion,
        status, notes, source, feature_key, role, run_id, spec_line,
-       artifact_bucket, artifact_path, confidence, seen_count, last_seen_at)
+       artifact_bucket, artifact_path, confidence, seen_count, last_seen_at,
+       scenario)
     values
       (p_surface, coalesce(p_role,''), left(coalesce(nullif(btrim(p_title),''),'Bot finding'), 200),
        p_type, p_severity, nullif(p_evidence,''), nullif(p_suggestion,''),
        'open', nullif(p_notes,''), p_source, p_feature, coalesce(p_role,''),
        p_run_id, nullif(p_spec_line,''), nullif(p_bucket,''), nullif(p_path,''),
-       nullif(p_confidence,''), 1, now())
+       nullif(p_confidence,''), 1, now(),
+       -- The scenario is what makes this row the SAME row #635's triggers are
+       -- looking for: a visual finding carries its result's scenario, so that
+       -- trigger refreshes this row instead of filing a second one beside it —
+       -- and closes it by itself the moment the screen matches again. An
+       -- exploratory opinion carries none, because an opinion is not closed by
+       -- the lane merely running again.
+       nullif(p_scenario,''))
     returning id into v_id;
     v_new := true;
   else
@@ -1456,4 +1484,33 @@ begin
 
   return jsonb_build_object('id', v_id, 'new', v_new);
 end $$;
-grant execute on function public.gap_file_or_touch(text,text,text,text,text,text,text,text,text,text,bigint,text,text,text,text) to authenticated, service_role;
+grant execute on function public.gap_file_or_touch(text,text,text,text,text,text,text,text,text,text,text,bigint,text,text,text,text) to authenticated, service_role;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 16. THE SOURCE COLUMN MUST NOT LIE
+-- ─────────────────────────────────────────────────────────────────────────
+-- #635's trigger files a gap from a failed result and never names a source, so
+-- every journey finding would arrive with this column's default and print
+-- "Filed by hand" — the one thing it certainly was not. The fact is already in
+-- the row (test_result_id is set), so it is read from there rather than asked
+-- of a function that does not know it needs to say.
+create or replace function public._trg_feature_gap_source()
+returns trigger
+language plpgsql security definer set search_path to 'public'
+as $$
+begin
+  if coalesce(new.source, 'human') = 'human' and new.test_result_id is not null then
+    new.source := 'journey';
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists trg_feature_gap_source on public.feature_gaps;
+create trigger trg_feature_gap_source
+  before insert on public.feature_gaps
+  for each row execute function public._trg_feature_gap_source();
+
+-- The rows the trigger already filed, corrected once.
+update public.feature_gaps
+   set source = 'journey'
+ where test_result_id is not null and source = 'human';

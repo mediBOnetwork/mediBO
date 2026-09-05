@@ -712,7 +712,7 @@ update public.feature_registry
          jsonb_build_object('kind','rpc',    'fn','cart_clear',    'as','user'),
          jsonb_build_object('kind','pick_product'),
          jsonb_build_object('kind','rpc',    'fn','cart_set_item', 'as','user',
-                            'args', jsonb_build_object('p_qty', 1)),
+                            'args', jsonb_build_object('p_quantity', 1)),
          jsonb_build_object('kind','goto',   'path','/cart'),
          jsonb_build_object('kind','settle', 'ms', 5000),
          jsonb_build_object('kind','rpc',    'fn','place_order_v2','as','user'),

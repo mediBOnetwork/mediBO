@@ -429,10 +429,16 @@ begin
   if NEW.key <> 'desired_state' then return NEW; end if;
   if coalesce(NEW.value->>'vm','on') = 'off'
      and coalesce(OLD.value->>'vm','on') <> 'off' then
-    NEW.value := NEW.value;      -- untouched; the drain lives in worker_pool
-    perform _ops_put('{drain}'::text[], jsonb_build_object(
-      'on', true, 'at', now()::text, 'alerted', false,
-      'reason', 'VM stop requested — draining first'));
+    -- A drain Om already set BY HAND is left exactly as it is, reason and all.
+    -- Overwriting it here would relabel it as the power-cycle's own drain, and
+    -- the clause below would then clear it when the box comes back — silently
+    -- undoing a decision a person made, on the way through a decision a machine
+    -- made. Only a fleet that is NOT already draining is put into a drain here.
+    if not coalesce((_ops_cfg()#>>'{drain,on}')::boolean, false) then
+      perform _ops_put('{drain}'::text[], jsonb_build_object(
+        'on', true, 'at', now()::text, 'alerted', false,
+        'reason', 'VM stop requested — draining first'));
+    end if;
   elsif coalesce(NEW.value->>'vm','on') = 'on'
         and coalesce(OLD.value->>'vm','on') = 'off' then
     -- Coming back up clears the drain the stop set. A drain Om set BY HAND is
@@ -581,13 +587,32 @@ on conflict (key) do update set
 
 create or replace function public.runner_ops_alert(p_kind text, p_vars jsonb default '{}'::jsonb)
 returns jsonb language plpgsql security definer set search_path to 'public' as $$
-declare o jsonb; v jsonb;
+declare o jsonb; v jsonb; v_last timestamptz; v_mins int;
 begin
   o := _ops_cfg();
   if not coalesce((o#>>'{alerts,enabled}')::boolean, true) then
     return jsonb_build_object('ok', false, 'reason', 'alerts_disabled');
   end if;
+
+  -- THE CALLER IS A ONE-MINUTE TICK, so "usage is over 90%" is true sixty times
+  -- an hour and the route's own dedupe is not enough on its own: notify() still
+  -- runs the whole ladder and still writes a notification_log row — and that row
+  -- is stamped with the template's COST even when the send was deduped away.
+  -- Sixty phantom rows an hour, each carrying a price. So the cooldown is kept
+  -- here too, before anything is attempted, keyed by alert kind.
+  select coalesce(dedupe_minutes, 45) into v_mins from wa_event_routes where event_key = p_kind;
+  v_last := nullif(o#>>array['alerts','sent',p_kind],'')::timestamptz;
+  if v_last is not null and v_last > now() - make_interval(mins => greatest(coalesce(v_mins,45),1)) then
+    return jsonb_build_object('ok', false, 'reason', 'cooling_down', 'kind', p_kind,
+                              'last_at', v_last);
+  end if;
+
   v := notify(p_kind, null, coalesce(p_vars,'{}'::jsonb));
+  -- Recorded whatever the ladder decided: a queued alert has been ACCOUNTED
+  -- FOR, and re-queueing the same sentence every minute is the same noise by a
+  -- different door.
+  perform _ops_put(array['alerts','sent'], coalesce(o#>'{alerts,sent}','{}'::jsonb)
+                   || jsonb_build_object(p_kind, now()::text));
   return jsonb_build_object('ok', true, 'kind', p_kind, 'notify', v);
 exception when others then
   return jsonb_build_object('ok', false, 'reason', sqlerrm);

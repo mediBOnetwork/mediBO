@@ -15,6 +15,7 @@ import 'dart:convert';
 import '../../design_tokens.dart';
 import '../../utils/render_log.dart';
 import 'dispute/dispute_models.dart';
+import '../../models/c529_admin_gaps.dart';
 import '../../fulfill/fulfill_view_logic.dart'; // C355: shared logic for both layouts
 import '../../fulfill/fulfill_landing_stage.dart';
 import '../../fulfill/fulfill_lookups.dart'; // C531: backend-owned strings/colours cache
@@ -14147,6 +14148,12 @@ class _DisputesScreenState extends State<_DisputesScreen> {
   // per-supplier header row reads this verbatim instead of aggregating
   // active/total counts from the flat disputes[] list client-side.
   Map<String, Map<String, dynamic>> _supplierGroups = {};
+  // CHANGE #534 (follow-up to #529 gaps 36/37): fw_get_disputes() ages every
+  // dispute server-side and hangs a `short_reminder` admin action off every
+  // ACTIVE one. DisputeItem carries neither, so the raw rows are parsed once
+  // here — keyed by dispute_id — and the header prints them verbatim.
+  Map<String, DisputeAgeView> _disputeAges = const {};
+  final Set<String> _reminding = {};
   // CHANGE #537: fw_get_disputes.total_rows — the number of product rows across
   // all supplier sections, summed server-side (was a client fold).
   int _supplierProductRows = 0;
@@ -14206,6 +14213,18 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       if (!mounted) return;
       _olderOpen = (res['older_open'] as num?)?.toInt() ?? 0;
       final items = DisputeItem.listFromResponse(res);
+      // CHANGE #534: the ageing block + short_reminder action, straight off the
+      // same rows, parsed by DisputeAgeView (models/c529_admin_gaps.dart).
+      final ages = <String, DisputeAgeView>{};
+      final rawDisputes = res['disputes'];
+      if (rawDisputes is List) {
+        for (final d in rawDisputes) {
+          if (d is! Map) continue;
+          final m = Map<String, dynamic>.from(d);
+          final id = m['dispute_id']?.toString();
+          if (id != null && id.isNotEmpty) ages[id] = DisputeAgeView.from(m);
+        }
+      }
       // CHANGE #531: backend-owned Disputes list structure, verbatim.
       final rawSprod = res['supplier_products'];
       final supplierProducts = <Map<String, dynamic>>[];
@@ -14258,6 +14277,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
           'change:182,uses_shared_reveal:true,duration_ms:280,curve:easeInOutCubic,chevron_animated:true');
       setState(() {
         _disputes = items;
+        _disputeAges = ages;
         _unfillable = unfillable;
         _supplierGroups = supplierGroups;
         _supplierProducts = supplierProducts;
@@ -14645,6 +14665,40 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     );
   }
 
+  // CHANGE #534 — GAP 36's action, finally wired. The label, the tone and the
+  // "reminded" copy are all the backend's; this only sends and reloads.
+  Future<void> _sendShortReminder(String supplier) async {
+    if (_reminding.contains(supplier)) return;
+    setState(() => _reminding.add(supplier));
+    try {
+      final res = await Supabase.instance.client.rpc(
+        'fw_send_supplier_short_reminder',
+        params: {'p_supplier_name': supplier},
+      ).timeout(const Duration(seconds: 15));
+      final err = res is Map ? res['error']?.toString() : null;
+      RenderLog.write('c534_short_reminder_sent',
+          'supplier=$supplier;err=${err ?? ''}');
+      if (!mounted) return;
+      if (err != null && err.isNotEmpty) {
+        final msg = FulfillLookups.instance.message(err);
+        if (msg != null && msg.isNotEmpty) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(msg)));
+        }
+      }
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      final msg = FulfillLookups.instance.errorText(e) ?? '';
+      if (msg.isNotEmpty) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(msg)));
+      }
+    } finally {
+      if (mounted) setState(() => _reminding.remove(supplier));
+    }
+  }
+
   // #349 relative time — CHANGE #548: the 'just now'/'Xm ago'/'Xh ago'/'Xd ago'
   // ladder is DELETED from Dart. ist_fmt('relative') owns it; this returns ''
   // until the label lands and the caller already renders nothing for ''.
@@ -14701,10 +14755,32 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                 final hasNudge = items.any((d) => d.nudgePending);
                 final reminderAt = items.map((d) => d.lastReminderAt).where((s) => s != null).firstOrNull;
                 final relTime = _relTime(reminderAt);
+                // CHANGE #534 — the ageing block for THIS supplier, in the
+                // backend's own order (fw_get_disputes sorts disputes[] by
+                // waited_hours desc), so "first" is the longest silence.
+                final ages = items
+                    .map((d) => _disputeAges[d.disputeId])
+                    .whereType<DisputeAgeView>()
+                    .toList();
+                final ageChip = ages
+                    .map((a) => a.ageChip)
+                    .whereType<Map<String, dynamic>>()
+                    .firstOrNull;
+                final reminderView =
+                    ages.where((a) => a.hasShortReminder).firstOrNull;
+                final reminderLabel = ages
+                    .map((a) => a.reminderLabel)
+                    .where((t) => t.isNotEmpty)
+                    .firstOrNull;
+                final sending = _reminding.contains(supplier);
                 return Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Row(children: [
+                    Wrap(
+                      spacing: Ds.space.x8,
+                      runSpacing: Ds.space.x8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
                       if (canonicalLink.isNotEmpty) ...[
                         OutlinedButton.icon(
                           key: sendKey,
@@ -14724,7 +14800,6 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                               style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                         ),
                         if (hasNudge) ...[
-                          const SizedBox(width: 8),
                           Builder(builder: (_) {
                             RenderLog.write('c349_nudge', 'pending=y');
                             RenderLog.write('c352_nudge', 'p=1');
@@ -14746,7 +14821,62 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                           }),
                         ],
                       ],
+                      // CHANGE #534 gap 37 — the age chip, beside the nudge
+                      // chip. Label and both colours are fw_get_disputes'
+                      // age_chip, verbatim; c529Hex only turns '#RRGGBB' into
+                      // a Color and falls back rather than inventing a hue.
+                      if (ageChip != null) Builder(builder: (_) {
+                        RenderLog.write('c534_age_chip', 'supplier=$supplier');
+                        return Container(
+                          padding: EdgeInsets.symmetric(
+                              horizontal: Ds.space.x8, vertical: Ds.space.x4),
+                          decoration: BoxDecoration(
+                            color: c529Hex(ageChip['bg'], Ds.c.infoSoft),
+                            borderRadius: Ds.r.rChip,
+                          ),
+                          child: Text(
+                            (ageChip['label'] ?? '').toString(),
+                            style: Ds.t.caption.copyWith(
+                                color: c529Hex(ageChip['fg'], Ds.c.info),
+                                fontWeight: FontWeight.w600),
+                          ),
+                        );
+                      }),
+                      // CHANGE #534 gap 36 — the short-supply reminder. It
+                      // exists ONLY because a dispute carried the backend's
+                      // `short_reminder` action, and its caption is that
+                      // action's own label.
+                      if (reminderView != null) Builder(builder: (_) {
+                        RenderLog.write('c534_short_reminder_btn',
+                            'supplier=$supplier');
+                        return OutlinedButton(
+                          onPressed:
+                              sending ? null : () => _sendShortReminder(supplier),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Ds.c.brand,
+                            side: BorderSide(color: Ds.c.brand),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: Ds.r.rButton),
+                            padding: EdgeInsets.symmetric(
+                                horizontal: Ds.space.x12, vertical: Ds.space.x8),
+                            minimumSize: Size(0, Ds.touch.minTarget),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          child: Text(
+                            reminderView.shortReminderLabel,
+                            style: Ds.t.caption.copyWith(
+                                color: Ds.c.brand, fontWeight: FontWeight.w600),
+                          ),
+                        );
+                      }),
                     ]),
+                    // CHANGE #534 — the backend's own reminder sentence
+                    // ("Not reminded yet" / "Reminded once, 3h ago"), printed
+                    // under the chip row verbatim.
+                    if (reminderLabel != null) ...[
+                      SizedBox(height: Ds.space.x4),
+                      Text(reminderLabel, style: Ds.t.caption),
+                    ],
                     if (relTime.isNotEmpty) ...[
                       const SizedBox(height: 4),
                       Text(FulfillLookups.instance.uiFill('reminded_rel', {'when': relTime}),

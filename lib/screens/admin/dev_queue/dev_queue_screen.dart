@@ -1212,6 +1212,7 @@ bool openDevTool(
       return true;
     case 'journey_bot':
       push(JourneyBotScreen(service: svc));
+      return true;
     case 'visual_baselines':
       push(VisualBaselinesScreen(service: svc));
       return true;

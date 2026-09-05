@@ -229,29 +229,50 @@ revoke all on function public.test_customer_shop_ensure() from anon;
 revoke all on function public.test_customer_shop_ensure() from authenticated;
 grant execute on function public.test_customer_shop_ensure() to service_role;
 
--- Nightly, so a test_purge() that empties the synthetic shelf repairs itself
--- instead of quietly retiring the proof. One dispatcher, one offset minute —
--- never a bare */N (the connection-exhaustion outage was 35 jobs on minute 0).
-insert into public.cron_task
-  (name, ord, mode, work_sql, run_at_ist, dml, enabled, note, step_timeout_ms)
-values
-  ('c668_test_customer_shop', 640, 'poll',
-   'select public.test_customer_shop_ensure()',
-   '03:17', true, true,
-   'CHANGE #668 — keeps test.cust1 shop, shelf, expiry window and khata alive',
-   20000)
-on conflict (name) do update
-  set work_sql   = excluded.work_sql,
-      run_at_ist = excluded.run_at_ist,
-      dml        = excluded.dml,
-      enabled    = true,
-      note       = excluded.note;
-
--- Run it now, on this deploy.
-do $c668run$
+-- ── APP-SCHEMA WORK, and only where the app schema lives ─────────────────
+-- CHANGE #1802 replays every migration file on the CONTROL PLANE (medibo-dev)
+-- as well as production, and medibo-dev is a dev-queue clone: it carries
+-- dev_commands, deploy_queue and cron_task but NOT the storefront schema. An
+-- earlier copy of this file ran its seed unguarded there and died on
+--   ERROR: function public.identity_norm(unknown) does not exist
+-- which failed the whole batch AFTER production had already taken the file.
+-- So everything below is fenced behind one sentinel, and a control plane that
+-- an unguarded copy already wrote a cron row into is cleaned up rather than
+-- left with a task pointing at a function it does not have.
+do $c668app$
 declare v jsonb;
 begin
+  if to_regprocedure('public.identity_norm(text)') is null
+     or to_regclass('public.pharmacy_profiles') is null then
+    if to_regclass('public.cron_task') is not null then
+      delete from public.cron_task where name = 'c668_test_customer_shop';
+    end if;
+    raise notice 'c668: app schema absent here (control plane) — nothing to seed';
+    return;
+  end if;
+
+  -- Nightly by default, so a test_purge() that empties the synthetic shelf
+  -- repairs itself instead of quietly retiring the proof. One dispatcher, one
+  -- offset minute — never a bare */N (the connection-exhaustion outage was 35
+  -- jobs on minute 0). run_at_ist is deliberately NOT in the update list:
+  -- 20260905210000 turns this into a poll task and a replay of this file must
+  -- not drag it back to a daily pin.
+  insert into public.cron_task
+    (name, ord, mode, work_sql, run_at_ist, dml, enabled, note, step_timeout_ms)
+  values
+    ('c668_test_customer_shop', 640, 'poll',
+     'select public.test_customer_shop_ensure()',
+     '03:17', true, true,
+     'CHANGE #668 — keeps test.cust1 shop, shelf, expiry window and khata alive',
+     20000)
+  on conflict (name) do update
+    set work_sql = excluded.work_sql,
+        dml      = excluded.dml,
+        enabled  = true,
+        note     = excluded.note;
+
+  -- Run it now, on this deploy.
   v := public.test_customer_shop_ensure();
   raise notice 'c668 seed: %', v;
 end
-$c668run$;
+$c668app$;

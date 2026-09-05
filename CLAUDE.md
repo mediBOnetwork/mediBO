@@ -327,6 +327,17 @@ Current files and what they hold down:
   SERVER recomputed them, and CartOrderRefusal treats only
   error:'unavailable_in_cart' as that refusal, keeping its message verbatim.
 
+- `synthetic_isolation_test.dart` — a synthetic pharmacy is never visible to a
+  real viewer (#668). Invisibility is decided in SQL before a payload exists, so
+  this gate reads the SHIPPED MIGRATIONS the merge worker replays: it resolves
+  the LAST definition of each enumeration surface (/near, admin customer lists,
+  the global search, the claim queue, the khata overview, both pharmacy-exchange
+  browses) and fails if the is_synthetic filter is not in it, and it asserts the
+  test.cust1 fixture asks to be hidden — marked synthetic and carrying no map
+  pin. A future migration that re-creates one of those functions without the
+  filter goes red in the command that wrote it, not in the incident that finds a
+  test shop in a real supplier's waterfall.
+
 - `razorpay_qr_test.dart` — the money path: the Razorpay QR card prints
   title/subtitle/amount/note VERBATIM from the payload (the amount exactly once,
   never re-derived in Dart from the raw `amount` number), draws `qr_string`

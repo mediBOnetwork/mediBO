@@ -8,7 +8,7 @@
 --                      audience from a DATA truth table, observed reachability
 --                      from grants + guard analysis + (for the suspicious set)
 --                      a real impersonated call. A role that reaches an RPC it
---                      has no business reaching is a CRITICAL feature_gaps row.
+--                      has no business reaching is a CRITICAL gap row.
 --   2. PROPERTY FUZZ — inputs generated from each RPC's own signature (nulls,
 --                      negatives, zero, huge, wrong type, someone else's id,
 --                      unicode, empty array), executed inside a subtransaction
@@ -37,7 +37,7 @@ create table if not exists public.autotest_config (
   updated_at        timestamptz not null default now()
 );
 insert into public.autotest_config (id) values (1) on conflict (id) do nothing;
--- feature_gaps.surface is a closed set; keep the config inside it.
+-- The gap ledger's surface column is a closed set; keep the config inside it.
 update public.autotest_config
    set gap_surface = 'platform'
  where id = 1
@@ -138,6 +138,29 @@ alter table public.autotest_auth_check      enable row level security;
 -- than SECURITY DEFINER everywhere) because the probe MUST run as an invoker:
 -- `set role` is forbidden inside a security-definer function, and without it
 -- the matrix can only ever guess.
+--
+-- The predicate is this migration's OWN function, and it resolves the role
+-- LATE. A policy that named the app's guard helper directly would be validated
+-- at create time, which makes this whole file un-replayable on any database
+-- that does not carry that helper — and the merge worker replays every file on
+-- two databases.
+create or replace function public._autotest_admin()
+returns boolean
+language plpgsql stable security definer set search_path to 'public' as $fn$
+declare v boolean := false;
+begin
+  if coalesce(current_setting('request.jwt.claim.role', true), '') = 'service_role'
+     or coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '')
+        = 'service_role'
+     or session_user in ('postgres', 'supabase_admin', 'service_role')
+  then return true; end if;
+  begin
+    execute 'select public.get_my_role() = ''super_admin''' into v;
+  exception when others then v := false;
+  end;
+  return coalesce(v, false);
+end $fn$;
+
 do $$
 declare t text;
 begin
@@ -146,8 +169,8 @@ begin
     execute format('grant select, insert, update, delete on public.%I to authenticated, service_role', t);
     execute format($p$ drop policy if exists %I on public.%I $p$, t || '_super', t);
     execute format($p$ create policy %I on public.%I for all to authenticated, service_role
-                       using (public.get_my_role() = 'super_admin' or public._is_service_role())
-                       with check (public.get_my_role() = 'super_admin' or public._is_service_role()) $p$,
+                       using (public._autotest_admin())
+                       with check (public._autotest_admin()) $p$,
                    t || '_super', t);
   end loop;
 end $$;
@@ -163,7 +186,7 @@ insert into public.autotest_audience_rule (priority, match_kind, match_value, au
   (30, 'regex', '^(admin_|ops_|kyc_|settlement_|gst_|khata_)',
        array['admin','super_admin'], true, 'mediBO back office.'),
   (40, 'regex', '^(my_|cart_|storefront_|reorder_|wishlist_|loyalty_|refill_)',
-       array['customer','admin','super_admin'], false, 'Customer-facing surface (admins act-as).'),
+       array['customer','admin','super_admin'], false, 'Customer-facing surface (staff act as).'),
   (42, 'regex', '^(sup_|supplier_|fw_)',
        array['supplier','admin','super_admin'], false, 'Supplier surface.'),
   (44, 'regex', '^(partner_|zone_)',
@@ -212,32 +235,40 @@ $fn$;
 -- Which roles a rule set claims for one RPC. First (lowest priority) match wins.
 create or replace function public.autotest_audience_for(p_proname text)
 returns table (audience text[], source text, authoritative boolean)
-language sql stable security definer set search_path to 'public' as $fn$
+language plpgsql stable security definer set search_path to 'public' as $fn$
+begin
+  -- The four existing allow-lists are read through dynamic SQL for the same
+  -- reason the policy predicate is: they are production's, and this file must
+  -- still parse where they do not exist.
+  return query execute $q$
   with hit as (
     select r.audience, r.match_kind || ':' || r.match_value as source,
            r.authoritative, r.priority
       from public.autotest_audience_rule r
      where r.enabled
-       and ((r.match_kind = 'exact'  and p_proname = r.match_value)
-         or (r.match_kind = 'prefix' and p_proname like r.match_value || '%')
-         or (r.match_kind = 'regex'  and p_proname ~ r.match_value))
+       and ((r.match_kind = 'exact'  and $1 = r.match_value)
+         or (r.match_kind = 'prefix' and $1 like r.match_value || '%')
+         or (r.match_kind = 'regex'  and $1 ~ r.match_value))
     union all
     select array['super_admin','admin']::text[], 'table:medibo_only_rpc', true, 5
-      from public.medibo_only_rpc m where m.proname = p_proname
+      from public.medibo_only_rpc m where m.proname = $1
     union all
     select array['anon','customer','supplier','partner','delivery','mr','company','worker','admin','super_admin']::text[],
            'table:rpc_anon_allow', true, 6
-      from public.rpc_anon_allow a where a.fn_name = p_proname
+      from public.rpc_anon_allow a where a.fn_name = $1
     union all
     select array['admin','super_admin']::text[], 'table:admin_rpc_feature', true, 7
-      from public.admin_rpc_feature f where f.proname = p_proname
+      from public.admin_rpc_feature f where f.proname = $1
     union all
     select array['partner','admin','super_admin']::text[], 'table:partner_rpc_allow', true, 8
-      from public.partner_rpc_allow pa where pa.proname = p_proname and coalesce(pa.clamp_ok,true)
+      from public.partner_rpc_allow pa where pa.proname = $1 and coalesce(pa.clamp_ok,true)
   )
-  select audience, source, authoritative
-    from hit order by priority, source limit 1
-$fn$;
+  select audience, source, authoritative from hit order by priority, source limit 1
+  $q$ using p_proname;
+exception when others then
+  -- No truth tables here at all: every rpc is unclassified, which is honest.
+  return;
+end $fn$;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 4. THE RUN LEDGER
@@ -346,15 +377,24 @@ end $fn$;
 -- itself. GUC changes (role, jwt claims) roll back with it, so the session is
 -- never left impersonating anybody.
 -- auth.users is not readable by `authenticated`; this is the one definer step.
+-- It reads the QA identity ledger through the foundation's own accessor rather
+-- than its table, so this file resolves nothing at create time.
 create or replace function public._autotest_identity(p_role text)
 returns jsonb
-language sql stable security definer set search_path to 'public' as $fn$
-  select jsonb_build_object('uid', u.id, 'email', u.email)
-    from public.qa_test_identities t
-    join auth.users u on lower(btrim(u.email)) = lower(btrim(t.identity))
-   where t.role = p_role and coalesce(t.ready,false)
-   limit 1
-$fn$;
+language plpgsql stable security definer set search_path to 'public' as $fn$
+declare v jsonb;
+begin
+  execute $q$
+    select jsonb_build_object('uid', u.id, 'email', u.email)
+      from jsonb_array_elements(public.test_identities()) t
+      join auth.users u
+        on lower(btrim(u.email)) = lower(btrim(t->>'identity'))
+     where t->>'role' = $1 and coalesce((t->>'ready')::boolean, false)
+     limit 1
+  $q$ into v using p_role;
+  return v;
+exception when others then return null;
+end $fn$;
 
 create or replace function public._autotest_call_as(
   p_proname text, p_role text, p_args text default null)
@@ -520,9 +560,7 @@ begin
      and k.role_key in (
        select r.role_key from public.autotest_role r
         where r.enabled and not r.is_anon
-          and not exists (select 1 from public.qa_test_identities t
-                           join auth.users u on lower(btrim(u.email)) = lower(btrim(t.identity))
-                          where t.role = r.role_key and coalesce(t.ready,false)));
+          and public._autotest_identity(r.role_key) is null);
 
   select count(*) into v_fail
     from public.autotest_auth_check where verdict in ('fail','proven');
@@ -588,8 +626,8 @@ begin
       (select gap_surface from public.autotest_config where id = 1),
       format('No test identity for role %s', v_r.role_key),
       'missing', 'high', 'auth_matrix',
-      format('qa_test_identities has no ready, resolvable login for %s, so every allow/deny for that role is static only — never proven.', v_r.role_key),
-      'Create the login and mark it ready in qa_test_identities.',
+      format('The QA identity ledger has no ready, resolvable login for %s, so every allow/deny for that role is static only — never proven.', v_r.role_key),
+      'Create the login and mark it ready in the QA identity ledger.',
       'S', null, (select gap_command_id from public.autotest_config where id = 1));
     v_gaps := v_gaps + 1;
   end loop;
@@ -767,8 +805,8 @@ begin
     execute format('grant select, insert, update, delete on public.%I to authenticated, service_role', t);
     execute format($p$ drop policy if exists %I on public.%I $p$, t || '_super', t);
     execute format($p$ create policy %I on public.%I for all to authenticated, service_role
-                       using (public.get_my_role() = 'super_admin' or public._is_service_role())
-                       with check (public.get_my_role() = 'super_admin' or public._is_service_role()) $p$,
+                       using (public._autotest_admin())
+                       with check (public._autotest_admin()) $p$,
                    t || '_super', t);
   end loop;
 end $$;
@@ -1117,8 +1155,8 @@ begin
     execute format('grant select, insert, update, delete on public.%I to authenticated, service_role', t);
     execute format($p$ drop policy if exists %I on public.%I $p$, t || '_super', t);
     execute format($p$ create policy %I on public.%I for all to authenticated, service_role
-                       using (public.get_my_role() = 'super_admin' or public._is_service_role())
-                       with check (public.get_my_role() = 'super_admin' or public._is_service_role()) $p$,
+                       using (public._autotest_admin())
+                       with check (public._autotest_admin()) $p$,
                    t || '_super', t);
   end loop;
 end $$;
@@ -1510,20 +1548,6 @@ on conflict (name) do update
 -- THE SCREEN'S ONE RPC. Every word below is a string, not a number the client
 -- formats: the panel is a printer.
 -- ─────────────────────────────────────────────────────────────────────────────
-insert into public.ui_copy (key, value) values
-  ('safety_net.title',        to_jsonb('Safety net'::text)),
-  ('safety_net.subtitle',     to_jsonb('Tests the system generates for itself — nobody writes these cases.'::text)),
-  ('safety_net.run_label',    to_jsonb('Run the safety net'::text)),
-  ('safety_net.running_label',to_jsonb('Running…'::text)),
-  ('safety_net.never_label',  to_jsonb('Never run yet'::text)),
-  ('safety_net.never_sub',    to_jsonb('Run it once to generate the matrix, the fuzz corpus and the oracle baseline.'::text)),
-  ('safety_net.auth_title',   to_jsonb('Auth matrix'::text)),
-  ('safety_net.fuzz_title',   to_jsonb('Property fuzzing'::text)),
-  ('safety_net.inv_title',    to_jsonb('Invariant oracles'::text)),
-  ('safety_net.empty_row',    to_jsonb('Nothing to answer for.'::text)),
-  ('safety_net.footnote',     to_jsonb('Every case is a pure function of its seed, so a failure replays byte for byte. Nothing a case does survives it — each call runs in a subtransaction that is always rolled back.'::text))
-on conflict (key) do update set value = excluded.value;
-
 create or replace function public.autotest_safety_net_home()
 returns jsonb
 language plpgsql stable security definer set search_path to 'public' as $fn$

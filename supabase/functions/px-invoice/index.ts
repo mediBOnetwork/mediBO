@@ -164,11 +164,9 @@ async function render(inv: any): Promise<Uint8Array> {
     product: 130, batch: 46, expiry: 40, qty: 30, rate: 52,
     taxable: 62, gst: 38, amount: 65,
     desc: 294, sac: 50,
-    // catalogue export: 294+120+75+34 = 523 <= 523 printable. 'desc' is SHARED
-    // with the settlement line, so the catalogue's own columns are sized around
-    // it rather than the other way round - a product name is the long one here
-    // too, and 294 is what stops the settlement description clipping.
-    company: 120, pack: 75, rxflag: 34,
+    // CHANGE #1362 — the catalogue list's own columns (company/pack/rxflag)
+    // went with it. 'desc' stays: it is the settlement line's description, and
+    // 294 is what stops that clipping.
   }
   const RIGHT = new Set(['qty', 'rate', 'taxable', 'gst', 'amount'])
   const cols = (Array.isArray(inv.columns) ? inv.columns : [])
@@ -265,17 +263,10 @@ const SOURCES: Record<string, Source> = {
     report: 'settlement_invoice_report',
     idArg: 'p_invoice_id',
   },
-  // CHANGE #748 — the customer's own catalogue list, deliberately WITHOUT
-  // money. It is the same table-on-a-page this file already draws, so it is a
-  // third source rather than a third generator; the document has no price
-  // column because catalogue_export_render_input() never builds one, not
-  // because anything here filters it out.
-  catalogue_export: {
-    idKey: 'export_id',
-    input: 'catalogue_export_render_input',
-    report: 'catalogue_export_report',
-    idArg: 'p_export_id',
-  },
+  // CHANGE #1362 — the catalogue-list source is GONE. It rendered a customer's
+  // whole filtered product list as a PDF, which is a scraping hole rather than
+  // a feature; its RPCs and its table were dropped with it. POS invoices,
+  // settlement invoices, audit and account documents are untouched.
 }
 
 Deno.serve(async (req) => {

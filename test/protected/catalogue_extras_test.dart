@@ -17,11 +17,17 @@
 //      send is not asked for, and a duplicate answer is SHOWN rather than
 //      guessed — the screen never searches the catalogue itself.
 //
-//   4. THE EXPORT SENDS THE IDS ON SCREEN and nothing else, and it polls on the
-//      backend's own poll_ms rather than a timeout invented in Dart.
+//   4. THE EXPORT IS GONE AND STAYS GONE (CHANGE #1362). "Make the PDF" let
+//      anyone bulk-download the product list, so the whole path — widget,
+//      button, RPCs, copy — was removed. This file now guards the ABSENCE:
+//      no Dart source may name a catalogue_export RPC or the export copy keys
+//      again. A future feature that needs a customer-facing list must be
+//      specified and gated on its own, not by reviving this one.
 //
 //   5. ABSENCE IS A FLAG. `show:false` on any of the three means that surface
 //      is not offered at all — never a greyed-out button.
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -185,49 +191,41 @@ void main() {
     });
   });
 
-  group('export — the ids on screen, and nothing else', () {
-    testWidgets('it sends exactly the ids it was given', (tester) async {
-      Map<String, dynamic>? sent;
-      await tester.pumpWidget(_host(CatalogueExportAction(
-        config: const {'show': true, 'title': 'My list', 'action_label': 'Make the PDF'},
-        productIds: const [7, 8, 9],
-        rpc: (fn, p) async {
-          if (fn == 'catalogue_export_start') {
-            sent = Map<String, dynamic>.from(p ?? const {});
-            return {'ok': false, 'message': 'stop here'};
-          }
-          return {'ok': true};
-        },
-      )));
-      await tester.pump();
-      await tester.tap(find.text('Make the PDF'));
-      await tester.pump();
-      // The refusal raises a toast, which is a real Timer; drain it so the
-      // suite stays free of pending-timer noise.
-      await tester.pump(const Duration(seconds: 6));
-      expect(sent?['p_product_ids'], const [7, 8, 9]);
+  // CHANGE #1362 — the catalogue export was removed end to end because it was
+  // a competitor-scraping hole: one tap produced the whole filtered product
+  // list as a PDF. The three tests that used to live here drove
+  // CatalogueExportAction; that widget no longer exists, so what is worth
+  // holding down is the removal itself. This reads the shipped Dart the same
+  // way the design literal gate does — the button cannot come back by accident.
+  group('export — removed, and it stays removed', () {
+    const banned = <String>[
+      'catalogue_export_start',
+      'catalogue_export_status',
+      'catalogue_export_render_input',
+      'catalogue_export_report',
+      'CatalogueExportAction',
+      'catalogue.export_action',
+    ];
+
+    test('no Dart file names the export path', () {
+      final offenders = <String>[];
+      for (final f in Directory('lib').listSync(recursive: true)) {
+        if (f is! File || !f.path.endsWith('.dart')) continue;
+        final src = f.readAsStringSync();
+        for (final needle in banned) {
+          if (src.contains(needle)) offenders.add('${f.path}: $needle');
+        }
+      }
+      expect(offenders, isEmpty,
+          reason: 'the catalogue export was removed in CHANGE #1362 — a bulk '
+              'product-list download is a scraping hole, not a feature');
     });
 
-    testWidgets('an empty list offers no action at all', (tester) async {
-      await tester.pumpWidget(_host(CatalogueExportAction(
-        config: const {'show': true, 'title': 'My list', 'action_label': 'Make the PDF'},
-        productIds: const [],
-        rpc: (f, p) async => {},
-      )));
-      await tester.pump();
-      final b = tester.widget<TextButton>(find.byType(TextButton));
-      expect(b.onPressed, isNull,
-          reason: 'nothing on screen means nothing to print');
-    });
-
-    testWidgets('the action label is the payload\'s', (tester) async {
-      await tester.pumpWidget(_host(CatalogueExportAction(
-        config: const {'show': true, 'action_label': 'Print this page'},
-        productIds: const [1],
-        rpc: (f, p) async => {},
-      )));
-      await tester.pump();
-      expect(find.text('Print this page'), findsOneWidget);
+    test('the px-invoice function offers no catalogue source', () {
+      final src = File('supabase/functions/px-invoice/index.ts').readAsStringSync();
+      expect(src.contains('catalogue_export'), isFalse,
+          reason: 'POS invoice, audit and account PDFs stay; the catalogue '
+              'source was removed with the rest of the path');
     });
   });
 }

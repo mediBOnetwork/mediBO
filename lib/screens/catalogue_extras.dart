@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../design_tokens.dart';
 import '../models/product.dart';
@@ -313,78 +312,4 @@ class _CatalogueRequestSheetState extends State<CatalogueRequestSheet> {
       ),
     );
   }
-}
-
-/// "Print / share my catalogue list" — asks for the PDF, polls on the backend's
-/// own `poll_ms`, and opens the signed link. The screen builds no URL and picks
-/// no timeout, and it sends only the ids it is LOOKING at.
-class CatalogueExportAction extends StatefulWidget {
-  const CatalogueExportAction({
-    super.key,
-    required this.config,
-    required this.productIds,
-    this.rpc,
-  });
-
-  final Map<String, dynamic> config;
-  final List<int> productIds;
-  final CatRpc? rpc;
-
-  @override
-  State<CatalogueExportAction> createState() => _CatalogueExportActionState();
-}
-
-class _CatalogueExportActionState extends State<CatalogueExportAction> {
-  bool _busy = false;
-
-  CatRpc get _rpc => widget.rpc ?? _defaultRpc;
-
-  Future<void> _go() async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    try {
-      var r = _map(await _rpc('catalogue_export_start',
-          {'p_product_ids': widget.productIds, 'p_title': _s(widget.config, 'title')}));
-      if (r['ok'] != true) {
-        if (mounted) showToast(context, _s(r, 'message'), isError: true);
-        return;
-      }
-      final id = r['export_id'];
-      var guard = 0;
-      while (r['status'] == 'building' && guard < 40 && mounted) {
-        guard++;
-        final ms = int.tryParse('${r['poll_ms'] ?? 1500}') ?? 1500;
-        await Future<void>.delayed(Duration(milliseconds: ms));
-        r = _map(await _rpc('catalogue_export_status', {'p_export_id': id}));
-        if (r['ok'] != true) break;
-      }
-      if (!mounted) return;
-      if (r['ok'] != true || r['status'] != 'ready') {
-        showToast(context, _s(r, 'message'), isError: true);
-        return;
-      }
-      final url = await Supabase.instance.client.storage
-          .from(_s(r, 'bucket'))
-          .createSignedUrl(
-              _s(r, 'path'), int.tryParse('${r['expires_s'] ?? 300}') ?? 300);
-      if (!mounted) return;
-      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-      RenderLog.write('c748_export', 'rows=${widget.productIds.length}');
-    } catch (e) {
-      if (mounted) showToast(context, e.toString(), isError: true);
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => SizedBox(
-        height: Ds.space.x48,
-        child: TextButton.icon(
-          onPressed: _busy || widget.productIds.isEmpty ? null : _go,
-          icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
-          label: Text(_s(widget.config, 'action_label'),
-              style: Ds.t.caption.copyWith(color: Ds.c.brand)),
-        ),
-      );
 }

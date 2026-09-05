@@ -111,7 +111,14 @@ IconData routeIcon(String route) {
 Tone androidTone(String s) {
   switch (s) {
     case 'built':
+    // CHANGE #1802 — 'published' (it is on a Play track) and 'skipped'
+    // (waived on the record, with a reason) are the two terminal states the
+    // gate added. Without them both fell to `default` and a shipped release
+    // rendered in the same grey as one that was never built.
+    case 'published':
       return _success;
+    case 'skipped':
+      return _neutral;
     case 'failed':
       return _error;
     case 'building':

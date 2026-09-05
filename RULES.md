@@ -908,7 +908,7 @@ NEVER flip `bugloop.enforce=true` until the full chain (preview → journeys →
 
 
 
-## PROJECT · protected_tests  (priority 90, v9)
+## PROJECT · protected_tests  (priority 90, v11)
 
 ## PROTECTED TEST SUITE (CHANGE #635 — never remove)
 Before EVERY deploy, run `flutter test test/protected/` in addition to the
@@ -1006,12 +1006,28 @@ Current files and what they hold down:
   the backend's refusal instead of throwing, and the partner editor's Send /
   Remove / PDF buttons are can_send / can_edit / can_doc.
 
+- `usage_sync_test.dart` — the Claude usage block is a PRINTER (#1365): the sync
+  line and its tone are dev_cmd_session_usage()' updated_display/updated_tone, so a
+  fetcher that has been dead since boot prints "sync failing: <reason>" and can never
+  read "synced 15h ago"; an expired window prints the backend's 0%% while raw_percent
+  remembers the 100 that was read; a stale-ignored reading prints its own copy; bars
+  render in payload order; an absent block is omitted, never dashed.
 - `context_economy_test.dart` — the Context economy panel is a PRINTER: title,
   threshold chip, since-line, every row label/value/sub-line and the footnote are
   dev_context_metrics() strings (the fixture's before/after deliberately disagree
   with its own Change row, so a card that recomputed the percentage fails), has:false
   draws nothing at all, an absent sub-line is omitted rather than dashed, tone is one
   lookup with an unknown tone staying neutral, and rows render in payload order.
+
+- `claude_auth_test.dart` — the Claude login banner is a PRINTER, and never
+  invents reassurance: a healthy login draws NOTHING (a permanent green badge is
+  how a real red stops being read) and so does has:false, every word is
+  claude_auth_status()'s (the fixture's title deliberately disagrees with its own
+  bucket, so a card that re-derived anything from bucket fails), an absent
+  sub-line or version is omitted rather than dashed, `can` is the backend's
+  decision so the button disappears while a login is already running while the
+  link and code stay on screen, and a tap calls the parent exactly once and
+  talks to no network.
 
 The suite runs on the Dart VM in ~2s. Keep it that way: no network, no goldens,
 no Supabase, no camera — mock RPC payloads inline. If a widget resists mocking,
@@ -1091,6 +1107,12 @@ What each file holds down:
   the backend's refusal instead of throwing, and the partner editor's Send /
   Remove / PDF buttons are can_send / can_edit / can_doc.
 
+- `usage_sync_test.dart` — the Claude usage block is a PRINTER (#1365): the sync
+  line and its tone are dev_cmd_session_usage()' updated_display/updated_tone, so a
+  fetcher that has been dead since boot prints "sync failing: <reason>" and can never
+  read "synced 15h ago"; an expired window prints the backend's 0%% while raw_percent
+  remembers the 100 that was read; a stale-ignored reading prints its own copy; bars
+  render in payload order; an absent block is omitted, never dashed.
 - `context_economy_test.dart` — the Context economy panel is a PRINTER: title,
   threshold chip, since-line, every row label/value/sub-line and the footnote are
   dev_context_metrics() strings (the fixture's before/after deliberately disagree
@@ -1098,8 +1120,17 @@ What each file holds down:
   draws nothing at all, an absent sub-line is omitted rather than dashed, tone is one
   lookup with an unknown tone staying neutral, and rows render in payload order.
 
-The suite runs on the Dart VM in ~2s. Keep it that way: no network, no goldens, no Supabase, no camera — mock RPC payloads inline. If a widget resists mocking, extract its decisions into a pure class and test that. Set `RenderLog.flushEnabled = false` in setUpAll for any test rendering a widget that calls RenderLog.write — its 800 ms debounce is a real Timer that would otherwise outlive the test and try to reach Supabase.
+- `claude_auth_test.dart` — the Claude login banner is a PRINTER, and never
+  invents reassurance: a healthy login draws NOTHING (a permanent green badge is
+  how a real red stops being read) and so does has:false, every word is
+  claude_auth_status()'s (the fixture's title deliberately disagrees with its own
+  bucket, so a card that re-derived anything from bucket fails), an absent
+  sub-line or version is omitted rather than dashed, `can` is the backend's
+  decision so the button disappears while a login is already running while the
+  link and code stay on screen, and a tap calls the parent exactly once and
+  talks to no network.
 
+The suite runs on the Dart VM in ~2s. Keep it that way: no network, no goldens, no Supabase, no camera — mock RPC payloads inline. If a widget resists mocking, extract its decisions into a pure class and test that. Set `RenderLog.flushEnabled = false` in setUpAll for any test rendering a widget that calls RenderLog.write — its 800 ms debounce is a real Timer that would otherwise outlive the test and try to reach Supabase.
 
 
 ## PROJECT · dart_imports  (priority 92, v2)

@@ -4,6 +4,7 @@ import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/render_log.dart';
 import 'build_lane_section.dart';
+import 'cron_budget_section.dart';
 import 'claude_auth_section.dart';
 import 'masked_calling_section.dart';
 import 'runner_boot_section.dart';
@@ -316,6 +317,13 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
                     // the one that stops every runner.
                     SizedBox(height: Ds.space.x24),
                     const ClaudeAuthSection(),
+                    // CHANGE #1361 — the ratio, next to the durations it
+                    // explains. A duration on its own means nothing: 30 s every
+                    // four hours is free, 30 s every minute is an outage, and
+                    // it was the second of those that made the app take minutes
+                    // per tab on 5 Sep with nothing building.
+                    SizedBox(height: Ds.space.x24),
+                    const CronBudgetSection(),
                     // CHANGE #530 — and its own condition again: a runner
                     // refusing to claim after a crash is the same question the
                     // lanes answer, in a fourth resource.

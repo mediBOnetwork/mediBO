@@ -57,7 +57,27 @@ is_transport_error() {
   return 1
 }
 
+# A guard that is NOT THERE has produced no verdict.
+#
+# CHANGE #668's live-proof round hit this: rg_run_behavior() answers
+# "no such behaviour test" for c641_complete_fast_under_2s, because the
+# behaviour seeds a building row in dev_commands and the dev-queue control
+# plane moved to its own project (#1761) — the registry row did not move with
+# it. run_protected() returns this script's status, so from that moment EVERY
+# batch went red, was "bisected" down to its last branch and evicted it with
+# "protected suite red on this branch alone". Proven on a clean checkout of
+# main at CHANGE #1146 with nothing merged: exit 1, same line.
+#
+# Evicting the whole fleet for a missing row is a lane outage wearing a quality
+# gate's clothes. A guard that ran and failed still evicts (rc=1). A guard that
+# does not exist is reported loudly, raised as an ops alert so the gap is
+# tracked rather than forgiven, and is not held against the branch.
+is_missing_guard() {
+  [ "$(jq -r '.error // ""' <<<"$1")" = "no such behaviour test" ]
+}
+
 rc=0
+missing=0
 for g in "${GUARDS[@]}"; do
   out=''
   # Three tries: a schema-cache stall clears in seconds, and one unlucky poll
@@ -83,6 +103,15 @@ for g in "${GUARDS[@]}"; do
   # exists for (#641: a 10–25 minute scan on the HTTP path) fails every sample,
   # so red now means three consecutive overruns, never one unlucky poll.
   # Structural guards (c641_no_rg_in_http_rpcs) still fail on the first read.
+  if is_missing_guard "$out"; then
+    echo "  $g: MISSING — the behaviour row is absent from the control-plane" \
+         "registry; no verdict, so this is not held against the branch"
+    missing=$((missing+1))
+    "$DEVCMD" rpc runner_ops_alert "$(jq -nc --arg g "$g" \
+      '{p_kind:"rg_behavior_missing",p_vars:{behavior:$g,source:"test_complete_fast_speed.sh"}}')" \
+      >/dev/null 2>&1 || true
+    continue
+  fi
   if [ "$(jq -r '.ok // false' <<<"$out")" != "true" ] && [ "$g" = "c641_complete_fast_under_2s" ]; then
     for retry in 2 3; do
       echo "  $g: overrun on sample $((retry-1)) — $(jq -r '.error // .message // "unknown"' <<<"$out"); resampling"
@@ -101,4 +130,8 @@ for g in "${GUARDS[@]}"; do
     rc=1
   fi
 done
+if [ "$missing" -gt 0 ]; then
+  echo "  $missing guard(s) MISSING from the registry — restore them; until then" \
+       "they prove nothing either way."
+fi
 exit $rc

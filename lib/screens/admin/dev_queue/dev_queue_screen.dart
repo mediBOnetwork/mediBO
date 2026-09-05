@@ -22,6 +22,7 @@ import '../test_mode_screen.dart';             // CHANGE #573, wired #468
 import 'journey_library_screen.dart';
 import 'test_coverage_screen.dart';   // CHANGE #634
 import 'journey_bot_screen.dart';     // CHANGE #635
+import 'visual_baselines_screen.dart'; // CHANGE #637
 import 'play_store_screen.dart';
 import 'signin_diag_screen.dart';
 import 'memory_screen.dart';
@@ -87,6 +88,7 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
       if (mounted && _hasActive) setState(() => _now = DateTime.now());
     });
     _openDeepLinkedCommand();
+    _openDeepLinkedTool();
   }
 
   /// CHANGE #1802 — `/admin/dev-queue?cmd=1802` opens that command's detail.
@@ -114,6 +116,24 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
     } catch (_) {/* the detail reads the row itself */}
     if (!mounted) return;
     await _openDetail({'id': id, ...row});
+  }
+
+  /// CHANGE #637 — `/admin/dev-queue?tool=visual_baselines` opens that dev
+  /// tool.
+  ///
+  /// The same hole #1802 closed for a command's detail, one level down: every
+  /// dev tool is behind the tools sheet, which is behind a header tap, and a
+  /// Flutter canvas cannot be tapped by the headless capture the runner uses.
+  /// So a tool screen was reachable by a human and by nothing else, and the
+  /// reachability proof §11 demands could never be a picture of the screen.
+  /// The key travels in the query string; a key this build does not know opens
+  /// nothing, exactly as `openDevTool` already reports for one it cannot route.
+  Future<void> _openDeepLinkedTool() async {
+    final key = (Uri.base.queryParameters['tool'] ?? '').trim();
+    if (key.isEmpty || !kDevToolKeys.contains(key)) return;
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    openDevTool(context, key, service: _svc, onDraftsQueued: _loadDrafts);
   }
 
   @override
@@ -1169,6 +1189,9 @@ const Set<String> kDevToolKeys = <String>{
   // been tested is the list; this is the run that tests it, every role and
   // every hostile variant, with the gaps it filed.
   'journey_bot',
+  // CHANGE #637 — the visual-regression review queue: what every registered
+  // screen looks like now, beside the picture Om approved.
+  'visual_baselines',
   'bug_report',
   'drafts_inbox',
   'cron_health',
@@ -1208,6 +1231,9 @@ bool openDevTool(
       return true;
     case 'journey_bot':
       push(JourneyBotScreen(service: svc));
+      return true;
+    case 'visual_baselines':
+      push(VisualBaselinesScreen(service: svc));
       return true;
     case 'bug_report':
       showBugReportSheet(context, svc);

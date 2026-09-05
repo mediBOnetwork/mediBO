@@ -19,8 +19,10 @@ import '../../design_tokens.dart';
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
 import '../../widgets/backend_error_view.dart';
+import '../../utils/payment_proof.dart';         // CHANGE #637 — the shared private-bucket loader
+import '../../widgets/payment_proof_image.dart'; // CHANGE #637 — the finding's own screenshot
 
-/// `feature_gaps_list(p_surface, p_type, p_severity, p_status, p_sort)`.
+/// `feature_gaps_list(p_surface, p_type, p_severity, p_status, p_sort, p_source)`.
 typedef FeatureGapsListRpc =
     Future<Map<String, dynamic>> Function(Map<String, dynamic> params);
 
@@ -32,10 +34,16 @@ class FeatureGapsScreen extends StatefulWidget {
   final FeatureGapsListRpc listRpc;
   final FeatureGapStatusRpc statusRpc;
 
+  /// CHANGE #637 — how a finding's screenshot is fetched out of the private
+  /// artifact bucket. Injected for the VM test; null in production, where the
+  /// shared signed-URL loader is used.
+  final PaymentProofLoader? imageLoader;
+
   const FeatureGapsScreen({
     super.key,
     required this.listRpc,
     required this.statusRpc,
+    this.imageLoader,
   });
 
   @override
@@ -77,6 +85,10 @@ class _FeatureGapsScreenState extends State<FeatureGapsScreen> {
         'p_severity': _picked['severity'] ?? 'all',
         'p_status': _picked['status'] ?? 'all',
         'p_sort': _picked['sort'] ?? 'severity',
+        // CHANGE #637 — WHO filed it. The bot lanes write into this same
+        // register, so the filter that separates a hand-written finding from
+        // an exploratory opinion is a payload dimension like every other.
+        'p_source': _picked['source'] ?? 'all',
       });
       if (!mounted) return;
       for (final f in (payload['filters'] as List? ?? const [])) {
@@ -197,6 +209,7 @@ class _FeatureGapsScreenState extends State<FeatureGapsScreen> {
             fieldLabels: labels,
             busy: _busy,
             onAction: (action) => _act(row, action),
+            imageLoader: widget.imageLoader,
           ),
         ),
     ];
@@ -392,12 +405,18 @@ class FeatureGapCard extends StatelessWidget {
   final bool busy;
   final ValueChanged<String> onAction;
 
+  /// Injected so a VM widget test can render a finding's screenshot without
+  /// Supabase; production leaves it null and the shared signed-URL loader is
+  /// used, the same one every payment proof goes through.
+  final PaymentProofLoader? imageLoader;
+
   const FeatureGapCard({
     super.key,
     required this.row,
     required this.fieldLabels,
     required this.busy,
     required this.onAction,
+    this.imageLoader,
   });
 
   @override
@@ -425,14 +444,27 @@ class FeatureGapCard extends StatelessWidget {
           _Tag(label: '${row['type_label'] ?? ''}', tone: row['type_tone']),
           _Tag(label: '${row['surface_label'] ?? ''}', tone: null),
           _Tag(label: '${row['status_label'] ?? ''}', tone: row['status_tone']),
+          // CHANGE #637 — a bot finding says so on its face. The word and its
+          // tone are the backend's (source.<key> in feature_gap_label), so a
+          // new lane is a row in that table rather than a case in this file.
+          if ('${row['source_label'] ?? ''}'.isNotEmpty)
+            _Tag(label: '${row['source_label'] ?? ''}', tone: row['source_tone']),
         ]),
         _field(fieldLabels['journey_step'], row['journey_step']),
+        // The sentence the screen contradicted, quoted from the feature's own
+        // registry row — an opinion with nothing to point at is an argument.
+        _field(fieldLabels['spec_line'], row['spec_line']),
+        _field(fieldLabels['confidence'], row['confidence']),
+        // "reported by 4 runs, first on …" — the backend's sentence, and only
+        // when there IS a repeat: one sighting says nothing and prints nothing.
+        _field(fieldLabels['repeat'], row['repeat_label']),
         _field(fieldLabels['evidence'], row['evidence']),
         _field(fieldLabels['suggestion'], row['suggestion']),
         _field(fieldLabels['effort'], row['effort_guess']),
         _field(fieldLabels['notes'], row['notes']),
         _field(fieldLabels['dev_command'], row['dev_command_id']),
         _field(fieldLabels['found'], row['found_label']),
+        _shot(),
         if (actions.isNotEmpty) ...[
           SizedBox(height: Ds.space.x16),
           Row(children: [
@@ -457,6 +489,36 @@ class FeatureGapCard extends StatelessWidget {
             ],
           ]),
         ],
+      ]),
+    );
+  }
+
+  /// CHANGE #637 — the picture the finding was seen in, out of the PRIVATE
+  /// test-artifacts bucket. The bucket and the path are the payload's; this
+  /// screen never builds a URL and never guesses a bucket, and a finding with
+  /// no picture draws nothing at all rather than an empty frame.
+  Widget _shot() {
+    final shot = row['shot'];
+    if (shot is! Map) return const SizedBox.shrink();
+    final path = '${shot['path'] ?? ''}';
+    final bucket = '${shot['bucket'] ?? ''}';
+    final label = '${fieldLabels['shot'] ?? ''}';
+    if (path.isEmpty || bucket.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.only(top: Ds.space.x12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (label.isNotEmpty)
+          Text(label, style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+        SizedBox(height: Ds.space.x4),
+        ClipRRect(
+          borderRadius: Ds.r.rButton,
+          child: PaymentProofImage(
+            bucket: bucket,
+            path: path,
+            fixedHeight: 180,
+            loader: imageLoader,
+          ),
+        ),
       ]),
     );
   }

@@ -13,6 +13,18 @@
 -- proven one. The merge worker is what guarantees the smoke runs; this is what
 -- makes its verdict binding and its absence visible.
 
+-- WHICH DATABASE. dev_commands lives ONLY on the control plane after #1761 —
+-- production does not have it at all, and the replay applies every file to
+-- production FIRST, so an unguarded ALTER here fails the whole batch at
+-- `relation "public.dev_commands" does not exist` before the control-plane
+-- pass is ever reached. Say which database this file is for.
+select (to_regclass('public.dev_commands') is not null) as c635_is_cp \gset
+\if :c635_is_cp
+\else
+\echo '[c635] no dev_commands here — the promote gate lives on the control plane; nothing to do.'
+\quit
+\endif
+
 alter table public.dev_commands
   add column if not exists smoke_status text,
   add column if not exists smoke_commit text;

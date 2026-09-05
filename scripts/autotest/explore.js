@@ -122,6 +122,11 @@ async function main() {
   const browser = await lane.chromium.launch({ headless: true });
   const sessionCache = {};
   let gaps = 0, looked = 0;
+  // CHANGE #637 — the judge is a dependency, and a dependency that is down must
+  // not read as "the app is fine". `attempted` counts pairs the lane actually
+  // drove; `judgeErrors` counts the ones the model never answered for. Zero
+  // findings from zero judged screens is an OUTAGE, not a clean bill of health.
+  let attempted = 0, judgeErrors = 0, lastJudgeError = '';
 
   for (const f of features) {
     const ident = idByRole[f.role];
@@ -150,6 +155,7 @@ async function main() {
       feature: f.feature_key, role: f.role, runId, viewport: vp
     });
     let verdict = 'unclear', summary = '', findings = [];
+    attempted += 1;
     const uploaded = {};
     try {
       await fsn.open(sessionCache[f.role]);
@@ -203,6 +209,8 @@ async function main() {
           const out = await judge.judge(brief.prompt, small);
           if (!out.ok) {
             verdict = 'error';
+            judgeErrors += 1;
+            lastJudgeError = out.error || '';
             summary = out.error || 'the judge did not answer';
           } else {
             verdict = out.verdict;
@@ -266,6 +274,16 @@ async function main() {
   }
   console.log(`[explore] ${gaps} finding(s) filed from ${looked} judged screen(s) — ` +
     'they are OPEN opinions: Admin ▸ More ▸ Feature gaps, source "Exploratory bot"');
+  // Judging NOTHING while having driven something is the judge being
+  // unavailable, and the lane says so where a cron can read it. The reason is
+  // printed verbatim — a 403 that names billing is a different job from a
+  // model that answered in prose, and the next reader should not have to guess.
+  if (attempted > 0 && looked === 0) {
+    console.log(`[explore] judged 0 of ${attempted} screen(s)` +
+      (judgeErrors ? ` — ${judgeErrors} judge error(s), last: ${lastJudgeError.slice(0, 200)}` : '') +
+      ' — failing the lane');
+    return 1;
+  }
   return 0;
 }
 

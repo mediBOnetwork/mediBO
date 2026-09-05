@@ -61,7 +61,6 @@ function parseVerdict(text) {
 
 /// prompt + up to `images` screenshots -> the agent's judgement, or a reason.
 async function judge(prompt, imageFiles) {
-  const key = process.env.AUTOTEST_SERVICE_KEY || '';
   const images = [];
   for (const f of imageFiles || []) {
     try { images.push({ base64: fs.readFileSync(f).toString('base64'), mime_type: 'image/png' }); }
@@ -73,8 +72,7 @@ async function judge(prompt, imageFiles) {
   let out;
   try {
     out = await post(`${api.SUPA_URL}/functions/v1/gemini-ocr`,
-      { images, prompt },
-      { apikey: key || api.ANON_KEY, Authorization: `Bearer ${key || api.ANON_KEY}` });
+      { images, prompt }, api.serviceHeaders());
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e).slice(0, 300) };
   }

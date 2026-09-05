@@ -158,7 +158,16 @@ async function main() {
           const step = Object.assign({}, steps[i]);
           if (step.role === '{role}') step.role = role;
           const out = await harness.runStep(fsn, step, i);
-          if (!out.ok) { verdict = 'failed'; error = `step ${i + 1} (${step.kind}): ${out.note}`; break; }
+          // A step may say the ENVIRONMENT could not meet a precondition —
+          // no supply in this zone, no fixture, nothing to act on. That is the
+          // same class as "no test identity for this role" above: not a pass,
+          // not a product failure, and never a silent skip. Anything else that
+          // returns ok:false is a failure of the feature.
+          if (!out.ok) {
+            verdict = out.blocked ? 'blocked' : 'failed';
+            error = `step ${i + 1} (${step.kind}): ${out.note}`;
+            break;
+          }
         }
         if (verdict === 'passed') {
           const end = await harness.checkExpect(fsn, f.expect);
@@ -213,7 +222,17 @@ async function main() {
     }, null);
   }
   console.log('[autotest] ' + JSON.stringify(finished && finished.totals));
-  console.log('[autotest] purge: ' + JSON.stringify((finished && finished.purge && finished.purge.message) || finished && finished.purge));
+  // #573's `clean` is residue AND an unchanged business fingerprint across 47
+  // tables. On a PRODUCTION smoke that second half is about the whole platform,
+  // not about the bot: real customers order while the run is in the browser, so
+  // it moves whatever the bot did or did not do. Print the two facts apart —
+  // "my session left nothing" is the one this bot can be held to — and keep the
+  // backend's own sentence verbatim beside them rather than in place of them.
+  const pg = (finished && finished.purge) || {};
+  const res = pg.residue || {};
+  console.log(`[autotest] purge: residue ${res.total || 0} row(s), ${res.files || 0} file(s)`
+    + ` · business fingerprint ${pg.business_unchanged === false ? 'moved' : 'unchanged'}`
+    + ` — ${JSON.stringify(pg.message || pg)}`);
   return (finished && finished.status === 'passed') ? 0 : 1;
 }
 

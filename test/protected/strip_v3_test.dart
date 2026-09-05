@@ -31,6 +31,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/screens/admin/dev_queue/strip_v3/strip_v3_view.dart';
 
 Map<String, dynamic> _payload({
@@ -70,11 +71,14 @@ Map<String, dynamic> _payload({
               'sub': 'One runner, one command at a time.'
             },
             // The case the whole change exists for: asked for, not happening.
+            // CHANGE #1570 — and the words for it are the backend's.
             {
               'key': 'workflow',
               'label': 'Parallel building',
               'desired': true,
               'actual': false,
+              'actual_label': 'running',
+              'not_actual_label': 'not running',
               'sub': 'Up to 3 runners at once (Pool settings).'
             },
           ],
@@ -92,7 +96,15 @@ Future<void> _pump(WidgetTester tester, Map<String, dynamic> p,
       ),
     ));
 
+// CHANGE #1570 — the mismatch chip's two words ('running' / 'not running')
+// were Dart literals; they are payload strings now, so the fixture carries
+// them. What this file holds down is unchanged: a desired/actual mismatch is
+// VISIBLE, and two that agree carry no chip.
 void main() {
+  // The card calls RenderLog.write; its 800 ms debounce is a real Timer that
+  // would outlive the test and try to reach Supabase.
+  setUpAll(() => RenderLog.flushEnabled = false);
+
   testWidgets('a toggle that is on but not running says so', (tester) async {
     await _pump(tester, _payload());
     // desired:true actual:false must be visible as a mismatch, not hidden

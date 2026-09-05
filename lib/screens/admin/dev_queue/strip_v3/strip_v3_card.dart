@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../../services/ui_copy.dart';
+import '../../../../utils/toast.dart';
 import 'strip_v3_view.dart';
 
 /// CHANGE #1367 — the fetching half of the runner strip.
@@ -21,6 +23,10 @@ import 'strip_v3_view.dart';
 class StripV3Card extends StatefulWidget {
   final SupabaseClient? client;
 
+  /// CHANGE #1570 — what used to be the second runner card, rendered inside
+  /// this one. See [StripV3View.footer].
+  final Widget? footer;
+
   /// How often to re-read while mounted. The backend does the work; this is
   /// one cheap RPC.
   final Duration refresh;
@@ -28,6 +34,7 @@ class StripV3Card extends StatefulWidget {
   const StripV3Card({
     super.key,
     this.client,
+    this.footer,
     this.refresh = const Duration(seconds: 60),
   });
 
@@ -101,9 +108,82 @@ class _StripV3CardState extends State<StripV3Card> {
     });
   }
 
+  /// CHANGE #1570 — Stop / Restart on one worker.
+  ///
+  /// The strip cannot reach tmux, so the tap is a ROW: `runner_action_request`
+  /// queues it and the supervisor executes it on its next tick. The toast is
+  /// the backend's sentence, including its refusal when an action is already
+  /// pending for that worker — nothing here decides whether the tap was
+  /// allowed, and nothing here paints the worker as stopped before it is.
+  Future<void> _workerAction(String agent, String action) async {
+    if (_busy) return;
+    final confirmed = await _confirm(agent, action);
+    if (confirmed != true) return;
+    setState(() => _busy = true);
+    String? toast;
+    try {
+      final r = _asMap(await _c.rpc('runner_action_request',
+          params: {'p_agent': agent, 'p_action': action}));
+      toast = (r['toast'] ?? '').toString();
+    } catch (_) {
+      // Same rule as the toggle: the re-read below is what tells the truth.
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    if (mounted && toast != null && toast.isNotEmpty) {
+      showToast(context, toast);
+    }
+    await _load();
+    Future.delayed(const Duration(seconds: 8), () {
+      if (mounted) _load();
+    });
+  }
+
+  /// The confirmation sentence is the payload's too — a build that has never
+  /// heard of an action still asks the right question about it.
+  Future<bool?> _confirm(String agent, String action) async {
+    String text = '';
+    for (final w in (_d['workers'] as List?) ?? const []) {
+      if (w is! Map || (w['agent'] ?? '').toString() != agent) continue;
+      for (final a in (w['actions'] as List?) ?? const []) {
+        if (a is Map && (a['key'] ?? '').toString() == action) {
+          text = (a['confirm'] ?? '').toString();
+        }
+      }
+    }
+    if (text.isEmpty) return true;
+    if (!mounted) return false;
+    return showDialog<bool>(
+      context: context,
+      builder: (dctx) => AlertDialog(
+        content: Text(text),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dctx, false),
+              child: Text(c('dev_queue.cancel'))),
+          TextButton(
+              onPressed: () => Navigator.pop(dctx, true),
+              child: Text(c('dev_queue.v3_action_go'))),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (_loading) return const SizedBox.shrink();
-    return StripV3View(data: _d, busy: _busy, onToggle: _toggle);
+    // A card that hosts the runner controls must not disappear while its own
+    // RPC is in flight — the footer is the whole control surface now.
+    if (_loading) {
+      return widget.footer == null
+          ? const SizedBox.shrink()
+          : StripV3View(data: const {}, footer: widget.footer);
+    }
+    return StripV3View(
+      data: _d,
+      busy: _busy,
+      onToggle: _toggle,
+      onWorkerAction: _workerAction,
+      footer: widget.footer,
+    );
   }
 }

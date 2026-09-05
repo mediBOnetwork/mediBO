@@ -196,3 +196,51 @@ drop function if exists public.build_branch_attempt(text, boolean, text, jsonb);
 revoke all on function public.build_branch_attempt(text, boolean, text, jsonb, boolean) from public;
 grant execute on function public.build_branch_attempt(text, boolean, text, jsonb, boolean) to service_role;
 grant execute on function public.build_branch_card() to authenticated, service_role;
+
+-- ── 5. the branch guard must judge a runner on a branch that EXISTED ────────
+-- c1149_runner_builds_on_branch went red the moment #1470 made a branch
+-- actually reach "on":
+--   RG_FAIL: runner building on LIVE while a build branch is on:
+--            runner-3 (#1361), runner-1 (#1470)
+-- Both sessions were innocent. The branch became ready at 12:20:07; runner-1
+-- had reported its environment at 12:12:37 and runner-3 at 12:13:35, minutes
+-- BEFORE the branch existed. runner.sh adopted branch.env once at session
+-- start, so neither could have moved even in principle — the guard was
+-- failing them for a state that had not happened yet, and would have done so
+-- on every future session that outlived a branch flip.
+--
+-- The code fix is in runner.sh (adopt_build_branch now runs before EVERY
+-- claim, so a session picks the branch up between commands and never during
+-- one). This is the matching fix to the guard: only count a session that
+-- reported PRODUCTION after the branch was ready — one that actually had the
+-- opportunity and did not take it. That is strictly the case the guard exists
+-- for; a runner that starts a command while the branch is up and still writes
+-- to live still fails, exactly as before.
+update public.rg_behavior_tests set body = $c1470$
+do $x$
+declare v_bad text; v_on boolean;
+begin
+  select enabled into v_on from public.build_branch_config where id;
+  if coalesce(v_on, false) then
+    -- A runner whose session was reported on the PRODUCTION ref while it holds a
+    -- building row. The merge worker (agent merge-worker) is exempt: its deploy
+    -- step is the one place production is meant to be touched.
+    -- CHANGE #1470 - and only if it reported AFTER the branch was ready. A
+    -- session that last spoke before the branch existed had nothing to adopt.
+    select string_agg(e.agent || ' (#' || d.id || ')', ', ') into v_bad
+      from public.runner_session_env e
+      join public.dev_commands d on d.claimed_by = e.agent and d.status = 'building'
+     where e.supabase_ref = 'swojhmarmaijkshsbeih'
+       and e.agent <> 'merge-worker'
+       and e.updated_at > now() - interval '6 hours'
+       and exists (select 1 from public.build_branch b
+                    where b.status = 'on'
+                      and b.ready_at is not null
+                      and e.updated_at > b.ready_at);
+    if v_bad is not null then
+      raise exception 'RG_FAIL: runner building on LIVE while a build branch is on: %', v_bad;
+    end if;
+  end if;
+  raise exception 'RG_ROLLBACK';
+end $x$;
+$c1470$ where name = 'c1149_runner_builds_on_branch';

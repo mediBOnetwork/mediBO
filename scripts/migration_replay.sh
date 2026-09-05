@@ -53,7 +53,20 @@ fi
 # WHICH MODE — the backend decides (migration_replay_mode). While no runner
 # has built on a Supabase branch, the files were applied to live by the
 # runners that wrote them (today's behaviour): record them, apply nothing.
-mode_resp=$("$DEVCMD" rpc migration_replay_mode '{}' 2>/dev/null)
+#
+# CHANGE #1800 — ask the CONTROL PLANE for the mode, not production.
+# migration_replay_mode() counts build_branch rows, and #1761's cutover moved
+# build_branch to medibo-dev and dropped it from production. devcmd routes every
+# migration_replay_* name to production, so the call threw
+#   relation "public.build_branch" does not exist
+# -> `.mode` was empty -> "mode unknown — refusing to touch live" -> the batch
+# never deployed. Batch 553 (CHANGE #1147) died exactly there, and every batch
+# after it would have. The LEDGER (migration_replay_ledger) and the DDL itself
+# still belong to production, so _applied and _record below stay on prod; only
+# this one read follows build_branch to the control plane. On a box whose
+# runner.env has not been switched yet PROD_* and the control plane are the same
+# pair, so the override is a no-op there.
+mode_resp=$(DEVCMD_FORCE_DEV=1 "$DEVCMD" rpc migration_replay_mode '{}' 2>/dev/null)
 mode=$(jq -r '.mode // empty' <<<"$mode_resp")
 log "mode=${mode:-unknown}: $(jq -r '.reason // "no answer from migration_replay_mode"' <<<"$mode_resp")"
 if [ "$mode" = "record" ]; then

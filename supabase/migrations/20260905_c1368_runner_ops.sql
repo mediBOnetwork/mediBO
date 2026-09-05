@@ -429,10 +429,16 @@ begin
   if NEW.key <> 'desired_state' then return NEW; end if;
   if coalesce(NEW.value->>'vm','on') = 'off'
      and coalesce(OLD.value->>'vm','on') <> 'off' then
-    NEW.value := NEW.value;      -- untouched; the drain lives in worker_pool
-    perform _ops_put('{drain}'::text[], jsonb_build_object(
-      'on', true, 'at', now()::text, 'alerted', false,
-      'reason', 'VM stop requested — draining first'));
+    -- A drain Om already set BY HAND is left exactly as it is, reason and all.
+    -- Overwriting it here would relabel it as the power-cycle's own drain, and
+    -- the clause below would then clear it when the box comes back — silently
+    -- undoing a decision a person made, on the way through a decision a machine
+    -- made. Only a fleet that is NOT already draining is put into a drain here.
+    if not coalesce((_ops_cfg()#>>'{drain,on}')::boolean, false) then
+      perform _ops_put('{drain}'::text[], jsonb_build_object(
+        'on', true, 'at', now()::text, 'alerted', false,
+        'reason', 'VM stop requested — draining first'));
+    end if;
   elsif coalesce(NEW.value->>'vm','on') = 'on'
         and coalesce(OLD.value->>'vm','on') = 'off' then
     -- Coming back up clears the drain the stop set. A drain Om set BY HAND is

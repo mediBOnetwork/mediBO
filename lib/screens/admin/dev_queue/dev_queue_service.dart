@@ -57,6 +57,11 @@ class DevQueueService {
     'recording_step_add',
     'recording_stop',
     'recording_promote',
+    // CHANGE #636 — the safety net judges PRODUCTION's own RPC surface: its
+    // pg_proc, its grants, its guards, its money and its stock. Pointing it at
+    // the control plane would grade the wrong database and pass.
+    'autotest_safety_net_home',
+    'autotest_safety_net_run',
   };
 
   /// The control-plane client (medibo-dev): minted on first use, re-minted
@@ -226,6 +231,15 @@ class DevQueueService {
   /// all arrive already worded and already toned.
   Future<Map<String, dynamic>> autotestHome({String filter = 'all'}) async =>
       _asMap(await _rpc('autotest_home', params: {'p_filter': filter}));
+  /// CHANGE #636 — the machine-generated safety net. One read, one write, both
+  /// against production: `autotest_safety_net_home()` is the whole screen and
+  /// `autotest_safety_net_run()` is the button. Nothing here interprets either
+  /// payload.
+  Future<Map<String, dynamic>> safetyNetHome() async =>
+      _asMap(await _rpc('autotest_safety_net_home'));
+
+  Future<Map<String, dynamic>> safetyNetRun() async =>
+      _asMap(await _rpc('autotest_safety_net_run', params: {'p_label': null}));
 
   /// CHANGE #638 — the Chaos lab, in one payload: the seven scenarios with the
   /// last run's verdict on each, the live recording and its steps, every

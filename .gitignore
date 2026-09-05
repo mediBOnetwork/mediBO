@@ -91,3 +91,6 @@ build/flutter_plugin_android_lifecycle/
 build/package_info_plus/
 build/share_plus/
 build/record_android/
+
+# CHANGE #1674 — the build phase hands the upload phase its fingerprint
+.deploy_phase_state

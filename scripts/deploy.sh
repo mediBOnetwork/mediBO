@@ -10,6 +10,37 @@ set -euo pipefail
 # say where; unset, this is byte-for-byte the old `cd ~/mediBO`.
 MEDIBO_REPO="${MEDIBO_REPO:-$HOME/mediBO}"
 cd "$MEDIBO_REPO"
+
+# ── CHANGE #1674 — DEPLOY PHASES: the BUILD stops holding the deploy lane ────
+# Measured on 5 Sep: the lane was held 375-891s per change against a 60s target,
+# and almost all of it was `flutter clean && flutter build web` running INSIDE
+# the lock. Nothing about a build needs the lane — the merged tree is already
+# fixed by then. So this script splits in two:
+#   MEDIBO_DEPLOY_PHASE=build   clean, build, fingerprint, gate, commit — no upload
+#   MEDIBO_DEPLOY_PHASE=upload  wrangler + purge + verify on a bundle already built
+#   MEDIBO_DEPLOY_PHASE=all     (default) exactly the old behaviour, one pass
+# The change number must therefore be knowable BEFORE the lane is taken, which
+# is what merge_batch_prenumber() is for. Pass it as $1 to both phases.
+DEPLOY_PHASE="${MEDIBO_DEPLOY_PHASE:-all}"
+case "$DEPLOY_PHASE" in
+  all|build|upload) ;;
+  *) echo "❌  MEDIBO_DEPLOY_PHASE must be all, build or upload (got '$DEPLOY_PHASE')"; exit 1 ;;
+esac
+if [ "$DEPLOY_PHASE" != "all" ]; then echo "[phase] deploy phase = $DEPLOY_PHASE"; fi
+# Persistent build caches live OUTSIDE the repo, so the mandatory `flutter
+# clean` cannot cold-start pub/Gradle/Dart. Sourcing it here means the split
+# build phase gets the same warm caches the one-pass deploy always had.
+if [ -f "$HOME/mediBO-runner/cache.env" ]; then
+  # shellcheck disable=SC1091
+  . "$HOME/mediBO-runner/cache.env"
+  echo "[cache] PUB_CACHE=${PUB_CACHE:-unset}"
+fi
+_phase_t0=$(date +%s)
+_phase_mark() {  # <name> — one line per phase, so the slowest one is visible
+  local now; now=$(date +%s)
+  echo "[phase-timing] $1 $((now - _phase_t0))s"
+  _phase_t0=$now
+}
 export PATH="$PATH:$HOME/flutter/bin"
 # CHANGE #324 — a warm pub/Gradle/Flutter cache is the difference between a
 # two-minute build and a ten-minute one, and `flutter clean` (mandatory, see
@@ -69,7 +100,9 @@ fi
 # gate the deploy (CLAUDE.md). An unreachable origin now WARNS and continues;
 # a reachable origin keeps the strict ff-only guard that #424 added, so the
 # merged-PR protection is unchanged whenever it can actually be evaluated.
-if git fetch origin --prune; then
+if [ "$DEPLOY_PHASE" = "upload" ]; then
+  echo "[phase] upload — skipping the pull-first guard (the build phase already ran it)."
+elif git fetch origin --prune; then
   if ! git pull --ff-only origin main; then
     echo "❌  DEPLOY ABORTED: local main is behind or diverged from origin/main."
     echo "    A PR may have been merged on GitHub. Resolve with: git fetch origin && git rebase origin/main"
@@ -115,7 +148,11 @@ echo "🧪 [gate] fold-in self-test (CHANGE #222) — tests run BEFORE the build
 # NOTE: this script runs under `set -e`, so the exit code must be captured with
 # `|| STATUS=$?` — a bare call would abort before the diagnosis below prints.
 SELFTEST_STATUS=0
-bash scripts/selftest.sh --no-rg || SELFTEST_STATUS=$?
+if [ "$DEPLOY_PHASE" = "upload" ]; then
+  echo "[phase] upload — the build phase already ran the self-test gate on this exact tree."
+else
+  bash scripts/selftest.sh --no-rg || SELFTEST_STATUS=$?
+fi
 if [ "$SELFTEST_STATUS" -ne 0 ]; then
   echo ""
   echo "❌  DEPLOY ABORTED — self-test gate is RED (exit $SELFTEST_STATUS)."
@@ -170,6 +207,7 @@ CHANGE_LABEL="$N"
 # on every deploy is what keeps it trustworthy — a stale map sends the worker
 # back to the expensive blanket scan. ~0.2s, deterministic, no network. Never
 # fatal: a broken map must not block a deploy.
+if [ "$DEPLOY_PHASE" != "upload" ]; then
 bash scripts/gen_repo_map.sh || echo "⚠️  REPO_MAP generation failed (continuing)"
 
 # Build release — flutter clean is MANDATORY: skipping it produces a corrupt dart2js
@@ -207,10 +245,29 @@ cp web/_routes.json build/web/_routes.json
 # Commit first so HEAD reflects the new state
 git add -A
 git commit -m "CHANGE #${N}: deploy" || echo "nothing to commit (continuing)"
+_phase_mark "flutter build"
+else
+  echo "[phase] upload — reusing the bundle the build phase left in build/web."
+  if [ ! -f build/web/index.html ]; then
+    echo "❌  MEDIBO_DEPLOY_PHASE=upload but build/web/index.html is missing — run the build phase first."; exit 1
+  fi
+fi
 
-# Capture the just-made commit hash
-SHORT=$(git rev-parse --short HEAD)
-BUILT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+# Capture the just-made commit hash.
+# CHANGE #1674: the upload phase must NOT re-derive this. The build phase
+# amends the commit after fingerprinting, so HEAD has already moved on by the
+# time the upload runs — re-reading it would look for main.<newhash>.dart.js
+# against a bundle named with the OLD hash and abort on a perfectly good build.
+# The build phase writes what it used; the upload phase reads it back.
+PHASE_STATE="$MEDIBO_REPO/.deploy_phase_state"
+if [ "$DEPLOY_PHASE" = "upload" ] && [ -f "$PHASE_STATE" ]; then
+  # shellcheck disable=SC1090
+  . "$PHASE_STATE"
+  echo "[phase] upload — reusing fingerprint $SHORT from the build phase"
+else
+  SHORT=$(git rev-parse --short HEAD)
+  BUILT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+fi
 WEB="build/web"
 
 echo "Build fingerprint: $SHORT ($BUILT)"
@@ -346,7 +403,24 @@ git add functions/_middleware.js 2>/dev/null || true
 git add "$WEB/main.$SHORT.dart.js" 2>/dev/null || true
 git add "$WEB/main.$SHORT.dart.js.map" 2>/dev/null || true
 git add "$WEB/flutter_service_worker.js" 2>/dev/null || true
-git commit --amend --no-edit
+if [ "$DEPLOY_PHASE" = "upload" ]; then
+  echo "[phase] upload — the build phase already amended the commit; not touching git history again."
+else
+  git commit --amend --no-edit
+  printf 'SHORT=%s\nBUILT=%s\nN=%s\n' "$SHORT" "$BUILT" "$N" > "$PHASE_STATE"
+fi
+
+# ── CHANGE #1674 — the build phase stops HERE, lane never taken ─────────────
+# Everything above is repeatable, verifiable and needs no exclusion: tests, the
+# bundle, the fingerprint, the boot gate, the commit. Only what follows — the
+# upload, the purge and the live verify — has to be serialised.
+if [ "$DEPLOY_PHASE" = "build" ]; then
+  _phase_mark "build phase total"
+  echo ""
+  echo "✅  BUILD PHASE COMPLETE — CHANGE #${N} stamped, bundle gated, nothing uploaded."
+  echo "    Re-run with MEDIBO_DEPLOY_PHASE=upload $N to publish this exact tree."
+  exit 0
+fi
 
 # ── LIVE DEPLOY: wrangler Direct Upload — bypasses Cloudflare Pages git queue ──
 echo ""
@@ -360,6 +434,7 @@ DEPLOY_STATUS=$?
 echo "$WRANGLER_OUTPUT"
 DEPLOY_END=$(date +%s)
 DEPLOY_SECS=$((DEPLOY_END - DEPLOY_START))
+_phase_mark "wrangler upload"
 
 if [ $DEPLOY_STATUS -ne 0 ]; then
   echo "❌  wrangler deploy failed (exit $DEPLOY_STATUS)"

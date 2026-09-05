@@ -25,60 +25,100 @@ class UsageMeter extends StatelessWidget {
 
   const UsageMeter({super.key, required this.usage, this.onRates});
 
-  List<Map<String, dynamic>> get _limits => ((usage['limits'] as List?) ?? const [])
-      .whereType<Map>()
-      .map((e) => Map<String, dynamic>.from(e))
-      .toList();
+  List<Map<String, dynamic>> get _limits =>
+      ((usage['limits'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
 
   @override
   Widget build(BuildContext context) {
     final spend = '${usage['spend_display'] ?? ''}';
     final today = '${usage['today_display'] ?? ''}';
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Padding(
-          padding: EdgeInsets.only(top: Ds.space.x4 / 2),
-          child: Icon(Icons.data_usage, size: Ds.t.bodySize, color: Ds.c.textSecondary),
-        ),
-        SizedBox(width: Ds.space.x8),
-        Text(c('dev_queue.usage_label'), style: Ds.t.subtitle),
-        SizedBox(width: Ds.space.x8),
-        // Flexible, not Spacer: the sync line can be a whole failure sentence
-        // ("sync failing: Claude login not usable — accessToken absent"), and a
-        // fixed-width chip would clip exactly the message that matters most.
-        Expanded(child: Align(alignment: Alignment.centerRight, child: _syncChip())),
-      ]),
-      SizedBox(height: Ds.space.x12),
-      for (final l in _limits) _limitBar(l),
-      if (spend.isNotEmpty) Text(spend, style: Ds.t.caption),
-      if (today.isNotEmpty) Text(today, style: Ds.t.caption),
-      SizedBox(height: Ds.space.x8),
-      Row(children: [
-        Expanded(
-          child: Text(c('dev_queue.plan_note'),
-              style: Ds.t.caption.copyWith(color: Ds.c.brand, fontWeight: FontWeight.w600)),
-        ),
-        if (onRates != null)
-          InkWell(
-            onTap: onRates,
-            borderRadius: Ds.r.rChip,
-            child: Container(
-              constraints: BoxConstraints(minHeight: Ds.touch.minTarget / 2),
-              alignment: Alignment.center,
-              padding: EdgeInsets.symmetric(
-                  horizontal: Ds.space.x12, vertical: Ds.space.x4),
-              decoration: BoxDecoration(color: Ds.c.infoSoft, borderRadius: Ds.r.rChip),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(Icons.info_outline, size: Ds.t.captionSize, color: Ds.c.info),
-                SizedBox(width: Ds.space.x4),
-                Text(c('dev_queue.rates_open'),
-                    style: Ds.t.caption
-                        .copyWith(color: Ds.c.info, fontWeight: FontWeight.w700)),
-              ]),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(
+              Icons.data_usage,
+              size: Ds.t.bodySize,
+              color: Ds.c.textSecondary,
             ),
-          ),
-      ]),
-    ]);
+            SizedBox(width: Ds.space.x8),
+            Text(c('dev_queue.usage_label'), style: Ds.t.subtitle),
+            SizedBox(width: Ds.space.x8),
+            // Flexible, not Spacer: the sync line can be a whole failure sentence
+            // ("sync failing: Claude login not usable — accessToken absent"), and a
+            // fixed-width chip would clip exactly the message that matters most.
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: _syncChip(),
+              ),
+            ),
+          ],
+        ),
+        SizedBox(height: Ds.space.x12),
+        for (final l in _limits) _limitBar(l),
+        if (spend.isNotEmpty) Text(spend, style: Ds.t.caption),
+        if (today.isNotEmpty) Text(today, style: Ds.t.caption),
+        SizedBox(height: Ds.space.x8),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                c('dev_queue.plan_note'),
+                style: Ds.t.caption.copyWith(
+                  color: Ds.c.brand,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            if (onRates != null)
+              InkWell(
+                onTap: onRates,
+                borderRadius: Ds.r.rChip,
+                // The chip stays visually small in a dense admin strip, but its tap
+                // target is a full Ds.touch.minTarget box around it.
+                child: Container(
+                  constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+                  alignment: Alignment.center,
+                  padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
+                  child: Container(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: Ds.space.x12,
+                      vertical: Ds.space.x4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Ds.c.infoSoft,
+                      borderRadius: Ds.r.rChip,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.info_outline,
+                          size: Ds.t.captionSize,
+                          color: Ds.c.info,
+                        ),
+                        SizedBox(width: Ds.space.x4),
+                        Text(
+                          c('dev_queue.rates_open'),
+                          style: Ds.t.caption.copyWith(
+                            color: Ds.c.info,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ],
+    );
   }
 
   /// Freshness / failure indicator. The sentence AND the tone are the
@@ -90,18 +130,31 @@ class UsageMeter extends StatelessWidget {
     final tone = statusTone((usage['updated_tone'] ?? 'completed').toString());
     final fresh = (usage['stale'] ?? false) != true;
     return Container(
-      padding:
-          EdgeInsets.symmetric(horizontal: Ds.space.x8, vertical: Ds.space.x4),
+      padding: EdgeInsets.symmetric(
+        horizontal: Ds.space.x8,
+        vertical: Ds.space.x4,
+      ),
       decoration: BoxDecoration(color: tone.bg, borderRadius: Ds.r.rChip),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(fresh ? Icons.check_circle : Icons.sync_problem,
-            size: Ds.t.captionSize, color: tone.fg),
-        SizedBox(width: Ds.space.x4),
-        Flexible(
-          child: Text(txt,
-              style: Ds.t.caption.copyWith(color: tone.fg, fontWeight: FontWeight.w600)),
-        ),
-      ]),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            fresh ? Icons.check_circle : Icons.sync_problem,
+            size: Ds.t.captionSize,
+            color: tone.fg,
+          ),
+          SizedBox(width: Ds.space.x4),
+          Flexible(
+            child: Text(
+              txt,
+              style: Ds.t.caption.copyWith(
+                color: tone.fg,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -114,28 +167,38 @@ class UsageMeter extends StatelessWidget {
     final resets = '${l['resets_display'] ?? ''}';
     return Padding(
       padding: EdgeInsets.only(bottom: Ds.space.x12),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Expanded(child: Text('${l['label'] ?? ''}', style: Ds.t.body)),
-          SizedBox(width: Ds.space.x8),
-          Text('${l['pct_display'] ?? ''}',
-              style: Ds.t.body.copyWith(color: tone.fg, fontWeight: FontWeight.w700)),
-        ]),
-        SizedBox(height: Ds.space.x8),
-        ClipRRect(
-          borderRadius: Ds.r.rChip,
-          child: LinearProgressIndicator(
-            value: pct.toDouble(),
-            minHeight: Ds.space.x8,
-            backgroundColor: Ds.c.divider,
-            valueColor: AlwaysStoppedAnimation<Color>(tone.fg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(child: Text('${l['label'] ?? ''}', style: Ds.t.body)),
+              SizedBox(width: Ds.space.x8),
+              Text(
+                '${l['pct_display'] ?? ''}',
+                style: Ds.t.body.copyWith(
+                  color: tone.fg,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
           ),
-        ),
-        if (resets.isNotEmpty) ...[
-          SizedBox(height: Ds.space.x4),
-          Text(resets, style: Ds.t.caption),
+          SizedBox(height: Ds.space.x8),
+          ClipRRect(
+            borderRadius: Ds.r.rChip,
+            child: LinearProgressIndicator(
+              value: pct.toDouble(),
+              minHeight: Ds.space.x8,
+              backgroundColor: Ds.c.divider,
+              valueColor: AlwaysStoppedAnimation<Color>(tone.fg),
+            ),
+          ),
+          if (resets.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(resets, style: Ds.t.caption),
+          ],
         ],
-      ]),
+      ),
     );
   }
 }

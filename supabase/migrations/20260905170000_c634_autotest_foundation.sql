@@ -832,6 +832,31 @@ on conflict (name) do update
 -- ~/.medibo/autotest.env (chmod 600, never committed, never in a payload).
 -- A role with no identity is reported by the harness as BLOCKED with this
 -- table's own note — never as a failure, and never silently skipped.
+-- The table itself. #129 created it on the dev/control-plane project only, and
+-- CHANGE #1761 then split that project away from production — so on PRODUCTION
+-- it has never existed, which is exactly how batch 557's replay died here. The
+-- harness reads test_identities() on production (that is where feature_registry,
+-- test_coverage and orders live), so production is where the table belongs.
+-- Created with the same shape and the same closed door as the original: RLS on,
+-- no policy, reachable only through the security-definer RPC below.
+create table if not exists public.qa_test_identities (
+  role        text primary key,
+  account_id  uuid,
+  identity    text,
+  note        text,
+  ready       boolean not null default false,
+  created_at  timestamptz not null default now()
+);
+alter table public.qa_test_identities enable row level security;
+
+insert into public.qa_test_identities (role, note)
+values ('super_admin','seed a test-only super_admin account, set account_id + ready'),
+       ('admin',      'seed a test-only admin account, set account_id + ready'),
+       ('supplier',   'seed a test-only supplier account, set account_id + ready'),
+       ('customer',   'seed a test-only customer account, set account_id + ready'),
+       ('company',    'seed a test-only company account, set account_id + ready')
+on conflict (role) do nothing;
+
 insert into public.qa_test_identities (role, identity, ready, note)
 values ('customer', 'test.cust1@medibo.in', true, 'password lives in ~/.medibo/autotest.env on the build VM'),
        ('admin',    'test.admin@medibo.in', true, 'password lives in ~/.medibo/autotest.env on the build VM'),

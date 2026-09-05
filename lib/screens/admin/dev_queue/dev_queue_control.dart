@@ -122,6 +122,15 @@ class _DevQueueControlState extends State<DevQueueControl> {
   Map<String, dynamic> get _vm =>
       (_snap['vm'] as Map?)?.cast<String, dynamic>() ?? const {};
 
+  /// CHANGE #1366 — the fleet's two silent states, both printed verbatim.
+  /// `blocked` is runner_blocked_badge(): present only while a runner's boot
+  /// doctor is red, which is the state that ran for 21 hours on 4-5 Sep with
+  /// nothing on this strip to say so. `disk` is runner_disk_state().
+  Map<String, dynamic> get _blocked =>
+      (_snap['blocked'] as Map?)?.cast<String, dynamic>() ?? const {};
+  Map<String, dynamic> get _disk =>
+      (_snap['disk'] as Map?)?.cast<String, dynamic>() ?? const {};
+
   /// CHANGE #755 — the self-healing breaker's card, delivered on the same
   /// dev_ctl_get poll as the toggles so it can never be a beat behind them.
   Map<String, dynamic> get _health =>
@@ -392,6 +401,7 @@ class _DevQueueControlState extends State<DevQueueControl> {
       // summary bar so it never blocks the list), tapped open to reveal the
       // toggles + real usage. No chevron — the header itself is the control.
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _blockedBanner(),
         InkWell(
           onTap: () {
             setState(() => _expanded = !_expanded);
@@ -417,6 +427,7 @@ class _DevQueueControlState extends State<DevQueueControl> {
           _divider(),
           WorkerGridCard(
             pool: (_snap['pool'] as Map?)?.cast<String, dynamic>() ?? const {},
+            disk: _disk,
             service: widget.service,
             onChanged: _load,
           ),
@@ -450,6 +461,8 @@ class _DevQueueControlState extends State<DevQueueControl> {
   /// verbatim; ContextEconomyCard prints it and computes nothing.
   Map<String, dynamic> get _context =>
       (_snap['context'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  Widget _blockedBanner() => RunnersBlockedBanner(blocked: _blocked);
 
   Widget _expandedHeader() => Row(children: [
         Text(c('dev_queue.ctl_section'),
@@ -856,5 +869,51 @@ class _DevQueueControlState extends State<DevQueueControl> {
       return ToneChip(label: c('dev_queue.ctl_wf_running'), tone: statusTone('completed'));
     }
     return ToneChip(label: c('dev_queue.ctl_applying'), tone: statusTone('awaiting_approval'));
+  }
+}
+
+/// CHANGE #1366 — the "Runners blocked" banner, on its own so it can be tested
+/// without a Supabase client behind it.
+///
+/// It is a PRINTER. `runner_blocked_badge()` decides whether the fleet is
+/// blocked, which runner and check blocked it, and how long it has been that
+/// way; this draws the three strings it is given and resolves one tone name.
+/// Absence is `has:false` — then it draws nothing at all, which is why it is
+/// safe to keep it above the collapsed header where it is always visible.
+class RunnersBlockedBanner extends StatelessWidget {
+  final Map<String, dynamic> blocked;
+  const RunnersBlockedBanner({super.key, required this.blocked});
+
+  @override
+  Widget build(BuildContext context) {
+    if ((blocked['has'] ?? false) != true) return const SizedBox.shrink();
+    final tone = toneByName((blocked['tone'] ?? 'danger').toString());
+    final detail = (blocked['detail'] ?? '').toString();
+    final since = (blocked['since_label'] ?? '').toString();
+    return Container(
+      margin: EdgeInsets.only(bottom: Ds.space.x8),
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x12, vertical: Ds.space.x8),
+      decoration: BoxDecoration(color: tone.bg, borderRadius: Ds.r.rButton),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(Icons.report_gmailerrorred, size: Ds.space.x16, color: tone.fg),
+        SizedBox(width: Ds.space.x8),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text((blocked['label'] ?? '').toString(),
+                style: Ds.t.caption
+                    .copyWith(fontWeight: FontWeight.w700, color: tone.fg)),
+            if (detail.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x4),
+              Text(detail, style: Ds.t.caption.copyWith(color: tone.fg)),
+            ],
+            if (since.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x4),
+              Text(since, style: Ds.t.caption.copyWith(color: tone.fg)),
+            ],
+          ]),
+        ),
+      ]),
+    );
   }
 }

@@ -311,6 +311,15 @@ Current files and what they hold down:
   than its string key, and ok:false renders the backend's message instead of
   throwing.
 
+- `runner_blocked_disk_test.dart` — the two surfaces that stayed silent while
+  the build disk sat at 99% for 21 hours: the "Runners blocked: <reason>" banner
+  prints runner_blocked_badge()'s whole sentence (the fixture's label names a
+  different reason from its own `reason` field, so a banner rebuilt in Dart
+  fails), has:false draws nothing at all rather than an empty banner, the disk
+  line prints runner_disk_state()'s own "% used · GB free" sentence (the fixture
+  deliberately disagrees with its own pct/free_gb numbers), an unmeasured disk
+  renders nothing rather than 0% or a dash, and tone is one lookup with an
+  unknown tone staying neutral.
 - `cart_unavailable_test.dart` — the cart's red state is the backend's flag:
   per-line unavailable/qty_locked are carried through untouched,
   unavailable_badge prints verbatim (never pluralised in Dart), the badge is

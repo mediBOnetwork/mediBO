@@ -88,12 +88,20 @@ async function main() {
     if (claimed.kind === 'safety_net') {
       const a = claimed.args || {};
       const t0 = Date.now();
-      const out = await api.rpc('autotest_safety_net_run', {
-        p_label: a.label || 'nightly safety net',
-        p_seed: a.seed == null ? null : Number(a.seed),
-        p_fuzz_rpcs: a.fuzz_rpcs == null ? 150 : Number(a.fuzz_rpcs),
-        p_variants: a.variants == null ? 2 : Number(a.variants)
-      }, null);
+      // A throw here used to leave the request 'claimed' for ever — the run
+      // that found the safeupdate bug did exactly that. Close it either way:
+      // a request nobody ever closes is a lie about what the lane did.
+      let out = null;
+      try {
+        out = await api.rpc('autotest_safety_net_run', {
+          p_label: a.label || 'nightly safety net',
+          p_seed: a.seed == null ? null : Number(a.seed),
+          p_fuzz_rpcs: a.fuzz_rpcs == null ? 150 : Number(a.fuzz_rpcs),
+          p_variants: a.variants == null ? 2 : Number(a.variants)
+        }, null);
+      } catch (e) {
+        out = { ok: false, error: (e && e.message) || String(e) };
+      }
       const ok = !!(out && out.ok);
       console.log(`[autotest] safety net ${ok ? 'ran' : 'FAILED'} in ${Math.round((Date.now() - t0) / 1000)}s · `
         + JSON.stringify(out && (out.gaps !== undefined ? { run_id: out.run_id, gaps: out.gaps } : out)).slice(0, 300));

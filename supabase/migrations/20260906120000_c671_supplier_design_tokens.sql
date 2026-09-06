@@ -253,3 +253,11 @@ insert into public.ui_copy (key, value) values
   ('dispute_card.qty_received', to_jsonb('Received'::text)),
   ('dispute_card.qty_missing',  to_jsonb('Missing'::text))
 on conflict (key) do nothing;
+
+-- dispute_token_page's invalid-link title and body were Dart literals too, on
+-- the /dispute?token=<token> page a supplier opens straight from WhatsApp.
+insert into public.ui_copy (key, value) values
+  ('dispute_token_page.invalid_title', to_jsonb('Link invalid'::text)),
+  ('dispute_token_page.invalid_body',
+   to_jsonb('This dispute link has expired or is not valid.'::text))
+on conflict (key) do nothing;

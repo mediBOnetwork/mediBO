@@ -477,7 +477,7 @@ class _SupplierPointsMapState extends State<_SupplierPointsMap> {
     var changed = false;
     for (final hex in wanted) {
       if (_iconCache.containsKey(hex)) continue;
-      _iconCache[hex] = await _dotMarkerIcon(_hexColor(hex, const Color(0xFF1B7A43)));
+      _iconCache[hex] = await _dotMarkerIcon(_hexColor(hex, Ds.c.brand));
       changed = true;
     }
     if (mounted && changed) setState(() {});
@@ -522,7 +522,7 @@ class _SupplierPointsMapState extends State<_SupplierPointsMap> {
         iconWidth: 24,
         iconHeight: 24,
         tipAtPoint: false,
-        fallbackColor: _hexColor(hex, const Color(0xFF1B7A43)),
+        fallbackColor: _hexColor(hex, Ds.c.brand),
         title: p['supplier']?.toString() ?? '',
       ));
     }

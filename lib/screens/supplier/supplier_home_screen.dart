@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../design_tokens.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import 'supplier_schemes_screen.dart';
@@ -143,16 +144,17 @@ class _SupplierHomeScreenState extends State<SupplierHomeScreen> {
       // Search bar
       Container(
         padding: EdgeInsets.fromLTRB(
-          isDesktop ? 24 : 16, 12, isDesktop ? 24 : 16, 8,
+          isDesktop ? Ds.space.x24 : Ds.space.x16, Ds.space.x12,
+          isDesktop ? Ds.space.x24 : Ds.space.x16, Ds.space.x8,
         ),
-        color: Colors.white,
+        color: Ds.c.surface,
         child: TextField(
           controller: _searchCtrl,
           onChanged: _onSearchChanged,
           decoration: InputDecoration(
             hintText: c('supplier_home.search_hint'),
-            hintStyle: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 14),
-            prefixIcon: const Icon(Icons.search, color: Color(0xFF6B7280), size: 20),
+            hintStyle: Ds.t.bodySecondary,
+            prefixIcon: Icon(Icons.search, color: Ds.c.textSecondary, size: 20),
             suffixIcon: _currentSearch.isNotEmpty
                 ? IconButton(
                     icon: const Icon(Icons.clear, size: 18),
@@ -163,19 +165,20 @@ class _SupplierHomeScreenState extends State<SupplierHomeScreen> {
                   )
                 : null,
             filled: true,
-            fillColor: const Color(0xFFF5F6F8),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            fillColor: Ds.c.bg,
+            contentPadding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x12, vertical: Ds.space.x8),
             border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+              borderRadius: Ds.r.rButton,
+              borderSide: BorderSide(color: Ds.c.divider),
             ),
             enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+              borderRadius: Ds.r.rButton,
+              borderSide: BorderSide(color: Ds.c.divider),
             ),
             focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+              borderRadius: Ds.r.rButton,
+              borderSide: BorderSide(color: Ds.c.brand),
             ),
           ),
         ),
@@ -186,11 +189,12 @@ class _SupplierHomeScreenState extends State<SupplierHomeScreen> {
             ? _emptyState()
             : GridView.builder(
                 controller: _scrollCtrl,
-                padding: EdgeInsets.all(isDesktop ? 20 : 12),
+                padding: EdgeInsets.all(
+                    isDesktop ? Ds.space.x16 : Ds.space.x12),
                 gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: isDesktop ? 4 : 2,
-                  crossAxisSpacing: 10,
-                  mainAxisSpacing: 10,
+                  crossAxisSpacing: Ds.space.x8,
+                  mainAxisSpacing: Ds.space.x8,
                   childAspectRatio: isDesktop ? 0.78 : 0.72,
                 ),
                 itemCount: _items.length + (_loading ? 2 : 0),
@@ -208,21 +212,21 @@ class _SupplierHomeScreenState extends State<SupplierHomeScreen> {
   Widget _emptyState() {
     return Center(
       child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-        const Icon(Icons.store_outlined, size: 56, color: Color(0xFFD1D5DB)),
-        const SizedBox(height: 12),
+        Icon(Icons.store_outlined, size: 56, color: Ds.c.divider),
+        SizedBox(height: Ds.space.x12),
         Text(
           _currentSearch.isNotEmpty
               ? cf('supplier_home.empty_search', {'query': _currentSearch})
               : c('supplier_home.empty_no_companies'),
           textAlign: TextAlign.center,
-          style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
+          style: Ds.t.bodySecondary,
         ),
         if (_currentSearch.isEmpty) ...[
-          const SizedBox(height: 6),
+          SizedBox(height: Ds.space.x4),
           Text(
             c('supplier_home.empty_no_companies_hint'),
             textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)),
+            style: Ds.t.caption,
           ),
         ],
       ]),
@@ -245,55 +249,53 @@ class _SupplierMedicineCard extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-        boxShadow: const [BoxShadow(
-          color: Color(0x0F000000), blurRadius: 6, offset: Offset(0, 2),
-        )],
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        border: Border.all(color: Ds.c.divider),
+        boxShadow: Ds.elevation.e1,
       ),
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: EdgeInsets.all(Ds.space.x12),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           // Scheme badge
           if (schemeLabel != null)
             Container(
-              margin: const EdgeInsets.only(bottom: 6),
-              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+              margin: EdgeInsets.only(bottom: Ds.space.x4),
+              padding: EdgeInsets.symmetric(
+                  horizontal: Ds.space.x8, vertical: Ds.space.x4),
               decoration: BoxDecoration(
-                color: const Color(0xFFD1FAE5),
-                borderRadius: BorderRadius.circular(20),
+                color: Ds.c.successSoft,
+                borderRadius: Ds.r.rChip,
               ),
               child: Text(schemeLabel,
-                style: const TextStyle(
-                  fontSize: 11, color: Color(0xFF065F46), fontWeight: FontWeight.w600,
+                style: Ds.t.caption.copyWith(
+                  color: Ds.c.success, fontWeight: FontWeight.w600,
                 ),
               ),
             ),
           // Product name
           Expanded(
             child: Text(name,
-              style: const TextStyle(
-                fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF111827),
-                height: 1.3,
+              style: Ds.t.caption.copyWith(
+                fontWeight: FontWeight.w500, color: Ds.c.text,
               ),
               maxLines: 3,
               overflow: TextOverflow.ellipsis,
             ),
           ),
-          const SizedBox(height: 8),
+          SizedBox(height: Ds.space.x8),
           // Marketer
           Text(marketer,
-            style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
+            style: Ds.t.caption,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
-          const SizedBox(height: 6),
+          SizedBox(height: Ds.space.x4),
           // MRP
           if (mrp.isNotEmpty)
             Text(cf('supplier_home.mrp', {'mrp': mrp}),
-              style: const TextStyle(
-                fontSize: 13, color: Color(0xFF111827), fontWeight: FontWeight.w600,
+              style: Ds.t.caption.copyWith(
+                color: Ds.c.text, fontWeight: FontWeight.w600,
               ),
             ),
         ]),
@@ -311,19 +313,19 @@ class _SkeletonCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        border: Border.all(color: Ds.c.divider),
       ),
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: EdgeInsets.all(Ds.space.x12),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Container(height: 14, width: double.infinity, decoration: BoxDecoration(
-            color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(4),
+            color: Ds.c.bg, borderRadius: BorderRadius.circular(Ds.space.x4),
           )),
-          const SizedBox(height: 8),
+          SizedBox(height: Ds.space.x8),
           Container(height: 12, width: 100, decoration: BoxDecoration(
-            color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(4),
+            color: Ds.c.bg, borderRadius: BorderRadius.circular(Ds.space.x4),
           )),
         ]),
       ),

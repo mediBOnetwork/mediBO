@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../design_tokens.dart';
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
 import '../../widgets/backend_chip.dart';
@@ -432,10 +433,9 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
     // hardcoded hexes that used to sit in this button's style block
     // (#1B7A43 fill, #D1FAE5 disabled fill, #6B7280 disabled label, white
     // label) are gone — one palette, in app_settings.
-    final sBg = backendHex(_submit['bg'] as String?, const Color(0xFFEDEFF2));
-    final sFg = backendHex(_submit['fg'] as String?, const Color(0xFF5A6472));
-    final sBorder =
-        backendHex(_submit['border'] as String?, const Color(0xFFD3D8DF));
+    final sBg = backendHex(_submit['bg'] as String?, Ds.c.bg);
+    final sFg = backendHex(_submit['fg'] as String?, Ds.c.textSecondary);
+    final sBorder = backendHex(_submit['border'] as String?, Ds.c.divider);
     return SizedBox(
       width: double.infinity,
       height: 48,
@@ -447,7 +447,7 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
           foregroundColor: sFg,
           disabledForegroundColor: sFg,
           side: BorderSide(color: sBorder),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
         ),
         child: _supplierSubmitting
             ? SizedBox(
@@ -456,8 +456,8 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
                 child: CircularProgressIndicator(color: sFg, strokeWidth: 2))
             : Text(
                 label,
-                style: TextStyle(
-                    fontSize: 15, fontWeight: FontWeight.w700, color: sFg),
+                style: Ds.t.body.copyWith(
+                    fontWeight: FontWeight.w700, color: sFg),
               ),
       ),
     );
@@ -571,9 +571,9 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
 
   Widget _buildContent(BuildContext context) {
     if (_loading) {
-      return const Center(
+      return Center(
         child: CircularProgressIndicator(
-            color: Color(0xFF1B7A43), strokeWidth: 2.5),
+            color: Ds.c.brand, strokeWidth: 2.5),
       );
     }
 
@@ -591,14 +591,11 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.check_circle_outline,
-                size: 56, color: Color(0xFFD1FAE5)),
+            Icon(Icons.check_circle_outline,
+                size: 56, color: Ds.c.successSoft),
             if (emptyLabel.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Text(
-                emptyLabel,
-                style: const TextStyle(fontSize: 15, color: Color(0xFF6B7280)),
-              ),
+              SizedBox(height: Ds.space.x12),
+              Text(emptyLabel, style: Ds.t.bodySecondary),
             ],
           ],
         ),
@@ -606,7 +603,8 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
     }
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 80),
+      padding: EdgeInsets.fromLTRB(
+          Ds.space.x12, Ds.space.x12, Ds.space.x12, Ds.space.x48),
       children: [
         // ── CHANGE #687 (#68) — how long this supplier has left to answer,
         // above everything he is being asked. The block is the backend's and
@@ -635,9 +633,9 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
           _InquiryGroup(
             label: (g['label'] as String?) ?? '',
             count: (g['count'] as num?)?.toInt() ?? 0,
-            bgColor: backendHex(g['bg'] as String?, const Color(0xFFEDEFF2)),
-            textColor: backendHex(g['fg'] as String?, const Color(0xFF5A6472)),
-            borderColor: backendHex(g['border'] as String?, const Color(0xFFD3D8DF)),
+            bgColor: backendHex(g['bg'] as String?, Ds.c.bg),
+            textColor: backendHex(g['fg'] as String?, Ds.c.textSecondary),
+            borderColor: backendHex(g['border'] as String?, Ds.c.divider),
             isOpen: _isGroupOpen(g),
             onToggle: () => _toggleGroup((g['key'] as String?) ?? ''),
             items: _itemsFor((g['key'] as String?) ?? ''),
@@ -708,17 +706,16 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Container(
-          padding: const EdgeInsets.all(16),
+          padding: EdgeInsets.all(Ds.space.x16),
           decoration: BoxDecoration(
-            color: const Color(0xFFD1FAE5),
-            borderRadius: BorderRadius.circular(10),
+            color: Ds.c.successSoft,
+            borderRadius: Ds.r.rButton,
           ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Icon(Icons.check_circle,
-                  color: Color(0xFF065F46), size: 22),
-              const SizedBox(width: 10),
+              Icon(Icons.check_circle, color: Ds.c.success, size: 22),
+              SizedBox(width: Ds.space.x8),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -730,10 +727,9 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
                     if (_label('submitted').isNotEmpty)
                       Text(
                         _label('submitted'),
-                        style: const TextStyle(
-                            fontSize: 15,
+                        style: Ds.t.body.copyWith(
                             fontWeight: FontWeight.w700,
-                            color: Color(0xFF065F46)),
+                            color: Ds.c.success),
                       ),
                   ],
                 ),
@@ -741,7 +737,7 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
             ],
           ),
         ),
-        const SizedBox(height: 12),
+        SizedBox(height: Ds.space.x12),
         ..._receipt.map(_buildReceiptCard),
       ],
     );
@@ -764,12 +760,12 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
     final badge = backendChipOf(item, 'answer_badge');
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(12),
+      margin: EdgeInsets.only(bottom: Ds.space.x8),
+      padding: EdgeInsets.all(Ds.space.x12),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rButton,
+        border: Border.all(color: Ds.c.divider),
       ),
       child: Row(
         children: [
@@ -777,41 +773,37 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: const Color(0xFFF3F4F6),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFFE5E7EB), width: 0.5),
+              color: Ds.c.bg,
+              borderRadius: Ds.r.rButton,
+              border: Border.all(color: Ds.c.divider, width: 0.5),
             ),
             clipBehavior: Clip.antiAlias,
             child: imageUrl != null && imageUrl.isNotEmpty
                 ? Image.network(imageUrl,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => const Icon(
+                    errorBuilder: (_, __, ___) => Icon(
                         Icons.medication_outlined,
                         size: 20,
-                        color: Color(0xFFD1D5DB)))
-                : const Icon(Icons.medication_outlined,
-                    size: 20, color: Color(0xFFD1D5DB)),
+                        color: Ds.c.divider))
+                : Icon(Icons.medication_outlined,
+                    size: 20, color: Ds.c.divider),
           ),
-          const SizedBox(width: 12),
+          SizedBox(width: Ds.space.x12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   name,
-                  style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF111827)),
+                  style: Ds.t.body.copyWith(fontWeight: FontWeight.w600),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
                 if (company != null && company.trim().isNotEmpty) ...[
-                  const SizedBox(height: 2),
+                  SizedBox(height: Ds.space.x4),
                   Text(
                     company,
-                    style: const TextStyle(
-                        fontSize: 12, color: Color(0xFF6B7280)),
+                    style: Ds.t.caption,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -819,11 +811,12 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
               ],
             ),
           ),
-          const SizedBox(width: 8),
+          SizedBox(width: Ds.space.x8),
           BackendChip(
             chip: badge,
-            fontSize: 12,
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            fontSize: Ds.t.captionSize,
+            padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x8, vertical: Ds.space.x4),
           ),
         ],
       ),
@@ -871,35 +864,35 @@ class _InquiryGroup extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: bgColor,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: Ds.r.rButton,
         border: Border.all(color: borderColor),
       ),
       child: Column(
         children: [
           InkWell(
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(10)),
+            borderRadius:
+                BorderRadius.vertical(top: Radius.circular(Ds.r.button)),
             onTap: onToggle,
             child: Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              padding: EdgeInsets.symmetric(
+                  horizontal: Ds.space.x12, vertical: Ds.space.x12),
               child: Row(children: [
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding: EdgeInsets.symmetric(
+                      horizontal: Ds.space.x8, vertical: Ds.space.x4),
                   decoration: BoxDecoration(
                     color: textColor.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: Ds.r.rButton,
                   ),
                   child: Text(
                     count.toString(),
-                    style: TextStyle(
-                      fontSize: 13,
+                    style: Ds.t.caption.copyWith(
                       fontWeight: FontWeight.w700,
                       color: textColor,
                     ),
                   ),
                 ),
-                const SizedBox(width: 10),
+                SizedBox(width: Ds.space.x8),
                 // CHANGE #606 — an empty backend label draws nothing; the
                 // group itself still renders, because hiding it would hide the
                 // supplier's items, not just a word.
@@ -908,8 +901,7 @@ class _InquiryGroup extends StatelessWidget {
                       ? const SizedBox.shrink()
                       : Text(
                           label,
-                          style: TextStyle(
-                            fontSize: 14,
+                          style: Ds.t.body.copyWith(
                             fontWeight: FontWeight.w700,
                             color: textColor,
                           ),
@@ -929,7 +921,7 @@ class _InquiryGroup extends StatelessWidget {
             Divider(
                 height: 1, color: textColor.withValues(alpha: 0.2)),
             Padding(
-              padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+              padding: EdgeInsets.all(Ds.space.x8),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [

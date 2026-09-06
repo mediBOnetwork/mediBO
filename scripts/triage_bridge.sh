@@ -44,10 +44,13 @@ PROD_SERVICE_ROLE_KEY="${PROD_SERVICE_ROLE_KEY:-$SERVICE_ROLE_KEY}"
 
 MAX_BATCHES="${TRIAGE_MAX_BATCHES:-4}"
 
+# The body is piped, not passed as an argument: a batch spec or a page of QA
+# findings goes past ARG_MAX and the call dies with "Argument list too long"
+# — which is exactly how carry_qa broke on its first real run.
 _call() {  # _call <url> <key> <fn> <json-args>
-  curl -sS --max-time 60 -X POST "$1/rest/v1/rpc/$3" \
+  printf '%s' "${4:-{\}}" | curl -sS --max-time 60 -X POST "$1/rest/v1/rpc/$3" \
     -H "apikey: $2" -H "Authorization: Bearer $2" \
-    -H 'Content-Type: application/json' --data "$4"
+    -H 'Content-Type: application/json' --data-binary @-
 }
 prod() { _call "$PROD_SUPABASE_URL" "$PROD_SERVICE_ROLE_KEY" "$1" "${2:-{\}}"; }
 ctl()  { _call "$SUPABASE_URL"      "$SERVICE_ROLE_KEY"      "$1" "${2:-{\}}"; }
@@ -73,7 +76,7 @@ send_batches() {
     # not — each title names DIFFERENT row ids, and same-surface rows were already
     # merged into one batch on the production side. Routing and autochaining still
     # happen inside bulk_add; only the similarity veto is waived.
-    res="$(ctl dev_cmd_bulk_add "$(jq -nc --argjson it "[$item]" '{p_items:$it,p_force:true}')")"
+    res="$(ctl dev_cmd_bulk_add "$(printf '%s' "$item" | jq -c '{p_items: [.], p_force: true}')")"
     cmd="$(echo "$res" | jq -r '.added[0].id // empty')"
     if [ -n "$cmd" ]; then
       prod triage_batch_bind "{\"p_batch_id\":$bid,\"p_command_id\":$cmd}" >/dev/null
@@ -108,7 +111,7 @@ carry_qa() {
     "$SUPABASE_URL/rest/v1/qa_findings?status=eq.open&select=id,command_id,severity,title,detail&limit=200" \
     -H "apikey: $SERVICE_ROLE_KEY" -H "Authorization: Bearer $SERVICE_ROLE_KEY" 2>/dev/null)"
   echo "$rows" | jq -e 'type=="array" and length>0' >/dev/null 2>&1 || return 0
-  n="$(prod triage_file_qa "$(jq -nc --argjson r "$rows" '{p_rows:$r}')" | jq -r '.filed // 0')"
+  n="$(prod triage_file_qa "$(printf '%s' "$rows" | jq -c '{p_rows: .}')" | jq -r '.filed // 0')"
   [ "${n:-0}" != "0" ] && log "carried $n hostile-QA finding(s) into triage"
   return 0
 }

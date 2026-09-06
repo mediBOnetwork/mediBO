@@ -135,6 +135,19 @@ class ProductDetail {
   /// an OTC pack can never surface a Schedule-H companion.
   final PdCompanions companions;
 
+  /// CMD #1826 — the supply-confidence band. A label, a tone and an optional
+  /// sub-line / speed line, ALL worded by `pdp_supply_confidence()`. There is
+  /// no count and no supplier name anywhere in it, and `has` is false for a
+  /// pack nobody has answered on lately — the page then draws nothing.
+  final PdSupply supply;
+
+  /// CMD #1826 — BOTH prices, every time: the MRP row (printed pack ceiling)
+  /// and the sale-price row (what the buyer pays, or the backend's "On quote"
+  /// copy when no pricing_ready row exists). The sticky bar's main number and
+  /// its small MRP are the same block's `sticky` object. Nothing here is
+  /// formatted or chosen in Dart.
+  final PdPriceLines priceLines;
+
   final bool hasHistory;
   final String historyLabel;
 
@@ -186,6 +199,8 @@ class ProductDetail {
     this.facts = const PdFacts.empty(),
     this.purchase = const PurchaseOverlay.absent(),
     this.companions = const PdCompanions.empty(),
+    this.supply = const PdSupply.empty(),
+    this.priceLines = const PdPriceLines.empty(),
     required this.hasHistory,
     required this.historyLabel,
     required this.showWishlist,
@@ -288,6 +303,8 @@ class ProductDetail {
       facts: PdFacts.fromMap(m['facts']),
       purchase: PurchaseOverlay.fromMap(m['purchase']),
       companions: PdCompanions.fromMap(m['companions']),
+      supply: PdSupply.fromMap(m['supply']),
+      priceLines: PdPriceLines.fromMap(m['price_lines']),
       hasHistory: hist['has'] == true,
       historyLabel: _s(hist['label']),
       showWishlist: m['show_wishlist'] == true,
@@ -719,6 +736,158 @@ class PdCompanions {
           .whereType<Map>()
           .map((r) => PdCompanion.fromMap(r.cast<String, dynamic>()))
           .toList(growable: false),
+    );
+  }
+}
+
+/// CMD #1826 — the supply-confidence band, printed verbatim. `tone` is the
+/// backend's colour word (success / warning / danger); the page maps it
+/// through ONE lookup and never re-derives it from `band` or from anything
+/// else in the payload.
+class PdSupply {
+  final bool has;
+  final String band;
+  final String label;
+  final String tone;
+  final bool hasSub;
+  final String sub;
+  final bool hasSpeed;
+  final String speed;
+  const PdSupply({
+    required this.has,
+    required this.band,
+    required this.label,
+    required this.tone,
+    required this.hasSub,
+    required this.sub,
+    required this.hasSpeed,
+    required this.speed,
+  });
+  const PdSupply.empty()
+      : has = false,
+        band = '',
+        label = '',
+        tone = '',
+        hasSub = false,
+        sub = '',
+        hasSpeed = false,
+        speed = '';
+
+  factory PdSupply.fromMap(Object? raw) {
+    if (raw is! Map || raw['has'] != true) return const PdSupply.empty();
+    return PdSupply(
+      has: true,
+      band: raw['band']?.toString() ?? '',
+      label: raw['label']?.toString() ?? '',
+      tone: raw['tone']?.toString() ?? '',
+      hasSub: raw['has_sub'] == true,
+      sub: raw['sub']?.toString() ?? '',
+      hasSpeed: raw['has_speed'] == true,
+      speed: raw['speed']?.toString() ?? '',
+    );
+  }
+}
+
+/// One labelled price line: a caption, a value that is EITHER a backend-
+/// formatted rupee string or the backend's own words ("On quote"), and an
+/// optional sub-line. `hasAmount` says which; `tone` says how loud.
+class PdPriceLine {
+  final String caption;
+  final String value;
+  final bool hasAmount;
+  final bool hasNote;
+  final String note;
+  final String tone;
+  const PdPriceLine({
+    required this.caption,
+    required this.value,
+    required this.hasAmount,
+    required this.hasNote,
+    required this.note,
+    required this.tone,
+  });
+  const PdPriceLine.empty()
+      : caption = '',
+        value = '',
+        hasAmount = false,
+        hasNote = false,
+        note = '',
+        tone = '';
+
+  factory PdPriceLine.fromMap(Object? raw) {
+    if (raw is! Map) return const PdPriceLine.empty();
+    return PdPriceLine(
+      caption: raw['caption']?.toString() ?? '',
+      value: raw['value']?.toString() ?? '',
+      hasAmount: raw['has_amount'] == true,
+      hasNote: raw['has_note'] == true,
+      note: raw['note']?.toString() ?? '',
+      tone: raw['tone']?.toString() ?? '',
+    );
+  }
+}
+
+/// The sticky bar's numbers: the sale-price value as the main line and the
+/// small MRP beside it, both already worded.
+class PdSticky {
+  final String main;
+  final String mainCaption;
+  final String mainTone;
+  final bool hasSide;
+  final String side;
+  const PdSticky({
+    required this.main,
+    required this.mainCaption,
+    required this.mainTone,
+    required this.hasSide,
+    required this.side,
+  });
+  const PdSticky.empty()
+      : main = '',
+        mainCaption = '',
+        mainTone = '',
+        hasSide = false,
+        side = '';
+
+  factory PdSticky.fromMap(Object? raw) {
+    if (raw is! Map) return const PdSticky.empty();
+    return PdSticky(
+      main: raw['main']?.toString() ?? '',
+      mainCaption: raw['main_caption']?.toString() ?? '',
+      mainTone: raw['main_tone']?.toString() ?? '',
+      hasSide: raw['has_side'] == true,
+      side: raw['side']?.toString() ?? '',
+    );
+  }
+}
+
+/// CMD #1826 — `price_lines`: the MRP row, the sale-price row and the sticky
+/// bar's pair. `has` false only when an older backend sent no block at all,
+/// in which case the page falls back to the CHANGE #638 single price.
+class PdPriceLines {
+  final bool has;
+  final PdPriceLine mrp;
+  final PdPriceLine sale;
+  final PdSticky sticky;
+  const PdPriceLines({
+    required this.has,
+    required this.mrp,
+    required this.sale,
+    required this.sticky,
+  });
+  const PdPriceLines.empty()
+      : has = false,
+        mrp = const PdPriceLine.empty(),
+        sale = const PdPriceLine.empty(),
+        sticky = const PdSticky.empty();
+
+  factory PdPriceLines.fromMap(Object? raw) {
+    if (raw is! Map || raw['has'] != true) return const PdPriceLines.empty();
+    return PdPriceLines(
+      has: true,
+      mrp: PdPriceLine.fromMap(raw['mrp']),
+      sale: PdPriceLine.fromMap(raw['sale']),
+      sticky: PdSticky.fromMap(raw['sticky']),
     );
   }
 }

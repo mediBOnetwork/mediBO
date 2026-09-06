@@ -429,6 +429,13 @@ class _Body extends StatelessWidget {
         // the regulatory detail stays in the Product details fact row.
         const SizedBox(height: 12),
         _StockRow(data: data),
+        // CMD #1826 — supply confidence: a band, never a count. `has` is the
+        // backend's verdict; a pack nobody has answered on lately draws
+        // nothing here rather than a grey "unknown".
+        if (data.supply.has) ...[
+          SizedBox(height: Ds.space.x12),
+          _SupplyBand(supply: data.supply),
+        ],
         // CMD #367 (row 177) — the supply trust strip. `has` is the backend's
         // verdict, so a product with no supply history shows nothing at all
         // rather than a flattering default. No expiry claim is rendered here
@@ -1032,9 +1039,13 @@ class _PriceRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final pr = data.pricing;
-    // has_price is explicit absence: no MRP at all, so show no price rather
-    // than a fabricated ₹0.00.
-    if (pr == null || !pr.hasPrice) return const SizedBox.shrink();
+    final pl = data.priceLines;
+    // CMD #1826 — when the two-line block is present the page prints it and
+    // never the legacy single price. Without it (an older backend) has_price
+    // is the explicit absence: no MRP at all, so no price rather than ₹0.00.
+    if (!pl.has && (pr == null || !pr.hasPrice)) {
+      return const SizedBox.shrink();
+    }
 
     // CHANGE #673, revised by #676 — the price block.
     //
@@ -1045,6 +1056,12 @@ class _PriceRow extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // CMD #1826 — BOTH prices, every time: the sale-price row (what the
+        // buyer pays, or the backend's "On quote") and the MRP row captioned
+        // as the printed ceiling. MRP is never the hero again.
+        if (pl.has)
+          _PriceLines(lines: pl)
+        else if (pr != null)
         Row(
           crossAxisAlignment: CrossAxisAlignment.baseline,
           textBaseline: TextBaseline.alphabetic,
@@ -1087,7 +1104,7 @@ class _PriceRow extends StatelessWidget {
         // The margin line: the whole reason a pharmacy is on this screen.
         // Rendered only when the backend computed one — never derived here
         // from mrp minus price, which would be the app pricing the product.
-        if (pr.marginLabel.isNotEmpty) ...[
+        if (pr != null && pr.marginLabel.isNotEmpty) ...[
           const SizedBox(height: 10),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -1128,7 +1145,7 @@ class _PriceRow extends StatelessWidget {
         // tax split. Every row is a backend string; this widget prints pairs
         // and nothing else. Absent in mrp_only mode, so a product with no
         // captured pricing looks exactly as it did before.
-        if (pr.hasPtr || pr.gst != null) ...[
+        if (pr != null && (pr.hasPtr || pr.gst != null)) ...[
           const SizedBox(height: 10),
           _TradeBreakdown(pricing: pr),
         ],
@@ -1201,6 +1218,176 @@ class _TradeBreakdown extends StatelessWidget {
             ),
         ],
       ),
+    );
+  }
+}
+
+/// CMD #1826 — one tone word → one pair of colours. The ONLY place the band's
+/// colour is decided, and it reads `tone`, never `band` or the sub-line.
+Color _toneBg(String tone) => switch (tone) {
+      'success' => Brand.positiveBg,
+      'warning' => Ds.c.warningSoft,
+      'danger' => Brand.negativeBg,
+      _ => Brand.field,
+    };
+
+Color _toneFg(String tone) => switch (tone) {
+      'success' => Brand.positiveFg,
+      'warning' => Ds.c.warning,
+      'danger' => Brand.negativeFg,
+      _ => Brand.inkSub,
+    };
+
+/// CMD #1826 — the two price lines. Sale price first (the number the buyer
+/// acts on), MRP second as the printed ceiling. Every string is the payload's.
+class _PriceLines extends StatelessWidget {
+  final PdPriceLines lines;
+  const _PriceLines({required this.lines});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _PriceLineRow(
+            key: const ValueKey('pdp-sale-line'), line: lines.sale, hero: true),
+        SizedBox(height: Ds.space.x8),
+        _PriceLineRow(
+            key: const ValueKey('pdp-mrp-line'), line: lines.mrp, hero: false),
+      ],
+    );
+  }
+}
+
+class _PriceLineRow extends StatelessWidget {
+  final PdPriceLine line;
+  final bool hero;
+  const _PriceLineRow({super.key, required this.line, required this.hero});
+
+  @override
+  Widget build(BuildContext context) {
+    // A rupee amount on the hero row prints big; the backend's words ("On
+    // quote") print in the secondary tone. The MRP row is always small.
+    final TextStyle valueStyle = hero && line.hasAmount
+        ? AppType.h4.copyWith(color: Brand.price)
+        : hero
+            ? AppType.l4.copyWith(
+                color: Brand.inkSub, fontWeight: FontWeight.w600)
+            : AppType.b3.copyWith(
+                color: Brand.inkSub, fontWeight: FontWeight.w600);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: [
+            if (line.caption.isNotEmpty) ...[
+              Text(line.caption,
+                  style: AppType.t2.copyWith(
+                      color: Brand.inkMuted,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.6)),
+              SizedBox(width: Ds.space.x8),
+            ],
+            Flexible(child: Text(line.value, style: valueStyle)),
+          ],
+        ),
+        if (line.hasNote && line.note.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x4),
+          Text(line.note, style: AppType.t2.copyWith(color: Brand.inkMuted)),
+        ],
+      ],
+    );
+  }
+}
+
+/// CMD #1826 — the supply-confidence band. Label, tone, sub-line and speed
+/// line are printed verbatim; nothing here counts anything.
+class _SupplyBand extends StatelessWidget {
+  final PdSupply supply;
+  const _SupplyBand({required this.supply});
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = _toneFg(supply.tone);
+    return Container(
+      key: const ValueKey('pdp-supply-band'),
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x12, vertical: Ds.space.x8),
+      decoration: BoxDecoration(
+        color: _toneBg(supply.tone),
+        borderRadius: BorderRadius.circular(Rad.chip),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.verified_outlined, size: Ds.space.x16, color: fg),
+              SizedBox(width: Ds.space.x8),
+              Flexible(
+                child: Text(supply.label,
+                    style: AppType.b3
+                        .copyWith(color: fg, fontWeight: FontWeight.w600)),
+              ),
+            ],
+          ),
+          if (supply.hasSub && supply.sub.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(supply.sub,
+                style: AppType.t2.copyWith(color: Brand.inkMuted)),
+          ],
+          if (supply.hasSpeed && supply.speed.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(supply.speed,
+                style: AppType.t2.copyWith(color: Brand.inkMuted)),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// CMD #1826 — the sticky bar's price pair: the sale value as the main line,
+/// its caption and the small MRP beneath. All three are backend strings.
+class _StickyPrice extends StatelessWidget {
+  final PdSticky sticky;
+  const _StickyPrice({required this.sticky});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Text(
+          sticky.main,
+          key: const ValueKey('pdp-sticky-main'),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: sticky.mainTone == 'primary'
+              ? AppType.l4.copyWith(
+                  color: Brand.price, fontWeight: FontWeight.w800)
+              : AppType.b3.copyWith(
+                  color: Brand.inkSub, fontWeight: FontWeight.w600),
+        ),
+        Row(
+          children: [
+            Text(sticky.mainCaption,
+                style: AppType.t2.copyWith(color: Brand.inkMuted)),
+            if (sticky.hasSide) ...[
+              SizedBox(width: Ds.space.x8),
+              Flexible(
+                child: Text(sticky.side,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppType.t2.copyWith(color: Brand.inkMuted)),
+              ),
+            ],
+          ],
+        ),
+      ],
     );
   }
 }
@@ -1503,8 +1690,15 @@ class _StickyBar extends StatelessWidget {
         ),
         child: Row(
           children: [
+            // CMD #1826 — the sale price is the bar's main number and MRP is
+            // the small line beside its caption; never MRP alone next to
+            // Add to cart. Both strings are the backend's `sticky` pair.
+            if (data.priceLines.has) ...[
+              Expanded(child: _StickyPrice(sticky: data.priceLines.sticky)),
+              SizedBox(width: Ds.space.x12),
+            ]
             // Same price source as the row above and as every card.
-            if (pr != null && pr.hasPrice) ...[
+            else if (pr != null && pr.hasPrice) ...[
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,

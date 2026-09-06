@@ -20,6 +20,31 @@
 -- production leg of migration_replay.sh (which always runs) is a clean no-op on
 -- a database that carries no dev-queue tables.
 
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 0. A MISSED ANCHOR IS LOUD, NOT FATAL.
+--    Four of the blocks below patch a function's live text rather than pasting
+--    a copy over it, because other commands edit those same functions and a
+--    verbatim re-paste would silently revert whatever landed last. The first
+--    version raised on a missed anchor — and then the BUILD BRANCH, which was
+--    cut from production before #1761 moved the dev queue and still carries
+--    stale copies of every one of these functions, failed the whole file on an
+--    anchor that was never going to be there. A missed anchor now writes an
+--    alert and skips: visible on the control plane, harmless everywhere else,
+--    and it can never cost the fleet a deploy.
+-- ═══════════════════════════════════════════════════════════════════════════
+create or replace function public._c1819_patch_miss(p_what text, p_why text)
+returns void language plpgsql security definer set search_path to 'public' as $fn$
+begin
+  raise warning 'c1819: % — %; left alone', p_what, p_why;
+  if to_regclass('public.rg_alerts') is not null then
+    insert into rg_alerts(fingerprint, severity, kind, name, detail)
+    values ('c1819_patch_miss_' || p_what, 'warn', 'runner',
+            'c1819 could not patch ' || p_what,
+            jsonb_build_object('what', p_what, 'why', p_why))
+    on conflict (fingerprint) do update set last_seen = now(), seen_count = rg_alerts.seen_count + 1;
+  end if;
+end $fn$;
+
 do $mig$
 begin
 if to_regclass('public.dev_commands') is null or to_regclass('public.dev_runner_config') is null then
@@ -263,7 +288,12 @@ create or replace function public.dev_cmd_unpark(p_id bigint, p_reason text defa
 returns jsonb language plpgsql security definer set search_path to 'public' as $fn$
 declare r record; v_secs int;
 begin
-  perform _dev_guard();
+  -- ...or_local_cron: the resume is now driven by TRIGGERS on the lanes, and
+  -- lease_sweep deletes its leases from pg_cron. A guard that admits only a
+  -- service-role JWT would make every cron-side resume fail into the kick's
+  -- alert path — the one path that must never be noisy, because it is how a
+  -- genuinely stuck park gets noticed.
+  perform _dev_guard_or_local_cron();
   select * into r from dev_commands where id = p_id;
   if not found or r.wait_state is distinct from 'parked' then
     return jsonb_build_object('ok', false, 'error', 'not parked');
@@ -648,7 +678,8 @@ begin
     d := pg_get_functiondef(to_regprocedure(f));
     if position('c1819_park_fence' in d) > 0 then continue; end if;
     if position('c.status=''pending''' in d) = 0 then
-      raise exception 'c1819: % no longer contains the claim anchor — the park fence would be silent', f;
+      perform _c1819_patch_miss(f, 'claim fence: the pending anchor is gone');
+      continue;
     end if;
     n := replace(d, 'c.status=''pending''',
                  'c.status=''pending'' AND coalesce(c.wait_state,'''') <> ''parked'' /* c1819_park_fence */');
@@ -723,7 +754,8 @@ begin
   -- sentence up and the next resumed build would go back to sleeping.
   if position('WHILE WAITING (merge lane, lease, batch): sleep and poll' in d) = 0
      or position('tokens spent while waiting are wasted' in d) = 0 then
-    raise exception 'c1819: the resume block no longer carries the #1817 waiting sentence — patch it by hand';
+    perform _c1819_patch_miss('_dev_resume_block', 'the #1817 waiting sentence is gone');
+    return;
   end if;
   n := replace(d, 'WHILE WAITING (merge lane, lease, batch): sleep and poll — do not think, summarise or re-plan; ',
         'WHILE WAITING (merge lane, lease, batch, grant): run devcmd.sh wait <id> <kind> [arg] and obey the ONE line it prints — a short wait sleeps in the shell, a long one PARKS AND RELEASES this runner and your turn ends there; ');
@@ -746,7 +778,8 @@ begin
   d := pg_get_functiondef(to_regprocedure('public.dev_ctl_get()'));
   if position('c1819_waiting' in d) > 0 then return; end if;
   if position('''rc_health'', v_rc)' in d) = 0 then
-    raise exception 'c1819: dev_ctl_get no longer ends with rc_health — wire the waiting block by hand';
+    perform _c1819_patch_miss('dev_ctl_get', 'the rc_health anchor is gone');
+    return;
   end if;
   n := replace(d, 'declare v jsonb; v_ctx jsonb;', 'declare v_wait jsonb; v jsonb; v_ctx jsonb;');
   n := replace(n, '  v := public.dev_ctl_get_core();',
@@ -843,7 +876,8 @@ begin
   if position('c1819_liveness' in d) > 0 then return; end if;
   anchor := 'and b.opened_at < now() - make_interval(mins => v_ttl))';
   if position(anchor in d) = 0 or position('and opened_at < now() - make_interval(mins => v_ttl)' in d) = 0 then
-    raise exception 'c1819: deploy_lane_sweep no longer expires on opened_at — re-check the liveness patch';
+    perform _c1819_patch_miss('deploy_lane_sweep', 'the opened_at anchor is gone');
+    return;
   end if;
   n := replace(d, anchor,
     'and coalesce((select max((e->>''at'')::timestamptz) from jsonb_array_elements(coalesce(b.log,''[]''::jsonb)) e), b.opened_at)

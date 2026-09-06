@@ -261,3 +261,45 @@ insert into public.ui_copy (key, value) values
   ('dispute_token_page.invalid_body',
    to_jsonb('This dispute link has expired or is not valid.'::text))
 on conflict (key) do nothing;
+
+-- ── feature_gaps row 51 → done ─────────────────────────────────────────────
+-- "Supplier screens sit outside the design token system." #465 closed the
+-- first of the two public token pages and queued the rest here; every file the
+-- row names is now at ZERO and has dropped OUT of
+-- test/protected/design_literal_baseline.json rather than merely shrinking in
+-- it — so a literal reappearing in any of them is a NEW file entering the
+-- baseline, which the gate fails on outright.
+--
+-- The counts below are the baseline's own numbers immediately before this
+-- command, which is why inquiry_form_screen reads 67 and not the 71 the row
+-- quotes: #465's pass over the file it shared with public_order_page had
+-- already taken four of them.
+--
+-- Idempotent, and a no-op on a build branch whose feature_gaps table does not
+-- carry this row; the merge worker replays it once on live.
+update public.feature_gaps
+   set status         = 'done',
+       dev_command_id = 671,
+       updated_at     = now(),
+       notes = concat_ws(E'\n',
+         nullif(btrim(coalesce(notes, '')), ''),
+         'CHANGE #671 — CLOSED. Every supplier/public screen named on this row is at zero design literals and has left the ratchet baseline entirely. Before -> after:',
+         '  lib/screens/supplier/supplier_orders_screen.dart          80 -> 0',
+         '  lib/screens/supplier/supplier_disputes_screen.dart        76 -> 0',
+         '  lib/screens/public/dispute_form_screen.dart               73 -> 0',
+         '  lib/screens/supplier/supplier_add_medicine_screen_web.dart 70 -> 0',
+         '  lib/screens/public/inquiry_form_screen.dart               67 -> 0',
+         '  lib/widgets/dispute_card.dart                             45 -> 0',
+         '  lib/screens/supplier/supplier_inquiry_screen.dart         39 -> 0',
+         '  lib/screens/supplier/supplier_shell.dart                  33 -> 0',
+         '  lib/screens/supplier/supplier_home_screen.dart            32 -> 0',
+         '  lib/pages/dispute_token_page.dart                         18 -> 0',
+         '  lib/pages/supplier_disputes_page.dart                     17 -> 0',
+         '  lib/widgets/supplier_map_groups_panel.dart                 2 -> 0',
+         '  (lib/screens/public/public_order_page.dart 21 -> 0 was #465.)',
+         'Baseline total 8962 -> 8410 across 123 files; nothing raised.',
+         'Three status-string switches became backend decisions: supplier_my_orders and pending_staging_all now return status_label + status_tone, and lib/widgets/ds_tone.dart is the one place a tone NAME becomes a colour.',
+         'Twelve English sentences that lived as Dart literals on the public dispute pages moved to ui_copy.')
+ where id = 51
+   -- Replay-safe: the note block is appended once, never stacked.
+   and coalesce(notes, '') not like '%CHANGE #671 — CLOSED%';

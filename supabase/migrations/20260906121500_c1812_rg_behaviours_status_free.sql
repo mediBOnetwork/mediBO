@@ -1,3 +1,4 @@
+-- replay-target: production
 -- CMD #1812 — Part C. Two regression-guard behaviours picked their fixture with
 -- `status = 'Available'`. That column no longer exists, so on the first replay
 -- after Part B they would fail with 42703 and the guard would read red for a

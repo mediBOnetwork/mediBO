@@ -1,3 +1,4 @@
+-- replay-target: production
 -- CMD #1812 — Remove 1mg's status / status_reason from availability.
 -- Zone standby is the ONLY availability truth:
 --   standby = master zone supplier list − (out-of-stock + nostock);

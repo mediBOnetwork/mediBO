@@ -1,3 +1,4 @@
+-- replay-target: production
 -- CMD #1812 — the journey that keeps this fixed.
 --
 -- Abbott Gel Hand Sanitizer was refused with a red "Discontinued" chip and a

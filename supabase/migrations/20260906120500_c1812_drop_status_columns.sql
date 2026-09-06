@@ -1,3 +1,4 @@
+-- replay-target: production
 -- CMD #1812 — Part B. Nothing calls the status layer any more (Part A rewrote
 -- every caller), so the helpers, the policy table, the copy keys and finally the
 -- two scraped columns go. Zone standby is the only availability truth left.

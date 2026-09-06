@@ -5,8 +5,9 @@ import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 
 import '../data/medicine_repository.dart';
 import '../models/home_sections.dart';
+import '../services/payload_cache.dart';
+import 'stale_payload.dart';
 import '../models/storefront_p3.dart';
-import '../services/ui_copy.dart';
 import '../utils/render_log.dart';
 import '../theme.dart';
 import 'animations.dart';
@@ -79,6 +80,17 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
   BackInStock _backInStock = BackInStock.empty;
   bool _seenSent = false;
 
+  /// CMD #1813 — the feed's last SUCCESSFUL payload, kept on the device.
+  ///
+  /// The session memo below already survived a failed refetch, but it lives in
+  /// RAM: a cold start with a slow database had nothing, and the feed painted a
+  /// bare Retry button in front of a customer. This controller paints the last
+  /// good feed off disk first, refreshes behind it, and retries on the
+  /// backend's own backoff. It is bypassed entirely when a test supplies
+  /// [widget.loader].
+  PayloadController? _payload;
+  PayloadState _payloadState = const PayloadState();
+
   /// CHANGE #678 — paging happens sideways, not downwards.
   ///
   /// A rail grows as you scroll RIGHT, up to the ceiling the backend set. The
@@ -93,8 +105,35 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
 
   @override
   void dispose() {
+    _payload?.removeListener(_onPayload);
+    _payload?.dispose();
     _scroll.dispose();
     super.dispose();
+  }
+
+  /// The controller moved: adopt its payload if it has one, and always adopt
+  /// its status so the quiet line above the feed stays truthful.
+  void _onPayload() {
+    final c = _payload;
+    if (c == null || !mounted) return;
+    final st = c.state;
+    final raw = st.data;
+    HomeSections? parsed;
+    if (raw != null) {
+      try {
+        parsed = HomeSections.fromMap(raw);
+      } catch (_) {
+        parsed = null;
+      }
+    }
+    setState(() {
+      _payloadState = st;
+      if (parsed != null && parsed.ok) {
+        HomeSectionsView._memo = parsed;
+        _data = parsed;
+      }
+    });
+    if (parsed != null && parsed.ok) _reportSeen();
   }
 
   @override
@@ -108,7 +147,35 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
     if (memo != null) {
       _data = memo;
     }
-    _load();
+    if (widget.loader == null) {
+      // Production path: disk cache first, then network, then backoff.
+      final ctl = PayloadController(
+        cacheKey: 'storefront_home_v2',
+        fetch: () => MedicineRepository().fetchHomeSectionsRaw(),
+      );
+      _payload = ctl;
+      ctl.addListener(_onPayload);
+      unawaited(ctl.start());
+      // The strip and the labels are not part of the feed payload.
+      unawaited(_loadSideCars());
+    } else {
+      _load();
+    }
+  }
+
+  /// The back-in-stock strip and the storefront labels — fetched alongside the
+  /// feed, never per card, and never able to blank the feed if they fail.
+  Future<void> _loadSideCars() async {
+    unawaited(MedicineRepository().loadStorefrontLabels());
+    try {
+      final strip = await (widget.notificationsLoader ??
+          () => MedicineRepository().myStockNotifications())();
+      if (!mounted) return;
+      setState(() => _backInStock = strip);
+      _reportSeen();
+    } catch (_) {
+      // No strip is a missing strip, never a missing feed.
+    }
   }
 
   Future<void> _load() async {
@@ -270,13 +337,23 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
   Widget build(BuildContext context) {
     final d = _data;
 
-    // Nothing yet — first load. A refresh keeps the old feed on screen
-    // instead of flashing back to a skeleton.
-    if (d == null) return const _FeedSkeleton();
-
-    // ok:false — the search bar and chips above this widget stay put; this
-    // block is the only thing that changes. Never a blank page, never a throw.
-    if (!d.ok) return _Retry(onRetry: () => _load());
+    // CMD #1813 — three states, and none of them is a dead end.
+    //
+    // Nothing yet: the skeleton, with the quiet line saying we are still
+    // trying. ok:false or a failed refresh: the LAST GOOD feed stays exactly
+    // where it is and the line turns amber. There is no Retry button in any of
+    // them — [PayloadController] is already retrying on the backend's schedule,
+    // and pull-to-refresh below is still there for an impatient thumb.
+    if (d == null || !d.ok) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          PayloadStatusLine(state: _payloadState),
+          const Flexible(child: _FeedSkeleton()),
+        ],
+      );
+    }
 
     // CHANGE #673 — the hero is the first row of the feed rather than a
     // separate widget above it, so it scrolls with the content and costs no
@@ -298,8 +375,16 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
 
     final lead = hero + strip + lane;
 
-    return RefreshIndicator(
-      onRefresh: () => _load(),
+    // The loaded feed carries the same quiet line: a slow or failing refresh
+    // says so above the content instead of replacing it.
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        PayloadStatusLine(state: _payloadState),
+        Flexible(
+          child: RefreshIndicator(
+      onRefresh: () => _payload == null ? _load() : _payload!.refresh(),
       child: ListView.builder(
         key: const PageStorageKey('home-sections'),
         controller: _scroll,
@@ -348,6 +433,9 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
           );
         },
       ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1211,30 +1299,11 @@ class _Tile extends StatelessWidget {
 
 // ── states ───────────────────────────────────────────────────────────────────
 
-class _Retry extends StatelessWidget {
-  final VoidCallback onRetry;
-  const _Retry({required this.onRetry});
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 48),
-    child: Column(
-      children: [
-        const Icon(Icons.cloud_off_rounded, size: 34, color: Brand.inkFaint),
-        const SizedBox(height: 14),
-        OutlinedButton(
-          onPressed: onRetry,
-          style: OutlinedButton.styleFrom(
-            foregroundColor: Brand.green,
-            side: const BorderSide(color: Brand.green),
-            shape: const StadiumBorder(),
-          ),
-          child: Text(c('home_sections_view.retry')),
-        ),
-      ],
-    ),
-  );
-}
+// CMD #1813 — the _Retry widget that used to live here is gone on purpose.
+//
+// It was the bare Retry button a customer met when every RPC stalled together
+// at ~13.9 s. The feed now keeps its last good payload and retries itself on
+// the backend's backoff, so there is no state left for that button to occupy.
 
 /// Two headers and one rail of card skeletons — the same geometry the loaded
 /// feed uses, so nothing shifts when the payload lands.

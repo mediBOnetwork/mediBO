@@ -13,6 +13,7 @@ import '../data/storefront_labels.dart';
 import '../design_tokens.dart';
 import '../models/product.dart';
 import '../services/ui_copy.dart';
+import '../services/payload_cache.dart';
 import '../theme.dart';
 import '../util.dart';
 import '../utils/render_log.dart';
@@ -1002,40 +1003,17 @@ class _CategoryTiles extends StatelessWidget {
             if (metaError != null) {
               // Show wifi-offline UI only for real network failures.
               // For API/config errors show a quieter retry prompt.
+              // CMD #1813 — a stalled database must not hand the customer a
+              // button. Both branches now retry themselves on the backend's
+              // backoff and say so in one quiet line.
               if (isNetworkError) {
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.wifi_off_rounded, size: 56, color: Colors.grey),
-                    const SizedBox(height: 16),
-                    Text(c('storefront_screen.offline_title'),
-                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 8),
-                    Text(
-                      c('storefront_screen.offline_body'),
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Brand.inkMuted, fontSize: 13),
-                    ),
-                    const SizedBox(height: 20),
-                    FilledButton(
-                      onPressed: onRetry,
-                      style: FilledButton.styleFrom(backgroundColor: Brand.green),
-                      child: Text(c('storefront_screen.retry')),
-                    ),
-                  ],
+                return _AutoRetry(
+                  onRetry: onRetry,
+                  title: c('storefront_screen.offline_title'),
+                  body: c('storefront_screen.offline_body'),
                 );
               }
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 24),
-                child: Center(
-                  child: FilledButton.icon(
-                    onPressed: onRetry,
-                    style: FilledButton.styleFrom(backgroundColor: Brand.green),
-                    icon: const Icon(Icons.refresh, size: 16),
-                    label: Text(c('storefront_screen.reload_categories')),
-                  ),
-                ),
-              );
+              return _AutoRetry(onRetry: onRetry, body: c('net.updating'));
             }
 
             final categories = meta!.categories;
@@ -1401,17 +1379,19 @@ class _ProductsSection extends StatelessWidget {
     if (loadingFirst) return const _SkeletonGrid();
     // Show offline widget ONLY on genuine network failure.
     // API errors / empty results are NOT offline — show retry or no-results.
+    // CMD #1813 — neither branch is a dead end any more, and the label is the
+    // backend's word rather than a Dart literal.
     if (error != null && isNetworkError) {
       return _InlineError(onRetry: onRetry);
     }
     if (error != null) {
-      // Non-network error: show quiet retry without the wifi icon
       return _EmptyResults(
         query: query,
         suggestions: const [],
         onSuggestionTap: onSuggestionTap,
-        overrideLabel: 'Something went wrong — tap to retry',
-        onRetry: onRetry,
+        overrideLabel: c('storefront_screen.search_failed'),
+        onRetry: null,
+        autoRetry: onRetry,
       );
     }
     // CHANGE #553 — when the backend sent an empty_label, print it verbatim.
@@ -1493,6 +1473,11 @@ class _EmptyResults extends StatelessWidget {
   /// CHANGE #553 — `empty_label`, rendered by storefront_search_page.
   final String? backendLabel;
   final VoidCallback? onRetry;
+
+  /// CMD #1813 — when the empty state is really a FAILURE, this fires on the
+  /// backend's backoff instead of waiting for a tap. A genuinely empty search
+  /// leaves it null and stays a plain empty state.
+  final VoidCallback? autoRetry;
   const _EmptyResults({
     this.query = '',
     this.suggestions = const [],
@@ -1500,6 +1485,7 @@ class _EmptyResults extends StatelessWidget {
     this.overrideLabel,
     this.backendLabel,
     this.onRetry,
+    this.autoRetry,
   });
 
   @override
@@ -1518,7 +1504,8 @@ class _EmptyResults extends StatelessWidget {
         children: [
           const Icon(Icons.search_off, size: 48, color: Brand.inkMuted),
           const SizedBox(height: 12),
-          Text(label,
+          if (autoRetry != null) _AutoRetry(onRetry: autoRetry!, body: label),
+          if (autoRetry == null) Text(label,
               style: const TextStyle(
                   fontSize: 15,
                   fontWeight: FontWeight.w600,
@@ -1573,29 +1560,101 @@ class _InlineError extends StatelessWidget {
   const _InlineError({required this.onRetry});
 
   @override
+  Widget build(BuildContext context) => _AutoRetry(
+        onRetry: onRetry,
+        title: c('storefront_screen.offline_title'),
+        body: c('storefront_screen.offline_body'),
+        icon: Icons.wifi_off_rounded,
+      );
+}
+
+/// CMD #1813 — what replaced every bare Retry button on this screen.
+///
+/// The stall that made this necessary hit every RPC at once for about fourteen
+/// seconds; a button asked the customer to solve it by tapping. This block
+/// retries by itself on the schedule the BACKEND owns (`net.retry_backoff_ms`),
+/// prints the backend's own words, and shows a spinner so it is visibly alive.
+/// It never grows a button, and it stops the moment its parent rebuilds with a
+/// payload.
+class _AutoRetry extends StatefulWidget {
+  const _AutoRetry({
+    required this.onRetry,
+    this.title,
+    required this.body,
+    this.icon,
+  });
+
+  final VoidCallback onRetry;
+  final String? title;
+  final String body;
+  final IconData? icon;
+
+  @override
+  State<_AutoRetry> createState() => _AutoRetryState();
+}
+
+class _AutoRetryState extends State<_AutoRetry> {
+  Timer? _t;
+  int _attempt = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _schedule();
+  }
+
+  void _schedule() {
+    _t?.cancel();
+    _attempt++;
+    _t = Timer(PayloadTiming.delayFor(_attempt), () {
+      if (!mounted) return;
+      widget.onRetry();
+      _schedule();
+    });
+  }
+
+  @override
+  void dispose() {
+    _t?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final title = widget.title;
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 48),
+      padding: EdgeInsets.symmetric(vertical: Ds.space.x32),
       alignment: Alignment.center,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.wifi_off_rounded, size: 56, color: Colors.grey),
-          const SizedBox(height: 16),
-          Text(c('storefront_screen.offline_title'),
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 8),
-          Text(
-            c('storefront_screen.offline_body'),
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: Brand.inkMuted, fontSize: 13),
-          ),
-          const SizedBox(height: 20),
-          FilledButton(
-            onPressed: onRetry,
-            style: FilledButton.styleFrom(backgroundColor: Brand.green),
-            child: Text(c('storefront_screen.retry')),
+          if (widget.icon != null)
+            Icon(widget.icon, size: 48, color: Ds.c.textSecondary),
+          if (widget.icon != null) SizedBox(height: Ds.space.x16),
+          if (title != null && title.isNotEmpty) ...[
+            Text(title, style: Ds.t.subtitle, textAlign: TextAlign.center),
+            SizedBox(height: Ds.space.x8),
+          ],
+          if (widget.body.isNotEmpty)
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+              child: Text(widget.body,
+                  textAlign: TextAlign.center, style: Ds.t.caption),
+            ),
+          SizedBox(height: Ds.space.x16),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: Ds.space.x12,
+                height: Ds.space.x12,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: Ds.c.textSecondary),
+              ),
+              SizedBox(width: Ds.space.x8),
+              Text(c('net.updating'), style: Ds.t.caption),
+            ],
           ),
         ],
       ),

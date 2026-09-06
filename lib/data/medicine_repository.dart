@@ -656,12 +656,27 @@ class MedicineRepository {
   /// more than the config allows.
   Future<HomeSections> fetchHomeSections({int? items}) async {
     try {
-      final res = await _rpc('storefront_home_v2', params: {'p_items': items});
-      if (res is! Map) return HomeSections.failed;
-      return HomeSections.fromMap(Map<String, dynamic>.from(res));
+      final raw = await fetchHomeSectionsRaw(items: items);
+      if (raw == null) return HomeSections.failed;
+      return HomeSections.fromMap(raw);
     } catch (_) {
       return HomeSections.failed;
     }
+  }
+
+  /// CMD #1813 — the same call, handed back as the raw payload so the feed can
+  /// be kept on the device and repainted on a cold start.
+  ///
+  /// THROWS instead of swallowing: [PayloadController] needs to tell "the
+  /// backend answered" from "the backend did not", because only the second one
+  /// may leave the last good feed on screen. A null return means the backend
+  /// answered with something that is not a feed.
+  Future<Map<String, dynamic>?> fetchHomeSectionsRaw({int? items}) async {
+    final res = await _rpc('storefront_home_v2', params: {'p_items': items});
+    if (res is! Map) return null;
+    final m = Map<String, dynamic>.from(res);
+    if (m['ok'] == false) return null;
+    return m;
   }
 
   /// CHANGE #677 — one more page of a home-feed section.

@@ -11,6 +11,7 @@ import 'dev_queue_context.dart';
 import 'dev_queue_health.dart';
 import 'restart_safety.dart';
 import 'dev_queue_service.dart';
+import 'safety_net_screen.dart';
 import 'dev_queue_workers.dart';
 import 'usage_meter.dart';
 import 'vm_toggle_policy.dart';
@@ -105,6 +106,17 @@ class _DevQueueControlState extends State<DevQueueControl> {
     // open has to do the same or the panel paints with an empty usage block.
     if (_expanded) _refreshUsage();
     _poll = Timer.periodic(const Duration(seconds: 10), (_) => _tick());
+    // CHANGE #636 — `/admin/dev-queue?panel=safety_net` lands ON the safety
+    // net. A screen that can only be reached by expanding a card and tapping a
+    // row cannot be photographed, and a proof nobody can capture is a proof
+    // nobody checks.
+    if (Uri.base.queryParameters['panel'] == 'safety_net') {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => SafetyNetScreen(service: widget.service)));
+      });
+    }
   }
 
   @override
@@ -543,6 +555,12 @@ class _DevQueueControlState extends State<DevQueueControl> {
             _divider(),
             ContextEconomyCard(payload: _context),
           ],
+          // CHANGE #636 — the way in to the machine-generated safety net.
+          // A backend that grades its own RPC surface and nobody can open is
+          // not a safety net, so it gets a real entry point here rather than a
+          // cron job Om has to read the logs to find.
+          _divider(),
+          _safetyNetRow(),
         ],
       ]);
     if (widget.embedded) return body;
@@ -603,6 +621,32 @@ class _DevQueueControlState extends State<DevQueueControl> {
       ),
     );
   }
+
+  /// CHANGE #636 — one tap to the safety net. The label is ui_copy, the screen
+  /// behind it renders `autotest_safety_net_home()` verbatim.
+  Widget _safetyNetRow() => InkWell(
+        borderRadius: Ds.r.rChip,
+        onTap: () => Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => SafetyNetScreen(service: widget.service))),
+        child: Semantics(
+          identifier: 'devq_safety_net',
+          button: true,
+          child: Container(
+            constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+            padding: EdgeInsets.symmetric(vertical: Ds.space.x8),
+            child: Row(children: [
+              Icon(Icons.shield_outlined,
+                  size: Ds.t.bodySize + Ds.space.x4, color: Ds.c.brand),
+              SizedBox(width: Ds.space.x12),
+              Expanded(
+                child: Text(c('safety_net.title'), style: Ds.t.body),
+              ),
+              Icon(Icons.chevron_right, size: Ds.t.bodySize + Ds.space.x4,
+                  color: Ds.c.textSecondary),
+            ]),
+          ),
+        ),
+      );
 
   Widget _breakerBadge() => BreakerBanner(
       breaker: (_snap['breaker'] as Map?)?.cast<String, dynamic>() ?? const {});

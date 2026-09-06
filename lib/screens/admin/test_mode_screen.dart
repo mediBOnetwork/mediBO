@@ -354,6 +354,7 @@ class _TestModeScreenState extends State<TestModeScreen> {
     final residue = (r['residue'] as Map?) ?? const {};
     final proof = (r['proof'] as Map?) ?? const {};
     final tone = _tone((r['status_tone'] ?? '').toString());
+    final originTone = _tone((r['origin_tone'] ?? '').toString());
     final held = (residue['total'] ?? 0).toString();
     final files = (residue['files'] ?? 0).toString();
     final hasProof = proof.containsKey('clean');
@@ -370,6 +371,22 @@ class _TestModeScreenState extends State<TestModeScreen> {
                     overflow: TextOverflow.ellipsis),
               ),
               SizedBox(width: Ds.space.x8),
+              // CHANGE #1821 — WHO started it, and whether it could ever have
+              // raised the platform banner. Five "autotest smoke" rows looked
+              // exactly like Om's own runs on this list, which is why the
+              // reopening loop was invisible for a whole day. Both words are
+              // the backend's (origin_label / banner_label).
+              if ((r['origin_label'] ?? '').toString().isNotEmpty) ...[
+                Container(
+                  padding: EdgeInsets.symmetric(
+                      horizontal: Ds.space.x8, vertical: Ds.space.x4),
+                  decoration: BoxDecoration(
+                      color: originTone.bg, borderRadius: Ds.r.rChip),
+                  child: Text((r['origin_label'] ?? '').toString(),
+                      style: Ds.t.caption.copyWith(color: originTone.fg)),
+                ),
+                SizedBox(width: Ds.space.x8),
+              ],
               Container(
                 padding: EdgeInsets.symmetric(
                     horizontal: Ds.space.x8, vertical: Ds.space.x4),
@@ -385,6 +402,7 @@ class _TestModeScreenState extends State<TestModeScreen> {
             [
               (r['started_label'] ?? '').toString(),
               (r['by'] ?? '').toString(),
+              (r['banner_label'] ?? '').toString(),
               '${(s['residue_label'] ?? '').toString()} $held',
               '${(s['files_label'] ?? '').toString()} $files',
             ].where((t) => t.trim().isNotEmpty).join('  ·  '),

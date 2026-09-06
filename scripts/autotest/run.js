@@ -169,6 +169,18 @@ async function main() {
     p_open_session: true
   }, null);
   if (!started || !started.ok) {
+    // CHANGE #1821 — A REFUSED SESSION IS A SKIP, NEVER A FAILURE AND NEVER A
+    // PASS. test_run_start() now refuses to open a run it cannot scope to
+    // itself: a person has test mode on (human_session_live), or somebody
+    // else's session is already open (session_busy). Before this the bot took
+    // the platform's GLOBAL session for its own three-minute run — which is
+    // the loop Om reported. Exit 3 is the merge worker's "could not run" code,
+    // so the promote is recorded as not_run instead of as a green smoke.
+    const why = (started && started.error) || 'unknown';
+    if (why === 'human_session_live' || why === 'session_busy') {
+      console.log(`[autotest] SKIPPED — ${(started && started.message) || why}`);
+      process.exit(3);
+    }
     console.error('autotest: could not open a run:', JSON.stringify(started));
     process.exit(1);
   }

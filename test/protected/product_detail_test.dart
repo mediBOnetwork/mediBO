@@ -566,4 +566,77 @@ void main() {
       expect(find.byIcon(Icons.favorite_border), findsNothing);
     });
   });
+
+  // CMD #1835 — the Supply record block is a chip, and only a chip.
+  //
+  // It used to print the chip and then say the same thing again in longhand:
+  // "100% fill rate" followed by "Filled 4 of 4 asks · last 180 days" — two
+  // raw tallies and a window the buyer never chose, which is the exposure
+  // CMD #1826 took out of the supply block next to it. The sentence was
+  // deleted at the source (product_trust_strip no longer builds a `note` for
+  // the fill-rate chip, and app_settings no longer holds `fill_note_fmt`), so
+  // what is pinned here is that the PAGE does not put one back: a chip whose
+  // payload carried no note renders nothing beside it, while a chip that DID
+  // carry one — cold chain — still prints it verbatim.
+  group('the Supply record block prints a chip, never a sentence', () {
+    Map<String, dynamic> withTrust(List<Map<String, dynamic>> chips) =>
+        _payload()..['trust'] = {
+          'has': true,
+          'title': 'Supply record',
+          'chips': chips,
+        };
+
+    testWidgets('a fill-rate chip with no note shows the chip alone',
+        (tester) async {
+      await _pump(
+          tester,
+          withTrust([
+            {'key': 'fill_rate', 'label': '100% fill rate', 'tone': 'success'},
+          ]));
+
+      // The title and the chip — the whole block.
+      expect(find.text('Supply record'), findsOneWidget);
+      expect(find.text('100% fill rate'), findsOneWidget);
+
+      // And nothing that counts, tallies or dates it. These are the exact
+      // shapes of the sentence that was removed; a Dart fallback that
+      // re-derived any of them from the chip would land here.
+      expect(find.textContaining('asks'), findsNothing);
+      expect(find.textContaining('Filled'), findsNothing);
+      expect(find.textContaining('180'), findsNothing);
+      expect(find.textContaining('last '), findsNothing);
+      // Not even an empty caption holding the space open.
+      expect(find.text(''), findsNothing);
+    });
+
+    testWidgets('a chip that DID send a note still prints it verbatim',
+        (tester) async {
+      await _pump(
+          tester,
+          withTrust([
+            {'key': 'fill_rate', 'label': '100% fill rate', 'tone': 'success'},
+            {
+              'key': 'cold_chain',
+              'label': 'Cold chain',
+              'note': 'Moved in a cold box',
+              'tone': 'info',
+            },
+          ]));
+
+      expect(find.text('Cold chain'), findsOneWidget);
+      expect(find.text('Moved in a cold box'), findsOneWidget);
+      // The fill-rate chip beside it is still bare.
+      expect(find.text('100% fill rate'), findsOneWidget);
+      expect(find.textContaining('asks'), findsNothing);
+    });
+
+    testWidgets('has:false draws no block at all', (tester) async {
+      await _pump(
+          tester,
+          _payload()
+            ..['trust'] = {'has': false, 'title': 'Supply record', 'chips': []});
+
+      expect(find.text('Supply record'), findsNothing);
+    });
+  });
 }

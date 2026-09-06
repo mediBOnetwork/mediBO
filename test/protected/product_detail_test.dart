@@ -202,7 +202,7 @@ const Map<String, dynamic> _pricedLines = {
 };
 
 /// price_lines with NO pricing_ready row: the sale slot carries the backend's
-/// on-quote words, never a dash, a zero or the MRP repeated.
+/// literal "PTR" value (Om amendment 3) — never a note, a dash, a zero or the MRP repeated.
 const Map<String, dynamic> _quoteLines = {
   'has': true,
   'mrp': {
@@ -214,15 +214,15 @@ const Map<String, dynamic> _quoteLines = {
     'tone': 'secondary',
   },
   'sale': {
-    'caption': 'Sale price (PTR)',
-    'value': 'On quote',
+    'caption': 'Sale price',
+    'value': 'PTR',
     'has_amount': false,
-    'has_note': true,
-    'note': 'Trade rate is confirmed when suppliers quote',
+    'has_note': false,
+    'note': '',
     'tone': 'secondary',
   },
   'sticky': {
-    'main': 'On quote',
+    'main': 'PTR',
     'main_caption': 'Sale price',
     'main_tone': 'secondary',
     'has_side': true,
@@ -820,15 +820,22 @@ void main() {
         (tester) async {
       await _pump(tester, _payload(priceLines: _quoteLines));
 
-      expect(find.text('On quote'), findsNWidgets(2),
-          reason: 'hero row + sticky main, both the backend phrase');
+      // Om amendment 3: the caption stays "Sale price" and the VALUE is the
+      // literal "PTR" — a backend string, printed twice, never re-worded.
+      expect(find.text('PTR'), findsNWidgets(2),
+          reason: 'hero row + sticky main, both the backend value');
+      expect(find.text('Sale price'), findsNWidgets(2),
+          reason: 'hero caption + sticky caption, both from ui copy');
       expect(
           tester
               .widget<Text>(find.byKey(const ValueKey('pdp-sticky-main')))
               .data,
-          'On quote');
+          'PTR');
+      // has_note:false — no on-quote sentence, no dash, no zero, no blank.
       expect(find.text('Trade rate is confirmed when suppliers quote'),
-          findsOneWidget);
+          findsNothing);
+      expect(find.text('On quote'), findsNothing);
+      expect(find.text('—'), findsNothing);
       expect(find.text('₹69.96'), findsOneWidget);
       expect(find.text('MRP ₹69.96'), findsOneWidget);
       expect(find.text('Printed pack ceiling — not the selling price'),
@@ -845,7 +852,7 @@ void main() {
       await _pump(tester, _payload(priceLines: _quoteLines));
       final phrase = tester.widget<Text>(find.descendant(
           of: find.byKey(const ValueKey('pdp-sale-line')),
-          matching: find.text('On quote')));
+          matching: find.text('PTR')));
       expect(phrase.style?.color, isNot(Brand.price),
           reason: 'has_amount:false is the secondary ink, never the price ink');
 

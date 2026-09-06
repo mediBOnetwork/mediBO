@@ -37,6 +37,7 @@ import '../admin/admin_delivery_waves_screen.dart';
 import '../admin/admin_feedback_screen.dart';
 import '../admin/returns_refunds_screen.dart';
 import '../admin/surface_map_screen.dart';
+import '../admin/dev_queue/triage_inbox_screen.dart';
 import '../admin/damage_report_screen.dart';
 import '../partner/zone_pnl_screen.dart';
 import '../admin/wa_assistant_screen.dart';
@@ -72,6 +73,15 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       'delivery_waves' => const AdminDeliveryWavesScreen(),
       'returns_refunds' => const ReturnsRefundsScreen(),
       'surface_map' => const SurfaceMapScreen(),
+      // CHANGE #639 — Triage. Its real entry point is Dev Queue → tools →
+      // Proof & QA → Triage, but a findings inbox is what an alert wants to
+      // link straight at, and a screen with no URL cannot be screenshotted for
+      // its own proof either. The door belongs HERE and not in the shell's own
+      // switch: adding ten lines there put home_shell.dart at 2,003 of a hard
+      // 2,000-line guard, which is the growth this shard exists to absorb.
+      // Authorisation is not here — triage_inbox() runs _dev_guard() and
+      // triage_approve() refuses anyone who is not a signed-in super admin.
+      'triage' => const TriageInboxScreen(),
       // CHANGE #697 — the Feedback desk. order_feedback_screen() pins a
       // partner to their own zone and refuses anyone else, so the door is
       // opened here and the authorisation stays in the RPC.

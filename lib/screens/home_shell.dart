@@ -81,7 +81,6 @@ import 'admin/admin_supplier_screen.dart';
 import 'admin/admin_fulfillment_screen.dart';
 import 'admin/admin_upi_screen.dart';
 import 'admin/dev_queue/dev_queue_screen.dart';
-import 'admin/dev_queue/triage_inbox_screen.dart'; // CHANGE #639 — /admin/go/triage
 import 'auth/login_screen.dart';
 import 'bulk_upload_screen.dart';
 import 'delivery/delivery_home_screen.dart'; // C629: the rider/agency surface
@@ -1206,16 +1205,6 @@ class _HomeShellState extends State<HomeShell> {
         if (_amISuper) {
           Navigator.push(context,
               MaterialPageRoute(builder: (_) => const DevQueueScreen()));
-        }
-        break;
-      // CHANGE #639 — Triage. It is reached by tapping Dev Queue → tools →
-      // Proof & QA → Triage, but a findings inbox is exactly the thing an alert
-      // wants to link straight at, and a screen with no URL cannot be
-      // screenshotted for its own proof either.
-      case 'triage':
-        if (_amISuper) {
-          Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const TriageInboxScreen()));
         }
         break;
       // CHANGE #653 — Users & access: the one screen that edits the matrix

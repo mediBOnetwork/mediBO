@@ -41,6 +41,48 @@ _phase_mark() {  # <name> — one line per phase, so the slowest one is visible
   echo "[phase-timing] $1 $((now - _phase_t0))s"
   _phase_t0=$now
 }
+
+# ── CHANGE #1836 — THE EXIT CODE IS NOT THE REASON ──────────────────────────
+# Every deploy from 10:41 to 11:42 UTC on 6 Sep exited 1, and the batch note
+# carried exactly that: "deploy.sh exit 1". Two completely different things were
+# wearing that number — a missing cache-purge token AFTER a successful upload,
+# and a boot gate that refused a bundle BEFORE one — and the lane could not tell
+# them apart, so batches 611-614 shipped while reporting a failure and 619 did
+# not ship while reporting the same failure.
+#
+# So: one code per cause, and the reason WRITTEN DOWN. _die leaves
+# .deploy_error in the repo (exit / reason / error, one line each) and
+# merge_worker.sh puts that error line on the batch. A machine reads the code;
+# a human reads the line.
+#   3  live, but edge caches were not purged (warning — the site IS up)
+#  10  boot gate refused the bundle (nothing uploaded)
+#  11  build-output guard refused the bundle (nothing uploaded)
+#  12  wrangler upload failed
+#  13  live alias never moved to this commit
+#  14  live-assert failed after the upload
+#  42  the pre-upload hook (critical-path smoke) refused the bundle
+#   1  anything not yet classified
+DEPLOY_ERR_FILE="${MEDIBO_DEPLOY_ERR_FILE:-$MEDIBO_REPO/.deploy_error}"
+rm -f "$DEPLOY_ERR_FILE" 2>/dev/null || true
+_reason_write() {  # <exit> <slug> <one-line error>
+  { printf 'exit=%s\n' "$1"
+    printf 'reason=%s\n' "$2"
+    printf 'error=%s\n' "$(printf '%s' "$3" | tr -d '\r' | tr '\n' ' ' | cut -c1-400)"
+    printf 'at=%s\n' "$(date -u +%FT%TZ)"
+  } > "$DEPLOY_ERR_FILE" 2>/dev/null || true
+}
+_die() {  # <exit> <slug> <one-line error> [extra lines…]
+  local code="$1" slug="$2" line="$3"; shift 3
+  _reason_write "$code" "$slug" "$line"
+  echo "❌  $line"
+  local extra; for extra in "$@"; do echo "    $extra"; done
+  exit "$code"
+}
+# A warning is not a failure, but it must not be silent either: it is collected
+# here and re-stated at the end, and it changes the exit code to 3 — never 1,
+# and never 0, because "live but unpurged" is its own state.
+DEPLOY_WARNINGS=""
+_warn() { DEPLOY_WARNINGS="${DEPLOY_WARNINGS}${DEPLOY_WARNINGS:+ | }$1"; echo "⚠️   $1"; }
 export PATH="$PATH:$HOME/flutter/bin"
 # CHANGE #324 — a warm pub/Gradle/Flutter cache is the difference between a
 # two-minute build and a ten-minute one, and `flutter clean` (mandatory, see
@@ -356,42 +398,64 @@ cp web/_headers "$WEB/_headers"
 # ── Guard: verify build output before boot gate ──────────────────────────────
 echo "[guard] checking build output…"
 if [ ! -f "$WEB/index.html" ]; then
-  echo "❌  build/web/index.html missing — build failed"; exit 1
+  _die 11 guard_index "build/web/index.html missing — build failed"
 fi
 if ! grep -q 'base href="/"' "$WEB/index.html" 2>/dev/null; then
-  echo "❌  build/web/index.html missing base href='/' — wrong base-href or bad build"; exit 1
+  _die 11 guard_basehref "build/web/index.html missing base href='/' — wrong base-href or bad build"
 fi
 BUNDLE="$WEB/main.$SHORT.dart.js"
 if [ ! -f "$BUNDLE" ]; then
-  echo "❌  $BUNDLE missing — fingerprint step failed"; exit 1
+  _die 11 guard_bundle_missing "$BUNDLE missing — fingerprint step failed"
 fi
 BUNDLE_SIZE=$(wc -c < "$BUNDLE")
 if [ "$BUNDLE_SIZE" -lt 1500000 ]; then
-  echo "❌  $BUNDLE is only ${BUNDLE_SIZE} bytes — corrupt/partial build (must be >1.5MB). Run flutter clean and retry."; exit 1
+  _die 11 guard_bundle_small "$BUNDLE is only ${BUNDLE_SIZE} bytes — corrupt/partial build (must be >1.5MB); run flutter clean and retry"
 fi
 if [ ! -f "$WEB/assets/AssetManifest.bin" ] && [ ! -f "$WEB/assets/AssetManifest.json" ]; then
-  echo "❌  build/web/assets/AssetManifest* missing — half-built assets dir"; exit 1
+  _die 11 guard_assets "build/web/assets/AssetManifest* missing — half-built assets dir"
 fi
 LIVE_CHANGE=$(python3 -c "import json,sys; print(json.load(open('$WEB/version.json')).get('change',''))" 2>/dev/null || true)
 if [ "$LIVE_CHANGE" != "$CHANGE_LABEL" ]; then
-  echo "❌  build/web/version.json has '$LIVE_CHANGE', expected '$CHANGE_LABEL' — aborting"; exit 1
+  _die 11 guard_version "build/web/version.json has '$LIVE_CHANGE', expected '$CHANGE_LABEL'"
 fi
 # ── CHANGE #491: regression guard for the Fault-2 hardening (see cp comment
 # above) — refuse to ship if _headers ever again lacks the hardened
 # fingerprinted-bundle rule, or has `immutable` on it.
 if ! grep -q '^/main\.\*\.dart\.js$' "$WEB/_headers"; then
-  echo "❌  build/web/_headers missing the hardened /main.*.dart.js rule — aborting (would regress the 2026-07-13 outage fix)"; exit 1
+  _die 11 guard_headers "build/web/_headers missing the hardened /main.*.dart.js rule (would regress the 2026-07-13 outage fix)"
 fi
 if grep -A1 '^/main\.\*\.dart\.js$' "$WEB/_headers" | grep -qi 'immutable'; then
-  echo "❌  build/web/_headers has 'immutable' on the fingerprinted-bundle rule — this is the exact Fault-2 regression, aborting"; exit 1
+  _die 11 guard_headers_immutable "build/web/_headers has 'immutable' on the fingerprinted-bundle rule — the exact Fault-2 regression"
 fi
 echo "[guard] index.html ✓  bundle=${BUNDLE_SIZE}b ✓  assets ✓  version=${CHANGE_LABEL} ✓  headers ✓"
 
 # ── Boot gate — reject corrupt bundles BEFORE they reach production ──────────
+# CHANGE #1836 — TWO ATTEMPTS, AND THE ERROR IS KEPT.
+# The gate boots the bundle against a throwaway local HTTP server. On batch 619
+# that server answered two script requests with its own HTML 404 page, so the
+# page logged `Unexpected token '<'` twice, never painted, and a bundle that was
+# byte-identical to the one batch 620 shipped ten minutes later was refused.
+# A flaky local server must not be able to fail a batch on its own — but a
+# genuinely corrupt bundle must still never reach production, so the gate is
+# RE-RUN rather than forgiven, and only a second refusal aborts.
 echo "[boot-gate] running bundle validation…"
-if ! node ~/boot_check.js "$WEB" 2>&1; then
-  echo "❌  BOOT GATE FAILED — bundle would hang on load. NOT deploying. Fix the build and retry."
-  exit 1
+BOOT_OUT=""
+BOOT_OK=0
+for _bg_try in 1 2; do
+  if BOOT_OUT=$(node ~/boot_check.js "$WEB" 2>&1); then
+    printf '%s\n' "$BOOT_OUT"
+    BOOT_OK=1; break
+  fi
+  printf '%s\n' "$BOOT_OUT"
+  if [ "$_bg_try" = "1" ]; then
+    echo "[boot-gate] attempt 1 refused the bundle — re-running once before failing the batch"
+    sleep 5
+  fi
+done
+if [ "$BOOT_OK" -ne 1 ]; then
+  _die 10 boot_gate \
+    "BOOT GATE FAILED twice — bundle would hang on load, NOT deploying: $(printf '%s' "$BOOT_OUT" | grep -E '^\s*(•|\[boot-gate\])' | tail -3 | tr '\n' ';' | cut -c1-260)" \
+    "Fix the build and retry. Full boot-gate output is above."
 fi
 echo "[boot-gate] PASSED — bundle is safe to deploy"
 
@@ -433,8 +497,9 @@ if [ -n "${MEDIBO_PRE_UPLOAD_HOOK:-}" ]; then
   echo ""
   echo "🧪  pre-upload hook: $MEDIBO_PRE_UPLOAD_HOOK"
   if ! bash -c "$MEDIBO_PRE_UPLOAD_HOOK"; then
-    echo "❌  DEPLOY ABORTED: the pre-upload hook failed — nothing was uploaded to production."
-    exit 42
+    _die 42 pre_upload_hook \
+      "DEPLOY ABORTED: the pre-upload hook refused this bundle — nothing was uploaded to production." \
+      "hook: $MEDIBO_PRE_UPLOAD_HOOK"
   fi
 fi
 
@@ -453,8 +518,7 @@ DEPLOY_SECS=$((DEPLOY_END - DEPLOY_START))
 _phase_mark "wrangler upload"
 
 if [ $DEPLOY_STATUS -ne 0 ]; then
-  echo "❌  wrangler deploy failed (exit $DEPLOY_STATUS)"
-  exit 1
+  _die 12 wrangler "wrangler deploy failed (exit $DEPLOY_STATUS): $(printf '%s' "$WRANGLER_OUTPUT" | grep -iE 'error|✘|failed' | tail -2 | tr '\n' ';' | cut -c1-240)"
 fi
 
 DEPLOY_URL=$(echo "$WRANGLER_OUTPUT" | grep -oE 'https://[a-z0-9-]+\.medibo(-[0-9a-z]+)?\.pages\.dev[^ ]*' | head -1 || true)
@@ -467,26 +531,38 @@ DEPLOY_URL=$(echo "$WRANGLER_OUTPUT" | grep -oE 'https://[a-z0-9-]+\.medibo(-[0-
 # $CF_API_TOKEN from ~/.medibo_secrets, so the purge silently failed on every
 # deploy (code 10000, "Authentication error") for days without anyone noticing.
 [ -f ~/.medibo_secrets ] && . ~/.medibo_secrets
+# CHANGE #1836 — THIS BLOCK NO LONGER TRUNCATES THE DEPLOY.
+# It sat immediately after a SUCCESSFUL wrangler upload and `exit 1`, so from
+# the moment CF_API_TOKEN went missing every single deploy skipped the git push,
+# the stale-alias re-upload (#582), the live-assert, verify_live.sh AND
+# rg_after_deploy.sh (#273) — the guard that is supposed to catch a schema
+# regression on the deploy that caused it. That is why 611-614 all read
+# "deploy.sh exit 1 but verify_live.sh confirmed live": the script had walked
+# out before it could verify anything. An unpurged edge cache is a real problem
+# and is still said loudly, and it still refuses to look like success — it is
+# exit 3 now, its own state, and the rest of the deploy runs.
+PURGE_STATE=ok
 if [ -z "${CF_ZONE_ID:-}" ] || [ -z "${CF_API_TOKEN:-}" ]; then
-  echo "❌  CACHE PURGE SKIPPED — CF_ZONE_ID or CF_API_TOKEN missing from ~/.medibo_secrets."
-  echo "    The site IS already live via wrangler, but edge caches were not purged."
+  PURGE_STATE=skipped
+  _warn "CACHE PURGE SKIPPED — CF_ZONE_ID or CF_API_TOKEN missing from ~/.medibo_secrets. The site IS live via wrangler; edge caches were not purged."
   echo "    Fix ~/.medibo_secrets (needs a token with Zone -> Cache Purge -> Purge"
   echo "    permission for the medibo.in zone) before trusting this deploy is live everywhere."
-  exit 1
 fi
-PURGE_RESP=$(curl --max-time 60 -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/purge_cache" \
-  -H "Authorization: Bearer $CF_API_TOKEN" \
-  -H "Content-Type: application/json" \
-  --data '{"purge_everything":true}')
-PURGE_OK=$(echo "$PURGE_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print('ok' if d.get('success') else 'fail')" 2>/dev/null || echo "fail")
-if [ "$PURGE_OK" = "ok" ]; then
-  echo "[purge] ok"
-else
-  echo "❌  CACHE PURGE FAILED — response: $PURGE_RESP"
-  echo "    The site IS already live via wrangler, but edge caches were not purged."
-  echo "    A stale/bad response cached as immutable at any edge node will NOT clear on its own."
-  echo "    Fix the Cloudflare token/zone in ~/.medibo_secrets before trusting this deploy."
-  exit 1
+if [ "$PURGE_STATE" = "ok" ]; then
+  PURGE_RESP=$(curl --max-time 60 -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/purge_cache" \
+    -H "Authorization: Bearer $CF_API_TOKEN" \
+    -H "Content-Type: application/json" \
+    --data '{"purge_everything":true}')
+  PURGE_OK=$(echo "$PURGE_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print('ok' if d.get('success') else 'fail')" 2>/dev/null || echo "fail")
+  if [ "$PURGE_OK" = "ok" ]; then
+    echo "[purge] ok"
+  else
+    PURGE_STATE=failed
+    _warn "CACHE PURGE FAILED — response: $(printf '%s' "$PURGE_RESP" | tr -d '\n' | cut -c1-200)"
+    echo "    The site IS already live via wrangler, but edge caches were not purged."
+    echo "    A stale/bad response cached as immutable at any edge node will NOT clear on its own."
+    echo "    Fix the Cloudflare token/zone in ~/.medibo_secrets before trusting this deploy."
+  fi
 fi
 
 # ── CHANGE #424: git push — NEVER --force. If origin/main moved since the
@@ -604,8 +680,9 @@ for i in $(seq 1 $MAX); do
       ASSERT_FAIL=1
     }
     if [ "$ASSERT_FAIL" -eq 1 ]; then
-      echo "❌  LIVE ASSERT FAILED — deploy may have gone to preview or stale CDN. Investigate."
-      exit 1
+      _die 14 live_assert \
+        "LIVE ASSERT FAILED — index=${IDX_CODE} bootstrap=${BS_CODE} main=${MAIN_CODE} bundle_ref=${LIVE_BUNDLE_REF:-?} change=${LIVE_CHANGE_CHECK:-?} (wanted ${CHANGE_LABEL})" \
+        "The deploy may have gone to preview or a stale CDN. Investigate."
     fi
 
     echo "[live-assert] index=${IDX_CODE} bootstrap=${BS_CODE} main=${MAIN_CODE} ✓"
@@ -648,6 +725,16 @@ for i in $(seq 1 $MAX); do
     # shipped); dev_cmd_complete() is what refuses a red guard.
     bash scripts/rg_after_deploy.sh "${DEPLOY_CMD_ID:-}" || true
 
+    # CHANGE #1836 — a deploy that is LIVE never exits 1. If the only thing that
+    # went wrong is the edge-cache purge, that is exit 3 and the reason is on
+    # record, so the lane stops reading "failed" over a working deploy.
+    if [ -n "$DEPLOY_WARNINGS" ]; then
+      _reason_write 3 "purge_${PURGE_STATE}" "LIVE (CHANGE ${CHANGE_LABEL}, commit $SHORT) with warnings: $DEPLOY_WARNINGS"
+      echo ""
+      echo "✅  DEPLOY LIVE — CHANGE #${CHANGE_LABEL} (${SHORT}) — with warnings:"
+      echo "    $DEPLOY_WARNINGS"
+      exit 3
+    fi
     exit 0
   fi
   echo "  poll $i/$MAX: live='$LIVE', want='$SHORT' — retrying in ${DELAY}s…"
@@ -664,6 +751,7 @@ done
 echo ""
 echo "❌  DEPLOY FAILED: version.json never matched the uploaded commit."
 LIVE_NOW=$(curl -sf --max-time 8 "https://medibo.in/version.json" 2>/dev/null || echo '{}')
+_reason_write 13 alias_never_moved "version.json never matched the uploaded commit $SHORT (change ${CHANGE_LABEL}); live serving $(printf '%s' "$LIVE_NOW" | tr -d '\n' | cut -c1-160)"
 echo "    wanted commit : $SHORT (change ${CHANGE_LABEL})"
 echo "    live serving  : $LIVE_NOW"
 echo "    preview url   : ${DEPLOY_URL:-?}"
@@ -672,4 +760,4 @@ echo "    The upload succeeded but the LIVE ALIAS did not move. Most likely the"
 echo "    Git-connected Pages build (which fails — no Flutter toolchain) landed"
 echo "    after the wrangler upload and pinned the alias to the last good build."
 echo "    Re-run this script; it re-uploads after the push to win that race."
-exit 1
+exit 13

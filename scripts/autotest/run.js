@@ -206,7 +206,9 @@ async function main() {
       process.exit(3);
     }
     console.error('autotest: could not open a run:', JSON.stringify(started));
-    summary({ status: 'not_run', exit: 2, note: 'could not open a run: ' + JSON.stringify(started).slice(0, 200) });
+    // The card prints this sentence verbatim (deploy_lane_status().smoke), so
+    // it carries the backend's own message when there is one, not a JSON dump.
+    summary({ status: 'not_run', exit: 2, note: 'could not open a run: ' + (((started && started.message) || JSON.stringify(started)) + '').slice(0, 200) });
     process.exit(2);
   }
   const runId = started.run_id;
@@ -437,12 +439,30 @@ async function main() {
     try { pcfg = (await api.rpc('test_config_get', { p_key: 'pipeline' }, null)) || {}; }
     catch (_) { pcfg = {}; }
     let timedOut = false;
-    try {
-      out = await api.rpc('test_pipeline_run', { p_run_id: runId, p_order_id: null }, null);
-    } catch (e) {
-      const msg = String((e && e.message) || e);
-      timedOut = !(e && e.status) && !!pcfg.timeout_match && msg.includes(pcfg.timeout_match);
-      out = { ok: false, detail: (timedOut ? pcfg.timeout_note : msg).slice(0, 400) };
+    // CHANGE #1823 — ONE retry on a transient database refusal, in the
+    // backend's words (test_config.pipeline.retry_match / retry_wait_ms /
+    // retry_note). The first real smoke after the kill switch came back on
+    // (run 35, 6 Sep) failed 0/9 on "canceling statement due to lock timeout"
+    // (55P03): a co-running migration held a lock for longer than the
+    // authenticator role's 8 s lock_timeout. That is the box mid-deploy, not
+    // the feature — and a gate that fails a batch on it gets switched off
+    // again. A second refusal is reported exactly as before.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        out = await api.rpc('test_pipeline_run', { p_run_id: runId, p_order_id: null }, null);
+        break;
+      } catch (e) {
+        const msg = String((e && e.message) || e);
+        if (attempt === 1 && pcfg.retry_match && msg.includes(pcfg.retry_match)) {
+          const waitMs = parseInt(pcfg.retry_wait_ms, 10) || 3000;
+          console.log(`[autotest] pipeline: ${pcfg.retry_note || 'transient database error'} — retrying once in ${waitMs} ms`);
+          await new Promise((r) => setTimeout(r, waitMs));
+          continue;
+        }
+        timedOut = !(e && e.status) && !!pcfg.timeout_match && msg.includes(pcfg.timeout_match);
+        out = { ok: false, detail: (timedOut ? pcfg.timeout_note : msg).slice(0, 400) };
+        break;
+      }
     }
     const stages = (out && out.stages) || [];
     // A stage the ENVIRONMENT could not meet (no buyable catalogue on this

@@ -99,7 +99,7 @@ const _kMedCols = [
   // nothing else about that flow changed.
   'product_name', 'salt_composition', 'marketer', 'mrp', 'barcode',
   'pack_qty', 'pack_size', 'pack_type', 'therapeutic_class',
-  'rx_required', 'status', 'uses', 'benefits', 'side_effects',
+  'rx_required', 'uses', 'benefits', 'side_effects',
   'storage', 'chemical_class', 'action_class',
   'product_introduction', 'product_highlight',
 ];
@@ -684,11 +684,9 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
             (((raw is List ? raw.first : raw) as Map)['rows'] as List? ?? const []));
       } catch (_) {}
     }
-    list = list.where((row) {
-      if (!row.containsKey('status')) return true;
-      final s = (row['status'] as String? ?? '').toLowerCase();
-      return s == 'available' || s == 'active' || s == '1' || s == 'true';
-    }).toList();
+    // CMD #1812 — no status filter. Recognition matches any catalogued
+    // medicine; whether it can be bought is the zone's standby count, decided
+    // by the backend on the storefront, not by a scraped word on this screen.
     if (list.isEmpty) return list;
     final form = _detectForm(name);
     list.sort((a, b) => _s1Score(name, (b['product_name'] as String?) ?? '')
@@ -1999,7 +1997,6 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
     'pack_type'         => 'pack_type',
     'therapeutic_class' => 'therapeutic_class',
     'rx_required'       => 'rx_required',
-    'status'            => 'status',
     _                   => col,
   };
 

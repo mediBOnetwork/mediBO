@@ -23,8 +23,6 @@ CREATE TABLE IF NOT EXISTS "MEDICINE" (
   pack_qty             text,
   pack_type            text,
   scrapping_status     text,
-  status               text,
-  status_reason        text,
   uses                 text,
   benefits             text,
   side_effects         text,

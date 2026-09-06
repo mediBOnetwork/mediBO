@@ -62,6 +62,16 @@ class DevQueueService {
     // the control plane would grade the wrong database and pass.
     'autotest_safety_net_home',
     'autotest_safety_net_run',
+    // CHANGE #639 — the triage loop sits on top of every one of those: it reads
+    // production's visual_shot, autotest_* results, dev_journey_runs and
+    // test_coverage, and the findings table it fills lives there too. Pointing
+    // it at the control plane would show an empty inbox and call it clean.
+    'triage_inbox',
+    'triage_finding_detail',
+    'triage_trends',
+    'triage_approve',
+    'triage_reject',
+    'triage_approve_bulk',
   };
 
   /// The control-plane client (medibo-dev): minted on first use, re-minted
@@ -297,6 +307,53 @@ class DevQueueService {
   /// Rendered verbatim in the Journey Library screen.
   Future<List<Map<String, dynamic>>> journeysGet({String? area}) async =>
       _asList(await _rpc('journeys_get', params: {'p_area': area}));
+
+  // ── CHANGE #639: triage ────────────────────────────────────────────────
+  /// The triage inbox, rendered verbatim. Every label, chip and button caption
+  /// on the screen is in this payload.
+  Future<Map<String, dynamic>> triageInbox({
+    String? status = 'new',
+    String? surface,
+    String? severity,
+    int limit = 30,
+    int offset = 0,
+  }) async =>
+      _asMap(await _rpc('triage_inbox', params: {
+        'p_status': status,
+        'p_surface': surface,
+        'p_severity': severity,
+        'p_limit': limit,
+        'p_offset': offset,
+      }));
+
+  Future<Map<String, dynamic>> triageTrends({int weeks = 8}) async =>
+      _asMap(await _rpc('triage_trends', params: {'p_weeks': weeks}));
+
+  /// Approve / reject are the ONLY two writes this screen makes. They go under
+  /// Om's own session on purpose: the backend's `_triage_human()` refuses
+  /// service_role, so a bot can never approve its own finding.
+  Future<Map<String, dynamic>> triageApprove(List<int> ids) async =>
+      _asMap(await _rpc('triage_approve', params: {'p_ids': ids}));
+
+  Future<Map<String, dynamic>> triageReject(List<int> ids, String reason) async =>
+      _asMap(await _rpc('triage_reject',
+          params: {'p_ids': ids, 'p_reason': reason}));
+
+  Future<Map<String, dynamic>> triageApproveBulk(
+          {String? surface, String? severity}) async =>
+      _asMap(await _rpc('triage_approve_bulk',
+          params: {'p_surface': surface, 'p_severity': severity}));
+
+  /// A finding's screenshot. The bucket and path are the payload's; nothing
+  /// here builds a URL out of a feature name.
+  Future<String?> triageShotUrl(String bucket, String path) async {
+    if (bucket.isEmpty || path.isEmpty) return null;
+    try {
+      return await _prod.storage.from(bucket).createSignedUrl(path, 900);
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// File a bug → backend creates a linked fix command + journey stub and
   /// returns the created command id. The app only sends the text + area.

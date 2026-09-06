@@ -1263,3 +1263,34 @@ GRANT EXECUTE ON FUNCTION public.triage_batch_bind(bigint,bigint)          TO se
 GRANT EXECUTE ON FUNCTION public.triage_batch_fail(bigint,text)            TO service_role;
 GRANT EXECUTE ON FUNCTION public.triage_batch_completed(bigint)            TO service_role;
 GRANT EXECUTE ON FUNCTION public.triage_batch_open_commands()              TO service_role;
+
+-- ─────────────────────────────────────────────────────────────
+-- 11. THE TOOL ROW — Triage is reachable, or it does not exist (§11)
+--
+-- `dev_tools()` reads feature_registry on the CONTROL PLANE, so the row that
+-- actually lights the tile up is applied there (supabase/dev/c639_triage_tool.sql).
+-- This copy keeps production's registry in step and is what
+-- test/protected/dev_tools_registry_test.dart reads: a tool this build can open
+-- must be registered by a migration, and a registered tool must be openable.
+-- ─────────────────────────────────────────────────────────────
+INSERT INTO public.feature_registry
+  (feature_key, label, description, group_label, icon_key, route_key,
+   sort_order, owner, partner_eligible, default_access, is_active, category,
+   surface, roles_allowed, deep_link, search_terms, badge_source, badge_noun)
+VALUES
+  ('devtool.triage','Triage',
+   'Approve what the bots found — fixes generate themselves','Proof & QA','fact_check',
+   'triage',15,'medibo',false,'none',true,'system','dev_tools',
+   array['super_admin'],null,
+   'triage inbox findings approve reject bot fix reopen trend coverage',null,null)
+ON CONFLICT (feature_key) DO UPDATE
+  SET label         = EXCLUDED.label,
+      description   = EXCLUDED.description,
+      group_label   = EXCLUDED.group_label,
+      icon_key      = EXCLUDED.icon_key,
+      route_key     = EXCLUDED.route_key,
+      sort_order    = EXCLUDED.sort_order,
+      surface       = EXCLUDED.surface,
+      is_active     = true,
+      roles_allowed = EXCLUDED.roles_allowed,
+      search_terms  = EXCLUDED.search_terms;

@@ -422,6 +422,22 @@ if [ "$DEPLOY_PHASE" = "build" ]; then
   exit 0
 fi
 
+# ── CHANGE #1823 — THE CRITICAL-PATH SMOKE GATE RUNS ON THIS BUNDLE FIRST ──
+# The merge worker sets MEDIBO_PRE_UPLOAD_HOOK to smoke_gate.sh, which puts
+# build/web on the Pages branch `smoke-gate`, drives the critical-path
+# journeys against it, and exits 1 (red) or 3 (crashed). Either aborts HERE,
+# before a byte reaches production: a red critical path is a failed batch and
+# nothing deployed — not a note in the journal after the fact. Exit 42 is
+# this abort and nothing else, so the worker can name it.
+if [ -n "${MEDIBO_PRE_UPLOAD_HOOK:-}" ]; then
+  echo ""
+  echo "🧪  pre-upload hook: $MEDIBO_PRE_UPLOAD_HOOK"
+  if ! bash -c "$MEDIBO_PRE_UPLOAD_HOOK"; then
+    echo "❌  DEPLOY ABORTED: the pre-upload hook failed — nothing was uploaded to production."
+    exit 42
+  fi
+fi
+
 # ── LIVE DEPLOY: wrangler Direct Upload — bypasses Cloudflare Pages git queue ──
 echo ""
 echo "⬆  Uploading build/web to Cloudflare Pages (project=medibo, branch=main)…"

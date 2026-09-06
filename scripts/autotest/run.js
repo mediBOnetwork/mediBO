@@ -31,6 +31,28 @@ const argv = process.argv.slice(2);
 const flag = (n) => argv.includes('--' + n);
 const val = (n, d) => { const i = argv.indexOf('--' + n); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
 
+// CHANGE #1823 — the exit code is the merge worker's whole reading of this
+// run, so each number means ONE thing:
+//   0  ran, every journey that could run passed
+//   1  ran, at least one journey FAILED (a red critical path)
+//   2  could not run — no service key, no playwright, no test account for the
+//      role(s), no run opened. Forgiven by the gate: an environment gap is not
+//      a product failure.
+//   3  CRASHED mid-run — an exception after the run opened (a reporting RPC
+//      that raised, a browser that died). This used to share 2 with "could
+//      not run" and the gate forgave it; batches 600-602 each found two real
+//      reds, crashed on a duplicate-key in test_result_report, and shipped.
+// AUTOTEST_SUMMARY_FILE, when set, receives one JSON object with the verdict,
+// the exit code, the totals and the names of what went red or was blocked —
+// the merge worker records THAT on the deploy batch, not a grep of this log.
+const SUMMARY_FILE = process.env.AUTOTEST_SUMMARY_FILE || '';
+let lastSummary = null;
+function summary(obj) {
+  lastSummary = Object.assign({ at: new Date().toISOString() }, lastSummary || {}, obj);
+  if (!SUMMARY_FILE) return;
+  try { fs.writeFileSync(SUMMARY_FILE, JSON.stringify(lastSummary, null, 2)); } catch (_) {}
+}
+
 const TARGETS = {
   prod: 'https://medibo.in',
   preview: process.env.MEDIBO_PREVIEW_URL || ''
@@ -54,7 +76,7 @@ async function main() {
   // request waiting is a normal, quiet exit — not a failure.
   let request = null;
   if (flag('if-requested')) {
-    if (!api.hasServiceKey()) { console.error('autotest: no service key'); process.exit(3); }
+    if (!api.hasServiceKey()) { console.error('autotest: no service key'); summary({ status: 'not_run', exit: 2, note: 'no service key' }); process.exit(2); }
     // CHANGE #636 — --kinds narrows the claim. A timer that must only ever run
     // ONE job cannot use the unfiltered claim: the head of the queue may be
     // #634's 'full' request, the entire hostile suite against production.
@@ -122,7 +144,8 @@ async function main() {
 
   if (!api.hasServiceKey()) {
     console.error('autotest: no service key — put AUTOTEST_SERVICE_KEY in ~/.medibo/autotest.env');
-    process.exit(3);
+    summary({ status: 'not_run', exit: 2, note: 'no service key on this box' });
+    process.exit(2);
   }
 
   const manifest = await api.rpc('test_manifest', {
@@ -155,7 +178,8 @@ async function main() {
 
   if (!harness.chromium) {
     console.error('autotest: playwright is not installed on this box');
-    process.exit(3);
+    summary({ status: 'not_run', exit: 2, note: 'playwright is not installed on this box' });
+    process.exit(2);
   }
 
   const started = await api.rpc('test_run_start', {
@@ -182,9 +206,11 @@ async function main() {
       process.exit(3);
     }
     console.error('autotest: could not open a run:', JSON.stringify(started));
-    process.exit(1);
+    summary({ status: 'not_run', exit: 2, note: 'could not open a run: ' + JSON.stringify(started).slice(0, 200) });
+    process.exit(2);
   }
   const runId = started.run_id;
+  summary({ status: 'running', run_id: runId, target: target.url });
   const artifactDir = path.join(artifactRoot, `run-${runId}-${stamp}`);
   fs.mkdirSync(artifactDir, { recursive: true });
   console.log(`[autotest] run ${runId} · ${target.kind} · ${target.url} · session ${started.test_session_id}`);
@@ -481,10 +507,38 @@ async function main() {
   console.log(`[autotest] purge: residue ${res.total || 0} row(s), ${res.files || 0} file(s)`
     + ` · business fingerprint ${pg.business_unchanged === false ? 'moved' : 'unchanged'}`
     + ` — ${JSON.stringify(pg.message || pg)}`);
-  return (finished && finished.status === 'passed') ? 0 : 1;
+  const tot = (finished && finished.totals) || {};
+  const names = (v) => results.filter((r) => r.verdict === v)
+    .map((r) => `${r.feature_key} (${r.role}/${r.scenario})`);
+  const exitCode = (tot.failed || 0) > 0 ? 1
+                 : (finished && finished.status === 'passed') ? 0
+                 : 2;   // nothing passed and nothing failed: the roles were blocked, or nothing ran
+  summary({
+    status: exitCode === 0 ? 'passed' : exitCode === 1 ? 'failed'
+          : ((tot.blocked || 0) > 0 ? 'blocked' : 'not_run'),
+    exit: exitCode,
+    run_id: runId,
+    target: target.url,
+    totals: tot,
+    failed: names('failed'),
+    blocked: names('blocked'),
+    note: exitCode === 2
+      ? ((tot.blocked || 0) > 0
+          ? `${tot.blocked} journey(s) blocked, none could run — ` +
+            Object.values(blockedRole).filter((v, i, a) => a.indexOf(v) === i).join('; ').slice(0, 300)
+          : 'no journey ran')
+      : null
+  });
+  return exitCode;
 }
 
 main().then((c) => process.exit(c)).catch((e) => {
-  console.error('[autotest] fatal:', (e && e.message) || e);
-  process.exit(2);
+  const msg = String((e && e.message) || e);
+  console.error('[autotest] fatal:', msg);
+  // A run that opened and then died is a CRASH (3), never "could not run" (2):
+  // the gate must fail the batch on it. Before the run opened there was nothing
+  // to crash out of, and that is the environment's 2.
+  const opened = lastSummary && lastSummary.run_id != null;
+  summary({ status: opened ? 'crashed' : 'not_run', exit: opened ? 3 : 2, note: 'fatal: ' + msg.slice(0, 400) });
+  process.exit(opened ? 3 : 2);
 });

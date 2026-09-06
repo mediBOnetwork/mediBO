@@ -35,6 +35,9 @@ class DeployLaneSection extends StatelessWidget {
     }
 
     final lane = (data['lane'] as Map?)?.cast<String, dynamic>() ?? const {};
+    // CHANGE #1823 — the critical-path smoke verdict. has:false draws nothing;
+    // the sentence, the tone and the verdict word are merge_batch_smoke_status()'s.
+    final smoke = (data['smoke'] as Map?)?.cast<String, dynamic>() ?? const {};
     final queue = (data['queue'] as Map?)?.cast<String, dynamic>() ?? const {};
     final batch = (data['batch'] as Map?)?.cast<String, dynamic>();
     final metrics =
@@ -105,6 +108,19 @@ class DeployLaneSection extends StatelessWidget {
                   ),
                 ],
               ],
+            ),
+          ],
+
+          // ── the critical-path smoke verdict (CHANGE #1823) ─────────────
+          // It used to live only in merge_worker.journal, as "could not run
+          // (exit 2) — not treated as a failure" on every single batch.
+          if (smoke['has'] == true) ...[
+            SizedBox(height: Ds.space.x12),
+            _row(
+              (smoke['label'] as String?) ?? '',
+              (smoke['detail'] as String?) ?? '',
+              (smoke['verdict'] as String?) ?? '',
+              (smoke['tone'] as String?) ?? 'neutral',
             ),
           ],
 

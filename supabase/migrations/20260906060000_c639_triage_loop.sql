@@ -234,6 +234,16 @@ DECLARE r public.triage_source_rule; v_id bigint; v_sev text; v_line text;
 BEGIN
   r := public._triage_rule(p_source, p_rule);
   IF r.source IS NULL THEN RETURN NULL; END IF;             -- rule disabled = not filed
+
+  -- CHURN GUARD. Intake rescans the same evidence every 15 minutes, so without
+  -- this a settled inbox would rewrite every one of its rows on every pass —
+  -- hundreds of no-op UPDATEs a quarter-hour against a 1 GB instance, for
+  -- nothing but a seen_count. A case already seen inside the window is left
+  -- exactly as it is; the freshness that matters (a NEW case) is unaffected.
+  SELECT id INTO v_id FROM triage_finding
+   WHERE source = p_source AND source_key = p_source_key
+     AND last_seen_at > now() - make_interval(mins => (SELECT reseen_quiet_min FROM triage_config WHERE id=1));
+  IF v_id IS NOT NULL THEN RETURN v_id; END IF;
   v_sev  := coalesce(p_severity, r.severity);
   v_line := coalesce(nullif(btrim(coalesce(p_plain,'')),''),
                      coalesce(r.lead_in,'The bot found a problem'));
@@ -606,10 +616,12 @@ CREATE TABLE IF NOT EXISTS public.triage_config (
   solo_after_min   int  NOT NULL DEFAULT 30,   -- a lone approved row waits this long for company
   max_open_batches int  NOT NULL DEFAULT 4,    -- never flood the queue
   reopen_limit     int  NOT NULL DEFAULT 2,    -- guard rail #3
+  reseen_quiet_min int  NOT NULL DEFAULT 60,   -- don't rewrite a case re-seen inside this
   enabled          boolean NOT NULL DEFAULT true,
   updated_at       timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE public.triage_config ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.triage_config ADD COLUMN IF NOT EXISTS reseen_quiet_min int NOT NULL DEFAULT 60;
 INSERT INTO public.triage_config(id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 
 -- A batch is what a fix command WILL be. The dev queue lives on the control

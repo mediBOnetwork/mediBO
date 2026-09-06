@@ -49,6 +49,8 @@ import '../partner/partner_documents_screen.dart';
 import '../admin/settlement_invoices_screen.dart'; // CHANGE #695 — tax invoices
 import '../partner/partner_issues_screen.dart'; // CHANGE #696 — partner issues
 import '../partner/partner_returns_screen.dart'; // CHANGE #710 — returns door
+import '../admin/admin_partner_scorecards_screen.dart'; // CHANGE #693 — scorecards
+import '../partner/partner_scorecard_card.dart'; // CHANGE #693 — own scorecard
 
 /// CHANGE #697 — the whole-order feedback card's one hook into the shell.
 /// `home_shell.dart` sits under a 2,000-line guard (#340 / #327 layer 1) and
@@ -194,6 +196,26 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       // nor partner with its own sentence, so the door being open to a role
       // decides nothing about what that role may read or write.
       'supplier_returns' => const PartnerReturnsScreen(),
+      // CHANGE #693 — the partner scorecard, both ends of it.
+      //
+      // #693 built the screens, the RPCs and the ui_copy and registered
+      // admin.partner_scorecards -> `partner_scorecards` and
+      // partner.scorecard -> `partner_scorecard`, each surface_route row
+      // naming THIS function as handled_by. This file was leased by another
+      // command for the whole of that build, so the two doors were the one
+      // piece that could not land — and both registry rows were left
+      // is_active=false on purpose so no tile could draw and fall through
+      // this switch into "route unavailable". That is the failure every
+      // comment above documents, refused in advance rather than shipped and
+      // then fixed. The rows go live in the same command as these two arms.
+      //
+      // Authorisation is NOT here. partner_scorecards() answers the office
+      // with every zone and refuses anyone else with its own sentence, and
+      // partner_scorecard() resolves the partner from the CALLER — its
+      // partnerId argument is an operator filter and never a way in — so the
+      // door being open to a role decides nothing about what that role reads.
+      'partner_scorecards' => const AdminPartnerScorecardsScreen(),
+      'partner_scorecard' => const PartnerScorecardScreen(),
       _ => null,
     };
 

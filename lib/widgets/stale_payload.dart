@@ -18,11 +18,15 @@ import '../services/payload_cache.dart';
 class PayloadStatusLine extends StatelessWidget {
   const PayloadStatusLine({super.key, required this.state});
 
-  final PayloadState state;
+  /// Null means "this screen is not on the never-blank controller at all"
+  /// (a test seam, or a surface that supplies its own payload) — draw nothing
+  /// rather than an eternal spinner over content that has already arrived.
+  final PayloadState? state;
 
   @override
   Widget build(BuildContext context) {
-    if (!state.showStatusLine) return const SizedBox.shrink();
+    final state = this.state;
+    if (state == null || !state.showStatusLine) return const SizedBox.shrink();
     final line = state.statusLine;
     // A failing refresh is amber, a normal refresh is just quiet grey. Nothing
     // here is red: the customer still has a working screen.

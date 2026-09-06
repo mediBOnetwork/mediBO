@@ -89,7 +89,10 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
   /// backend's own backoff. It is bypassed entirely when a test supplies
   /// [widget.loader].
   PayloadController? _payload;
-  PayloadState _payloadState = const PayloadState();
+
+  /// Null until the controller says something. A test that supplies its own
+  /// loader has no controller and therefore no status line.
+  PayloadState? _payloadState;
 
   /// CHANGE #678 — paging happens sideways, not downwards.
   ///

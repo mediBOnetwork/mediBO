@@ -21,6 +21,7 @@ import '../admin_heartbeat_screen.dart';        // CHANGE #468
 import '../test_mode_screen.dart';             // CHANGE #573, wired #468
 import 'journey_library_screen.dart';
 import 'token_dashboard_screen.dart';
+import 'build_intelligence_screen.dart';
 import 'triage_inbox_screen.dart';
 import 'test_coverage_screen.dart';   // CHANGE #634
 import 'journey_bot_screen.dart';     // CHANGE #635
@@ -1228,6 +1229,10 @@ const Set<String> kDevToolKeys = <String>{
   // and the heartbeat because it answers the same kind of question: what is
   // this fleet doing with what it is being given.
   'token_dashboard',
+  // CMD #1824 — what the registry has learned and is now enforcing: calibrated
+  // ETAs, repeat causes promoted to constraints, waste classes with their
+  // knobs, open proposals and the lessons that have stopped earning their place.
+  'build_intelligence',
 };
 
 /// Open one registered tool. Returns false for a key this build does not know,
@@ -1250,6 +1255,9 @@ bool openDevTool(
       return true;
     case 'token_dashboard':
       push(TokenDashboardScreen(service: svc));
+      return true;
+    case 'build_intelligence':
+      push(BuildIntelligenceScreen(service: svc));
       return true;
     case 'triage':
       push(TriageInboxScreen(service: svc));

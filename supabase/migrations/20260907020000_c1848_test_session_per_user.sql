@@ -1937,4 +1937,525 @@ begin
   return new;
 end $$;
 
+
+-- ---------------------------------------------------------------------------
+-- 5d. THE DEFINER LISTS. RLS cannot reach a SECURITY DEFINER body (postgres
+--     BYPASSRLS), so the ordinary lists apply the SAME rule through ONE helper.
+-- ---------------------------------------------------------------------------
+create or replace function public.test_row_visible(p_synthetic boolean, p_session bigint)
+ returns boolean
+ language plpgsql stable security definer set search_path to 'public'
+as $$
+begin
+  -- The SAME rule the c1848 RLS policy applies, for the definer RPCs that
+  -- postgres's BYPASSRLS carries past the policy: ordinary rows for everyone,
+  -- a session-stamped row only for that session's participants, a legacy
+  -- synthetic row (no session) admin-only exactly as c573 left it.
+  if p_session is null and not coalesce(p_synthetic,false) then return true; end if;
+  if p_session is not null then return coalesce(p_session = public.test_session_mine(), false); end if;
+  return coalesce(p_synthetic,false) and public.is_admin();
+exception when others then
+  return p_session is null and not coalesce(p_synthetic,false);
+end $$;
+revoke all on function public.test_row_visible(boolean, bigint) from public;
+grant execute on function public.test_row_visible(boolean, bigint) to anon, authenticated, service_role;
+CREATE OR REPLACE FUNCTION public.admin_customer_orders(p_date date DEFAULT admin_active_date())
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE
+  v_rows jsonb;
+  v_copy jsonb := coalesce((SELECT value FROM app_settings WHERE key='customer_orders_screen_copy'),'{}'::jsonb);
+  v_act  jsonb := coalesce((SELECT value FROM app_settings WHERE key='customer_order_actions_copy'),'{}'::jsonb);
+  v_cols jsonb := coalesce((SELECT value FROM app_settings WHERE key='order_tab_columns'),'{}'::jsonb);
+  v_sep  text  := coalesce(v_copy->>'summary_sep',' • ');
+  v_zone smallint := public.admin_active_zone();
+  v_n int; v_items int; v_amt numeric;
+BEGIN
+  IF public.role_for_medibo_only() NOT IN ('admin','super_admin') THEN
+    RETURN jsonb_build_object('error','not_authorized');
+  END IF;
+
+  WITH base AS (
+    SELECT o.*, (SELECT count(*) FROM order_items oi WHERE oi.order_id = o.id) AS items_count,
+           (lower(coalesce(o.status,'')) = 'pending') AS can_confirm
+    FROM orders o
+    WHERE public._date_in_scope(o.created_at, p_date, false)
+      AND public.test_row_visible(o.is_synthetic, o.test_session_id)   -- CMD #1848
+      AND (v_zone IS NULL OR o.zone_id = v_zone)
+  )
+  SELECT coalesce(jsonb_agg(jsonb_build_object(
+      'order_id',b.id,'order_code',coalesce(b.order_code,''),'customer_id',b.customer_id,
+      'user_id',b.user_id,'phone',coalesce(b.phone,''),'zone_id',b.zone_id,
+      'title', CASE WHEN coalesce(btrim(b.pharmacy_name),'') <> '' THEN b.pharmacy_name
+                    ELSE coalesce(v_copy->>'unnamed','') END,
+      'code_label',coalesce(b.order_code,''),'show_code',(coalesce(btrim(b.order_code),'') <> ''),
+      'phone_label', CASE WHEN coalesce(btrim(b.phone),'') <> '' THEN b.phone
+                          ELSE coalesce(v_copy->>'no_phone','') END,
+      'has_phone',(coalesce(btrim(b.phone),'') <> ''),
+      'status_chip', public.status_chip('customer_status', b.status),
+      'fulfillment_chip', public.status_chip('fulfillment', b.fulfillment_status),
+      'source_chip', public.status_chip('source', b.source),
+      'payment_chip', public.order_payment_chip(b.id),
+      'zone_label', coalesce((SELECT name FROM zones WHERE id = b.zone_id),''),
+      'admin_chip', CASE WHEN coalesce(b.placed_by_admin,false)
+            THEN jsonb_build_object('label',coalesce(v_copy->>'admin_placed',''),
+                   'bg','#E6F1FB','fg','#0C447C','border','#B6D4F0','show',true)
+            ELSE jsonb_build_object('label','','bg','#FFFFFF','fg','#FFFFFF','border','#FFFFFF','show',false) END,
+      'amount',coalesce(b.total_amount,0),'amount_label',public.inr_money(coalesce(b.total_amount,0)),
+      'items_count',b.items_count,
+      'items_label',public.count_label(v_copy,'items_one','items_many',b.items_count::int),
+      'created_at',b.created_at,
+      'time_label',to_char(b.created_at AT TIME ZONE 'Asia/Kolkata','HH12:MI AM'),
+      'date_label',to_char(b.created_at AT TIME ZONE 'Asia/Kolkata','DD/MM/YYYY'),
+      'can_confirm',b.can_confirm,
+      'actions', jsonb_build_object('show',b.can_confirm,
+        'accept', jsonb_build_object('label',coalesce(v_act->>'accept_label',''),'status','accepted',
+                    'show',b.can_confirm,'note',coalesce(v_act->>'accepted_note',''))
+                  || public.tone_colors(coalesce(v_act->>'accept_tone','green')),
+        'reject', jsonb_build_object('label',coalesce(v_act->>'reject_label',''),'status','rejected',
+                    'show',b.can_confirm,'note',coalesce(v_act->>'rejected_note',''))
+                  || public.tone_colors(coalesce(v_act->>'reject_tone','red')))
+    ) ORDER BY b.created_at DESC),'[]'::jsonb),
+    count(*), coalesce(sum(b.items_count),0), coalesce(sum(b.total_amount),0)
+  INTO v_rows, v_n, v_items, v_amt FROM base b;
+
+  RETURN jsonb_build_object('status','ok','date',p_date,
+    'date_label',to_char(p_date,'DD/MM/YYYY'),
+    'zone_id', v_zone,
+    'zone_label', coalesce((SELECT name FROM zones WHERE id = v_zone),'All zones'),
+    'orders',v_rows,'count',v_n,'has_orders',(v_n > 0),
+    'columns',coalesce(v_cols->'customer_orders','[]'::jsonb),
+    'summary', jsonb_build_object('orders',v_n,'items',v_items,'amount',v_amt,
+      'amount_label',public.inr_money(v_amt),
+      'label', public.count_label(v_copy,'orders_one','orders_many',v_n)||v_sep||
+               public.count_label(v_copy,'items_one','items_many',v_items)||v_sep||
+               public.inr_money(v_amt)),
+    'empty', jsonb_build_object('show',(v_n=0),
+      'title',coalesce(v_copy->>'empty_title',''),'note',coalesce(v_copy->>'empty_note','')));
+END;
+$function$;
+CREATE OR REPLACE FUNCTION public.pack_list_orders_core(p_date date DEFAULT admin_active_date(), p_include_older boolean DEFAULT false)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE v_rows jsonb;
+BEGIN
+  IF get_my_role() NOT IN ('admin','super_admin') THEN
+    RETURN jsonb_build_object('error','not_authorized');
+  END IF;
+
+  SELECT COALESCE(jsonb_agg(jsonb_build_object(
+           'order_id', o.id, 'order_code', o.order_code,
+           'pharmacy_name', o.pharmacy_name,
+           'dispatch_ready', COALESCE(o.dispatch_ready,false),
+           'created_at', o.created_at,
+           'items_total', x.n_items, 'items_packed', x.n_packed,
+           'fulfillment_status', COALESCE(o.fulfillment_status,''),
+           -- NEW: backend-owned order status label + colours
+           'status_label', CASE COALESCE(o.fulfillment_status,'')
+                             WHEN 'ready' THEN 'Ready'
+                             WHEN 'partial_ready' THEN 'Partially ready'
+                             WHEN 'in_transit' THEN 'In transit'
+                             WHEN 'collecting' THEN 'Collecting'
+                             WHEN 'open' THEN 'Open'
+                             WHEN 'shipped' THEN 'Shipped'
+                             WHEN 'delivered' THEN 'Delivered'
+                             WHEN '' THEN 'Open'
+                             ELSE initcap(replace(COALESCE(o.fulfillment_status,''),'_',' ')) END,
+           'status_colors', CASE
+                             WHEN COALESCE(o.fulfillment_status,'') = 'ready' THEN jsonb_build_object('bg','#E1F5EE','fg','#0F6E56')
+                             WHEN COALESCE(o.fulfillment_status,'') IN ('partial_ready','in_transit') THEN jsonb_build_object('bg','#FEF3C7','fg','#92400E')
+                             WHEN COALESCE(o.fulfillment_status,'') IN ('shipped','delivered') THEN jsonb_build_object('bg','#E6F1FB','fg','#0C447C')
+                             ELSE jsonb_build_object('bg','#FEF3C7','fg','#92400E') END,
+           'dot', jsonb_build_object(
+             'state', CASE WHEN COALESCE(o.fulfillment_status,'') = 'ready' THEN 'green'
+                           WHEN COALESCE(o.fulfillment_status,'') IN ('partial_ready','in_transit') THEN 'light_yellow'
+                           ELSE 'yellow' END,
+             'fill',  CASE WHEN COALESCE(o.fulfillment_status,'') = 'ready' THEN '#1B7A43'
+                           WHEN COALESCE(o.fulfillment_status,'') IN ('partial_ready','in_transit') THEN '#FEF3C7'
+                           ELSE '#FCD34D' END,
+             'border',CASE WHEN COALESCE(o.fulfillment_status,'') = 'ready' THEN '#1B7A43'
+                           ELSE '#F59E0B' END),
+           'pack_button', jsonb_build_object(
+             'label', CASE WHEN x.n_items <= 0 THEN 'Start Packing'
+                           WHEN x.n_packed = 0 THEN 'Start Packing'
+                           WHEN x.n_packed >= x.n_items THEN 'Packed ✓ — View'
+                           ELSE 'Resume Packing (' || x.n_packed || '/' || x.n_items || ')' END,
+             'fill', '#1B7A43'),
+           'can_mark_ready', x.can_ready
+         ) ORDER BY o.created_at DESC), '[]'::jsonb)
+    INTO v_rows
+  FROM orders o
+  JOIN LATERAL (
+    SELECT count(*) AS n_items,
+           count(*) FILTER (WHERE COALESCE(q.packed,false)) AS n_packed,
+           (count(*) FILTER (WHERE q.fulfillment_state IN ('received','short')) > 0
+            AND count(*) FILTER (
+                  WHERE q.fulfillment_state IN ('received','short')
+                    AND NOT ( COALESCE(q.packed_qty,0) >= q.packable_qty
+                              AND COALESCE(q.packed_qty,0) > 0
+                              AND q.pack_counted_qty IS NOT NULL
+                              AND COALESCE(q.pack_counted_qty,0) >= q.packable_qty
+                              AND COALESCE(q.pack_counted_qty,0) > 0 )
+                ) = 0) AS can_ready
+    FROM (
+      SELECT oi.packed, oi.packed_qty, oi.pack_counted_qty, oi.fulfillment_state,
+             least(
+               COALESCE((SELECT sum(bic.qty) FROM bag_item_counts bic
+                         WHERE bic.assigned_supplier = oi.assigned_supplier
+                           AND bic.product_id = oi.product_id AND bic.qty > 0),0),
+               oi.quantity
+             ) AS packable_qty
+      FROM order_items oi
+      WHERE oi.order_id = o.id AND oi.fulfillment_state NOT IN ('shipped','cancelled')
+    ) q
+  ) x ON true
+  WHERE x.n_items > 0
+    AND public.test_row_visible(o.is_synthetic, o.test_session_id)   -- CMD #1848
+    AND NOT public._c708_order_held(o.id)   -- CHANGE #708
+    AND (p_date IS NULL OR (o.created_at AT TIME ZONE 'Asia/Kolkata')::date = p_date);
+
+  RETURN jsonb_build_object('status','ok','orders',v_rows,
+    'older_open', 0, 'date', p_date, 'include_older', false);
+END;
+$function$;
+CREATE OR REPLACE FUNCTION public.admin_supplier_orders(p_date date DEFAULT admin_active_date())
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE
+  v_rows jsonb;
+  v_copy jsonb := coalesce((SELECT value FROM app_settings WHERE key='supplier_orders_screen_copy'),'{}'::jsonb);
+  v_cols jsonb := coalesce((SELECT value FROM app_settings WHERE key='order_tab_columns'),'{}'::jsonb);
+  v_sep  text  := coalesce(v_copy->>'summary_sep',' • ');
+  v_zone smallint := public.admin_active_zone();
+  v_n int; v_items int; v_amt numeric;
+BEGIN
+  IF get_my_role() NOT IN ('admin','super_admin') THEN
+    RETURN jsonb_build_object('error','not_authorized');
+  END IF;
+
+  WITH base AS (
+    SELECT so.*, coalesce(jsonb_array_length(so.items),0) AS items_count
+    FROM supplier_orders so
+    WHERE coalesce(so.order_date,(so.created_at AT TIME ZONE 'Asia/Kolkata')::date) = p_date
+      AND public.test_row_visible(so.is_synthetic, so.test_session_id)   -- CMD #1848
+      AND lower(coalesce(so.status,'')) <> 'cancelled'
+      AND coalesce(jsonb_array_length(so.items),0) > 0
+      AND (v_zone IS NULL OR so.zone_id = v_zone)
+  )
+  SELECT coalesce(jsonb_agg(jsonb_build_object(
+      'supplier_order_id',b.id,'supplier_id',b.supplier_id,'order_code',coalesce(b.order_code,''),
+      'order_id',b.order_id,'supplier_name',coalesce(b.supplier_name,''),'zone_id',b.zone_id,
+      'title', CASE WHEN coalesce(btrim(b.supplier_name),'') <> '' THEN b.supplier_name
+                    ELSE coalesce(v_copy->>'unnamed','') END,
+      'code_label',coalesce(b.order_code,''),'show_code',(coalesce(btrim(b.order_code),'') <> ''),
+      'description',coalesce(b.description,''),
+      'description_label', CASE WHEN coalesce(btrim(b.description),'') <> '' THEN b.description
+                                ELSE public.count_label(v_copy,'items_one','items_many',b.items_count::int) END,
+      'order_no',b.order_no,
+      'order_no_label', CASE WHEN b.order_no IS NULL THEN ''
+                             ELSE replace(coalesce(v_copy->>'order_no',''),'{n}',b.order_no::text) END,
+      'show_order_no',(b.order_no IS NOT NULL),
+      'status_chip',public.status_chip('supplier_status',b.status),
+      'zone_label', coalesce((SELECT name FROM zones WHERE id = b.zone_id),''),
+      'amount',coalesce(b.total_amount,0),'amount_label',public.inr_money(coalesce(b.total_amount,0)),
+      'items_count',b.items_count,
+      'items_label',public.count_label(v_copy,'items_one','items_many',b.items_count::int),
+      'created_at',b.created_at,
+      'time_label',to_char(b.created_at AT TIME ZONE 'Asia/Kolkata','HH12:MI AM'),
+      'order_date',b.order_date,
+      'date_label',to_char(coalesce(b.order_date,(b.created_at AT TIME ZONE 'Asia/Kolkata')::date),'DD/MM/YYYY'),
+      'packed',coalesce(b.packed,false),
+      'send_button',public._sup_order_send_state(b.order_code)
+    ) ORDER BY b.supplier_name),'[]'::jsonb),
+    count(*), coalesce(sum(b.items_count),0), coalesce(sum(b.total_amount),0)
+  INTO v_rows, v_n, v_items, v_amt FROM base b;
+
+  RETURN jsonb_build_object('status','ok','date',p_date,
+    'date_label',to_char(p_date,'DD/MM/YYYY'),
+    'zone_id', v_zone,
+    'zone_label', coalesce((SELECT name FROM zones WHERE id = v_zone),'All zones'),
+    'supplier_orders',v_rows,'count',v_n,'has_orders',(v_n > 0),
+    'columns',coalesce(v_cols->'supplier_orders','[]'::jsonb),
+    'summary', jsonb_build_object('orders',v_n,'items',v_items,'amount',v_amt,
+      'amount_label',public.inr_money(v_amt),
+      'label', public.count_label(v_copy,'orders_one','orders_many',v_n)||v_sep||
+               public.count_label(v_copy,'items_one','items_many',v_items)||v_sep||
+               public.inr_money(v_amt)),
+    'empty', jsonb_build_object('show',(v_n=0),
+      'title',coalesce(v_copy->>'empty_title',''),'note',coalesce(v_copy->>'empty_note','')));
+END;
+$function$;
+CREATE OR REPLACE FUNCTION public.supplier_my_orders(p_supplier_id uuid DEFAULT NULL::uuid)
+ RETURNS TABLE(order_id uuid, order_no integer, created_at timestamp with time zone, status text, status_label text, status_tone text, total_amount numeric, item_count integer, items jsonb, order_code text, packed boolean, packed_via text, pack_button jsonb, pricing jsonb, accept jsonb, line_details jsonb)
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_name text;
+begin
+  if p_supplier_id is null then
+    select sp.supplier_name into v_name from current_supplier_profile() sp;
+  else
+    if get_my_role() <> 'super_admin' then RETURN; end if;
+    select sp.supplier_name into v_name from supplier_profiles sp where sp.id = p_supplier_id;
+  end if;
+  if v_name is null then return; end if;
+
+  return query
+  select so.id, so.order_no, so.created_at, so.status,
+         -- CHANGE #671 gap 51: the word on the chip and the TONE it is
+         -- drawn in. The screen used to switch on the status string to
+         -- pick one of five hardcoded hex pairs; that is a display
+         -- decision, so it is made here and the app performs one lookup.
+         public.supplier_status_label(so.status)  as status_label,
+         public.supplier_status_tone(so.status)   as status_tone,
+         so.total_amount,
+         coalesce(jsonb_array_length(so.items),0) as item_count,
+         coalesce((
+           select jsonb_agg(jsonb_build_object(
+                    'product_id',        it->>'product_id',
+                    'product_name',      it->>'product_name',
+                    'quantity',          (it->>'quantity')::numeric,
+                    'asked_qty',         it->'asked_qty',
+                    'partial',           coalesce((it->>'partial')::boolean, false),
+                    'pack_type',         nullif(btrim(med.pack_type),''),
+                    'image_url',         nullif(btrim(med.image_url_1),''),
+                    'therapeutic_class', nullif(btrim(med.therapeutic_class),''),
+                    'company',           nullif(btrim(med.marketer),''),
+                    'rate',              it->'rate',
+                    'rate_source',       it->>'rate_source',
+                    'rate_display',      it->>'rate_display',
+                    'mrp_display',       it->>'mrp_display',
+                    'line_total',        it->'line_total',
+                    'line_total_display', it->>'line_total_display',
+                    'price_basis_label', it->>'price_basis_label',
+                    'batch_no',          d.batch_no,
+                    'expiry',            d.expiry,
+                    'hsn',               d.hsn
+                  ) order by it->>'product_name')
+           from jsonb_array_elements(so.items) it
+           left join "MEDICINE" med on med.id = (it->>'product_id')::bigint
+           left join public.supplier_order_line_detail d
+                  on d.supplier_order_id = so.id
+                 and d.product_id = (it->>'product_id')::bigint
+         ), '[]'::jsonb) as items,
+         so.order_code,
+         coalesce(so.packed,false) as packed,
+         so.packed_via,
+         jsonb_build_object(
+           'label',       case when coalesce(so.packed,false) then 'Packed ✓' else 'Mark Packed' end,
+           'next_packed', not coalesce(so.packed,false),
+           'enabled',     (coalesce(so.accept_state,'pending') in ('accepted','partial')),
+           'blocked_reason',
+             case when coalesce(so.accept_state,'pending') in ('accepted','partial') then null
+                  else public.uic('supplier_po.pack_blocked','Accept the order before you mark it packed') end,
+           'bg',          case when coalesce(so.packed,false) then '#E1F5EE' else '#1B7A43' end,
+           'fg',          case when coalesce(so.packed,false) then '#0F6E56' else '#FFFFFF' end
+         ) as pack_button,
+         public.po_pricing_block(so.id) as pricing,
+         -- CHANGE #687: the same accept block, plus the countdown the supplier
+         -- is racing. Absent clock (pre-#687 rows) => has:false => nothing draws.
+         (public.supplier_po_accept_block(coalesce(so.accept_state,'pending'),
+                                          coalesce(so.packed,false), so.decline_reason)
+          || jsonb_build_object('deadline',
+               public.supplier_po_deadline_block(so.accept_due_at,
+                                                 coalesce(so.accept_state,'pending')))) as accept,
+         jsonb_build_object(
+           'title',        public.uic('supplier_po.details_title','Batch & expiry'),
+           'hint',         public.uic('supplier_po.details_hint','Required on the purchase bill'),
+           'batch_label',  public.uic('supplier_po.batch_label','Batch no.'),
+           'expiry_label', public.uic('supplier_po.expiry_label','Expiry (MM/YY)'),
+           'hsn_label',    public.uic('supplier_po.hsn_label','HSN'),
+           'save_label',   public.uic('supplier_po.save_details','Save batch & expiry'),
+           'status_label',
+             case when exists (select 1 from public.supplier_order_line_detail d
+                                where d.supplier_order_id = so.id
+                                  and d.batch_no is not null and d.expiry is not null)
+                  then public.uic('supplier_po.details_done','Batch and expiry filled')
+                  else public.uic('supplier_po.details_missing','Batch and expiry not filled') end,
+           'complete',
+             not exists (select 1 from jsonb_array_elements(coalesce(so.items,'[]'::jsonb)) it2
+                          where not exists (select 1 from public.supplier_order_line_detail d2
+                                             where d2.supplier_order_id = so.id
+                                               and d2.product_id = (it2->>'product_id')::bigint
+                                               and d2.batch_no is not null
+                                               and d2.expiry is not null))
+         ) as line_details
+  from supplier_orders so
+  where so.supplier_name = v_name
+    and public.test_row_visible(so.is_synthetic, so.test_session_id)   -- CMD #1848
+  order by so.created_at desc, so.order_no desc;
+end $function$;
+CREATE OR REPLACE FUNCTION public.my_orders_screen(p_view_as_user uuid DEFAULT NULL::uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_cust uuid;
+  v_admin boolean := coalesce((public.my_session()->>'is_admin')::boolean, false);
+  v_cfg  jsonb := coalesce((select value from app_settings where key='order_status_config'), '{}'::jsonb);
+  v_copy jsonb := coalesce((select value from app_settings where key='orders_screen_copy'), '{}'::jsonb);
+  v_unf  jsonb := coalesce((select value from app_settings where key='unfulfilled_copy'), '{}'::jsonb);
+  v_tone jsonb := coalesce((select value from app_settings where key='item_status_tones'),
+                    '{"green":{"bg":"#E1F5EE","fg":"#0F6E56"},
+                      "yellow":{"bg":"#FEF3C7","fg":"#92400E"},
+                      "red":{"bg":"#FBE9E7","fg":"#B42318"}}'::jsonb);
+  v_rows jsonb; v_title text; v_note text;
+begin
+  if p_view_as_user is not null and v_admin then
+    v_cust := coalesce(public.customer_id_for_user(p_view_as_user), p_view_as_user);
+  else
+    v_cust := public.my_customer_id();
+  end if;
+
+  select coalesce(jsonb_agg(o order by o->>'placed_at' desc), '[]'::jsonb)
+    into v_rows
+  from (
+    select jsonb_build_object(
+      'id',                coalesce(ord.id::text,''),
+      'order_code',        coalesce(ord.order_code,''),
+      'placed_at',         coalesce(ord.created_at::text,''),
+      'placed_at_label',   public._ist_stamp(ord.created_at),
+      'status',            coalesce(ord.status,'pending'),
+      -- CMD #1848 — a stamped order says so on the buyer's own list.
+      'test_badge',        case when coalesce(ord.is_synthetic,false) then public.uic('test_mode.badge','TEST') else '' end,
+      'status_label',      coalesce(nullif(v_cfg->lower(coalesce(ord.status,'pending'))->>'label',''),
+                                    initcap(coalesce(ord.status,'pending'))),
+      'status_color',      coalesce(v_cfg->lower(coalesce(ord.status,'pending'))->>'color',
+                                    v_cfg->'_default'->>'color', '#F59E0B'),
+      'total',             coalesce(ord.total_amount,0),
+      'total_display',     public.inr_money(coalesce(ord.total_amount,0)),
+      'placed_by_admin',   coalesce(ord.placed_by_admin,false),
+      'unique_item_count', coalesce(g.n_ok,0),
+      'unit_count',        coalesce(g.units_ok,0),
+      'total_item_count',  coalesce(g.n_ok,0) + coalesce(g.n_bad,0),
+      'lines',             coalesce(g.ok_lines, '[]'::jsonb),
+      'has_unfulfilled',   (coalesce(g.n_bad,0) > 0),
+      'unfulfilled_count', coalesce(g.n_bad,0),
+      'unfulfilled_title', coalesce(nullif(v_unf->>'title',''),'Unfulfilled items'),
+      'unfulfilled_note',  coalesce(nullif(v_unf->>'note',''),''),
+      'unfulfilled_label', coalesce(nullif(v_unf->>'title',''),'Unfulfilled items')
+                             || ' (' || coalesce(g.n_bad,0)::text || ')',
+      'unfulfilled_collapsed', true,
+      'unfulfilled_lines', coalesce(g.bad_lines, '[]'::jsonb),
+      -- CHANGE #408 — the edit window travels WITH the order.
+      'edit',              public._order_edit_gate(ord.id),
+      -- CMD #452 — and so does every other door a buyer has on this order:
+      -- track (#133), cancel (#130), returns (#131), help (#132). The card
+      -- renders this list in payload order and decides nothing.
+      'actions',           public._order_customer_actions(ord.id)
+    ) as o
+    from orders ord
+    left join lateral (
+      select
+        count(*) filter (where d.unfulfillable = false)                       as n_ok,
+        count(*) filter (where d.unfulfillable)                               as n_bad,
+        coalesce(sum(d.qty) filter (where d.unfulfillable = false),0)::int     as units_ok,
+        jsonb_agg(jsonb_build_object(
+            'name', d.product_name, 'quantity', d.qty::int,
+            'price', d.unit_price, 'price_display', public.inr_money(d.unit_price),
+            'line_total', d.line_total, 'line_total_display', public.inr_money(d.line_total),
+            'product_id',  coalesce(d.product_id::text,''),
+            'image_url',   coalesce(d.image_url,''),
+            'company',     coalesce(d.company,''),
+            'pack_label',  coalesce(d.pack_label,''),
+            'qty_label',   d.qty_label,
+            'rate_label',  public.inr_money(d.unit_price),
+            'line_label',  public.inr_money(d.line_total),
+            'batch_block', public._order_product_batch_block(ord.id, d.product_id),
+            'status_label', d.status_text,
+            'status_tone',  d.status_tone,
+            'status_ok',    (d.status_text = 'Available'),
+            'status_text', d.status_text,
+            'status_colors', coalesce(v_tone->d.status_tone, v_tone->'yellow'))
+          order by d.product_name) filter (where d.unfulfillable = false)      as ok_lines,
+        jsonb_agg(jsonb_build_object(
+            'name', d.product_name, 'quantity', d.qty::int,
+            'price', d.unit_price, 'price_display', public.inr_money(d.unit_price),
+            'line_total', d.line_total, 'line_total_display', public.inr_money(d.line_total),
+            'product_id',  coalesce(d.product_id::text,''),
+            'image_url',   coalesce(d.image_url,''),
+            'company',     coalesce(d.company,''),
+            'pack_label',  coalesce(d.pack_label,''),
+            'qty_label',   d.qty_label,
+            'rate_label',  public.inr_money(d.unit_price),
+            'line_label',  public.inr_money(d.line_total),
+            'batch_block', public._order_product_batch_block(ord.id, d.product_id),
+            'status_label', coalesce(d.reason, d.status_text),
+            'status_tone',  'red',
+            'status_ok',    false,
+            'status_text', coalesce(d.reason, d.status_text),
+            'status_colors', coalesce(v_unf->'chip_colors', v_tone->'red'))
+          order by d.product_name) filter (where d.unfulfillable)              as bad_lines
+      from (
+        select oi.product_id,
+               max(oi.product_name)                       as product_name,
+               sum(coalesce(oi.quantity,0))               as qty,
+               max(coalesce(oi.price, oi.mrp, 0))         as unit_price,
+               sum(coalesce(oi.line_total,
+                     coalesce(oi.quantity,0) * coalesce(oi.price, oi.mrp, 0))) as line_total,
+               bool_or(oi.unfulfillable)                  as unfulfillable,
+               max(oi.unfulfillable_reason)               as reason,
+               coalesce(max(inq.current_status), 'Confirmation Pending') as status_text,
+               case coalesce(max(inq.current_status), 'Confirmation Pending')
+                 when 'Available'            then 'green'
+                 when 'No Supplier Available' then 'red'
+                 else 'yellow' end                        as status_tone,
+               max(nullif(btrim(m.image_url_1),''))       as image_url,
+               max(upper(nullif(btrim(m.marketer),'')))   as company,
+               max(nullif(btrim(regexp_replace(coalesce(m.pack_qty,''),'(\d)\.0(\D)','\1\2','g')),'')) as pack_label,
+               trim_scale(sum(coalesce(oi.quantity,0)))::text || ' ' ||
+                 case when max(m.pack_type) is null
+                        then case when sum(coalesce(oi.quantity,0)) > 1 then 'Units' else 'Unit' end
+                      when sum(coalesce(oi.quantity,0)) > 1 and lower(max(m.pack_type)) ~ '(s|x|z|ch|sh)$'
+                        then max(m.pack_type) || 'es'
+                      when sum(coalesce(oi.quantity,0)) > 1 then max(m.pack_type) || 's'
+                      else max(m.pack_type) end           as qty_label
+        from order_items oi
+        left join "MEDICINE" m on m.id = oi.product_id
+        left join lateral (
+          select q.current_status from inquiry q
+           where q.product_id = oi.product_id
+             and (q.zone_id is null or coalesce(oi.zone_id, ord.zone_id) is null
+                  or q.zone_id = coalesce(oi.zone_id, ord.zone_id))
+           order by (q.batch_date = (ord.created_at at time zone 'Asia/Kolkata')::date) desc nulls last,
+                    q.batch_date desc nulls last, q.id desc limit 1) inq on true
+        where oi.order_id = ord.id
+        group by oi.product_id
+      ) d
+    ) g on true
+    where v_cust is not null and ord.customer_id = v_cust
+    order by ord.created_at desc
+  ) s;
+
+  if v_cust is null and v_admin then
+    v_title := 'Admin account';
+    v_note  := 'This login is an admin, not a pharmacy. Customer orders live in the admin Orders tab.';
+  else
+    v_title := coalesce(nullif(v_copy->>'empty_title',''), 'No purchase orders yet');
+    v_note  := coalesce(nullif(v_copy->>'empty_note',''),  'Placed orders will appear here.');
+  end if;
+
+  return jsonb_build_object(
+    'orders',      v_rows,
+    'count',       jsonb_array_length(v_rows),
+    'has_orders',  (jsonb_array_length(v_rows) > 0),
+    'is_admin_session', v_admin,
+    'no_customer_account', (v_cust is null),
+    'empty_title', v_title,
+    'empty_note',  v_note,
+    'customer_id', coalesce(v_cust::text,''));
+end $function$;
+
 commit;

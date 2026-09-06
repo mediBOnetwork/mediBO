@@ -1,3 +1,12 @@
+-- RE-LANDED under a unique version prefix. The first copy of this file was
+-- 20260905200000_c635_gate_keys_on_change.sql, which shares its version prefix
+-- with 20260905200000_c1662_rc_session_stability.sql. The merge worker's tree
+-- kept c1662's file and DELETED this one, so CHANGE #1163 shipped every other
+-- c635 migration and silently left this one behind: production still answered
+-- from the 182000 definition, and the fix below — the whole point of the QA
+-- round — was never live. The ledger keys replays by BASENAME, so a rename is
+-- also what makes it replayable at all.
+--
 -- CHANGE #635 — the smoke gate keys on the CHANGE NUMBER, not the commit.
 --
 -- Found by this change's own hostile QA round against the build it had just

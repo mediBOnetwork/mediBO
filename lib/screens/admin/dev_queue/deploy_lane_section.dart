@@ -44,6 +44,13 @@ class DeployLaneSection extends StatelessWidget {
         (data['metrics'] as Map?)?.cast<String, dynamic>() ?? const {};
     final waiting = (queue['rows'] as List?) ?? const [];
     final recent = (data['recent'] as List?) ?? const [];
+    // CHANGE #1836 — the recent BATCHES and their real notes. Six batches failed
+    // in a row on 6 Sep while this card could only ever show the one that was
+    // open, so the hour was legible in merge_worker.journal and nowhere else.
+    // has:false draws nothing at all.
+    final batches =
+        (data['batches'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final batchRows = (batches['rows'] as List?) ?? const [];
     final stale = (data['stale'] as List?) ?? const [];
 
     return DqCard(
@@ -122,6 +129,66 @@ class DeployLaneSection extends StatelessWidget {
               (smoke['verdict'] as String?) ?? '',
               (smoke['tone'] as String?) ?? 'neutral',
             ),
+          ],
+
+          // ── recent batches, and whether they are failing in a row ──────
+          // CHANGE #1836. Every string here is deploy_lane_batches()' — the
+          // streak sentence, each batch's value word ("worker died — retried"
+          // for an expired batch, which is a dead worker and not a verdict) and
+          // the note, which is now the error line deploy.sh actually printed
+          // rather than its exit code. Nothing is recomputed from `status`.
+          if (batches['has'] == true) ...[
+            SizedBox(height: Ds.space.x24),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    (batches['heading'] as String?) ?? '',
+                    style: Ds.t.body.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: kTextHi,
+                    ),
+                  ),
+                ),
+                if (((batches['streak_label'] as String?) ?? '').isNotEmpty)
+                  ToneChip(
+                    label: (batches['streak_label'] as String?) ?? '',
+                    tone: toneByName(
+                      (batches['streak_tone'] as String?) ?? 'neutral',
+                    ),
+                  ),
+              ],
+            ),
+            if (batchRows.isEmpty) ...[
+              SizedBox(height: Ds.space.x4),
+              Text(
+                (batches['empty_label'] as String?) ?? '',
+                style: Ds.t.caption.copyWith(color: kTextLo),
+              ),
+            ] else
+              for (final b in batchRows) ...[
+                SizedBox(height: Ds.space.x12),
+                _row(
+                  ((b as Map)['label'] as String?) ?? '',
+                  (b['sub_label'] as String?) ?? '',
+                  (b['value_label'] as String?) ?? '',
+                  (b['tone'] as String?) ?? 'neutral',
+                ),
+                if (((b['when_label'] as String?) ?? '').isNotEmpty) ...[
+                  SizedBox(height: Ds.space.x4),
+                  Text(
+                    (b['when_label'] as String?) ?? '',
+                    style: Ds.t.caption.copyWith(color: kTextLo),
+                  ),
+                ],
+              ],
+            if (((batches['footnote'] as String?) ?? '').isNotEmpty) ...[
+              SizedBox(height: Ds.space.x8),
+              Text(
+                (batches['footnote'] as String?) ?? '',
+                style: Ds.t.caption.copyWith(color: kTextLo),
+              ),
+            ],
           ],
 
           // ── what is waiting ────────────────────────────────────────────

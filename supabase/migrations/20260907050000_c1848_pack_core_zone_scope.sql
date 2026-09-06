@@ -7,8 +7,9 @@
 -- the core stayed executable by any signed-in user, so the wrapper could be
 -- bypassed. The core now applies the SAME predicate the wrapper applies
 -- (zone_filter_order_array keeps an order only when o.zone_id = the picked
--- zone; a NULL picker means every zone), and direct execution is revoked from
--- anon/authenticated: the wrapper is SECURITY DEFINER and still reaches it.
+-- zone; a NULL picker means every zone). With the scope inside the core a
+-- direct call is scoped too, so the signed-in role keeps EXECUTE (the #436
+-- lockdown rule: an admin screen must reach its own RPC); anon never had it.
 begin;
 
 CREATE OR REPLACE FUNCTION public.pack_list_orders_core(p_date date DEFAULT admin_active_date(), p_include_older boolean DEFAULT false)
@@ -100,7 +101,7 @@ BEGIN
 END;
 $function$;
 
-revoke execute on function public.pack_list_orders_core(date, boolean) from public, anon, authenticated;
-grant execute on function public.pack_list_orders_core(date, boolean) to postgres, service_role;
+revoke execute on function public.pack_list_orders_core(date, boolean) from public, anon;
+grant execute on function public.pack_list_orders_core(date, boolean) to postgres, authenticated, service_role;
 
 commit;

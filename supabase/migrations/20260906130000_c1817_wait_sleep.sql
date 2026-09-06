@@ -1,4 +1,21 @@
 -- replay-target: control-plane
+--
+-- THE PRODUCTION PASS RUNS ON THIS FILE TOO — SO THE FILE SAYS NO ITSELF.
+-- `-- replay-target: control-plane` above only ADDS the control-plane pass;
+-- scripts/migration_replay.sh applies every pending file to production first,
+-- whatever it declares. #1761 moved dev_commands, dev_context_event and
+-- dev_journeys to the control plane and dropped them from production, so this
+-- file died there on `relation "dev_commands" does not exist` — at CREATE time,
+-- because plpgsql resolves `dev_commands%rowtype` when the function is compiled.
+-- It took batch 599 down with it, and #1816, #1818 and #1819 went with it: one
+-- mis-placed file blocks every branch beside it.
+-- So: no dev_commands on this database, nothing here belongs on it, exit 0.
+select case when to_regclass('public.dev_commands') is null then 'true' else 'false' end
+  as c1817_not_control_plane \gset
+\if :c1817_not_control_plane
+\echo 'c1817: no dev_commands on this database — control-plane migration, nothing to apply'
+\quit
+\endif
 -- CHANGE / CMD #1817 — A WAITING AGENT MUST SLEEP, NOT THINK.
 --
 -- 6 Sep 2026: #1812 finished its code at 11/11, queued behind deploy batch 594

@@ -453,6 +453,10 @@ async function phaseCustomerPath(browser, session, expectedHash) {
       const logText = await readRenderLog(page);
       if (customerShot) {
         try {
+          // CMD #1815 — the admin and supplier phases have scrolled before the
+          // capture since #447; the customer one never did, so a proof of
+          // anything below the fold on a 900px phone was impossible to take.
+          await wheelBeforeShot(page);
           await page.screenshot({ path: customerShot, fullPage: false });
           console.log(`  Screenshot : ${customerShot}`);
         } catch (e) {

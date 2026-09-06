@@ -20,6 +20,7 @@ import 'strip_v3/strip_v3_card.dart';
 import '../admin_heartbeat_screen.dart';        // CHANGE #468
 import '../test_mode_screen.dart';             // CHANGE #573, wired #468
 import 'journey_library_screen.dart';
+import 'triage_inbox_screen.dart';
 import 'test_coverage_screen.dart';   // CHANGE #634
 import 'journey_bot_screen.dart';     // CHANGE #635
 import 'visual_baselines_screen.dart'; // CHANGE #637
@@ -1182,6 +1183,10 @@ class _DraftsInboxSheetState extends State<_DraftsInboxSheet> {
 /// that would do nothing is never drawn.
 const Set<String> kDevToolKeys = <String>{
   'journey_library',
+  // CHANGE #639 — Triage. The chaos lab, the visual bot and the safety net all
+  // FIND things; this is the one screen where a person says which of them are
+  // real. Approving here is what generates the fix command.
+  'triage',
   // CHANGE #634 — the coverage ledger. It sits in the same group as the
   // Journey Library on purpose: journeys are what the bot runs, coverage is
   // the list of what it has never run.
@@ -1229,6 +1234,9 @@ bool openDevTool(
   switch (toolKey) {
     case 'journey_library':
       push(JourneyLibraryScreen(service: svc));
+      return true;
+    case 'triage':
+      push(TriageInboxScreen(service: svc));
       return true;
     case 'test_coverage':
       push(TestCoverageScreen(service: svc));

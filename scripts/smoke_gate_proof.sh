@@ -6,8 +6,13 @@
 # on a duplicate-key in test_result_report, and shipped. The gate now runs on a
 # Pages preview of the built bundle BEFORE the production upload, and a red or
 # crashed smoke fails the batch with nothing uploaded. This script proves it
-# with a tree that is knowingly red: a branch whose index.html never loads
-# flutter_bootstrap.js, so no critical-path journey can pass.
+# with a tree that is knowingly red AT THE SMOKE: the app boots and paints, but
+# RenderLog drops the c325_deep_link key, so the three deep-link journeys of the
+# critical path (admin.khata, cust.my_account, identity.logout) wait for a
+# render-log key that never comes and fail. Batch 619 (6 Sep) taught why the red
+# must boot: a tree whose index.html never loaded flutter_bootstrap.js was
+# stopped by deploy.sh's OWN boot gate before the smoke ever ran — "no smoke
+# verdict recorded", which proves nothing about the gate under test.
 #
 #   bash scripts/smoke_gate_proof.sh           # run it (≈8-12 min: one full build)
 #   bash scripts/smoke_gate_proof.sh --keep    # leave the proof branch behind
@@ -48,12 +53,22 @@ BR="proof-smoke-red-$(date +%s)"
 BASE=$(git -C "$REPO" rev-parse --verify -q refs/heads/deployed || git -C "$REPO" rev-parse main)
 WT=$(mktemp -d /tmp/smoke-proof.XXXXXX)
 git -C "$REPO" worktree add -q "$WT" -b "$BR" "$BASE" || fail "could not create the proof worktree"
-sed -i 's#src="flutter_bootstrap.js#src="flutter_bootstrap.PROOF_RED.js#' "$WT/web/index.html"
-grep -q 'flutter_bootstrap.PROOF_RED.js' "$WT/web/index.html" || fail "index.html did not take the red edit"
-git -C "$WT" commit -q -am "smoke-gate proof: deliberately red — the app never boots" || fail "commit failed"
+RL="$WT/lib/utils/render_log.dart"
+MARK='smoke-gate proof: deliberately red'
+python3 - "$RL" "$MARK" <<'PY' || fail "render_log.dart did not take the red edit"
+import sys
+p, mark = sys.argv[1], sys.argv[2]
+s = open(p).read()
+sig = '  static void write(String key, dynamic value) {\n'
+assert sig in s, 'RenderLog.write signature not found'
+s = s.replace(sig, sig + "    if (key == 'c325_deep_link') return; // " + mark + "\n", 1)
+open(p, 'w').write(s)
+PY
+grep -q "$MARK" "$RL" || fail "render_log.dart did not take the red edit"
+git -C "$WT" commit -q -am "smoke-gate proof: deliberately red — the deep-link render-log key is never written" || fail "commit failed"
 SHA=$(git -C "$WT" rev-parse --short HEAD)
 git -C "$REPO" worktree remove --force "$WT"
-say "branch $BR @ $SHA (flutter_bootstrap.js renamed away — nothing boots)"
+say "branch $BR @ $SHA (boots and paints; c325_deep_link never written — the deep-link journeys go red)"
 
 push() {
   local out; out=$("$D" queue_push null smoke-gate-proof "[smoke-gate proof] deliberately red critical path" "$BR" "$SHA")

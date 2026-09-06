@@ -116,15 +116,70 @@ async function request(method, url, body, headers) {
   }
 }
 
-function rpc(fn, params, token) {
+// CHANGE #1823 — a transient database refusal earns a retry, for EVERY rpc of
+// the run. WHICH refusals, how many attempts, how long to wait and what to say
+// are the backend's (test_config.pipeline: retry_match — one string or a list —
+// retry_attempts, retry_wait_ms, retry_note, retry_notes[match]), handed in by
+// run.js once the config is read. Two batches taught this: 615 (6 Sep) was
+// failed by devtool.order_pipeline's test_assert_pipeline answering 55P03
+// "canceling statement due to lock timeout" while the pipeline block itself,
+// moments later, passed 9/9 — the retry lived only around test_pipeline_run;
+// and 620 was failed by test_result_report answering 503 PGRST002 "Could not
+// query the database for the schema cache. Retrying." — PostgREST reloading its
+// cache right after the batch's own migrate phase. Both are the box mid-deploy,
+// not the feature, and a gate that fails batches on them gets switched off
+// again. A 4xx/5xx that is NOT a configured transient text is still an answer
+// and is never retried.
+let transientRetry = null;
+function setTransientRetry(cfg) {
+  const raw = cfg ? cfg.retry_match : null;
+  const matches = (Array.isArray(raw) ? raw : [raw])
+    .filter((m) => typeof m === 'string' && m.trim()).map((m) => m.trim());
+  transientRetry = matches.length ? {
+    matches,
+    attempts: Math.max(1, parseInt(cfg.retry_attempts, 10) || 1),
+    waitMs: parseInt(cfg.retry_wait_ms, 10) || 3000,
+    note: cfg.retry_note || 'transient database error',
+    notes: (cfg.retry_notes && typeof cfg.retry_notes === 'object') ? cfg.retry_notes : {}
+  } : null;
+}
+// Pure: says whether THIS error, on THIS attempt, earns the configured retry.
+// Returns { match, attempts, waitMs, note } or null.
+function transientRetryFor(err, attempt, cfg) {
+  const c = cfg === undefined ? transientRetry : cfg;
+  if (!c) return null;
+  const matches = Array.isArray(c.matches) ? c.matches
+    : (Array.isArray(c.match) ? c.match : [c.match]).filter(Boolean);
+  const attempts = Math.max(1, parseInt(c.attempts, 10) || 1);
+  if (!(attempt >= 1 && attempt <= attempts)) return null;
+  const msg = String((err && err.message) || err || '');
+  const hit = matches.find((m) => typeof m === 'string' && m && msg.includes(m));
+  if (!hit) return null;
+  return {
+    match: hit, attempts,
+    waitMs: parseInt(c.waitMs, 10) || 3000,
+    note: (c.notes && c.notes[hit]) || c.note || 'transient database error'
+  };
+}
+
+async function rpc(fn, params, token) {
   const key = token ? ANON_KEY : SERVICE_KEY;
   const bearer = token || SERVICE_KEY;
   if (!bearer) {
-    return Promise.reject(new Error(
-      'autotest: no service key. Put AUTOTEST_SERVICE_KEY in ~/.medibo/autotest.env (chmod 600).'));
+    throw new Error(
+      'autotest: no service key. Put AUTOTEST_SERVICE_KEY in ~/.medibo/autotest.env (chmod 600).');
   }
-  return request('POST', `${SUPA_URL}/rest/v1/rpc/${fn}`, params || {},
-    { apikey: key, Authorization: `Bearer ${bearer}` });
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await request('POST', `${SUPA_URL}/rest/v1/rpc/${fn}`, params || {},
+        { apikey: key, Authorization: `Bearer ${bearer}` });
+    } catch (e) {
+      const r = transientRetryFor(e, attempt);
+      if (!r) throw e;
+      console.log(`[autotest] ${fn}: ${r.note} — retry ${attempt}/${r.attempts} in ${r.waitMs} ms`);
+      await new Promise((res) => setTimeout(res, r.waitMs));
+    }
+  }
 }
 
 // Sign a role in for real. Returns the session the Flutter app itself stores,
@@ -169,5 +224,6 @@ const DEFAULT_PASSWORDS = {
 module.exports = {
   SUPA_URL, ANON_KEY, PROJECT_REF,
   hasServiceKey: () => Boolean(SERVICE_KEY), serviceHeaders,
-  rpc, signIn, storageEntry, passwordFor, request
+  rpc, signIn, storageEntry, passwordFor, request,
+  setTransientRetry, transientRetryFor
 };

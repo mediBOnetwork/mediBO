@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 
 import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
@@ -146,14 +147,30 @@ class _DevQueueControlState extends State<DevQueueControl> {
       final results = await Future.wait([
         widget.service.ctlGet(),
         widget.service.sessionUsage(),
+        // CHANGE #1816 — the Claude login line is its own read rather than a
+        // field spliced into dev_ctl_get: that composer is shared by half a
+        // dozen changes, and a card that depends on winning a text patch on it
+        // goes silently blank the day someone re-writes it. Its own RPC cannot
+        // be lost that way. Failing alone leaves the rest of the card intact.
+        _loadClaudeLogin(),
       ]);
       if (mounted) {
         setState(() {
           _snap = results[0];
           _usage = results[1];
+          _claudeLogin = results[2];
         });
       }
     } catch (_) {}
+  }
+
+  Future<Map<String, dynamic>> _loadClaudeLogin() async {
+    try {
+      final r = await Supabase.instance.client.rpc('claude_login_line');
+      return r is Map ? Map<String, dynamic>.from(r) : const {};
+    } catch (_) {
+      return const {};
+    }
   }
 
   /// The 10s refresh, plus the backend's freshness verdict on the VM chip.
@@ -191,8 +208,7 @@ class _DevQueueControlState extends State<DevQueueControl> {
       (_snap['runner_status'] as Map?)?.cast<String, dynamic>() ?? const {};
   Map<String, dynamic> get _vm =>
       (_snap['vm'] as Map?)?.cast<String, dynamic>() ?? const {};
-  Map<String, dynamic> get _claudeLogin =>
-      (_snap['claude_login'] as Map?)?.cast<String, dynamic>() ?? const {};
+  Map<String, dynamic> _claudeLogin = const {};
 
   /// CHANGE #1366 — the fleet's two silent states, both printed verbatim.
   /// `blocked` is runner_blocked_badge(): present only while a runner's boot

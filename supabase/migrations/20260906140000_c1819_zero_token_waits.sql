@@ -480,6 +480,7 @@ declare v_cfg jsonb; v_base jsonb; v_rows jsonb := '[]'::jsonb; k text; v_kinds 
         v_since timestamptz; v_ev record; v_b jsonb; v_kills int; v_parks int;
         v_worst bigint; v_tot bigint := 0; v_n int := 0; v_med numeric; v_prev numeric;
         v_tone text; v_sub text; v_grace bigint; v_names jsonb;
+        v_landed timestamptz; v_kills_since int;
 begin
   perform _dev_guard();
   v_since := now() - make_interval(hours => greatest(coalesce(p_hours,24),1));
@@ -522,6 +523,11 @@ begin
 
   select count(*) into v_kills from dev_commands
    where needs_input_kind = 'waiting_burn' and coalesce(finished_at, heartbeat_at, created_at) >= v_since;
+  -- The 24 h window straddles the day this shipped, so a kill from BEFORE
+  -- park-and-release would read as a failure of it. Both numbers, named.
+  v_landed := coalesce((v_base->>'landed_at')::timestamptz, now());
+  select count(*) into v_kills_since from dev_commands
+   where needs_input_kind = 'waiting_burn' and coalesce(finished_at, heartbeat_at, created_at) >= v_landed;
   select count(*) into v_parks from dev_context_event
    where kind = 'wait_park' and at >= v_since;
 
@@ -538,8 +544,9 @@ begin
   v_rows := v_rows || jsonb_build_array(
     jsonb_build_object('key','kills','label','Killed while waiting',
       'value', v_kills::text,
-      'sub', format('grace %s tokens · target 0 in %sh', v_grace, greatest(coalesce(p_hours,24),1)),
-      'tone', case when v_kills = 0 then 'success' else 'danger' end),
+      'sub', format('%s since park-and-release landed (%s) · grace %s tokens · target 0',
+                    v_kills_since, to_char(v_landed at time zone 'Asia/Kolkata', 'DD Mon HH24:MI') || ' IST', v_grace),
+      'tone', case when v_kills_since = 0 then 'success' else 'danger' end),
     jsonb_build_object('key','parks','label','Parked and released',
       'value', v_parks::text,
       'sub', 'each one freed a runner instead of holding it asleep',
@@ -673,6 +680,7 @@ if to_regclass('public.dev_commands') is null then return; end if;
 update dev_runner_config
    set value = jsonb_set(value, '{wait_gate,baseline}', jsonb_build_object(
      'measured_on', '2026-09-06',
+     'landed_at', coalesce(value->'wait_gate'->'baseline'->>'landed_at', now()::text),
      'window_h', 48,
      'total_tokens', 2030000,
      'merge', jsonb_build_object('tokens', 1600000, 'events', 8,  'worst', 942000,

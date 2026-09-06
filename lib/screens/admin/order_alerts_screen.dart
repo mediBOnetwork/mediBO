@@ -221,6 +221,10 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
                       ..._fieldRows(const ['enabled', 'ring_delay_s', 'rering_after_s',
                         'wa_after_s', 'critical_after_s', 'ring_seconds',
                         'autocancel_after_min', 'admin_wa_phone']),
+                      ..._groupSections(),
+                      SizedBox(height: Ds.space.x32),
+                      _section('${(_cutoff['title'] ?? '')}'),
+                      ..._cutoffRows(),
                       SizedBox(height: Ds.space.x32),
                       _section(_sectionLabel('credit')),
                       ..._fieldRows(const ['new_customer_prepaid_only',
@@ -441,6 +445,8 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
             Expanded(
               child: TextField(
                 controller: ctrl,
+                minLines: f['multiline'] == true ? 2 : 1,
+                maxLines: f['multiline'] == true ? 5 : 1,
                 keyboardType: (f['type'] == 'int' || f['type'] == 'money')
                     ? TextInputType.number
                     : TextInputType.text,
@@ -463,6 +469,79 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
       }
     }
     return out;
+  }
+
+  /// CMD #1847 — the sections the BACKEND declares. A new knob is a row in
+  /// order_alert_settings().groups; this screen never learns its name.
+  List<Widget> _groupSections() {
+    final groups = (_data?['groups'] as List?) ?? const [];
+    final out = <Widget>[];
+    for (final g in groups) {
+      if (g is! Map) continue;
+      final keys = ((g['fields'] as List?) ?? const [])
+          .map((e) => '$e')
+          .toList(growable: false);
+      final rows = _fieldRows(keys);
+      if (rows.isEmpty) continue;
+      out.add(SizedBox(height: Ds.space.x32));
+      out.add(_section('${g['label'] ?? ''}'));
+      out.addAll(rows);
+    }
+    return out;
+  }
+
+  /// CMD #1847 — the orders on the cut-off clock. Every word, every rupee, the
+  /// countdown and which buttons exist are order_cutoff_console()'s.
+  Map<String, dynamic> get _cutoff =>
+      ((_data?['cutoff'] as Map?) ?? const {}).cast<String, dynamic>();
+
+  List<Widget> _cutoffRows() {
+    final items = (_cutoff['items'] as List?) ?? const [];
+    if (items.isEmpty) {
+      return [
+        _EmptyState(
+          title: '${_cutoff['cutoff_label'] ?? ''}',
+          body: '${_cutoff['empty_label'] ?? ''}',
+        ),
+      ];
+    }
+    final out = <Widget>[];
+    if ('${_cutoff['window_note'] ?? ''}'.isNotEmpty && _cutoff['window_open'] == true) {
+      out.add(Padding(
+        padding: EdgeInsets.only(bottom: Ds.space.x12),
+        child: _Note(text: '${_cutoff['window_note']}', tone: Ds.c.warning),
+      ));
+    }
+    for (final raw in items.whereType<Map>()) {
+      final m = Map<String, dynamic>.from(raw);
+      out.add(CutoffClockCard(
+        item: m,
+        busy: _busy,
+        onAction: (action, minutes) => _cutoffAct(m, action, minutes),
+      ));
+    }
+    return out;
+  }
+
+  Future<void> _cutoffAct(Map<String, dynamic> m, String action, int? minutes) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final res = _asMap(await _db.rpc('order_cutoff_action', params: {
+        'p_order_id': m['order_id'],
+        'p_action': action,
+        'p_minutes': ?minutes,
+      }));
+      if (!mounted) return;
+      setState(() => _busy = false);
+      final msg = (res?['message'] as String?) ?? '';
+      if (msg.isNotEmpty) showToast(context, msg, isError: res?['ok'] != true);
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      showToast(context, '$e', isError: true);
+    }
   }
 
   List<Widget> _creditRows() {
@@ -500,6 +579,7 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
   Future<void> _editCredit(Map<String, dynamic> m) async {
     final ctrl = TextEditingController(text: '${m['limit'] ?? 0}');
     bool prepaid = m['prepaid_only'] == true;
+    bool never = m['never_auto_cancel'] == true;
     final saved = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -532,6 +612,14 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
                   style: Ds.t.body),
               onChanged: (v) => setSheet(() => prepaid = v),
             ),
+            // CMD #1847 — this pharmacy is never auto-cancelled at the cut-off.
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: never,
+              title: Text((_data?['credit_never_label'] as String?) ?? '',
+                  style: Ds.t.body),
+              onChanged: (v) => setSheet(() => never = v),
+            ),
             SizedBox(height: Ds.space.x8),
             SizedBox(
               width: double.infinity,
@@ -551,6 +639,7 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
         'p_customer_id': m['customer_id'],
         'p_limit': num.tryParse(ctrl.text.trim()) ?? 0,
         'p_prepaid_only': prepaid,
+        'p_never_auto_cancel': never,
       });
       await _load();
     } catch (e) {
@@ -796,6 +885,112 @@ class _ErrorState extends StatelessWidget {
           ),
         ]),
       ),
+    );
+  }
+}
+
+/// CMD #1847 — one order on the cut-off clock.
+///
+/// It decides nothing. The state word and its tone, the countdown, the
+/// restoration window's own countdown, every rupee and the label on every
+/// button are strings in order_cutoff_console()'s payload; a button exists
+/// only because the backend sent its `can_*` flag. Once the restoration
+/// window shuts the backend stops sending can_restore and the button is gone
+/// — the screen never compares a clock of its own.
+class CutoffClockCard extends StatelessWidget {
+  final Map<String, dynamic> item;
+  final bool busy;
+  final void Function(String action, int? minutes) onAction;
+
+  const CutoffClockCard({
+    required this.item,
+    required this.busy,
+    required this.onAction,
+  });
+
+  static Color _tone(String tone) {
+    switch (tone) {
+      case 'danger':
+        return Ds.c.dangerSoft;
+      case 'warning':
+        return Ds.c.warningSoft;
+      case 'success':
+        return Ds.c.successSoft;
+      case 'info':
+        return Ds.c.infoSoft;
+      default:
+        return Ds.c.bg;
+    }
+  }
+
+  String _s(String key) => '${item[key] ?? ''}';
+
+  @override
+  Widget build(BuildContext context) {
+    final actions = <Widget>[];
+    void add(String flag, String labelKey, String action, {int? minutes}) {
+      if (item[flag] != true) return;
+      final label = _s(labelKey);
+      if (label.isEmpty) return;
+      actions.add(SizedBox(
+        height: Ds.touch.minTarget,
+        child: OutlinedButton(
+          onPressed: busy ? null : () => onAction(action, minutes),
+          child: Text(label),
+        ),
+      ));
+    }
+
+    add('can_restore', 'restore_label', 'restore');
+    add('can_extend_window', 'extend_window_label', 'extend_window');
+    add('can_extend', 'extend_label', 'extend');
+    add('can_cancel_now', 'cancel_now_label', 'cancel_now');
+    add('can_exempt', 'exempt_label', 'exempt');
+    add('can_unexempt', 'unexempt_label', 'unexempt');
+
+    return Container(
+      margin: EdgeInsets.only(bottom: Ds.space.x12),
+      padding: EdgeInsets.all(Ds.space.x16),
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        border: Border.all(color: Ds.c.divider),
+        boxShadow: Ds.elevation.e1,
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(_s('order_code'), style: Ds.t.bodyStrong),
+              if (_s('customer').isNotEmpty) ...[
+                SizedBox(height: Ds.space.x4),
+                Text(_s('customer'), style: Ds.t.caption),
+              ],
+            ]),
+          ),
+          Container(
+            padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x8, vertical: Ds.space.x4),
+            decoration: BoxDecoration(
+              color: _tone(_s('state_tone')),
+              borderRadius: Ds.r.rChip,
+            ),
+            child: Text(_s('state_label'), style: Ds.t.caption),
+          ),
+        ]),
+        SizedBox(height: Ds.space.x12),
+        Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x8, children: [
+          _Chip(text: _s('cutoff_label')),
+          _Chip(text: _s('countdown')),
+          _Chip(text: _s('extended_label')),
+          _Chip(text: _s('window_label')),
+          _Chip(text: _s('due_label')),
+        ]),
+        if (actions.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x16),
+          Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x8, children: actions),
+        ],
+      ]),
     );
   }
 }

@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pharma_b2b/design_tokens.dart';
+import 'package:pharma_b2b/widgets/order_stage_strip.dart' show OrderStageDot;
 import 'package:pharma_b2b/services/customer_care_service.dart';
 import 'package:pharma_b2b/screens/delivery/customer_track_sheet.dart'
     show OrderTimelineCard;
@@ -123,12 +124,25 @@ void main() {
       expect(find.byType(Text), findsNothing);
     });
 
-    testWidgets('state drives the glyph — a "done" step is ticked',
+    // CMD #1839 restyled BOTH customer views to the same vocabulary — a solid
+    // green disc for a finished stage, a green hollow ring for the current one,
+    // grey for what is still ahead — so the popup and the card's condensed
+    // strip cannot drift apart. The rule this test holds down is unchanged:
+    // `state` decides the glyph, nothing on this side of the wire does.
+    testWidgets('state drives the dot — done solid, current hollow, future grey',
         (tester) async {
       await tester.pumpWidget(_host(OrderTimelineCard(timeline: payload)));
-      expect(find.byIcon(Icons.check_circle), findsOneWidget);
-      expect(find.byIcon(Icons.radio_button_checked), findsOneWidget);
-      expect(find.byIcon(Icons.radio_button_unchecked), findsOneWidget);
+      final dots =
+          tester.widgetList<OrderStageDot>(find.byType(OrderStageDot)).toList();
+      expect(dots.length, 3);
+      Color? colourOf(int i) => (tester
+              .widget<Container>(find.descendant(
+                  of: find.byWidget(dots[i]), matching: find.byType(Container)))
+              .decoration as BoxDecoration)
+          .color;
+      expect(colourOf(0), Ds.c.brand); // placed — done
+      expect(colourOf(1), Ds.c.surface); // sourcing — current, a hollow ring
+      expect(colourOf(2), Ds.c.divider); // packed — still ahead
     });
   });
 

@@ -20,6 +20,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pharma_b2b/widgets/order_card_lean.dart';
+import 'package:pharma_b2b/widgets/order_stage_strip.dart' show OrderStageDot;
 
 Map<String, dynamic> _card({
   String amountLabel = '₹1,240.00',
@@ -43,6 +44,9 @@ Map<String, dynamic> _card({
       'progress': {
         'show': progressShow,
         'index': 2,
+        // CMD #1839 — the strip's one sentence, already finished server-side.
+        'caption': 'Packed 3 of 4',
+        'dispute_note': '',
         'steps': [
           {'key': 'confirmed', 'label': 'Confirmed', 'state': 'done'},
           {'key': 'sourcing', 'label': 'Sourcing', 'state': 'done'},
@@ -182,34 +186,33 @@ void main() {
     });
   });
 
-  group('PART A7 — the progress line', () {
-    testWidgets('four steps, in payload order, with the backend\'s labels',
+  group('PART A7 — the progress line (CMD #1839: condensed, cumulative)', () {
+    testWidgets('one dot per stage, in payload order, and ONE backend sentence',
         (tester) async {
+      // Fifteen stages will not fit fifteen labels on a phone card, so the
+      // condensed strip is dots plus the payload's own `caption`. The card
+      // still writes nothing: the sentence arrives finished, counts and all.
       await _pumpCard(tester, _card());
-      for (final label in const [
-        'Confirmed',
-        'Sourcing',
-        'Packed',
-        'Out for delivery'
-      ]) {
-        expect(find.text(label), findsOneWidget);
-      }
-      final steps = tester
+      final line = tester
           .widgetList<OrderProgressLine>(find.byType(OrderProgressLine))
-          .single
-          .steps;
-      expect(steps.map((s) => s['key']).toList(),
+          .single;
+      expect(line.steps.map((s) => s['key']).toList(),
           ['confirmed', 'sourcing', 'packed', 'out_for_delivery']);
+      expect(find.byType(OrderStageDot), findsNWidgets(4));
+      expect(find.text('Packed 3 of 4'), findsOneWidget);
+      // The stage names are NOT redrawn under the dots any more.
+      expect(find.text('Out for delivery'), findsNothing);
     });
 
     testWidgets('show:false hides the line even though steps arrived',
         (tester) async {
       // The backend decides whether an order has a live progress line — a
-      // delivered or cancelled order does not. The card must not substitute
-      // "the array is non-empty" for that answer.
+      // cancelled one does not. The card must not substitute "the array is
+      // non-empty" for that answer.
       await _pumpCard(tester, _card(progressShow: false));
       expect(find.byType(OrderProgressLine), findsNothing);
-      expect(find.text('Sourcing'), findsNothing);
+      expect(find.byType(OrderStageDot), findsNothing);
+      expect(find.text('Packed 3 of 4'), findsNothing);
     });
   });
 

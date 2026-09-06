@@ -21,12 +21,12 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../fulfill/fulfill_lookups.dart';
+import '../../services/live_feed.dart';
 import '../../utils/render_log.dart';
 import 'delivery_tracking_view.dart';
 import 'reschedule_sheet.dart';
 import '../../design_tokens.dart';
-import '../../models/order_timeline_view.dart';
-import '../../widgets/order_event_timeline.dart';
+import '../../widgets/order_stage_strip.dart';
 
 String _ui(String k) => FulfillLookups.instance.ui(k);
 
@@ -68,12 +68,52 @@ class _CustomerTrackSheetState extends State<_CustomerTrackSheet> {
   bool _rateBusy = false;
   String _rateDone = '';
 
+  // CMD #1839 — the fifteen stages advance ON SCREEN. The three tables a stage
+  // is made of are watched through LiveFeed, narrowed to THIS order, which is
+  // what the backend's registry requires of them before it will bind live at
+  // all. Whether that ends up as a realtime binding or a poll is the
+  // registry's call, not this sheet's.
+  LiveFeedHandle? _live;
+
   @override
   void initState() {
     super.initState();
     FulfillLookups.instance.ensureLoaded();
     _load();
+    _watch();
   }
+
+  Future<void> _watch() async {
+    PostgresChangeFilter eq(String col) => PostgresChangeFilter(
+          type: PostgresChangeFilterType.eq,
+          column: col,
+          value: widget.orderId,
+        );
+    try {
+      final h = await LiveFeed.instance.watch(
+        channelPrefix: 'cust_track_${widget.orderId}',
+        tables: const ['orders', 'order_items', 'deliveries'],
+        filters: {
+          'orders': eq('id'),
+          'order_items': eq('order_id'),
+          'deliveries': eq('order_id'),
+        },
+        onChange: (changed) {
+          if (!mounted) return;
+          RenderLog.write('c1839_track_live', changed.join(','));
+          _load();
+        },
+      );
+      if (!mounted) {
+        h.unsubscribe();
+        return;
+      }
+      _live = h;
+    } catch (_) {
+      // A feed that will not open is not a reason to show no tracking.
+    }
+  }
+
 
   Future<void> _load() async {
     try {
@@ -99,6 +139,17 @@ class _CustomerTrackSheetState extends State<_CustomerTrackSheet> {
             (_timeline['steps'] as List?)?.length ?? 0);
         RenderLog.write('c689_cust_timeline',
             'access=${_timeline['access'] ?? ''};events=${_timeline['event_count'] ?? 0}');
+        // CMD #1839 — the popup's own proof: how many stages painted, which one
+        // is current, whether it carried a count and whether a line is held.
+        // events must read 0 here: the buyer's event log was retired.
+        RenderLog.write(
+            'c1839_track_stages',
+            'stages:${(_timeline['steps'] as List?)?.length ?? 0}'
+            ';cur:${_timeline['current'] ?? ''}'
+            ';cap:${(_timeline['caption'] ?? '').toString().isEmpty ? 0 : 1}'
+            ';drop:${_timeline['dropped_count'] ?? 0}'
+            ';disp:${_timeline['disputed_count'] ?? 0}'
+            ';events:${_timeline['event_count'] ?? 0}');
         await _loadRatePrompt();
         return;
       }
@@ -142,6 +193,7 @@ class _CustomerTrackSheetState extends State<_CustomerTrackSheet> {
 
   @override
   void dispose() {
+    _live?.unsubscribe();
     _commentCtrl.dispose();
     super.dispose();
   }
@@ -271,16 +323,12 @@ class _CustomerTrackSheetState extends State<_CustomerTrackSheet> {
             // sentence. Which step is current is the payload's `state`, never
             // a comparison this sheet makes.
             if (!_loading) OrderTimelineCard(timeline: _timeline),
-            // CHANGE #689 (feature_gaps #75) — the same payload's full event
-            // list, filtered by the BACKEND for a buyer: no supplier name, no
-            // phone number, no ops chatter, no action buttons. This sheet does
-            // not remove any of that; it never receives it.
-            if (!_loading)
-              Padding(
-                padding: EdgeInsets.only(top: Ds.space.x24),
-                child: OrderEventTimeline(
-                    view: OrderTimelineView.from(_timeline)),
-              ),
+            // CMD #1839 — the "Order timeline" event log is GONE from the
+            // customer's popup, and so is the "supplier details are kept
+            // private" apology that went with it. The fifteen stages above
+            // answer "where is my order", and no supplier name reaches this
+            // screen because the backend sends the buyer none: order_timeline()
+            // returns events:[] for access 'customer'.
             if (!_loading)
               RescheduleCard(
                 key_: widget.orderId,
@@ -296,22 +344,21 @@ class _CustomerTrackSheetState extends State<_CustomerTrackSheet> {
 }
 
 
-/// CMD #452 — feature_gaps #133. Renders `order_timeline()` verbatim: the step
-/// labels, their state (done / current / pending), the IST stamps, the
-/// pending-step notes and the expected-delivery line are all payload strings.
-/// An empty payload renders nothing rather than an invented "no data" message.
+/// CMD #452, rebuilt by CMD #1839 — the Track popup's stage list.
+///
+/// Renders `order_timeline()` verbatim: every stage the backend sent, in the
+/// order it sent them, with its own IST stamp, its partial-progress count
+/// ("Packing 14 of 15") and the re-sourcing note when a line is held. Which
+/// stage is current is the payload's `state`, never a comparison made here,
+/// and an empty payload renders nothing rather than an invented "no data".
 class OrderTimelineCard extends StatelessWidget {
   final Map<String, dynamic> timeline;
   const OrderTimelineCard({super.key, required this.timeline});
 
   @override
   Widget build(BuildContext context) {
-    final steps = (timeline['steps'] as List?)
-            ?.whereType<Map>()
-            .map((e) => Map<String, dynamic>.from(e))
-            .toList() ??
-        const <Map<String, dynamic>>[];
-    if (steps.isEmpty) return const SizedBox.shrink();
+    final stages = OrderStage.listFrom(timeline['steps']);
+    if (stages.isEmpty) return const SizedBox.shrink();
 
     String s(String k) => (timeline[k] ?? '').toString();
 
@@ -326,8 +373,7 @@ class OrderTimelineCard extends StatelessWidget {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(s('heading'), style: Ds.t.subtitle),
         SizedBox(height: Ds.space.x16),
-        for (var i = 0; i < steps.length; i++)
-          _TimelineStep(step: steps[i], last: i == steps.length - 1),
+        OrderStageList(stages: stages, note: s('dispute_note')),
         if (s('eta_display').isNotEmpty) ...[
           SizedBox(height: Ds.space.x16),
           Divider(color: Ds.c.divider, height: 1),
@@ -341,63 +387,6 @@ class OrderTimelineCard extends StatelessWidget {
             ),
           ]),
         ],
-      ]),
-    );
-  }
-}
-
-class _TimelineStep extends StatelessWidget {
-  final Map<String, dynamic> step;
-  final bool last;
-  const _TimelineStep({required this.step, required this.last});
-
-  @override
-  Widget build(BuildContext context) {
-    // `state` is the backend's verdict. The card never compares timestamps.
-    final state = (step['state'] ?? '').toString();
-    final done = state == 'done';
-    final current = state == 'current';
-    final colour = done || current ? Ds.c.brand : Ds.c.divider;
-    final label = (step['label'] ?? '').toString();
-    final ts = (step['ts_label'] ?? '').toString();
-    final note = (step['note'] ?? '').toString();
-
-    return IntrinsicHeight(
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Column(children: [
-          Icon(
-            done
-                ? Icons.check_circle
-                : current
-                    ? Icons.radio_button_checked
-                    : Icons.radio_button_unchecked,
-            size: 20,
-            color: colour,
-          ),
-          if (!last)
-            Expanded(
-              child: Container(width: 2, color: colour),
-            ),
-        ]),
-        SizedBox(width: Ds.space.x12),
-        Expanded(
-          child: Padding(
-            padding: EdgeInsets.only(bottom: last ? 0 : Ds.space.x16),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(label,
-                  style: current ? Ds.t.bodyStrong : Ds.t.body.copyWith(
-                      color: done ? Ds.c.text : Ds.c.textSecondary)),
-              if (ts.isNotEmpty) ...[
-                SizedBox(height: Ds.space.x4),
-                Text(ts, style: Ds.t.caption),
-              ],
-              if (note.isNotEmpty) ...[
-                SizedBox(height: Ds.space.x4),
-                Text(note, style: Ds.t.caption),
-              ],
-            ]),
-          ),
-        ),
       ]),
     );
   }

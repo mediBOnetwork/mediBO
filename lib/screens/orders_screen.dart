@@ -15,6 +15,7 @@ import 'package:pharma_b2b/utils/toast.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../services/live_feed.dart';
+import '../url_sync.dart';
 
 import '../utils/download_bytes.dart';
 import '../utils/render_log.dart';
@@ -349,7 +350,21 @@ class _OrdersScreenState extends State<OrdersScreen> {
       Scrollable.ensureVisible(ctx,
           duration: const Duration(milliseconds: 260), alignment: 0.1);
       RenderLog.write('c298_order_deeplink', 1);
+      final code = _focusCode;
       _focusCode = null;
+      // CMD #1839 — /my-order/<code>?track=1 lands ON the Track popup, not
+      // merely beside it. The popup is the second of the two stage views and a
+      // modal opened by a tap cannot otherwise be reached by a link (or
+      // photographed for a completion proof). The shell already parses the
+      // /my-order/ prefix; only the query is read here, and only for this one
+      // flag.
+      if (code != null && initialSearch().contains('track=1')) {
+        final row = _cards.where((c) => c.orderCode == code);
+        if (row.isNotEmpty) {
+          RenderLog.write('c1839_track_deeplink', row.first.id);
+          showCustomerTrackSheet(context, row.first.id);
+        }
+      }
     });
   }
 
@@ -436,6 +451,16 @@ class _OrdersScreenState extends State<OrdersScreen> {
           ';prog:${parsed.where((o) => o.progressSteps.isNotEmpty).length}'
           ';acts:${parsed.map((o) => o.actionKey).where((k) => k.isNotEmpty).toSet().length}'
           ';q:${query.isEmpty ? 0 : 1}');
+      // CMD #1839 — proof the FIFTEEN-stage strip is what painted: the widest
+      // stage list on screen, how many cards carried the backend's caption and
+      // how many carried a re-sourcing note. A four-step strip would read
+      // stages:4 here, which is exactly the regression this key catches.
+      RenderLog.write(
+          'c1839_stage_strip',
+          'cards:${parsed.length}'
+          ';stages:${parsed.fold<int>(0, (m, o) => o.progressSteps.length > m ? o.progressSteps.length : m)}'
+          ';caps:${parsed.where((o) => o.progressCaption.isNotEmpty).length}'
+          ';notes:${parsed.where((o) => o.progressNote.isNotEmpty).length}');
 
       if (noCust && hasSession && attempt < _kMaxFetchRetries) {
         _retryOrSettle(attempt);
@@ -509,10 +534,16 @@ class _OrdersScreenState extends State<OrdersScreen> {
     // publishes to Realtime — LiveFeed reads realtime_plan() and puts this on
     // the backend's own interval instead. The callback is unchanged: this was
     // always a refetch trigger, never a row parser.
+    // CMD #1839 — the fifteen-stage strip has to MOVE on this screen, and a
+    // stage is made of three tables. `orders` is narrowed to this account, so
+    // the registry binds it live; order_items and deliveries cannot be narrowed
+    // from a LIST, so the registry puts them on its own poll interval instead
+    // of letting one customer open an unfiltered WAL subscription. Either way
+    // the callback is the same refetch it has always been.
     LiveFeed.instance
         .watch(
           channelPrefix: 'customer_orders_$accountId',
-          tables: const ['orders'],
+          tables: const ['orders', 'order_items', 'deliveries'],
           filters: {
             'orders': PostgresChangeFilter(
               type: PostgresChangeFilterType.eq,
@@ -1199,7 +1230,11 @@ class _DetailHeader extends StatelessWidget {
           Text(card.stageLabel, style: Ds.t.body),
           if (card.progressShow && card.progressSteps.isNotEmpty) ...[
             SizedBox(height: Ds.space.x12),
-            OrderProgressLine(steps: card.progressSteps),
+            OrderProgressLine(
+              steps: card.progressSteps,
+              caption: card.progressCaption,
+              note: card.progressNote,
+            ),
           ],
         ],
       ),

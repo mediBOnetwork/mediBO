@@ -50,6 +50,14 @@ insert into public.storefront_ui_label (key, value, note) values
      'CMD #1826 — speed line; {within} filled server-side from real answer times')
 on conflict (key) do nothing;
 
+-- The sticky bar's main line is a NUMBER-sized slot beside Add to cart: for a
+-- viewer who is not yet entitled to trade prices it carries a short phrase,
+-- while the sale-price ROW above keeps the full ptr_locked_note sentence.
+insert into public.storefront_ui_label (key, value, note) values
+  ('pdp_sticky_locked', 'Trade price on approval',
+     'CMD #1826 — sticky-bar main line when a trade rate exists but the viewer is not approved')
+on conflict (key) do nothing;
+
 -- ── Thresholds ──────────────────────────────────────────────────────────────
 insert into public.app_settings (key, value) values
   ('pdp_supply_confidence', jsonb_build_object(
@@ -91,6 +99,20 @@ $$;
 create or replace function public._pdp_label(p_key text, p_default text)
 returns text language sql stable set search_path = public as $$
   select coalesce(nullif(btrim((select value from public.storefront_ui_label where key = p_key)), ''), p_default);
+$$;
+
+-- ── Count stripper ──────────────────────────────────────────────────────────
+-- The trust strip's internal ask / fill tallies exist to compute a label; the
+-- label leaves, the tallies do not — at the top level OR inside fill_rate.
+create or replace function public._pdp_strip_counts(p jsonb)
+returns jsonb language sql immutable as $$
+  select case
+    when p is null then '{}'::jsonb
+    when p ? 'fill_rate' and jsonb_typeof(p->'fill_rate') = 'object'
+      then (p - 'asks' - 'filled')
+           || jsonb_build_object('fill_rate', (p->'fill_rate') - 'asks' - 'filled')
+    else p - 'asks' - 'filled'
+  end;
 $$;
 
 -- ── Supply confidence ───────────────────────────────────────────────────────
@@ -184,6 +206,7 @@ declare
   v_sale_cap text := public._pdp_label('pdp_sale_price_caption', 'Sale price (PTR)');
   v_sale_val text; v_sale_note text := ''; v_sale_amount boolean := false; v_sale_tone text := 'secondary';
   v_side text := '';
+  v_sticky_main text;
 begin
   v_mrp_val := case when v_has_mrp then public.inr_money(p_mrp)
                     else public._pdp_label('pdp_mrp_missing', 'Not printed on this pack') end;
@@ -210,6 +233,7 @@ begin
   if not v_sale_amount then
     if v_ready and not v_entitled then
       v_sale_val := public._pdp_label('ptr_locked_note', 'Register and get approved to see trade prices');
+      v_sticky_main := public._pdp_label('pdp_sticky_locked', 'Trade price on approval');
     else
       v_sale_val := public._pdp_label('pdp_sale_on_quote', 'On quote');
       v_sale_note := public._pdp_label('pdp_sale_on_quote_note', 'Trade rate is confirmed when suppliers quote');
@@ -237,7 +261,7 @@ begin
       'note',       v_sale_note,
       'tone',       v_sale_tone),
     'sticky', jsonb_build_object(
-      'main',         v_sale_val,
+      'main',         coalesce(v_sticky_main, v_sale_val),
       'main_caption', public._pdp_label('pdp_sticky_sale_caption', 'Sale price'),
       'main_tone',    v_sale_tone,
       'has_side',     v_side <> '',
@@ -250,6 +274,7 @@ revoke all on function public.pdp_price_lines(bigint, numeric) from public, anon
 revoke all on function public._pdp_ago_words(timestamptz) from public, anon, authenticated;
 revoke all on function public._pdp_within_words(interval) from public, anon, authenticated;
 revoke all on function public._pdp_label(text, text) from public, anon, authenticated;
+revoke all on function public._pdp_strip_counts(jsonb) from public, anon, authenticated;
 
 -- ── product_detail(): attach the two blocks ─────────────────────────────────
 create or replace function public.product_detail(p_product_id bigint)
@@ -308,7 +333,7 @@ begin
     -- CMD #1826 — and NEVER a raw sourcing count in the payload: the trust
     -- strip's internal ask/fill tallies stay in the database.
     || jsonb_build_object(
-    'trust',       coalesce(v->'trust', '{}'::jsonb) - 'asks' - 'filled',
+    'trust',       public._pdp_strip_counts(v->'trust'),
     'supply',      v_supply,
     'price_lines', v_lines);
 end $function$;

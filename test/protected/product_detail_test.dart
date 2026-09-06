@@ -34,6 +34,7 @@ import 'package:pharma_b2b/app_state.dart';
 import 'package:pharma_b2b/models/cart_model.dart';
 import 'package:pharma_b2b/models/product_detail.dart';
 import 'package:pharma_b2b/screens/product_detail_screen.dart';
+import 'package:pharma_b2b/theme.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 
 /// The labels product_detail() attaches to every response, ok:true or not.
@@ -65,10 +66,17 @@ Map<String, dynamic> _payload({
   bool showWishlist = false,
   bool isWishlisted = false,
   List<Map<String, dynamic>> similar = const [],
+  Map<String, dynamic>? supply,
+  Map<String, dynamic>? priceLines,
 }) =>
     {
       'ok': true,
       'id': 176026,
+      // CMD #1826 — the supply-confidence band and the two price lines, exactly
+      // as product_detail() attaches them. Absent by default: an older backend
+      // (or an untouched pack) sends neither, and the page must stay quiet.
+      if (supply != null) 'supply': supply,
+      if (priceLines != null) 'price_lines': priceLines,
       // CMD #1825 — rx_badge()'s block and the buyer's licence state, exactly
       // as product_detail() sends them side by side. Absent when null, which
       // is what an anonymous visitor or a pack with no class gets.
@@ -145,6 +153,82 @@ Map<String, dynamic> _payload({
       'show_wishlist': showWishlist,
       'is_wishlisted': isWishlisted,
     };
+
+/// CMD #1826 — a band whose `band` key says green while its label, tone and
+/// sub-line say red. The page must print the words and paint the tone; any
+/// Dart that re-derived either from `band` paints it green and fails. The two
+/// decoy keys are what a leaky parser would print — the contract is silence.
+const Map<String, dynamic> _contraryBand = {
+  'has': true,
+  'band': 'green',
+  'tone': 'danger',
+  'label': 'Checked recently, not confirmed',
+  'has_sub': true,
+  'sub': 'Last checked 3 days ago',
+  'has_speed': false,
+  'speed': 'Usually confirmed within 2 hours',
+  'supplier_names': ['Zydus Distributors', 'Apex Pharma'],
+  'supplier_count': 3,
+};
+
+/// price_lines with a pricing_ready row: the sale value deliberately differs
+/// from the fixture's legacy `pricing.price_display` (₹2,597.00) so a page
+/// that still printed the old single price as the hero is caught.
+const Map<String, dynamic> _pricedLines = {
+  'has': true,
+  'mrp': {
+    'caption': 'MRP',
+    'value': '₹69.96',
+    'has_amount': true,
+    'has_note': true,
+    'note': 'Printed pack ceiling — not the selling price',
+    'tone': 'secondary',
+  },
+  'sale': {
+    'caption': 'Sale price (PTR)',
+    'value': '₹58.20',
+    'has_amount': true,
+    'has_note': true,
+    'note': 'PTR ₹55.43 · GST 5%',
+    'tone': 'primary',
+  },
+  'sticky': {
+    'main': '₹58.20',
+    'main_caption': 'Sale price',
+    'main_tone': 'primary',
+    'has_side': true,
+    'side': 'MRP ₹69.96',
+  },
+};
+
+/// price_lines with NO pricing_ready row: the sale slot carries the backend's
+/// on-quote words, never a dash, a zero or the MRP repeated.
+const Map<String, dynamic> _quoteLines = {
+  'has': true,
+  'mrp': {
+    'caption': 'MRP',
+    'value': '₹69.96',
+    'has_amount': true,
+    'has_note': true,
+    'note': 'Printed pack ceiling — not the selling price',
+    'tone': 'secondary',
+  },
+  'sale': {
+    'caption': 'Sale price (PTR)',
+    'value': 'On quote',
+    'has_amount': false,
+    'has_note': true,
+    'note': 'Trade rate is confirmed when suppliers quote',
+    'tone': 'secondary',
+  },
+  'sticky': {
+    'main': 'On quote',
+    'main_caption': 'Sale price',
+    'main_tone': 'secondary',
+    'has_side': true,
+    'side': 'MRP ₹69.96',
+  },
+};
 
 /// Distinguishes successive pumps in one test. Without a fresh key Flutter
 /// reuses the existing State, `initState` never runs again and the second
@@ -637,6 +721,202 @@ void main() {
             ..['trust'] = {'has': false, 'title': 'Supply record', 'chips': []});
 
       expect(find.text('Supply record'), findsNothing);
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // CMD #1826 — the page never implies a price or a supply it does not have.
+  // Every word below is the payload's; the fixtures are built to catch a page
+  // that computes, re-derives or leaks anything.
+  // ───────────────────────────────────────────────────────────────────────────
+  group('supply confidence is a band, never a count (CMD #1826)', () {
+    testWidgets(
+        'the band prints label, tone and sub-line verbatim even when they '
+        'contradict the band key', (tester) async {
+      await _pump(tester, _payload(supply: _contraryBand));
+
+      expect(find.text('Checked recently, not confirmed'), findsOneWidget,
+          reason: 'the label is printed, not looked up from band');
+      expect(find.text('Last checked 3 days ago'), findsOneWidget);
+      expect(find.text('Supply confirmed recently'), findsNothing,
+          reason: 'band:"green" must not summon the green copy');
+
+      final band = tester.widget<Container>(
+          find.byKey(const ValueKey('pdp-supply-band')));
+      final color = (band.decoration as BoxDecoration).color;
+      expect(color, Brand.negativeBg,
+          reason: 'colour follows tone:"danger", never band:"green"');
+      expect(color, isNot(Brand.positiveBg));
+    });
+
+    testWidgets('the speed line is drawn only when has_speed is true',
+        (tester) async {
+      await _pump(tester, _payload(supply: _contraryBand));
+      expect(find.text('Usually confirmed within 2 hours'), findsNothing,
+          reason: 'a speed string under has_speed:false is not a guess the '
+              'page may print');
+
+      await _pump(
+          tester,
+          _payload(supply: {
+            ..._contraryBand,
+            'has_speed': true,
+          }));
+      expect(find.text('Usually confirmed within 2 hours'), findsOneWidget);
+    });
+
+    testWidgets('has:false draws nothing at all', (tester) async {
+      await _pump(
+          tester,
+          _payload(supply: const {
+            'has': false,
+            // Decoys: an older or buggy backend might still send words under
+            // has:false. The contract is that they are not printed.
+            'label': 'Supply confirmed recently',
+            'sub': 'Last confirmed today',
+            'tone': 'success',
+          }));
+      expect(find.byKey(const ValueKey('pdp-supply-band')), findsNothing);
+      expect(find.text('Supply confirmed recently'), findsNothing);
+      expect(find.text('Last confirmed today'), findsNothing);
+    });
+
+    testWidgets('an absent block is the same as has:false', (tester) async {
+      await _pump(tester, _payload());
+      expect(find.byKey(const ValueKey('pdp-supply-band')), findsNothing);
+    });
+  });
+
+  group('two price lines, the sale price as hero (CMD #1826)', () {
+    testWidgets('with a trade rate the hero and the sticky bar print the sale '
+        'value and MRP is the captioned ceiling', (tester) async {
+      await _pump(tester, _payload(priceLines: _pricedLines));
+
+      // Hero row + sticky bar: the sale value appears exactly twice.
+      expect(find.text('₹58.20'), findsNWidgets(2));
+      expect(
+          tester
+              .widget<Text>(find.byKey(const ValueKey('pdp-sticky-main')))
+              .data,
+          '₹58.20');
+      expect(find.text('Sale price (PTR)'), findsOneWidget);
+      expect(find.text('PTR ₹55.43 · GST 5%'), findsOneWidget,
+          reason: 'the sub-line is the backend sentence, not a Dart join');
+      expect(find.text('₹69.96'), findsOneWidget,
+          reason: 'the MRP row prints the backend rupee string');
+      expect(find.text('Printed pack ceiling — not the selling price'),
+          findsOneWidget);
+      expect(find.text('MRP ₹69.96'), findsOneWidget,
+          reason: 'the sticky side line is one backend string');
+      expect(find.text('Sale price'), findsOneWidget,
+          reason: 'sticky caption comes from the block');
+      // The CHANGE #638 single price is deliberately a different number in
+      // this fixture: if the page still printed it as the hero, this fails.
+      expect(find.text('₹2,597.00'), findsNothing);
+    });
+
+    testWidgets('with no trade rate the sale row prints the on-quote copy, '
+        'MRP stays a captioned reference and Add to cart stays enabled',
+        (tester) async {
+      await _pump(tester, _payload(priceLines: _quoteLines));
+
+      expect(find.text('On quote'), findsNWidgets(2),
+          reason: 'hero row + sticky main, both the backend phrase');
+      expect(
+          tester
+              .widget<Text>(find.byKey(const ValueKey('pdp-sticky-main')))
+              .data,
+          'On quote');
+      expect(find.text('Trade rate is confirmed when suppliers quote'),
+          findsOneWidget);
+      expect(find.text('₹69.96'), findsOneWidget);
+      expect(find.text('MRP ₹69.96'), findsOneWidget);
+      expect(find.text('Printed pack ceiling — not the selling price'),
+          findsOneWidget);
+      expect(find.text('₹2,597.00'), findsNothing,
+          reason: 'MRP is never presented as the price any more');
+      expect(find.text('Add to cart'), findsOneWidget,
+          reason: 'a quote-driven B2B buyer orders before the rate is fixed');
+      expect(find.text('Unavailable'), findsNothing);
+    });
+
+    testWidgets('has_amount decides the ink: a phrase is never painted as a '
+        'price, a rupee amount is', (tester) async {
+      await _pump(tester, _payload(priceLines: _quoteLines));
+      final phrase = tester.widget<Text>(find.descendant(
+          of: find.byKey(const ValueKey('pdp-sale-line')),
+          matching: find.text('On quote')));
+      expect(phrase.style?.color, isNot(Brand.price),
+          reason: 'has_amount:false is the secondary ink, never the price ink');
+
+      await _pump(tester, _payload(priceLines: _pricedLines));
+      final amount = tester.widget<Text>(find.descendant(
+          of: find.byKey(const ValueKey('pdp-sale-line')),
+          matching: find.text('₹58.20')));
+      expect(amount.style?.color, Brand.price);
+    });
+
+    testWidgets('without the block an older backend still gets the '
+        'CHANGE #638 single price', (tester) async {
+      await _pump(tester, _payload());
+      expect(find.text('₹2,597.00'), findsWidgets);
+      expect(find.text('On quote'), findsNothing);
+      expect(find.byKey(const ValueKey('pdp-sale-line')), findsNothing);
+    });
+  });
+
+  group('nothing about sourcing leaks (CMD #1826)', () {
+    testWidgets('no supplier name or supplier count appears anywhere in the '
+        'rendered page', (tester) async {
+      await _pump(
+          tester,
+          _payload(
+            hasSupplierLabel: false,
+            supply: _contraryBand,
+            priceLines: _pricedLines,
+          ));
+
+      final rendered = tester
+          .widgetList<Text>(find.byType(Text, skipOffstage: false))
+          .map((t) => t.data ?? t.textSpan?.toPlainText() ?? '')
+          .join('\n');
+      expect(rendered, isNot(contains('Zydus Distributors')));
+      expect(rendered, isNot(contains('Apex Pharma')));
+      expect(RegExp(r'\b\d+\s+(supplier|source)s?\b', caseSensitive: false)
+              .hasMatch(rendered),
+          isFalse,
+          reason: 'a number of suppliers is a promise the page never makes');
+      expect(find.text('3'), findsNothing,
+          reason: 'the decoy supplier_count:3 must not surface as text');
+      expect(rendered, isNot(contains('supplier_count')));
+    });
+  });
+
+  group('the CMD #1826 parser', () {
+    test('supply and price_lines carry the payload through untouched', () {
+      final s = PdSupply.fromMap(_contraryBand);
+      expect(s.has, isTrue);
+      expect(s.band, 'green');
+      expect(s.tone, 'danger');
+      expect(s.label, 'Checked recently, not confirmed');
+      expect(s.hasSpeed, isFalse);
+
+      final pl = PdPriceLines.fromMap(_pricedLines);
+      expect(pl.has, isTrue);
+      expect(pl.sale.value, '₹58.20');
+      expect(pl.sale.hasAmount, isTrue);
+      expect(pl.mrp.hasAmount, isTrue);
+      expect(pl.sticky.side, 'MRP ₹69.96');
+    });
+
+    test('absence parses to has:false with nothing invented', () {
+      expect(PdSupply.fromMap(null).has, isFalse);
+      expect(PdSupply.fromMap(const {'has': false, 'label': 'x'}).label, '');
+      expect(PdPriceLines.fromMap(null).has, isFalse);
+      expect(PdPriceLines.fromMap(const {'has': false}).sale.value, '');
+      final d = ProductDetail.fromMap(_payload());
+      expect(d.supply.has, isFalse);
+      expect(d.priceLines.has, isFalse);
     });
   });
 }

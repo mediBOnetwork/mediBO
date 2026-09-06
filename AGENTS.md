@@ -6,7 +6,7 @@
      Dev Queue → Memory screen, or via the MCP memory server. Do NOT hand-edit
      this block; it is rewritten on every session start. Target: generic -->
 
-# Agent memory (generic) — 42 rules
+# Agent memory (generic) — 46 rules
 # Canonical fallback: see RULES.md in the repo root (git-committed).
 
 ## GLOBAL · style  (priority 10, v2)
@@ -219,6 +219,27 @@ Failure rules.
 
 
 
+## PROJECT · runner_context  (priority 66, v1)
+
+## CONTEXT ECONOMY (CHANGE #1197)
+The window is a budget, and re-reading is how it is wasted.
+- Your prompt file carries the SPEC and the STATE only. The rules and the business context are in
+  CLAUDE.md / RULES.md and are ALREADY in your context — never re-read them, and never open
+  `standing_preamble.md`.
+- `~/mediBO-runner/work/cmd-<id>.state.md` is written for you after every `steps_set`,
+  `step_done`, `spec_done`, `log_decision` and `mig_note`. On ANY resume (compact, clear,
+  restart, retry, auto-heal) that file — as a <=200-word brief, `devcmd.sh resume_brief <id>` —
+  is all you are handed. Do not go back to the prompt file.
+- A session past `worker_pool.context_compact_pct` (70%) is COMPACTED, not cleared; `/clear` is
+  only the fallback when `/compact` fails. `devcmd.sh ctx` reads the window.
+- Output you will not read still costs the whole window. Use `devcmd.sh tests` (one summary line
+  + failures only), `logtail` (40 lines), `migs` (filenames), `cat` (refuses >300 lines),
+  `rgcheck` (the diff table only). Never `bash -x` a devcmd call, and never `cat` a big file —
+  `grep -n` and `sed -n <from>,<to>p` instead.
+- An xlarge spec with more than 8 numbered items is SPLIT at add time into chained parts of at
+  most 6. Write "single command" in a spec to opt out.
+
+
 ## PROJECT · runner_recording  (priority 66, v2)
 
 ## 5. RECORDING (the registry is the memory)
@@ -253,6 +274,21 @@ Also: capture 2–3 screenshots of the changed screens into the `dev-cmd-proofs`
 
 `kind='gcp'` commands additionally write `p_plain_summary` (2–4 non-technical sentences) and put every copyable follow-up in `p_result_actions`.
 
+
+
+## PROJECT · runner_finish  (priority 67, v1)
+
+## FINISHED MEANS EXIT (CHANGE #369)
+Every heartbeat the harness asks `dev_cmd_finish_state(<ID>)`. When every condition is observed —
+steps N/N, QA passed where required, required journeys green, screenshot proof in
+`dev-cmd-proofs`, the change deployed and promoted, `rg_check` green, no open question — the
+BACKEND completes the row itself and interrupts your turn.
+- Mark the last step the MOMENT it lands: it is the trigger, not bookkeeping.
+- `complete` returning `already: true` is SUCCESS. Do not retry, do not look for a bug.
+- A turn interrupted right after everything landed is the feature working.
+- `devcmd.sh finish_state <ID>` names what is still holding the row open, in the backend's words.
+It cannot fire early: no step plan, an unanswered question, a pending QA verdict, a red journey,
+no proof, no promoted deploy or a red `rg_check` all block it.
 
 
 ## PROJECT · runner_solve  (priority 67, v1)
@@ -322,6 +358,26 @@ Definition of done = backend built + frontend wired + deployed + reachable + cli
 
 
 
+## PROJECT · runner_completion  (priority 68, v1)
+
+## COMPLETION INTEGRITY (CHANGE #571) — three rules that are no longer yours to get wrong
+1. **A finished build always registers as finished.** `devcmd.sh complete` is two idempotent
+   writes (`dev_cmd_complete_fast` + `dev_cmd_result_write`), spooled to disk and retried with
+   backoff. `spooled:true` means the completion is ON DISK and every heartbeat replays it until
+   it lands. Do NOT loop on `complete` and do NOT "fix" a timeout by failing the row.
+   `already:true` is success.
+2. **WAITING IS NOT FAILING.** Only a failing ARTIFACT — a red test, a broken build, a red
+   `rg_check`, a QA verdict of failed — may fail a command. A lease you cannot get, a merge-queue
+   eviction, an RPC timeout, a busy DB are WAIT states: `dev_cmd_fail` classifies the text
+   (`dev_fail_rule`) and PARKS the row instead. Park deliberately with
+   `devcmd.sh park <ID> <lease|merge|db|rpc> "<reason>"`. Land everything you CAN land first.
+3. **THE SPEC IS A CHECKLIST, AND IT GATES THE FINISH.** Every enumerated spec becomes
+   `dev_command_spec_item` rows. `devcmd.sh spec <ID>` shows them; an OPEN item blocks
+   `dev_cmd_complete`. Close each as it lands (`spec_done <ID> <n> "<evidence>"`), drop it with a
+   reason (`spec_drop`), or replace the derived list with your accurate one (`spec_set`).
+   Silence is the one thing that is not allowed.
+
+
 ## PROJECT · deploy  (priority 70, v3)
 
 ## Deploy Rules
@@ -355,6 +411,29 @@ ABSOLUTES:
 
 Built-in guards you should not fight: a pull-first guard (never build/commit/push on a stale local, CHANGE #424); auto-increment of the CHANGE # from web/version.json when no N is passed (CHANGE #57 fallback); a bundle-size assert (>1.5 MB or it aborts as corrupt); version.json + `<meta name="build-commit">` stamping; and a per-edge-node retry when polling https://medibo.in/version.json (CHANGE #604), because version.json propagates per node.
 
+
+
+## PROJECT · runner_waiting  (priority 74, v1)
+
+## WAITING COSTS NOTHING — IT IS A SHELL SLEEP (CHANGE #1817)
+
+#1812 finished its code at 11/11, queued behind deploy batch 594, and spent 159,555 tokens polling the lane and re-thinking between polls. The batch took 17 minutes and cost nothing. The DB backstop killed the row — which is the problem: the backstop should never be the thing that notices.
+
+The moment you are queued behind ANYTHING you cannot hurry — the merge lane, a batch, a file lease, a busy DB, an RPC that is timing out — you do not poll and you do not think. You run the waiter:
+
+    devcmd.sh wait <id> merge <entry-id>      # straight after queue_push
+    devcmd.sh wait <id> lease <path>...       # a file another command holds
+    devcmd.sh wait <id> db|rpc|other "<why>"  # anything only time heals
+
+It BLOCKS inside the Bash tool — sleep, check, sleep — so your turn is suspended for the whole of it and there is no turn in which to summarise, re-plan or narrate. It prints exactly ONE line, written by the backend.
+
+- **Exit 0** — the blocker is gone. The line names the next step; carry on from it. Do not re-read the spec, the state file or the prompt.
+- **Exit 75** — still busy. Run the IDENTICAL command again (the line hands it back to you, copy-pasteable). Nothing else in between. A Claude Code Bash call is capped at ten minutes, so a long wait is CHUNKED on purpose; dev_wait_begin is re-entrant, so the row stays asleep across chunks and the burn that is measured is the burn of the WHOLE wait.
+- Knobs live in worker_pool.wait_gate (poll_s 60, max_wait_s 540, turn_tokens 2000) — change them with pool_set(), never in a script.
+
+A model turn taken while the row is waiting is a BUG, and it is now visible: dev_context_event kind wait_turn records the token delta, _wait_burn_check writes them from the backstop side too, and the Context economy panel prints 'Waiting — 17m asleep · 340 tokens · N wake-ups · target 0' in danger tone the moment N is not zero. waiting_token_grace (150,000) still kills the row; after #1817 it should never fire again.
+
+devcmd.sh wait_state <id> is the one cheap read that says what a row is waiting on. The journey qa-1817-wait-sleeps holds the whole state machine down.
 
 
 ## PROJECT · deploy_lane  (priority 75, v5)
@@ -849,7 +928,7 @@ NEVER flip `bugloop.enforce=true` until the full chain (preview → journeys →
 
 
 
-## PROJECT · protected_tests  (priority 90, v5)
+## PROJECT · protected_tests  (priority 90, v13)
 
 ## PROTECTED TEST SUITE (CHANGE #635 — never remove)
 Before EVERY deploy, run `flutter test test/protected/` in addition to the
@@ -924,12 +1003,69 @@ Current files and what they hold down:
   fallback wording, and an order with no permitted counterparty is absent from
   call_mask_targets rather than a greyed-out button.
 
+- `delivery_eta_proof_test.dart` — the arrival window and the proof block, on
+  the widgets every delivery surface shares: the countdown is the payload's
+  sentence (the fixture's eta_at deliberately disagrees with its label, so a
+  client-side clock fails), absence is `has:false` rather than an empty string,
+  the method label is never method_key title-cased, an absent receiver omits the
+  row instead of printing a dash, and the Orders card draws a window only when
+  the payload sent one.
 - `cart_unavailable_test.dart` — the cart's red state is the backend's flag:
   per-line unavailable/qty_locked are carried through untouched,
   unavailable_badge prints verbatim (never pluralised in Dart), the badge is
   absent at count 0, re-rendering after a removal clears both because the
   SERVER recomputed them, and CartOrderRefusal treats only
   error:'unavailable_in_cart' as that refusal, keeping its message verbatim.
+
+- `supplier_return_test.dart` — the return-to-supplier flow and its
+  debit note: no rupee, status word, tone, GST figure or return ceiling is
+  computed in Dart (the fixture's total deliberately does NOT equal the sum of
+  its lines), Acknowledge is the backend's can_ack flag while the
+  "Acknowledged on …" sentence is its own `ack_done_label` key, rows and lines
+  render in payload order, ok:false and an unknown /return-ack/<token> print
+  the backend's refusal instead of throwing, and the partner editor's Send /
+  Remove / PDF buttons are can_send / can_edit / can_doc.
+
+- `usage_sync_test.dart` — the Claude usage block is a PRINTER (#1365): the sync
+  line and its tone are dev_cmd_session_usage()' updated_display/updated_tone, so a
+  fetcher that has been dead since boot prints "sync failing: <reason>" and can never
+  read "synced 15h ago"; an expired window prints the backend's 0%% while raw_percent
+  remembers the 100 that was read; a stale-ignored reading prints its own copy; bars
+  render in payload order; an absent block is omitted, never dashed.
+- `context_economy_test.dart` — the Context economy panel is a PRINTER: title,
+  threshold chip, since-line, every row label/value/sub-line and the footnote are
+  dev_context_metrics() strings (the fixture's before/after deliberately disagree
+  with its own Change row, so a card that recomputed the percentage fails), has:false
+  draws nothing at all, an absent sub-line is omitted rather than dashed, tone is one
+  lookup with an unknown tone staying neutral, and rows render in payload order.
+
+- `probe_lane_test.dart` — the Probe lane block is a PRINTER and the only
+  screen that says where journeys are being aimed: the lane sentence, refusal
+  line, cast-debt line and rg line are dev_probe_lane_status()'s (the fixture's
+  chip names one ref while its refusal line names another and cast_debt 63
+  disagrees with its own "41 waiting" line, so anything re-derived fails), the
+  three sub-lines keep a fixed order, refusal colour is refusal_tone through one
+  lookup rather than "count > 0", an absent sub-line is omitted rather than
+  dashed or zeroed, and has:false draws nothing at all.
+- `claude_auth_test.dart` — the Claude login banner is a PRINTER, and never
+  invents reassurance: a healthy login draws NOTHING (a permanent green badge is
+  how a real red stops being read) and so does has:false, every word is
+  claude_auth_status()'s (the fixture's title deliberately disagrees with its own
+  bucket, so a card that re-derived anything from bucket fails), an absent
+  sub-line or version is omitted rather than dashed, `can` is the backend's
+  decision so the button disappears while a login is already running while the
+  link and code stay on screen, and a tap calls the parent exactly once and
+  talks to no network.
+
+- `deep_link_routes_test.dart` — a `/admin/go/<key>` link is not a dead end
+  (CMD #757): the URL parses to the registry's own route key with no welded-on
+  subject, a RESOLVED matrix obeys `access_boot().routes[].stage` even when the
+  fixture deliberately pairs `ops_board` with the WRONG stage (so a Dart map
+  that "knows" the answer fails), an UNRESOLVED matrix still opens Fulfill
+  because shellWhenAccessResolved gives up after 5 s and the cold-boot list
+  carries every alert-shaped destination, an unrelated route is left alone cold
+  or warm, and the shell still calls the shard BEFORE its switch — after the
+  switch, `default:` has already printed "not in your app yet".
 
 The suite runs on the Dart VM in ~2s. Keep it that way: no network, no goldens,
 no Supabase, no camera — mock RPC payloads inline. If a widget resists mocking,
@@ -982,11 +1118,75 @@ What each file holds down:
   fallback wording, and an order with no permitted counterparty is absent from
   call_mask_targets rather than a greyed-out button.
 
+- `delivery_eta_proof_test.dart` — the arrival window and the proof block, on
+  the widgets every delivery surface shares: the countdown is the payload's
+  sentence (the fixture's eta_at deliberately disagrees with its label, so a
+  client-side clock fails), absence is `has:false` rather than an empty string,
+  the method label is never method_key title-cased, an absent receiver omits the
+  row instead of printing a dash, and the Orders card draws a window only when
+  the payload sent one.
 - `cart_unavailable_test.dart` — the cart's red state is the backend's flag: per-line unavailable/qty_locked carried through untouched, unavailable_badge printed verbatim (never pluralised in Dart), absent at count 0, cleared on re-render because the SERVER recomputed them, and CartOrderRefusal treats only error:'unavailable_in_cart' as that refusal, keeping its message verbatim.
 - `design_literal_gate_test.dart` — the style-literal baseline gate (see design).
+- `order_feedback_test.dart` — the whole-order feedback card, on the ONE widget
+  the in-app sheet and the public WhatsApp page share: dimensions and their
+  low-score chips render in PAYLOAD order, a prefilled star (the rider rating)
+  arrives selected and stays editable while an absent one is never defaulted,
+  the chips for a dimension appear only once its score is at or under the
+  backend's own `low_score_at`, Submit stays closed until every star AND the
+  NPS are set, and the anonymous /feedback/<token> page prints the backend's
+  refusal (unknown / used / expired) instead of throwing.
+
+- `supplier_return_test.dart` — the return-to-supplier flow and its
+  debit note: no rupee, status word, tone, GST figure or return ceiling is
+  computed in Dart (the fixture's total deliberately does NOT equal the sum of
+  its lines), Acknowledge is the backend's can_ack flag while the
+  "Acknowledged on …" sentence is its own `ack_done_label` key, rows and lines
+  render in payload order, ok:false and an unknown /return-ack/<token> print
+  the backend's refusal instead of throwing, and the partner editor's Send /
+  Remove / PDF buttons are can_send / can_edit / can_doc.
+
+- `usage_sync_test.dart` — the Claude usage block is a PRINTER (#1365): the sync
+  line and its tone are dev_cmd_session_usage()' updated_display/updated_tone, so a
+  fetcher that has been dead since boot prints "sync failing: <reason>" and can never
+  read "synced 15h ago"; an expired window prints the backend's 0%% while raw_percent
+  remembers the 100 that was read; a stale-ignored reading prints its own copy; bars
+  render in payload order; an absent block is omitted, never dashed.
+- `context_economy_test.dart` — the Context economy panel is a PRINTER: title,
+  threshold chip, since-line, every row label/value/sub-line and the footnote are
+  dev_context_metrics() strings (the fixture's before/after deliberately disagree
+  with its own Change row, so a card that recomputed the percentage fails), has:false
+  draws nothing at all, an absent sub-line is omitted rather than dashed, tone is one
+  lookup with an unknown tone staying neutral, and rows render in payload order.
+
+- `probe_lane_test.dart` — the Probe lane block is a PRINTER and the only
+  screen that says where journeys are being aimed: the lane sentence, refusal
+  line, cast-debt line and rg line are dev_probe_lane_status()'s (the fixture's
+  chip names one ref while its refusal line names another and cast_debt 63
+  disagrees with its own "41 waiting" line, so anything re-derived fails), the
+  three sub-lines keep a fixed order, refusal colour is refusal_tone through one
+  lookup rather than "count > 0", an absent sub-line is omitted rather than
+  dashed or zeroed, and has:false draws nothing at all.
+- `claude_auth_test.dart` — the Claude login banner is a PRINTER, and never
+  invents reassurance: a healthy login draws NOTHING (a permanent green badge is
+  how a real red stops being read) and so does has:false, every word is
+  claude_auth_status()'s (the fixture's title deliberately disagrees with its own
+  bucket, so a card that re-derived anything from bucket fails), an absent
+  sub-line or version is omitted rather than dashed, `can` is the backend's
+  decision so the button disappears while a login is already running while the
+  link and code stay on screen, and a tap calls the parent exactly once and
+  talks to no network.
+
+- `deep_link_routes_test.dart` — a `/admin/go/<key>` link is not a dead end
+  (CMD #757): the URL parses to the registry's own route key with no welded-on
+  subject, a RESOLVED matrix obeys `access_boot().routes[].stage` even when the
+  fixture deliberately pairs `ops_board` with the WRONG stage (so a Dart map
+  that "knows" the answer fails), an UNRESOLVED matrix still opens Fulfill
+  because shellWhenAccessResolved gives up after 5 s and the cold-boot list
+  carries every alert-shaped destination, an unrelated route is left alone cold
+  or warm, and the shell still calls the shard BEFORE its switch — after the
+  switch, `default:` has already printed "not in your app yet".
 
 The suite runs on the Dart VM in ~2s. Keep it that way: no network, no goldens, no Supabase, no camera — mock RPC payloads inline. If a widget resists mocking, extract its decisions into a pure class and test that. Set `RenderLog.flushEnabled = false` in setUpAll for any test rendering a widget that calls RenderLog.write — its 800 ms debounce is a real Timer that would otherwise outlive the test and try to reach Supabase.
-
 
 
 ## PROJECT · dart_imports  (priority 92, v2)

@@ -52,15 +52,24 @@ $c1817$;
 
 -- ── 2. the knobs live in worker_pool, never in a script ─────────────────────
 -- poll_s        how long the shell sleeps between checks (spec default 60 s)
--- max_wait_s    the ceiling; past it the waiter returns and the agent re-reads
---               the lane once, cheaply, instead of sleeping forever
+-- max_wait_s    how long ONE call of the waiter may sleep. It is 540 s, not
+--               "the whole wait", because a Claude Code Bash call is capped at
+--               ten minutes: a waiter that tried to sleep for 17 minutes would
+--               be killed by the tool and the agent would wake up with no line
+--               to read, which is the exact state that makes it start thinking.
+--               So a long wait is CHUNKED — the loop returns one line saying
+--               "still queued, run the same command again", the agent re-runs
+--               it, and dev_wait_begin keeps the original wait_since and token
+--               mark so the accounting spans the whole wait, not the chunk.
+--               A 17-minute lane wait is therefore two model turns of a few
+--               hundred tokens, against #1812's 159,555.
 -- turn_tokens   a token delta bigger than this, while asleep, is a model turn
 update public.dev_runner_config
    set value = jsonb_set(value, '{wait_gate}',
          coalesce(value->'wait_gate','{}'::jsonb)
          || jsonb_build_object(
               'poll_s',      coalesce(value->'wait_gate'->'poll_s',      to_jsonb(60)),
-              'max_wait_s',  coalesce(value->'wait_gate'->'max_wait_s',  to_jsonb(2700)),
+              'max_wait_s',  coalesce(value->'wait_gate'->'max_wait_s',  to_jsonb(540)),
               'turn_tokens', coalesce(value->'wait_gate'->'turn_tokens', to_jsonb(2000)),
               'note', to_jsonb('CHANGE #1817 — waiting is a shell sleep, not a model turn. poll_s is how long the wait loop sleeps between checks; turn_tokens is the delta that makes a wait_turn event; waiting_token_grace (worker_pool root) stays the kill backstop.'::text)),
          true)
@@ -75,7 +84,7 @@ set search_path to 'public'
 as $function$
   select jsonb_build_object(
            'poll_s',      coalesce((value->'wait_gate'->>'poll_s')::int, 60),
-           'max_wait_s',  coalesce((value->'wait_gate'->>'max_wait_s')::int, 2700),
+           'max_wait_s',  coalesce((value->'wait_gate'->>'max_wait_s')::int, 540),
            'turn_tokens', coalesce((value->'wait_gate'->>'turn_tokens')::bigint, 2000),
            'grace',       coalesce((value->>'waiting_token_grace')::bigint, 150000))
     from dev_runner_config where key = 'worker_pool'
@@ -153,7 +162,7 @@ language plpgsql
 security definer
 set search_path to 'public'
 as $function$
-declare r dev_commands%rowtype; v_cfg jsonb; v_tok bigint; v_reason text;
+declare r dev_commands%rowtype; v_cfg jsonb; v_tok bigint; v_reason text; v_cont boolean;
 begin
   perform _dev_guard();
   select * into r from dev_commands where id = p_id;
@@ -166,34 +175,45 @@ begin
   v_tok   := coalesce(r.cost_input_tokens,0) + coalesce(r.cost_output_tokens,0);
   v_reason := coalesce(nullif(p_reason,''), 'queued in the ' || coalesce(p_kind,'lane') || ' lane');
 
+  -- RE-ENTRANT ON PURPOSE. One call of the waiter sleeps for max_wait_s and
+  -- then hands back a line; the agent re-runs it and lands here again. If this
+  -- is a continuation of the SAME wait, wait_since and the token mark are kept,
+  -- so the burn that gets measured (and killed on) is the burn of the whole
+  -- wait, not of the last chunk — otherwise a builder could poll for ever, a
+  -- chunk at a time, and never trip the grace.
+  v_cont := coalesce(r.wait_state,'') = 'sleeping' and coalesce(r.wait_kind,'') = coalesce(p_kind,'other');
+
   update dev_commands
      set wait_state          = 'sleeping',
          wait_kind           = coalesce(p_kind,'other'),
          wait_reason         = v_reason,
-         wait_since          = now(),
+         wait_since          = case when v_cont then coalesce(wait_since, now()) else now() end,
          wait_until          = now() + ((v_cfg->>'max_wait_s')::int || ' seconds')::interval,
          wait_blocker        = coalesce(p_blocker,'{}'::jsonb),
-         wait_count          = coalesce(wait_count,0) + 1,
-         wait_started_tokens = v_tok,
-         wait_turn_tokens    = v_tok,
-         wait_turns          = 0,
-         wait_polls          = 0,
+         wait_count          = case when v_cont then coalesce(wait_count,0) else coalesce(wait_count,0) + 1 end,
+         wait_started_tokens = case when v_cont then coalesce(wait_started_tokens, v_tok) else v_tok end,
+         wait_turn_tokens    = case when v_cont then coalesce(wait_turn_tokens, v_tok) else v_tok end,
+         wait_turns          = case when v_cont then coalesce(wait_turns,0) else 0 end,
+         wait_polls          = case when v_cont then coalesce(wait_polls,0) else 0 end,
          heartbeat_at        = now(),
          eta_note            = 'asleep: ' || v_reason
    where id = p_id;
 
-  insert into dev_context_event (command_id, agent, kind, ok, detail)
-  values (p_id, coalesce(p_agent, r.claimed_by), 'wait_start', true,
-          jsonb_build_object('wait_kind', coalesce(p_kind,'other'),
-                             'reason', v_reason,
-                             'blocker', coalesce(p_blocker,'{}'::jsonb),
-                             'tokens_at_start', v_tok));
+  if not v_cont then
+    insert into dev_context_event (command_id, agent, kind, ok, detail)
+    values (p_id, coalesce(p_agent, r.claimed_by), 'wait_start', true,
+            jsonb_build_object('wait_kind', coalesce(p_kind,'other'),
+                               'reason', v_reason,
+                               'blocker', coalesce(p_blocker,'{}'::jsonb),
+                               'tokens_at_start', v_tok));
+  end if;
 
   return jsonb_build_object('ok', true,
+    'continuing', v_cont,
     'poll_s',      (v_cfg->>'poll_s')::int,
     'max_wait_s',  (v_cfg->>'max_wait_s')::int,
     'turn_tokens', (v_cfg->>'turn_tokens')::bigint,
-    'started_tokens', v_tok,
+    'started_tokens', case when v_cont then coalesce(r.wait_started_tokens, v_tok) else v_tok end,
     'label', 'asleep — ' || v_reason);
 end
 $function$;
@@ -205,7 +225,7 @@ security definer
 set search_path to 'public'
 as $function$
 declare r dev_commands%rowtype; v_cfg jsonb; v_free boolean := false; v_why text;
-        v_paths text[]; v_entry bigint; v_st text; v_waited int; v_burn bigint;
+        v_paths text[]; v_entry bigint; v_st text; v_waited int; v_burn bigint; v_hold text; v_args text;
 begin
   perform _dev_guard();
   select * into r from dev_commands where id = p_id;
@@ -250,10 +270,6 @@ begin
   end if;
 
   v_waited := greatest(0, extract(epoch from (now() - coalesce(r.wait_since, now())))::int);
-  if not v_free and r.wait_until is not null and now() >= r.wait_until then
-    v_free := true;
-    v_why  := 'max wait reached — check the lane once, cheaply';
-  end if;
 
   update dev_commands
      set wait_polls = coalesce(wait_polls,0) + 1,
@@ -263,9 +279,24 @@ begin
   select coalesce(cost_input_tokens,0) + coalesce(cost_output_tokens,0) - coalesce(wait_started_tokens,0)
     into v_burn from dev_commands where id = p_id;
 
+  -- The ONE LINE the agent reads when a chunk of sleep ends without the lane
+  -- freeing. It is a backend string on purpose: the whole point of this change
+  -- is that the agent narrates nothing while it waits.
+  -- the re-run must be copy-pasteable, so it carries the blocker back with it
+  v_args := case coalesce(r.wait_kind,'other')
+              when 'merge' then coalesce(' ' || (r.wait_blocker->>'entry_id'), '')
+              when 'lease' then coalesce((select ' ' || string_agg(value #>> '{}', ' ')
+                                            from jsonb_array_elements(coalesce(r.wait_blocker->'paths','[]'::jsonb))), '')
+              else coalesce(' ' || quote_literal(r.wait_reason), '')
+            end;
+  v_hold := format('Still waiting after %s — %s. Sleep again: devcmd.sh wait %s %s%s. Do NOT plan, summarise or re-read anything.',
+                   _fmt_dur(v_waited), v_why, p_id, coalesce(r.wait_kind,'other'), v_args);
+
   return jsonb_build_object('ok', true, 'free', v_free, 'reason', v_why,
     'polls', coalesce(r.wait_polls,0) + 1, 'waited_s', v_waited,
+    'waited_label', _fmt_dur(v_waited),
     'burn', greatest(0, coalesce(v_burn,0)), 'turns', coalesce(r.wait_turns,0),
+    'hold_line', v_hold,
     'poll_s', (v_cfg->>'poll_s')::int);
 end
 $function$;

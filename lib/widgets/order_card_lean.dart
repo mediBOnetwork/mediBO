@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../design_tokens.dart';
+import 'order_stage_strip.dart';
 import '../screens/orders/order_hold_sheet.dart';
 import 'delivery_proof_card.dart';
 
@@ -44,6 +45,13 @@ class CustomerOrderCard {
   final bool progressShow;
   final List<Map<String, dynamic>> progressSteps;
 
+  /// CMD #1839 — the condensed strip's one sentence, already finished by the
+  /// backend: "Packing 14 of 15" while the stage is mixed, the stage's own name
+  /// when it is not. And the re-sourcing note when a line is disputed. Neither
+  /// is assembled here, and neither ever names a supplier.
+  final String progressCaption;
+  final String progressNote;
+
   /// PART A4 — the ONE action, named by the backend from the order's
   /// situation. `situation` is carried purely so a misroute is visible in the
   /// render-log; nothing renders it.
@@ -83,6 +91,8 @@ class CustomerOrderCard {
     required this.stageLabel,
     required this.progressShow,
     required this.progressSteps,
+    this.progressCaption = '',
+    this.progressNote = '',
     required this.actionKey,
     required this.actionLabel,
     required this.actionTone,
@@ -114,6 +124,8 @@ class CustomerOrderCard {
           .whereType<Map>()
           .map((s) => Map<String, dynamic>.from(s))
           .toList(),
+      progressCaption: (prog['caption'] ?? '').toString(),
+      progressNote: (prog['dispute_note'] ?? '').toString(),
       actionKey: (act['key'] ?? '').toString(),
       actionLabel: (act['label'] ?? '').toString(),
       actionTone: (act['tone'] ?? '').toString(),
@@ -296,7 +308,11 @@ class OrderCardLean extends StatelessWidget {
               ],
               if (card.progressShow && card.progressSteps.isNotEmpty) ...[
                 SizedBox(height: Ds.space.x12),
-                OrderProgressLine(steps: card.progressSteps),
+                OrderProgressLine(
+                  steps: card.progressSteps,
+                  caption: card.progressCaption,
+                  note: card.progressNote,
+                ),
               ],
               // CHANGE #708 — the hold door. It appears only when the BACKEND
               // says this order may be held (the stage gate) or is already
@@ -355,75 +371,34 @@ class OrderCardLean extends StatelessWidget {
   }
 }
 
-/// PART A7 — the four steps a pharmacy understands. Which four, what they are
-/// called and which one this order is on all arrive in the payload; this draws
-/// dots and joins them, in payload order.
+/// PART A7, rebuilt by CMD #1839 — the CONDENSED cumulative strip.
+///
+/// Fifteen stages will not fit fifteen labels on a phone card, so the card
+/// carries the dots and ONE sentence: `caption`, which the backend has already
+/// written as "Packing 14 of 15" while the stage is mixed and as the stage's
+/// own name when it is not. Completed dots are solid green on a green line,
+/// the current one is a green hollow ring, the rest are grey — the same
+/// vocabulary the Track popup uses, because both read the same payload.
+///
+/// The steps arrive in payload order and are drawn in payload order. This
+/// widget compares no timestamps, counts nothing and pluralises nothing.
 class OrderProgressLine extends StatelessWidget {
   final List<Map<String, dynamic>> steps;
-  const OrderProgressLine({super.key, required this.steps});
+  final String caption;
+  final String note;
+  const OrderProgressLine({
+    super.key,
+    required this.steps,
+    this.caption = '',
+    this.note = '',
+  });
 
   @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (var i = 0; i < steps.length; i++)
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    _StepDot(state: (steps[i]['state'] ?? '').toString()),
-                    if (i < steps.length - 1)
-                      Expanded(
-                        child: Container(
-                          height: 1,
-                          color: (steps[i]['state'] ?? '') == 'done'
-                              ? Ds.c.brand
-                              : Ds.c.divider,
-                        ),
-                      ),
-                  ],
-                ),
-                SizedBox(height: Ds.space.x4),
-                Padding(
-                  padding: EdgeInsets.only(right: Ds.space.x4),
-                  child: Text(
-                    (steps[i]['label'] ?? '').toString(),
-                    maxLines: 2,
-                    style: (steps[i]['state'] ?? '') == 'current'
-                        ? Ds.t.caption.copyWith(color: Ds.c.brand)
-                        : Ds.t.caption,
-                  ),
-                ),
-              ],
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-class _StepDot extends StatelessWidget {
-  final String state;
-  const _StepDot({required this.state});
-
-  @override
-  Widget build(BuildContext context) {
-    final done = state == 'done';
-    final current = state == 'current';
-    return Container(
-      width: Ds.space.x12,
-      height: Ds.space.x12,
-      margin: EdgeInsets.only(right: Ds.space.x4),
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: done || current ? Ds.c.brand : Ds.c.divider,
-        border: current ? Border.all(color: Ds.c.brand, width: 2) : null,
-      ),
-    );
-  }
+  Widget build(BuildContext context) => OrderStageStrip(
+        stages: steps.map(OrderStage.new).toList(),
+        caption: caption,
+        note: note,
+      );
 }
 
 /// PART A2 / A5 — one chip, used by the list's filter row and by the order

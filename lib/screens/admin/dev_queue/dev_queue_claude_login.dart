@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../design_tokens.dart';
+import '../../../utils/render_log.dart';
 
 /// The Claude login state on the Runner card (CHANGE #1816).
 ///
@@ -40,11 +41,19 @@ class ClaudeLoginLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // Absence is the backend's word too: nothing read yet draws nothing at all.
-    if ((payload['has'] ?? false) != true) return const SizedBox.shrink();
+    // The render-log key is written either way: "the line drew nothing" is a
+    // fact worth proving, and a key that only ever appears on the happy path
+    // cannot tell a blank card apart from a card that was never opened.
+    if ((payload['has'] ?? false) != true) {
+      RenderLog.write('c1816_claude_login', 'has=false');
+      return const SizedBox.shrink();
+    }
 
     final tone = _toneColor((payload['tone'] ?? '').toString());
     final title = (payload['title'] ?? '').toString();
     final lines = _lines;
+    RenderLog.write('c1816_claude_login',
+        'state=${payload['state'] ?? ''} lines=${lines.length}');
 
     return Padding(
       padding: EdgeInsets.only(top: Ds.space.x8, bottom: Ds.space.x4),

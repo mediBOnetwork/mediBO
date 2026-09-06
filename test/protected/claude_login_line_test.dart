@@ -16,6 +16,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pharma_b2b/design_tokens.dart';
+import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/screens/admin/dev_queue/dev_queue_claude_login.dart';
 
 Widget _host(Map<String, dynamic> payload) => MaterialApp(
@@ -26,6 +27,10 @@ Color _colorOf(WidgetTester t, String text) =>
     (t.widget<Text>(find.text(text)).style?.color)!;
 
 void main() {
+  // The widget writes one render-log key, whose 800 ms debounce is a real Timer
+  // that would otherwise outlive the test and try to reach Supabase.
+  setUpAll(() => RenderLog.flushEnabled = false);
+
   // Healthy login: the sentence is the backend's, and its colour is the plain
   // text colour — a permanent green badge is how a real red stops being read.
   testWidgets('logged in prints the backend sentence in plain text',

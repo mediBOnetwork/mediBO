@@ -21,17 +21,19 @@ begin
     return;
   end if;
 
+  -- route_key is not unique on surface_route (an alias feature can share a
+  -- door), so this is a guarded insert, not an ON CONFLICT.
   insert into public.surface_route (route_key, feature_key, kind, handled_by, note, is_active)
-  values ('token_dashboard', 'devtool.token_dashboard', 'feature', 'dev_queue_screen',
-          'CMD #1826 — openDevTool() -> TokenDashboardScreen; /admin/go/token_dashboard', true)
-  on conflict (route_key) do update
-    set feature_key = excluded.feature_key,
-        kind        = excluded.kind,
-        handled_by  = excluded.handled_by,
-        is_active   = true,
-        updated_at  = now()
-    where surface_route.feature_key is distinct from excluded.feature_key
-       or not surface_route.is_active;
+  select 'token_dashboard', 'devtool.token_dashboard', 'feature', 'dev_queue_screen',
+         'CMD #1826 — openDevTool() -> TokenDashboardScreen; /admin/go/token_dashboard', true
+   where not exists (select 1 from public.surface_route r
+                      where r.route_key = 'token_dashboard'
+                        and r.feature_key = 'devtool.token_dashboard');
+  update public.surface_route r
+     set is_active = true, updated_at = now()
+   where r.route_key = 'token_dashboard'
+     and r.feature_key = 'devtool.token_dashboard'
+     and not r.is_active;
 
   update public.feature_registry f
      set roles_allowed = array['super_admin']::text[]

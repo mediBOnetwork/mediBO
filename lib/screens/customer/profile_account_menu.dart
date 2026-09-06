@@ -29,11 +29,12 @@ Widget? customerMenuScreen(String routeKey) => switch (routeKey) {
       // decides where a customer reaches them from.
       'cust_account' => const MyAccountScreen(),
       'cust_orders' => const OrdersScreen(),
-      // CMD #1815 — there is ONE profile screen. The old Edit profile screen is
-      // gone; a registry row (or an older payload) still naming it lands on the
-      // tab that now holds the editor.
-      'cust_profile_edit' =>
-        const MyAccountScreen(initialTab: 'profile', initialSection: 'profile'),
+      // CMD #1834 — the Edit profile screen is DELETED, and its form is not in
+      // Profile & KYC either. The registry row is inactive; a stale row or an
+      // older payload that still names it opens the account page rather than a
+      // dead end, and asks for no section, because there is no profile section
+      // to land on any more.
+      'cust_profile_edit' => const MyAccountScreen(initialTab: 'profile'),
       'cust_addresses' => const AddressBookScreen(),
       'cust_staff_logins' => const CustomerStaffScreen(),
       'cust_loyalty_admin' => const LoyaltyAdminScreen(),

@@ -164,10 +164,10 @@ final Map<String, WidgetBuilder> kAppRoutes = <String, WidgetBuilder>{
   // neither route guards anything of its own.
   '/wishlist':     (_) => const WishlistScreen(),
   '/rewards':      (_) => const RewardsScreen(),
-  // CMD #1815 — ONE profile screen. This address used to open a second
-  // editor beside My Account -> Profile & KYC; it opens that tab now.
-  '/customer/profile':   (_) =>
-      const MyAccountScreen(initialTab: 'profile', initialSection: 'profile'),
+  // CMD #1834 — the second profile editor is gone for good. This address used
+  // to open it; it opens My Account -> Profile & KYC, and asks for no section
+  // because the editor is not embedded in that tab either.
+  '/customer/profile':   (_) => const MyAccountScreen(initialTab: 'profile'),
   '/customer/addresses': (_) => const AddressBookScreen(),
   '/register':     (_) => const LoginScreen(),
   // CHANGE #631 (PART A) — the delivery-partner registration form.

@@ -79,13 +79,29 @@ if [ -z "$applied" ] || [ "$(jq -r 'length' <<<"$applied")" -eq 0 ]; then
 fi
 
 pending=()
+unversioned=()
 for f in "${FILES[@]}"; do
   b=$(basename "$f" .sql); v="${b%%_*}"
-  # Files with no leading version (legacy names) are applied by the runner that
-  # wrote them and never replayed: nothing to key them on.
-  [[ "$v" =~ ^[0-9]{8,}$ ]] || continue
+  # CHANGE #1821 — a file whose version prefix is not purely numeric used to
+  # `continue` in SILENCE, and that silence is how #1821's entire backend
+  # shipped without ever reaching live: the file was named
+  # 20260906T160000_c1821_… and the T made it invisible here, so the Dart that
+  # calls those RPCs deployed on top of a schema that had never seen them.
+  # Nothing about the outcome changes — a file with no numeric version still
+  # cannot be keyed in the ledger and is still skipped — but it is now NAMED,
+  # counted and alerted, so the next one is caught in the batch that wrote it
+  # instead of days later. 16 legacy files (#698, #713, #962) are in this state
+  # on main today; renaming them here would make 16 old migrations pending at
+  # once, which this script rightly refuses, so they are reported, not moved.
+  if [[ ! "$v" =~ ^[0-9]{8,}$ ]]; then unversioned+=("$b"); continue; fi
   if ! jq -e --arg b "$b" 'index($b) != null' <<<"$applied" >/dev/null; then pending+=("$f"); fi
 done
+if [ ${#unversioned[@]} -gt 0 ]; then
+  log "SKIPPED ${#unversioned[@]} migration file(s) with no numeric version prefix — they can never reach live: ${unversioned[*]}"
+  "$DEVCMD" rpc rg_alert_raise "$(jq -nc --arg n "${#unversioned[@]}" --arg files "$(printf '%s ' "${unversioned[@]}")" '{p_kind:"migration_replay",p_level:"warn",
+     p_title:("\($n) migration file(s) can never reach live"),
+     p_detail:("supabase/migrations/ holds files whose version prefix is not purely numeric, so migration_replay.sh cannot key them in the ledger and skips them. Rename to YYYYMMDDHHMMSS_name.sql. Files: " + $files)}')" >/dev/null 2>&1 || true
+fi
 [ ${#pending[@]} -eq 0 ] && { log "nothing pending (${#FILES[@]} files, all in the ledger)"; exit 0; }
 log "${#pending[@]} pending file(s) to replay on live"
 if [ ${#pending[@]} -gt "${REPLAY_MAX_FILES:-15}" ]; then

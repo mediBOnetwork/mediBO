@@ -147,17 +147,54 @@ fi
 # CHANGE #1819 — knob, not a constant: pool_set() can turn the soft skip off the
 # day a control-plane migration genuinely needs to fail the batch.
 CP_SOFT=true
+PROD_SOFT=true
 if [ -n "$DEVDB" ]; then
   CP_SOFT=$(psql "$DEVDB" -Atc "select case when coalesce((value->'replay'->>'cp_soft_missing')::boolean, true) then 'true' else 'false' end from dev_runner_config where key='worker_pool'" 2>/dev/null || echo true)
   [ -n "$CP_SOFT" ] || CP_SOFT=true
+  PROD_SOFT=$(psql "$DEVDB" -Atc "select case when coalesce((value->'replay'->>'prod_soft_missing')::boolean, true) then 'true' else 'false' end from dev_runner_config where key='worker_pool'" 2>/dev/null || echo true)
+  [ -n "$PROD_SOFT" ] || PROD_SOFT=true
 fi
 
 rc=0
 for f in "${pending[@]}"; do
   b=$(basename "$f" .sql); v="${b%%_*}"; n="${b#*_}"
-  if ! psql "$DB" -q -v ON_ERROR_STOP=1 -c "set lock_timeout='30s'" -f "$f" >/tmp/replay_$v.log 2>&1; then
-    log "FAILED $b: $(grep -m1 -i 'error' /tmp/replay_$v.log)"
-    rc=1; break
+
+  # #637's declaration is read HERE, before either pass, because it governs
+  # BOTH of them. (The routing block below reuses this value.)
+  target=$(grep -m1 -oEi '^--[[:space:]]*replay-target:[[:space:]]*[a-z-]+' "$f" \
+             | sed -E 's/.*:[[:space:]]*//' | tr 'A-Z' 'a-z')
+
+  # ── the production pass ─────────────────────────────────────────────────
+  # CHANGE #1819 — and it is a PASS, not a law. #637 taught the script that a
+  # file may SAY where it belongs, then ran it on production regardless: batch
+  # 599 died on 20260906130000_c1817_wait_sleep, whose very first line reads
+  # `-- replay-target: control-plane`, at `relation "dev_commands" does not
+  # exist`. #1761 moved dev_commands off production, so that file could never
+  # have applied there — and one impossible pass took three innocent branches
+  # (#1816, #1818, #1819) down with it. A declaration only half the script
+  # honours is worse than no declaration at all.
+  if [ -n "$DEVDB" ] && [ "$target" = "control-plane" ]; then
+    log "$b declares replay-target: control-plane — control plane only"
+  elif ! psql "$DB" -q -v ON_ERROR_STOP=1 -c "set lock_timeout='30s'" -f "$f" >/tmp/replay_$v.log 2>&1; then
+    err=$(grep -m1 -i 'error' /tmp/replay_$v.log)
+    # The mirror of the control-plane soft skip below. An UNDECLARED file that
+    # names a control-plane table and dies on production for a symbol that only
+    # ever existed on the control plane was mis-ROUTED, not broken: nothing is
+    # half-applied, so route it, alert on it, and let the batch ship. Anything
+    # else still fails the batch, and pool_set() can turn this off.
+    if [ "$PROD_SOFT" = "true" ] && [ -n "$DEVDB" ] && [ -z "$target" ] \
+       && grep -qEi "(^|[^A-Za-z0-9_])(${CP_RE})([^A-Za-z0-9_]|$)" "$f" \
+       && grep -qEi 'ERROR: +(function|relation|column) .* does not exist' /tmp/replay_$v.log; then
+      log "SKIPPED $b on production (control-plane-only symbol): $err — control plane still gets it, batch continues"
+      psql "$DEVDB" -q -c "insert into public.rg_alerts(fingerprint,severity,kind,name,detail)
+         values ('replay_prod_misroute_$b','warn','deploy','migration mis-routed to production',
+                 jsonb_build_object('file','$b','fix','add -- replay-target: control-plane to the file'))
+         on conflict (fingerprint) do update set last_seen=now(), seen_count=rg_alerts.seen_count+1" >/dev/null 2>&1 || true
+      target="control-plane"
+    else
+      log "FAILED $b: $err"
+      rc=1; break
+    fi
   fi
   # CHANGE #1802 — the same file, on the control plane, before the ledger is
   # told anything. A file that lands on production and dies here is a FAILED
@@ -173,10 +210,9 @@ for f in "${pending[@]}"; do
   # the whole batch, so one mis-guessed file blocks every branch beside it.
   #   -- replay-target: production     (skip the control-plane pass)
   #   -- replay-target: control-plane  (take it, whatever the names say)
-  #   -- replay-target: both           (same; the production pass always runs)
+  #   -- replay-target: both           (both passes run — the default shape)
   # Anything else, or nothing at all, keeps the table-name heuristic.
-  target=$(grep -m1 -oEi '^--[[:space:]]*replay-target:[[:space:]]*[a-z-]+' "$f" \
-             | sed -E 's/.*:[[:space:]]*//' | tr 'A-Z' 'a-z')
+  # (`target` was read at the top of the loop — the production pass needs it.)
   if [ -n "$DEVDB" ] && [ "$target" = "production" ]; then
     log "$b declares replay-target: production — production only"
   elif [ -n "$DEVDB" ] && [ -z "$target" ] \

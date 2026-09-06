@@ -1369,3 +1369,23 @@ ON CONFLICT (feature_key) DO UPDATE
       roles_allowed = EXCLUDED.roles_allowed,
       search_terms  = EXCLUDED.search_terms,
       deep_link     = EXCLUDED.deep_link;
+
+-- ─────────────────────────────────────────────────────────────
+-- 12. THE DOOR IS DECLARED, NOT JUST BUILT (CHANGE #821)
+--
+-- surface_route is where the app says which route_key the shell must be able to
+-- open. `test/protected/registered_routes.dart` is its offline mirror and
+-- admin_nav_reachability_test proves the two agree, so a shard arm that opens a
+-- screen no row declares is a FAILING build — which is exactly what it should
+-- be: that is a door with no key, the #697 Feedback-desk bug.
+-- ─────────────────────────────────────────────────────────────
+INSERT INTO public.surface_route (route_key, feature_key, kind, handled_by, note, is_active)
+VALUES ('triage', 'devtool.triage', 'feature', 'home_shell',
+        'CHANGE #639 — the triage inbox. The arm lives in shell/shell_extra_routes.dart '
+        'because home_shell.dart is at its 2,000-line ceiling.', true)
+ON CONFLICT (route_key, feature_key) DO UPDATE
+  SET kind        = EXCLUDED.kind,
+      handled_by  = EXCLUDED.handled_by,
+      note        = EXCLUDED.note,
+      is_active   = true,
+      updated_at  = now();

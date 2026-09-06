@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 
 import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
 import 'claude_auth_banner.dart';
 import 'dev_queue_branch.dart';
+import 'dev_queue_claude_login.dart';
 import 'dev_queue_common.dart';
 import 'dev_queue_context.dart';
 import 'dev_queue_health.dart';
@@ -145,14 +147,30 @@ class _DevQueueControlState extends State<DevQueueControl> {
       final results = await Future.wait([
         widget.service.ctlGet(),
         widget.service.sessionUsage(),
+        // CHANGE #1816 — the Claude login line is its own read rather than a
+        // field spliced into dev_ctl_get: that composer is shared by half a
+        // dozen changes, and a card that depends on winning a text patch on it
+        // goes silently blank the day someone re-writes it. Its own RPC cannot
+        // be lost that way. Failing alone leaves the rest of the card intact.
+        _loadClaudeLogin(),
       ]);
       if (mounted) {
         setState(() {
           _snap = results[0];
           _usage = results[1];
+          _claudeLogin = results[2];
         });
       }
     } catch (_) {}
+  }
+
+  Future<Map<String, dynamic>> _loadClaudeLogin() async {
+    try {
+      final r = await Supabase.instance.client.rpc('claude_login_line');
+      return r is Map ? Map<String, dynamic>.from(r) : const {};
+    } catch (_) {
+      return const {};
+    }
   }
 
   /// The 10s refresh, plus the backend's freshness verdict on the VM chip.
@@ -190,6 +208,7 @@ class _DevQueueControlState extends State<DevQueueControl> {
       (_snap['runner_status'] as Map?)?.cast<String, dynamic>() ?? const {};
   Map<String, dynamic> get _vm =>
       (_snap['vm'] as Map?)?.cast<String, dynamic>() ?? const {};
+  Map<String, dynamic> _claudeLogin = const {};
 
   /// CHANGE #1366 — the fleet's two silent states, both printed verbatim.
   /// `blocked` is runner_blocked_badge(): present only while a runner's boot
@@ -524,6 +543,11 @@ class _DevQueueControlState extends State<DevQueueControl> {
             _row('vm', c('dev_queue.ctl_vm'), Icons.dns_outlined, _vmChip()),
             _divider(),
             _row('claude', c('dev_queue.ctl_claude'), Icons.terminal, _claudeChip()),
+          // CHANGE #1816 — the login behind that toggle: when it was made, how
+          // long it lasts, and whether it has lapsed. Printed verbatim from
+          // claude_login_line(); absent until the VM has reported one.
+          if ((_claudeLogin['has'] ?? false) == true)
+            ClaudeLoginLine(payload: _claudeLogin),
             _divider(),
             _row('workflow', c('dev_queue.ctl_workflow'), Icons.sync, _workflowChip()),
             _divider(),

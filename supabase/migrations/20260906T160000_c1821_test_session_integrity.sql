@@ -678,15 +678,54 @@ begin
 end $$;
 
 -- ── 14. PERMISSION HOLES FOUND ON THIS PATH ───────────────────────────────
--- test_session_live_id() was granted to anon. Nothing in the app calls it (the
--- app reads test_session_banner()), and an id is one probe closer to a session
--- an anon has no business knowing exists. The SECURITY DEFINER callers inside
--- the database are unaffected.
-revoke execute on function public.test_session_live_id() from anon, authenticated;
--- test_session_residue() enumerates fifty tables; it belongs to the admin
--- screen, which reaches it through test_session_list()/test_mode_screen().
-revoke execute on function public.test_session_residue(bigint) from anon;
-grant execute on function public.test_session_expire_sweep() to service_role;
+-- Every one of these functions was reachable by ANON, and not because anybody
+-- granted it: Postgres gives EXECUTE to PUBLIC on a new function, and #573's
+-- `grant ... to authenticated` therefore never narrowed anything. The
+-- _test_guard() inside them is what actually refused the call — one guard, no
+-- second line. So the grants are made real here: revoke from PUBLIC first,
+-- then grant to exactly the roles that need it.
+--
+--   test_session_banner   — anon on purpose. A customer, a rider and a signed
+--                           out visitor must all SEE a live human session.
+--   test_session_live_id  — nobody outside the database. Nothing in the app
+--                           calls it; it is the stamping authority.
+--   *_start/_end/_purge/_list/_residue/_fingerprint — admins, through the
+--                           guard, and the service role.
+--   test_session_expire_sweep — the cron dispatcher only. It ENDS sessions;
+--                           it was reachable by every logged-in customer.
+do $$
+declare f text;
+begin
+  foreach f in array array[
+    'public.test_session_start(text, numeric)',
+    'public.test_session_end(bigint)',
+    'public.test_session_purge(bigint, int)',
+    'public.test_session_list(int)',
+    'public.test_session_residue(bigint)',
+    'public.test_session_live_id()',
+    'public.test_session_expire_sweep()',
+    'public.test_fingerprint(bigint)',
+    'public.test_run_start(text,text,text,int,bigint,text,text,boolean)',
+    'public.test_run_scope_to_bot(bigint)',
+    'public.test_session_banner()'
+  ] loop
+    if to_regprocedure(f) is not null then
+      execute format('revoke all on function %s from public, anon, authenticated', f);
+    end if;
+  end loop;
+end $$;
+
+grant execute on function public.test_session_banner() to anon, authenticated;
+grant execute on function public.test_session_start(text, numeric)  to authenticated;
+grant execute on function public.test_session_end(bigint)           to authenticated;
+grant execute on function public.test_session_purge(bigint, int)    to authenticated;
+grant execute on function public.test_session_list(int)             to authenticated;
+grant execute on function public.test_session_residue(bigint)       to authenticated;
+grant execute on function public.test_fingerprint(bigint)           to authenticated;
+grant execute on function public.test_run_start(text,text,text,int,bigint,text,text,boolean)
+  to authenticated, service_role;
+grant execute on function public.test_run_scope_to_bot(bigint)      to service_role;
+grant execute on function public.test_session_expire_sweep()        to service_role;
 
 -- ── 15. THE WORDS (backend, as always) ────────────────────────────────────
 insert into public.ui_copy (key, value) values

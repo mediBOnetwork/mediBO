@@ -25,11 +25,18 @@ import '../../utils/toast.dart';
 import '../../widgets/backend_chip.dart';
 import '../kyc/kyc_panel.dart';
 import 'profile_account_menu.dart' show customerMenuScreen;
+import 'profile_edit_screen.dart' show CustomerProfileForm;
 
 class MyAccountScreen extends StatefulWidget {
   /// A tab_key from the backend registry. Anything the registry does not offer
   /// is ignored and the payload's own default_tab wins.
   final String initialTab;
+
+  /// CMD #1815 — a block's own `section` key, so a link can land on the part
+  /// of a tab it was about. The KYC chip asks for 'kyc' and the customer
+  /// arrives at Licence & documents rather than at the top of a long tab. A
+  /// section this payload does not carry scrolls nowhere, in silence.
+  final String initialSection;
 
   /// Test seam. Null in production -> the real RPCs. The protected suite serves
   /// fixture payloads through this so the renderers can be proven without
@@ -56,6 +63,7 @@ class MyAccountScreen extends StatefulWidget {
   const MyAccountScreen({
     super.key,
     this.initialTab = '',
+    this.initialSection = '',
     this.pageRpc = 'my_account_page',
     this.logPrefix = 'c840_account',
     this.navResolver,
@@ -82,6 +90,7 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
   @override
   void initState() {
     super.initState();
+    _wantSection = widget.initialSection;
     _loadPage();
   }
 
@@ -665,6 +674,10 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
     switch (_s(b['widget'])) {
       case 'kyc_panel':
         return const KycPanel();
+      // CMD #1815 — THE profile editor, embedded where the backend put it.
+      // There is no separate Edit profile screen any more.
+      case 'profile_form':
+        return CustomerProfileForm(onSaved: _loadTab);
       default:
         return const SizedBox.shrink();
     }
@@ -957,6 +970,30 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
     );
   }
 
+  /// CMD #1815 — the section a link asked to land on, cleared the moment it
+  /// has been shown once so a pull-to-refresh does not yank the customer back.
+  /// The payload owns the anchor: a block carries its own `section` key and
+  /// this only finds it. A section this build is handed but the payload never
+  /// sent scrolls nowhere rather than throwing.
+  String _wantSection = '';
+  final GlobalKey _sectionKey = GlobalKey();
+
+  void _scheduleSectionScroll(List<Map<String, dynamic>> blocks) {
+    if (_wantSection.isEmpty) return;
+    if (!blocks.any((b) => _s(b['section']) == _wantSection)) {
+      _wantSection = '';
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _sectionKey.currentContext;
+      _wantSection = '';
+      if (ctx == null || !mounted) return;
+      Scrollable.ensureVisible(ctx,
+          duration: const Duration(milliseconds: 250), alignment: 0.05);
+      RenderLog.write('${widget.logPrefix}_section', _tabKey);
+    });
+  }
+
   Widget _tabBody(Map<String, dynamic> page) {
     if (_loadingTab) return const Center(child: CircularProgressIndicator());
     final tab = _tab;
@@ -973,6 +1010,7 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
       return Center(
           child: Text(_s(page['empty_label']), style: Ds.t.bodySecondary));
     }
+    _scheduleSectionScroll(blocks);
     return RefreshIndicator(
       onRefresh: _loadTab,
       child: ListView.separated(
@@ -980,8 +1018,10 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
         itemCount: blocks.length + (tab['has_more'] == true ? 1 : 0),
         separatorBuilder: (_, _) => SizedBox(height: Ds.space.x24),
         itemBuilder: (_, i) {
-          if (i < blocks.length) return _block(blocks[i]);
-          return _moreButton(tab);
+          if (i >= blocks.length) return _moreButton(tab);
+          final section = _s(blocks[i]['section']);
+          if (section.isEmpty || section != _wantSection) return _block(blocks[i]);
+          return KeyedSubtree(key: _sectionKey, child: _block(blocks[i]));
         },
       ),
     );

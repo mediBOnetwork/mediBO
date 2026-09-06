@@ -32,7 +32,6 @@ import 'screens/auth/login_screen.dart';
 import 'screens/customer/customer_staff_screen.dart'; // CMD #438: /customer/staff
 import 'screens/wishlist_screen.dart'; // CHANGE #745: /wishlist
 import 'screens/customer/my_account_screen.dart'; // CHANGE #840: /my-account
-import 'screens/customer/profile_edit_screen.dart'; // CHANGE #745: /customer/profile
 import 'screens/customer/address_book_screen.dart'; // CHANGE #745: /customer/addresses
 import 'screens/rewards_screen.dart'; // CHANGE #745: /rewards
 import 'screens/admin/admin_partner_console_screen.dart';
@@ -165,7 +164,10 @@ final Map<String, WidgetBuilder> kAppRoutes = <String, WidgetBuilder>{
   // neither route guards anything of its own.
   '/wishlist':     (_) => const WishlistScreen(),
   '/rewards':      (_) => const RewardsScreen(),
-  '/customer/profile':   (_) => const ProfileEditScreen(),
+  // CMD #1815 — ONE profile screen. This address used to open a second
+  // editor beside My Account -> Profile & KYC; it opens that tab now.
+  '/customer/profile':   (_) =>
+      const MyAccountScreen(initialTab: 'profile', initialSection: 'profile'),
   '/customer/addresses': (_) => const AddressBookScreen(),
   '/register':     (_) => const LoginScreen(),
   // CHANGE #631 (PART A) — the delivery-partner registration form.

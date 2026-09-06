@@ -14,7 +14,6 @@ import '../wishlist_screen.dart';
 import 'address_book_screen.dart';
 import 'customer_staff_screen.dart';
 import 'my_account_screen.dart';
-import 'profile_edit_screen.dart';
 
 /// CHANGE #745 — the screen a customer `route_key` opens.
 ///
@@ -30,7 +29,11 @@ Widget? customerMenuScreen(String routeKey) => switch (routeKey) {
       // decides where a customer reaches them from.
       'cust_account' => const MyAccountScreen(),
       'cust_orders' => const OrdersScreen(),
-      'cust_profile_edit' => const ProfileEditScreen(),
+      // CMD #1815 — there is ONE profile screen. The old Edit profile screen is
+      // gone; a registry row (or an older payload) still naming it lands on the
+      // tab that now holds the editor.
+      'cust_profile_edit' =>
+        const MyAccountScreen(initialTab: 'profile', initialSection: 'profile'),
       'cust_addresses' => const AddressBookScreen(),
       'cust_staff_logins' => const CustomerStaffScreen(),
       'cust_loyalty_admin' => const LoyaltyAdminScreen(),

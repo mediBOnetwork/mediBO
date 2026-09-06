@@ -24,7 +24,7 @@ import '../widgets/checkout_pay_sheet.dart';
 import '../widgets/companion_rail.dart';
 import 'auth/login_screen.dart';
 import 'profile_screen.dart';
-import 'customer/profile_edit_screen.dart'; // CHANGE #572 — the notice's action
+import 'customer/my_account_screen.dart'; // CMD #1815 — the notice's action
 import '../services/idempotency.dart';
 
 class CartScreen extends StatefulWidget {
@@ -263,20 +263,29 @@ class _CartScreenState extends State<CartScreen> {
   String get _placeOrderLabel =>
       (_checkout['button_label'] ?? '').toString();
 
-  /// CHANGE #572 — the ONE notice's inline action.
+  /// CHANGE #572 / CMD #1815 — the notice's (and now the chip's) inline action.
   ///
-  /// `render.notice.action` is a descriptor, not a route: the payload says
-  /// there IS an action, what it is called and which profile field it is
-  /// about. Only the navigation is ours. An action kind this build has never
-  /// heard of opens nothing, in silence — the same forward-compat rule the
-  /// home feed follows for an unknown layout.
+  /// `action` is a descriptor, not a route: the payload says there IS an
+  /// action, what it is called, and which screen, tab and section it is about.
+  /// Only the navigation is ours. An action kind this build has never heard of
+  /// opens nothing, in silence — the same forward-compat rule the home feed
+  /// follows for an unknown layout.
+  ///
+  /// #705 shipped '/account/kyc' as the route for this and no build ever had a
+  /// route by that name, so "Upload licence" opened nothing at all. The
+  /// descriptor names the registry key instead, and the customer lands on the
+  /// upload section itself.
   Future<void> _openNoticeAction(Map<String, dynamic> action) async {
-    if ((action['kind'] ?? '').toString() != 'profile_edit') return;
-    RenderLog.write('c572_notice_action', (action['field'] ?? '').toString());
-    await Navigator.of(context)
-        .push(MaterialPageRoute(builder: (_) => const ProfileEditScreen()));
+    final kind = (action['kind'] ?? '').toString();
+    if (kind != 'customer_route' && kind != 'profile_edit') return;
+    final tab = (action['tab_key'] ?? 'profile').toString();
+    final section = (action['section'] ?? '').toString();
+    RenderLog.write('c1815_kyc_chip_action', '$tab/$section');
+    await Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) =>
+            MyAccountScreen(initialTab: tab, initialSection: section)));
     if (!mounted) return;
-    // The licence may now be on file, so the gate has to be asked again.
+    // A document may now be on file, so the cart's chip has to be asked again.
     await AppState.of(context).reloadFromServer();
   }
 
@@ -3105,12 +3114,27 @@ class C572CartNotice extends StatelessWidget {
   Widget build(BuildContext context) {
     final n = (render['notice'] as Map?)?.cast<String, dynamic>() ?? const {};
     final note = (n['note'] ?? '').toString();
+    final chip = (n['chip'] as Map?)?.cast<String, dynamic>() ?? const {};
 
     if (n['has'] != true) {
-      if (note.isEmpty) return const SizedBox.shrink();
+      // CMD #1815 — a licence that is not on file WARNS. It is a small chip
+      // with a View action and nothing else: no full-width card, no countdown,
+      // and no sentence about ordering stopping, because ordering does not
+      // stop. Approval decided that, by hand, before the account existed.
+      final chipRow =
+          chip['has'] == true ? C1815KycChip(chip: chip, onAction: onAction) : null;
+      if (chipRow == null && note.isEmpty) return const SizedBox.shrink();
       return Padding(
         padding: EdgeInsets.only(top: Ds.space.x8),
-        child: Text(note, style: Ds.t.caption),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (chipRow != null) chipRow,
+            if (chipRow != null && note.isNotEmpty)
+              SizedBox(height: Ds.space.x8),
+            if (note.isNotEmpty) Text(note, style: Ds.t.caption),
+          ],
+        ),
       );
     }
 
@@ -3126,6 +3150,67 @@ class C572CartNotice extends StatelessWidget {
       onAction: (actionLabel.isEmpty || onAction == null)
           ? null
           : () => onAction!(action),
+    );
+  }
+}
+
+
+/// CMD #1815 — the smallest thing that can say "we still need a document".
+///
+/// Every word, colour and destination is `cart_render().render.notice.chip`,
+/// which is `kyc_chip_block()`'s answer: the label, the three tone colours and
+/// the action's own label and route descriptor. Nothing here knows what KYC
+/// is, which state the account is in, or where Licence & documents lives — a
+/// chip with no action draws no button, and a chip the backend did not send
+/// draws nothing at all.
+class C1815KycChip extends StatelessWidget {
+  final Map<String, dynamic> chip;
+  final void Function(Map<String, dynamic> action)? onAction;
+
+  const C1815KycChip({super.key, required this.chip, this.onAction});
+
+  @override
+  Widget build(BuildContext context) {
+    if (chip['has'] != true) return const SizedBox.shrink();
+    final label = (chip['label'] ?? '').toString();
+    if (label.isEmpty) return const SizedBox.shrink();
+    final tone = (chip['tone'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final action = (chip['action'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final actionLabel =
+        action['has'] == true ? (action['label'] ?? '').toString() : '';
+    final fg = Ds.hex(tone['fg'], Ds.c.warning);
+    RenderLog.write('c1815_kyc_chip', (chip['state'] ?? '').toString());
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: EdgeInsets.symmetric(
+              horizontal: Ds.space.x8, vertical: Ds.space.x4),
+          decoration: BoxDecoration(
+            color: Ds.hex(tone['bg'], Ds.c.warningSoft),
+            borderRadius: BorderRadius.circular(Ds.r.chip),
+            border: Border.all(color: Ds.hex(tone['border'], Ds.c.divider)),
+          ),
+          child: Text(label, style: Ds.t.caption.copyWith(color: fg)),
+        ),
+        if (actionLabel.isNotEmpty && onAction != null) ...[
+          SizedBox(width: Ds.space.x4),
+          // 44x44 of tappable area around a deliberately small label.
+          SizedBox(
+            height: Ds.touch.minTarget,
+            child: TextButton(
+              onPressed: () => onAction!(action),
+              style: TextButton.styleFrom(
+                padding: EdgeInsets.symmetric(horizontal: Ds.space.x8),
+                minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget),
+                foregroundColor: Ds.c.brand,
+              ),
+              child: Text(actionLabel, style: Ds.t.caption),
+            ),
+          ),
+        ],
+      ],
     );
   }
 }

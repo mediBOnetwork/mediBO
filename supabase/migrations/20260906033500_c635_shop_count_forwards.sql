@@ -59,6 +59,12 @@ begin
    where oi.order_id = p_order_id
      and coalesce(oi.unfulfillable,false) = false
      and coalesce(btrim(oi.assigned_supplier),'') <> ''
+     -- and it is a SYNTHETIC supplier, checked here rather than assumed.
+     -- _synthetic_party_guard only refuses a mismatch it RECOGNISES, so a
+     -- synthetic order carrying a name no supplier_profiles row knows would
+     -- slip past it — and forwarding a real supplier is the one thing this
+     -- statement must never do.
+     and public.synthetic_supplier_is(oi.assigned_supplier, null)
   on conflict (assigned_supplier, mode_date) do nothing;
   get diagnostics v_fw = row_count;
 

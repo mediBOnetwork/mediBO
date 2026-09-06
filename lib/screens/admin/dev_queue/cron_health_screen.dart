@@ -158,6 +158,15 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
           'c324_deploy_lane',
           _lane['ok'] == true ? 'ok' : (_lane.isEmpty ? 'absent' : 'refused'),
         );
+        // CHANGE #1822 — painted-proof for the renewal line: 'ok' only when
+        // deploy_lane_status() sent a renewal sentence and the card drew it.
+        RenderLog.write(
+          'c1822_lane_renewal',
+          (((_lane['lane'] as Map?)?['renewal_label'] as String?) ?? '')
+                  .isNotEmpty
+              ? 'ok'
+              : 'absent',
+        );
         // CHANGE #327 — painted-proof for the build lane, same contract as the
         // two lanes above: 'ok' only when the backend answered AND the section
         // drew its payload.

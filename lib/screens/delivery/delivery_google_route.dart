@@ -84,6 +84,30 @@ class DeliveryGoogleRoute {
         stops.add({'lead_id': id, 'lat': lat, 'lng': lng});
       }
 
+      // 2b. CMD #1840 — the cost gate, and the ONLY thing standing between a
+      // multi-stop run and one Google route call per stop. The backend owns the
+      // whole decision: delivery_google_budget() prices the trip by its
+      // assignment identity (when the run started, which rider holds which stop
+      // since when) and inserts against a primary key, so the SECOND caller for
+      // the same trip is refused by the database rather than by a comment here.
+      // A stop completing does not change that identity, so a completion buys
+      // no call; a reassignment does, so it buys exactly one. `allow:false`
+      // means this trip has already been routed — leave the stored per-leg road
+      // minutes alone (delivery_recompute_eta rebases the ETA from them and
+      // calls no API) and return without touching Google.
+      final budget = await client.rpc('delivery_google_budget', params: {
+        'p_run_id': runId,
+        'p_reason': 'trip_start',
+      });
+      final budgetMap = budget is Map ? Map<String, dynamic>.from(budget) : null;
+      if (budgetMap == null || budgetMap['allow'] != true) {
+        final why = budgetMap?['reason']?.toString() ?? 'no_answer';
+        RenderLog.write('c1840_google_budget', 'allow=false;reason=' + why);
+        return null;
+      }
+      RenderLog.write('c1840_google_budget',
+          'allow=true;calls=' + (budgetMap['calls_for_run']?.toString() ?? '1'));
+
       // 3. The Route tab's call, unchanged in shape: hub + origin + stops, with
       // waypoint optimisation on inside the function.
       final res = await client.functions.invoke('google-route', body: {

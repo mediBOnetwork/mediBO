@@ -218,14 +218,64 @@ begin
 end
 $function$;
 
+-- ── 5a. the shared free-checker ─────────────────────────────────────────────
+-- One helper answers "is the blocker gone?" for the poller and for the sweep,
+-- so the two can never disagree. #1819 owns it; this file creates it only when
+-- it is absent, so replay order between the two commands cannot regress it.
+do $c1817f$
+begin
+  if to_regprocedure('public._dev_wait_free(bigint, text, jsonb)') is not null then
+    return;
+  end if;
+  execute $fn$
+    create or replace function public._dev_wait_free(p_id bigint, p_kind text, p_blocker jsonb)
+    returns jsonb language plpgsql security definer set search_path to 'public'
+    as $body$
+    declare v_entry bigint; v_st text; v_paths text[]; v_free boolean; v_why text; v_holder text;
+    begin
+      if coalesce(p_kind,'other') = 'merge' then
+        v_entry := nullif(p_blocker->>'entry_id','')::bigint;
+        if v_entry is not null then
+          select status into v_st from deploy_queue where id = v_entry;
+          v_free := v_st is null or v_st in ('deployed','evicted','failed');
+          v_why  := 'entry ' || v_entry || ' is ' || coalesce(v_st,'gone');
+        else
+          v_free := not exists (select 1 from deploy_queue q
+                                 where q.command_id = p_id
+                                   and q.status not in ('deployed','evicted','failed'));
+          v_why  := case when v_free then 'nothing of this command is in the lane'
+                         else 'still queued in the merge lane' end;
+        end if;
+      elsif coalesce(p_kind,'') = 'lease' then
+        v_paths := coalesce((select array_agg(value #>> '{}')
+                               from jsonb_array_elements(coalesce(p_blocker->'paths','[]'::jsonb))), '{}');
+        if v_paths = '{}' then
+          v_free := true; v_why := 'no path named';
+        else
+          select fl.worker into v_holder from file_leases fl
+           where fl.path = any(v_paths) and fl.command_id is distinct from p_id limit 1;
+          v_free := v_holder is null;
+          v_why  := case when v_free then 'every path is free'
+                         else 'a path is still leased by ' || v_holder end;
+        end if;
+      else
+        v_free := true;
+        v_why  := 'waiting out ' || coalesce(p_kind,'other');
+      end if;
+      return jsonb_build_object('free', coalesce(v_free,false), 'why', v_why);
+    end $body$;
+  $fn$;
+end
+$c1817f$;
+
 create or replace function public.dev_wait_poll(p_id bigint)
 returns jsonb
 language plpgsql
 security definer
 set search_path to 'public'
 as $function$
-declare r dev_commands%rowtype; v_cfg jsonb; v_free boolean := false; v_why text;
-        v_paths text[]; v_entry bigint; v_st text; v_waited int; v_burn bigint; v_hold text; v_args text;
+declare r dev_commands%rowtype; v_cfg jsonb; v_f jsonb; v_free boolean := false; v_why text;
+        v_waited int; v_burn bigint; v_hold text; v_args text;
 begin
   perform _dev_guard();
   select * into r from dev_commands where id = p_id;
@@ -244,27 +294,20 @@ begin
   v_cfg := _dev_wait_cfg();
   perform _dev_wait_turn_log(p_id);
 
-  if r.wait_kind = 'merge' then
-    v_entry := nullif(r.wait_blocker->>'entry_id','')::bigint;
-    if v_entry is not null then
-      select status into v_st from deploy_queue where id = v_entry;
-      v_free := v_st is null or v_st not in ('queued','batched','merging');
-      v_why  := coalesce('entry ' || v_entry || ' is ' || coalesce(v_st,'gone'), 'entry gone');
-    else
-      v_free := not exists (select 1 from deploy_queue q
-                             where q.command_id = p_id and q.status in ('queued','batched','merging'));
-      v_why  := case when v_free then 'nothing of this command is in the lane'
-                     else 'still queued in the merge lane' end;
-    end if;
-  elsif r.wait_kind = 'lease' then
-    v_paths := coalesce((select array_agg(value #>> '{}')
-                           from jsonb_array_elements(coalesce(r.wait_blocker->'paths','[]'::jsonb))), '{}');
-    v_free := (v_paths = '{}') or not exists (
-      select 1 from file_leases fl where fl.path = any(v_paths) and fl.command_id <> p_id);
-    v_why  := case when v_free then 'every path is free' else 'a path is still leased' end;
+  -- WHO IS STILL HOLDING THIS? The decision lives in _dev_wait_free (#1819),
+  -- one helper shared by the poller and the sweep, so the two can never drift
+  -- into disagreeing about whether a lane is open. It names the CLOSED states
+  -- positively (deployed / evicted / failed) rather than listing the open ones
+  -- — this file's first cut listed ('queued','batched','merging') and would
+  -- have woken a command the moment an entry sat in 'waiting', which is the
+  -- state deploy_queue actually parks a fresh push in.
+  if coalesce(r.wait_kind,'other') in ('merge','lease') then
+    v_f    := _dev_wait_free(p_id, r.wait_kind, r.wait_blocker);
+    v_free := coalesce((v_f->>'free')::boolean, false);
+    v_why  := v_f->>'why';
   else
-    -- db / rpc / batch / other: time is the only thing that heals it, so the
-    -- wait window itself is the condition.
+    -- db / rpc / batch / grant / other: only time heals it, so the wait window
+    -- itself is the condition.
     v_free := r.wait_until is not null and now() >= r.wait_until;
     v_why  := case when v_free then 'wait window elapsed' else 'waiting out ' || coalesce(r.wait_kind,'other') end;
   end if;

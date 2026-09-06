@@ -67,9 +67,23 @@ class RenderLog {
     // Don't flush to Supabase on reset — wait for new writes
   }
 
+  /// CHANGE #638 — the one hook a session recording needs. A screen that
+  /// reports itself here is a screen a recorded walkthrough can replay, so the
+  /// recorder listens instead of guessing at route names. Null in every build
+  /// where nothing is recording, which is every build until Om taps Record.
+  static void Function(String key, dynamic value)? onWrite;
+
   static void write(String key, dynamic value) {
     if (_log[key] == value) return; // skip if unchanged
     _log[key] = value;
+    final hook = onWrite;
+    if (hook != null) {
+      try {
+        hook(key, value);
+      } catch (_) {
+        // A recorder must never be able to break the screen it is watching.
+      }
+    }
     _writeToDOM();
     _scheduleSupabaseFlush(_log['build'] as String?);
   }

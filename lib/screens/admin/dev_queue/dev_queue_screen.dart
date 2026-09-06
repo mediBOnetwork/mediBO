@@ -28,6 +28,7 @@ import 'signin_diag_screen.dart';
 import 'memory_screen.dart';
 import 'threads_screen.dart';
 import '../ops_runbooks_screen.dart';           // CHANGE #474
+import 'chaos_lab_screen.dart';
 import 'dev_tools_sheet.dart';
 
 /// The Dev Queue registry — the permanent development record, rendered from
@@ -1192,6 +1193,9 @@ const Set<String> kDevToolKeys = <String>{
   // CHANGE #637 — the visual-regression review queue: what every registered
   // screen looks like now, beside the picture Om approved.
   'visual_baselines',
+  // CHANGE #638 — the chaos lab: seven scripted failures, and Om's own
+  // walkthroughs turned into permanent tests.
+  'chaos_lab',
   'bug_report',
   'drafts_inbox',
   'cron_health',
@@ -1234,6 +1238,9 @@ bool openDevTool(
       return true;
     case 'visual_baselines':
       push(VisualBaselinesScreen(service: svc));
+      return true;
+    case 'chaos_lab':
+      push(ChaosLabScreen(service: svc));
       return true;
     case 'bug_report':
       showBugReportSheet(context, svc);

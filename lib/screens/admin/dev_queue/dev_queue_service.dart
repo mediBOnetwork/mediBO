@@ -48,6 +48,15 @@ class DevQueueService {
     // test_results, feature_gaps and the role/hostile/stage tables. Same
     // reason: the control plane has none of them.
     'autotest_home',
+    // CHANGE #638 — chaos and session recording sit on production's test
+    // session, its idempotency ledger, its webhook log and its DB lane. Every
+    // one of those is production's own; the control plane has none of them.
+    'chaos_home',
+    'chaos_run_all',
+    'recording_start',
+    'recording_step_add',
+    'recording_stop',
+    'recording_promote',
   };
 
   /// The control-plane client (medibo-dev): minted on first use, re-minted
@@ -217,6 +226,58 @@ class DevQueueService {
   /// all arrive already worded and already toned.
   Future<Map<String, dynamic>> autotestHome({String filter = 'all'}) async =>
       _asMap(await _rpc('autotest_home', params: {'p_filter': filter}));
+
+  /// CHANGE #638 — the Chaos lab, in one payload: the seven scenarios with the
+  /// last run's verdict on each, the live recording and its steps, every
+  /// stopped walkthrough with its own promote decision, and the findings both
+  /// halves have filed. Every word, chip, tone and enabled flag is the
+  /// backend's — the screen counts nothing.
+  Future<Map<String, dynamic>> chaosHome({int? run}) async =>
+      _asMap(await _rpc('chaos_home', params: {'p_run': run}));
+
+  /// Run every active scenario. Returns the same payload [chaosHome] does, so
+  /// the screen re-renders from the run it just finished.
+  Future<Map<String, dynamic>> chaosRunAll({String? label}) async =>
+      _asMap(await _rpc('chaos_run_all', params: {'p_label': label}));
+
+  /// Start / stop / promote one recorded walkthrough. The refusals
+  /// (test mode off, no session, already recording, nothing recorded) are the
+  /// backend's own messages and are shown verbatim.
+  Future<Map<String, dynamic>> recordingStart(String label) async =>
+      _asMap(await _rpc('recording_start', params: {'p_label': label}));
+
+  Future<Map<String, dynamic>> recordingStep({
+    required int recording,
+    required String kind,
+    required String screen,
+    required String action,
+    Map<String, dynamic> detail = const {},
+    bool ok = true,
+  }) async =>
+      _asMap(await _rpc('recording_step_add', params: {
+        'p_recording': recording,
+        'p_kind': kind,
+        'p_screen': screen,
+        'p_action': action,
+        'p_detail': detail,
+        'p_ok': ok,
+      }));
+
+  Future<Map<String, dynamic>> recordingStop(int recording,
+          {String outcome = 'ok', String note = ''}) async =>
+      _asMap(await _rpc('recording_stop', params: {
+        'p_recording': recording,
+        'p_outcome': outcome,
+        'p_note': note,
+      }));
+
+  Future<Map<String, dynamic>> recordingPromote(int recording,
+          {String? title, String area = 'platform'}) async =>
+      _asMap(await _rpc('recording_promote', params: {
+        'p_recording': recording,
+        'p_title': title,
+        'p_area': area,
+      }));
 
   /// The journey library: every enabled journey, optionally scoped to an area.
   /// Rendered verbatim in the Journey Library screen.

@@ -9,7 +9,7 @@
      Dev Queue → Memory screen, or via the MCP memory server. Do NOT hand-edit
      this block; it is rewritten on every session start. Target: generic -->
 
-# Agent memory (generic) — 45 rules
+# Agent memory (generic) — 46 rules
 # Canonical fallback: see RULES.md in the repo root (git-committed).
 
 ## GLOBAL · style  (priority 10, v2)
@@ -414,6 +414,29 @@ ABSOLUTES:
 
 Built-in guards you should not fight: a pull-first guard (never build/commit/push on a stale local, CHANGE #424); auto-increment of the CHANGE # from web/version.json when no N is passed (CHANGE #57 fallback); a bundle-size assert (>1.5 MB or it aborts as corrupt); version.json + `<meta name="build-commit">` stamping; and a per-edge-node retry when polling https://medibo.in/version.json (CHANGE #604), because version.json propagates per node.
 
+
+
+## PROJECT · runner_waiting  (priority 74, v1)
+
+## WAITING COSTS NOTHING — IT IS A SHELL SLEEP (CHANGE #1817)
+
+#1812 finished its code at 11/11, queued behind deploy batch 594, and spent 159,555 tokens polling the lane and re-thinking between polls. The batch took 17 minutes and cost nothing. The DB backstop killed the row — which is the problem: the backstop should never be the thing that notices.
+
+The moment you are queued behind ANYTHING you cannot hurry — the merge lane, a batch, a file lease, a busy DB, an RPC that is timing out — you do not poll and you do not think. You run the waiter:
+
+    devcmd.sh wait <id> merge <entry-id>      # straight after queue_push
+    devcmd.sh wait <id> lease <path>...       # a file another command holds
+    devcmd.sh wait <id> db|rpc|other "<why>"  # anything only time heals
+
+It BLOCKS inside the Bash tool — sleep, check, sleep — so your turn is suspended for the whole of it and there is no turn in which to summarise, re-plan or narrate. It prints exactly ONE line, written by the backend.
+
+- **Exit 0** — the blocker is gone. The line names the next step; carry on from it. Do not re-read the spec, the state file or the prompt.
+- **Exit 75** — still busy. Run the IDENTICAL command again (the line hands it back to you, copy-pasteable). Nothing else in between. A Claude Code Bash call is capped at ten minutes, so a long wait is CHUNKED on purpose; dev_wait_begin is re-entrant, so the row stays asleep across chunks and the burn that is measured is the burn of the WHOLE wait.
+- Knobs live in worker_pool.wait_gate (poll_s 60, max_wait_s 540, turn_tokens 2000) — change them with pool_set(), never in a script.
+
+A model turn taken while the row is waiting is a BUG, and it is now visible: dev_context_event kind wait_turn records the token delta, _wait_burn_check writes them from the backstop side too, and the Context economy panel prints 'Waiting — 17m asleep · 340 tokens · N wake-ups · target 0' in danger tone the moment N is not zero. waiting_token_grace (150,000) still kills the row; after #1817 it should never fire again.
+
+devcmd.sh wait_state <id> is the one cheap read that says what a row is waiting on. The journey qa-1817-wait-sleeps holds the whole state machine down.
 
 
 ## PROJECT · deploy_lane  (priority 75, v5)
@@ -908,7 +931,7 @@ NEVER flip `bugloop.enforce=true` until the full chain (preview → journeys →
 
 
 
-## PROJECT · protected_tests  (priority 90, v11)
+## PROJECT · protected_tests  (priority 90, v13)
 
 ## PROTECTED TEST SUITE (CHANGE #635 — never remove)
 Before EVERY deploy, run `flutter test test/protected/` in addition to the
@@ -1019,6 +1042,14 @@ Current files and what they hold down:
   draws nothing at all, an absent sub-line is omitted rather than dashed, tone is one
   lookup with an unknown tone staying neutral, and rows render in payload order.
 
+- `probe_lane_test.dart` — the Probe lane block is a PRINTER and the only
+  screen that says where journeys are being aimed: the lane sentence, refusal
+  line, cast-debt line and rg line are dev_probe_lane_status()'s (the fixture's
+  chip names one ref while its refusal line names another and cast_debt 63
+  disagrees with its own "41 waiting" line, so anything re-derived fails), the
+  three sub-lines keep a fixed order, refusal colour is refusal_tone through one
+  lookup rather than "count > 0", an absent sub-line is omitted rather than
+  dashed or zeroed, and has:false draws nothing at all.
 - `claude_auth_test.dart` — the Claude login banner is a PRINTER, and never
   invents reassurance: a healthy login draws NOTHING (a permanent green badge is
   how a real red stops being read) and so does has:false, every word is
@@ -1029,17 +1060,15 @@ Current files and what they hold down:
   link and code stay on screen, and a tap calls the parent exactly once and
   talks to no network.
 
-- `chaos_lab_test.dart` — the Chaos lab is a PRINTER, on the one screen whose
-  job is telling the truth about failure: the run chip says "All 9 degraded
-  safely" over THREE rows and a counts_label that agrees with neither, so a
-  screen that counted its own rows fails; the verdict WORD and the verdict TONE
-  are two independent fields (one row reads "Degraded safely" in danger, another
-  carries a tone name this build has never heard of and stays neutral);
-  promote.can is the backend's decision, so a stopped walkthrough with steps
-  still shows no button when the payload says no; step counts print verbatim
-  ("1 step", "12 steps"); scenarios, recordings and live steps all render in
-  payload order; and absence is explicit — no live recording draws Start plus
-  the backend's own reason, never a fabricated "0 steps so far".
+- `deep_link_routes_test.dart` — a `/admin/go/<key>` link is not a dead end
+  (CMD #757): the URL parses to the registry's own route key with no welded-on
+  subject, a RESOLVED matrix obeys `access_boot().routes[].stage` even when the
+  fixture deliberately pairs `ops_board` with the WRONG stage (so a Dart map
+  that "knows" the answer fails), an UNRESOLVED matrix still opens Fulfill
+  because shellWhenAccessResolved gives up after 5 s and the cold-boot list
+  carries every alert-shaped destination, an unrelated route is left alone cold
+  or warm, and the shell still calls the shard BEFORE its switch — after the
+  switch, `default:` has already printed "not in your app yet".
 
 The suite runs on the Dart VM in ~2s. Keep it that way: no network, no goldens,
 no Supabase, no camera — mock RPC payloads inline. If a widget resists mocking,
@@ -1132,6 +1161,14 @@ What each file holds down:
   draws nothing at all, an absent sub-line is omitted rather than dashed, tone is one
   lookup with an unknown tone staying neutral, and rows render in payload order.
 
+- `probe_lane_test.dart` — the Probe lane block is a PRINTER and the only
+  screen that says where journeys are being aimed: the lane sentence, refusal
+  line, cast-debt line and rg line are dev_probe_lane_status()'s (the fixture's
+  chip names one ref while its refusal line names another and cast_debt 63
+  disagrees with its own "41 waiting" line, so anything re-derived fails), the
+  three sub-lines keep a fixed order, refusal colour is refusal_tone through one
+  lookup rather than "count > 0", an absent sub-line is omitted rather than
+  dashed or zeroed, and has:false draws nothing at all.
 - `claude_auth_test.dart` — the Claude login banner is a PRINTER, and never
   invents reassurance: a healthy login draws NOTHING (a permanent green badge is
   how a real red stops being read) and so does has:false, every word is
@@ -1141,6 +1178,16 @@ What each file holds down:
   decision so the button disappears while a login is already running while the
   link and code stay on screen, and a tap calls the parent exactly once and
   talks to no network.
+
+- `deep_link_routes_test.dart` — a `/admin/go/<key>` link is not a dead end
+  (CMD #757): the URL parses to the registry's own route key with no welded-on
+  subject, a RESOLVED matrix obeys `access_boot().routes[].stage` even when the
+  fixture deliberately pairs `ops_board` with the WRONG stage (so a Dart map
+  that "knows" the answer fails), an UNRESOLVED matrix still opens Fulfill
+  because shellWhenAccessResolved gives up after 5 s and the cold-boot list
+  carries every alert-shaped destination, an unrelated route is left alone cold
+  or warm, and the shell still calls the shard BEFORE its switch — after the
+  switch, `default:` has already printed "not in your app yet".
 
 The suite runs on the Dart VM in ~2s. Keep it that way: no network, no goldens, no Supabase, no camera — mock RPC payloads inline. If a widget resists mocking, extract its decisions into a pure class and test that. Set `RenderLog.flushEnabled = false` in setUpAll for any test rendering a widget that calls RenderLog.write — its 800 ms debounce is a real Timer that would otherwise outlive the test and try to reach Supabase.
 

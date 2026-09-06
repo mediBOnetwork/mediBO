@@ -23,6 +23,13 @@
 //
 //   4. Rows render in PAYLOAD ORDER. The fixture is deliberately not sorted by
 //      label, value or tone, so any client-side sort fails here.
+//
+//   5. CHANGE #1817 — the Waiting row. It is the only place Om can see that a
+//      queued command sat there THINKING (#1812 spent 159,555 tokens waiting
+//      for a 17-minute batch that cost nothing). Its value, its sub-line and
+//      its DANGER tone are all the backend's: the fixture pairs a red tone with
+//      a sub-line that says "0 wake-up(s)", so a card that decided the colour
+//      from the wake-up count would turn it green and fail here.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -58,6 +65,14 @@ Map<String, dynamic> _payload({bool has = true, List? rows}) => {
               'value': '-41.9%',
               'sub': 'lower is better',
               'tone': 'success'
+            },
+            {
+              // #1817: red, with a sub-line that reads zero. The card must not
+              // reconcile the two — the tone is carried, not inferred.
+              'label': 'Waiting',
+              'value': '17m asleep · 340 tokens',
+              'sub': '2 wait(s) · 0 wake-up(s) · target 0',
+              'tone': 'danger'
             },
             {
               'label': '/compact vs /clear',
@@ -137,6 +152,43 @@ void main() {
     expect(find.text('-'), findsNothing);
   });
 
+  testWidgets(
+      'CHANGE #1817 — the Waiting row prints the backend\'s words and its own tone',
+      (tester) async {
+    await _pump(tester, _payload());
+
+    // Verbatim. Not "17 minutes", not a recomputed token count, not a plural
+    // Dart chose: the whole sentence is one backend string.
+    expect(find.text('Waiting'), findsOneWidget);
+    expect(find.text('17m asleep · 340 tokens'), findsOneWidget);
+    expect(find.text('2 wait(s) · 0 wake-up(s) · target 0'), findsOneWidget);
+
+    // And the colour is the payload's, even though its own sub-line reads zero
+    // wake-ups. Whether waiting was expensive is the database's judgement.
+    expect(ContextEconomyCard.toneKey('danger'), 'failed');
+  });
+
+  testWidgets('#1817 — a Waiting row with no waits yet is still just printed',
+      (tester) async {
+    await _pump(
+        tester,
+        _payload(rows: const [
+          {
+            'label': 'Waiting',
+            'value': 'no waits yet',
+            'sub': 'a queued command sleeps in the shell — target 0 wake-ups',
+            'tone': 'info'
+          },
+        ]));
+    expect(find.text('no waits yet'), findsOneWidget);
+    expect(
+        find.text('a queued command sleeps in the shell — target 0 wake-ups'),
+        findsOneWidget);
+    // No zero is invented for an unmeasured state.
+    expect(find.text('0'), findsNothing);
+    expect(find.text('—'), findsNothing);
+  });
+
   test('tone is a lookup, and an unknown tone stays neutral', () {
     expect(ContextEconomyCard.toneKey('success'), 'completed');
     expect(ContextEconomyCard.toneKey('warning'), 'pending');
@@ -155,6 +207,7 @@ void main() {
         .map((t) => t.data ?? '')
         .where((s) => s.startsWith('Tokens / command') ||
             s == 'Change' ||
+            s == 'Waiting' ||
             s == '/compact vs /clear' ||
             s == 'Average resume size')
         .toList();
@@ -162,6 +215,7 @@ void main() {
       'Tokens / command — before',
       'Tokens / command — after',
       'Change',
+      'Waiting',
       '/compact vs /clear',
       'Average resume size',
     ]);

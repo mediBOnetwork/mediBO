@@ -13,10 +13,10 @@ import '../services/test_session.dart';
 /// The host reflows the page (SafeArea + Column) rather than floating over it,
 /// because a banner that can be scrolled behind is a banner he can forget.
 ///
-/// CMD #1848 — the session is PER-USER now. `test_session_banner()` answers
-/// `on:true` only for the person who started the session and the logins they
-/// listed under "Also testing as"; everyone else's app shows nothing, because
-/// nothing of theirs is being stamped. The strip names WHOSE session it is
+/// CMD #1848 — the session is bound to THIS INSTALL now. `test_session_banner()`
+/// answers `on:true` only to the device carrying the session's token (whoever
+/// is signed in there); every other device shows nothing, because nothing of
+/// its is being stamped. The strip names WHOSE session it is
 /// (`owner_label`), when it auto-ends (`ends_label`), and carries the one
 /// action — End & purge — whose every word, confirm sentence and result
 /// message are the backend's.

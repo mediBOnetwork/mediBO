@@ -273,4 +273,42 @@ void main() {
           findsOneWidget);
     });
   });
+
+  group('5. the install token is a header, attached in ONE place', () {
+    // Om's correction: the session is bound to the client install and carried
+    // as x-medibo-test-session. headersWith() is the whole rule the client
+    // applies to the one Supabase header map — nothing is decided in Dart.
+    test('a token is added under the exact header the backend reads', () {
+      final h = TestSessionState.headersWith(
+          const {'apikey': 'k', 'Authorization': 'Bearer j'}, 'tok-1');
+      expect(h[TestSessionState.headerName], 'tok-1');
+      expect(TestSessionState.headerName, 'x-medibo-test-session');
+      // apikey and the signed-in Authorization survive: a header attach that
+      // rebuilt the map from scratch would 401 every request after it.
+      expect(h['apikey'], 'k');
+      expect(h['Authorization'], 'Bearer j');
+      expect(h.length, 3);
+    });
+
+    test('no token means NO header — the ordinary request, byte-identical', () {
+      final base = const {'apikey': 'k', 'Authorization': 'Bearer j'};
+      expect(TestSessionState.headersWith(base, null), equals(base));
+      expect(TestSessionState.headersWith(base, ''), equals(base));
+    });
+
+    test('clearing removes only the session header', () {
+      final h = TestSessionState.headersWith(const {
+        'apikey': 'k',
+        'x-medibo-test-session': 'stale',
+      }, null);
+      expect(h.containsKey('x-medibo-test-session'), isFalse);
+      expect(h['apikey'], 'k');
+    });
+
+    test('the input map is never mutated — the client copy is the only write', () {
+      final base = <String, String>{'apikey': 'k'};
+      TestSessionState.headersWith(base, 'tok');
+      expect(base.containsKey(TestSessionState.headerName), isFalse);
+    });
+  });
 }

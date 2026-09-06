@@ -6,10 +6,20 @@
 -- demanded a SYNTHETIC profile, so a real pharmacy could never place a test
 -- order, and the error named the wrong reason.
 --
--- What changes, and nothing else:
---   1. ONE reader — test_session_for(uid) — decides whose live session a
---      write belongs to. A human session stamps ONLY its owner's (and its
---      listed actors') writes. 'global' no longer means everyone.
+-- Om's correction (thread, 6 Sep 20:37 + 20:39 UTC): the session is bound to
+-- the CLIENT INSTALL, not to an auth user and not to a browser. Om starts
+-- test mode as an admin and then signs in as a real pharmacy ON THE SAME
+-- PHONE to shop; that phone is incognito, whoever is signed in there, until
+-- the session ends. His laptop, and that pharmacy on its own phone, write
+-- real data. So:
+--   1. ONE reader — test_session_mine() — resolves the live session from the
+--      opaque token the install carries in the x-medibo-test-session header
+--      (issued by test_session_start, stored in shared_preferences, read
+--      here through current_setting('request.headers') exactly as
+--      audit_actor reads x-forwarded-for). No header → no session, and a
+--      lookup that raises is caught and read as no session. started_by
+--      still records WHICH admin opened it; it never decides what is test.
+--      'global' no longer means everyone.
 --   2. _place_order_v2_core asks it once. No session → the function is
 --      byte-identical to before (explicit is_synthetic=false / null session
 --      are the column defaults; the lookup is wrapped so a failure is "no
@@ -30,26 +40,53 @@
 begin;
 
 -- ---------------------------------------------------------------------------
--- 1. THE READER.
+-- 1. THE READER. The session rides on the request as a header.
 -- ---------------------------------------------------------------------------
-create or replace function public.test_session_for(p_uid uuid)
+alter table public.test_sessions add column if not exists token text;
+create unique index if not exists test_sessions_token_uidx
+  on public.test_sessions (token) where token is not null;
+
+-- The bound-to-a-user reader and the actor editors of the first cut of this
+-- command never reached production (rolled back with the 21:10 UTC restart);
+-- they contradict the correction and are dropped so no second model lingers.
+drop function if exists public.test_session_for(uuid);
+drop function if exists public.test_session_actor_set(bigint, text, boolean);
+drop function if exists public.test_session_actors(bigint);
+
+create or replace function public.test_session_token()
+ returns text
+ language plpgsql stable security definer set search_path to 'public'
+as $$
+declare v text;
+begin
+  v := nullif(btrim(coalesce(
+         coalesce(nullif(current_setting('request.headers', true), ''), '{}')::jsonb
+           ->> 'x-medibo-test-session', '')), '');
+  if v is null or length(v) > 128 then return null; end if;
+  return v;
+exception when others then
+  return null;
+end $$;
+
+create or replace function public.test_session_mine()
  returns bigint
  language plpgsql stable security definer set search_path to 'public'
 as $$
-declare v_id bigint;
+declare v_tok text; v_id bigint; v_uid uuid;
 begin
-  if p_uid is null then return null; end if;
-  if exists (select 1 from public.test_session_exempt e where e.user_id = p_uid) then
+  v_tok := public.test_session_token();
+  if v_tok is null then return null; end if;
+  begin v_uid := auth.uid(); exception when others then v_uid := null; end;
+  -- The escape hatch (a login that must never be stamped) wins over the token.
+  if v_uid is not null and exists (
+       select 1 from public.test_session_exempt e where e.user_id = v_uid) then
     return null;
   end if;
   select s.id into v_id
     from public.test_sessions s
-   where s.status = 'live' and s.ended_at is null and now() < s.expires_at
+   where s.token = v_tok
+     and s.status = 'live' and s.ended_at is null and now() < s.expires_at
      and coalesce(s.scope,'global') <> 'canary'
-     and (s.started_by = p_uid
-          or exists (select 1 from public.test_session_actor a
-                      where a.session_id = s.id and a.user_id = p_uid))
-   order by s.id desc
    limit 1;
   return v_id;
 exception when others then
@@ -58,20 +95,8 @@ exception when others then
   return null;
 end $$;
 
-create or replace function public.test_session_mine()
- returns bigint
- language plpgsql stable security definer set search_path to 'public'
-as $$
-declare v_uid uuid;
-begin
-  begin v_uid := auth.uid(); exception when others then return null; end;
-  return public.test_session_for(v_uid);
-exception when others then
-  return null;
-end $$;
-
-revoke all on function public.test_session_for(uuid) from public, anon;
-grant execute on function public.test_session_for(uuid) to authenticated, service_role;
+revoke all on function public.test_session_token() from public, anon;
+grant execute on function public.test_session_token() to authenticated, service_role;
 revoke all on function public.test_session_mine() from public;
 grant execute on function public.test_session_mine() to anon, authenticated, service_role;
 
@@ -83,21 +108,33 @@ as $$
 declare v_uid uuid;
 begin
   if p_session is null then return false; end if;
+
+  -- CMD #1846 — a regression probe is not test data (rg_run_behaviors sets
+  -- medibo.rg_probe='on'; every probe body ends in RG_ROLLBACK). Kept.
+  if coalesce(current_setting('medibo.rg_probe', true), '') = 'on' then
+    return false;
+  end if;
+
   begin v_uid := auth.uid(); exception when others then v_uid := null; end;
 
+  -- The escape hatch wins over every scope.
   if v_uid is not null and exists (
        select 1 from public.test_session_exempt e where e.user_id = v_uid) then
     return false;
   end if;
 
-  -- The bot lane: a machine caller writing inside an automated session.
-  if p_scope = 'automated' and public._test_caller_is_backend() then return true; end if;
+  -- The bot lane: a machine caller, or a listed cast login, writing inside an
+  -- automated run. Untouched by this command.
+  if p_scope = 'automated' then
+    if public._test_caller_is_backend() then return true; end if;
+    return v_uid is not null and exists (
+      select 1 from public.test_session_actor a
+       where a.session_id = p_session and a.user_id = v_uid);
+  end if;
 
-  -- CMD #1848 — a person's session stamps ONLY its owner's and its actors'
-  -- writes. A real pharmacy checking out while Om is testing is untouched.
-  -- coalesce: a NULL here once read as "not false" in the caller's IF and
-  -- stamped a stranger's order (caught by the build-branch scenario S2).
-  return v_uid is not null and coalesce(public.test_session_for(v_uid) = p_session, false);
+  -- CMD #1848 — a person's session stamps ONLY the install that carries its
+  -- token, whoever is signed in there. 'global' no longer means everyone.
+  return coalesce(public.test_session_mine() = p_session, false);
 exception when others then
   return false;
 end $$;
@@ -106,15 +143,22 @@ create or replace function public._test_session_ambient()
  returns bigint
  language plpgsql security definer set search_path to 'public'
 as $$
-declare v_id bigint; v_scope text;
+declare v_id bigint;
 begin
-  select id, scope into v_id, v_scope
+  -- CMD #1848 — the ONE reader: this install's session, by its header.
+  v_id := public.test_session_mine();
+  if v_id is not null then return v_id; end if;
+  -- The bot lane, exactly as before.
+  select id into v_id
     from public.test_sessions
    where status = 'live' and ended_at is null and now() < expires_at
+     and scope = 'automated'
+   order by id desc
    limit 1;
-  if v_id is null then return null; end if;
-  if not coalesce(public._test_session_stamps(v_id, v_scope), false) then return null; end if;
-  return v_id;
+  if v_id is not null and coalesce(public._test_session_stamps(v_id, 'automated'), false) then
+    return v_id;
+  end if;
+  return null;
 exception when others then
   return null;
 end $$;
@@ -131,8 +175,8 @@ begin
   end if;
 
   if tg_op = 'INSERT' then
-    -- CMD #1848 — the ONE reader. Owner/actor of the live session, or the
-    -- bot lane; anybody else's insert is never stamped.
+    -- CMD #1848 — the ONE reader. This install's session (by header), or
+    -- the bot lane; anybody else's insert is never stamped.
     v_sess := public._test_session_ambient();
   end if;
   if v_sess is not null then
@@ -174,8 +218,11 @@ begin
   return new;
 end $$;
 
--- A human session is scoped to its user from now on. History keeps its word.
-update public.test_sessions set scope = 'user'
+-- A human session is scoped to one install from now on. A live 'global'
+-- session has no token and therefore stamps nobody any more; it is closed so
+-- the admin starts a fresh, install-bound one. History keeps its word.
+update public.test_sessions
+   set status = 'ended', ended_at = coalesce(ended_at, now()), ended_kind = 'superseded'
  where origin = 'human' and coalesce(scope,'global') = 'global' and status = 'live';
 
 create or replace function public.test_session_start(p_label text DEFAULT NULL::text, p_hours numeric DEFAULT NULL::numeric)
@@ -183,8 +230,8 @@ create or replace function public.test_session_start(p_label text DEFAULT NULL::
  language plpgsql security definer set search_path to 'public'
 as $$
 declare v_id bigint; v_hours numeric; v_uid uuid; v_label text;
-        v_origin text; v_scope text; v_cap numeric;
-        v_live_id bigint; v_live_origin text; v_live_owner uuid;
+        v_origin text; v_scope text; v_cap numeric; v_token text;
+        v_live_id bigint; v_live_origin text;
 begin
   if not public._test_guard() then return jsonb_build_object('ok',false,'error','not_authorized'); end if;
   if not (select enabled from public.test_mode_config where id=1) then
@@ -200,31 +247,35 @@ begin
      set status='ended', ended_at=coalesce(ended_at, expires_at), auto_expired=true
    where status='live' and (ended_at is not null or now() >= expires_at);
 
-  select id, origin, started_by into v_live_id, v_live_origin, v_live_owner
-    from public.test_sessions
-   where status='live' and ended_at is null and now() < expires_at
-   limit 1;
-
-  if v_live_id is not null then
-    if v_origin = 'automated' and v_live_origin = 'human' then
+  if v_origin = 'human' then
+    -- CMD #1848 — this INSTALL already carries a live session: hand its
+    -- token back so the client is whole again, do not open a second one.
+    v_live_id := public.test_session_mine();
+    if v_live_id is not null then
+      return jsonb_build_object('ok',true,'already',true,'session_id',v_live_id,
+        'origin','human','scope','install',
+        'token', (select token from public.test_sessions where id = v_live_id),
+        'message', public.uic('test_session.already_on','Test mode is already on.'));
+    end if;
+    -- A person supersedes a live automated run, as before. Another person's
+    -- install-bound session is THEIRS and is left alone: sessions no longer
+    -- collide, because each stamps only the install that carries its token.
+    update public.test_sessions
+       set status='ended', ended_at=coalesce(ended_at, now()), ended_kind='superseded'
+     where status='live' and ended_at is null and now() < expires_at and origin = 'automated';
+  else
+    select id, origin into v_live_id, v_live_origin
+      from public.test_sessions
+     where status='live' and ended_at is null and now() < expires_at
+     order by (origin = 'human') desc, id desc
+     limit 1;
+    if v_live_origin = 'human' then
       return jsonb_build_object('ok',false,'error','human_session_live',
         'session_id', v_live_id,
         'message', public.uic('test_session.human_live',
           'A person has test mode on. Automated runs do not join it.'));
     end if;
-    if v_origin = 'human' and v_live_origin = 'automated' then
-      update public.test_sessions
-         set status='ended', ended_at=coalesce(ended_at, now()), ended_kind='superseded'
-       where id = v_live_id;
-      v_live_id := null;
-    elsif v_origin = 'human' and v_live_origin = 'human'
-          and public.test_session_for(v_uid) is distinct from v_live_id then
-      -- CMD #1848 — somebody ELSE's session. It is theirs, not the platform's:
-      -- joining it silently would stamp this person's writes to a run they
-      -- never started.
-      return jsonb_build_object('ok',false,'error','busy','session_id', v_live_id,
-        'message', public.uic('test_session.busy','Another test session is already open.'));
-    else
+    if v_live_id is not null then
       return jsonb_build_object('ok',true,'already',true,'session_id',v_live_id,
         'origin', v_live_origin,
         'message', public.uic('test_session.already_on','Test mode is already on.'));
@@ -235,27 +286,31 @@ begin
     v_scope := 'automated';
     v_cap := coalesce((select automated_session_hours from public.test_mode_config where id=1), 1);
     v_hours := least(coalesce(nullif(p_hours,0), v_cap), v_cap);
+    v_token := null;
   else
-    v_scope := 'user';
+    v_scope := 'install';
     v_hours := coalesce(nullif(p_hours,0),
                         (select session_hours from public.test_mode_config where id=1), 12);
+    -- Opaque, unguessable, and the ONLY thing that binds a write to this run.
+    v_token := replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '');
   end if;
 
   v_label := coalesce(nullif(btrim(p_label),''),
                       to_char(now() at time zone 'Asia/Kolkata','DD Mon HH24:MI') || ' run');
 
   insert into public.test_sessions (label, scope, origin, started_by, started_by_label,
-                                    started_by_kind, expires_at, before_fp)
+                                    started_by_kind, expires_at, before_fp, token)
   values (v_label, v_scope, v_origin, v_uid,
           case when v_origin = 'automated' then 'automated'
                else coalesce((select email from auth.users where id = v_uid), 'admin') end,
           v_origin,
           now() + make_interval(mins => greatest(1, (v_hours*60)::int)),
-          public.test_fingerprint())
+          public.test_fingerprint(), v_token)
   returning id into v_id;
 
   return jsonb_build_object('ok',true,'session_id',v_id,'origin',v_origin,'scope',v_scope,
     'banner', (v_origin = 'human'),
+    'token', v_token,
     'message', case when v_origin = 'human'
       then public.uic('test_session.started','Test mode is ON. Everything you do now is a test.')
       else public.uic('test_session.started_automated','Automated test run open — no banner, bot scope only.') end);
@@ -286,8 +341,9 @@ begin
     ) then
       return new;
     end if;
-    -- (b) CMD #1848 — a REAL approved pharmacy inside its own live session.
-    begin v_sess := public.test_session_for(new.user_id); exception when others then v_sess := null; end;
+    -- (b) CMD #1848 — a REAL approved pharmacy ordering from an install
+    --     that is in test mode (the request carries the session's token).
+    begin v_sess := public.test_session_mine(); exception when others then v_sess := null; end;
     if v_sess is not null
        and (new.test_session_id is null or new.test_session_id = v_sess)
        and exists (
@@ -302,7 +358,7 @@ begin
     end if;
     raise exception 'test_mode.needs_session'
       using hint = public.uic('test_mode.needs_session',
-        'This is a test order, but you have no live test session.');
+        'This is a test order, but this device is not in test mode.');
   end if;
 
   if not exists (
@@ -350,7 +406,7 @@ begin
   -- CMD #1848 — ONE question, asked once: is this person inside a live test
   -- session of their own? Any failure reads as NO, so test mode can never
   -- break, delay or mis-stamp a real pharmacy's order.
-  begin v_test := public.test_session_for(v_uid); exception when others then v_test := null; end;
+  begin v_test := public.test_session_mine(); exception when others then v_test := null; end;
 
   if (v_sess->>'can_place_order') is distinct from 'true' then
     raise exception 'order_gate_blocked'
@@ -509,7 +565,7 @@ declare v boolean;
 begin
   if p_order_id is null then return false; end if;
   select public.test_outbound_silenced(o.test_session_id)
-         or (coalesce(o.is_synthetic,false) and public.test_session_for(o.user_id) is not null)
+         or (coalesce(o.is_synthetic,false) and public.test_session_mine() is not null)
     into v
     from public.orders o where o.id = p_order_id;
   return coalesce(v, false);
@@ -524,9 +580,12 @@ as $$
 declare v_sess bigint;
 begin
   if p_customer_id is null then return false; end if;
-  select public.test_session_for(pp.user_id) into v_sess
-    from public.pharmacy_profiles pp where pp.id = p_customer_id;
-  return v_sess is not null and public.test_outbound_silenced(v_sess);
+  -- The request that is about to send is inside a human session on THIS
+  -- install: nothing leaves for that customer from here.
+  v_sess := public.test_session_mine();
+  return v_sess is not null
+     and exists (select 1 from public.pharmacy_profiles pp where pp.id = p_customer_id)
+     and public.test_outbound_silenced(v_sess);
 exception when others then
   return false;
 end $$;
@@ -621,7 +680,9 @@ declare s public.test_sessions%rowtype; c public.test_mode_config%rowtype;
 begin
   select * into c from public.test_mode_config where id = 1;
   begin v_uid := auth.uid(); exception when others then v_uid := null; end;
-  v_id := public.test_session_for(v_uid);
+  -- CMD #1848 — this install's session, by its header. Another device, and
+  -- the same login anywhere else, gets on:false.
+  v_id := public.test_session_mine();
   if v_id is not null then
     select * into s from public.test_sessions
      where id = v_id and origin = 'human';
@@ -654,7 +715,7 @@ create or replace function public.test_session_end(p_session bigint DEFAULT NULL
  returns jsonb
  language plpgsql security definer set search_path to 'public'
 as $$
-declare v_id bigint; v_uid uuid; v_kind text;
+declare v_id bigint; v_uid uuid; v_kind text; v_mine boolean;
 begin
   if not public._test_guard() then return jsonb_build_object('ok',false,'error','not_authorized'); end if;
   v_id := coalesce(p_session, public.test_session_mine(), public.test_session_live_id());
@@ -664,6 +725,8 @@ begin
   end if;
   v_kind := public._test_caller_origin();
   begin v_uid := auth.uid(); exception when others then v_uid := null; end;
+  -- Was it THIS install's session? Then the client drops its token too.
+  v_mine := coalesce(public.test_session_mine() = v_id, false);
   update public.test_sessions
      set status = case when status='live' then 'ended' else status end,
          ended_at = coalesce(ended_at, now()),
@@ -671,29 +734,30 @@ begin
          ended_kind = coalesce(ended_kind, v_kind)
    where id = v_id;
   return jsonb_build_object('ok',true,'session_id',v_id,
+    'clear_token', v_mine,
     'residue', public.test_session_residue(v_id),
     'message', public.uic('test_session.ended','Test mode is OFF.'));
 end $$;
 
--- Who may end a session from the banner: the person who started it, or one of
--- its listed actors (Om on his pharmacy login is an actor of his own run).
+-- Who may end a session from the banner: the install that carries its token
+-- (whoever is signed in there — Om on his pharmacy login is on the phone
+-- that started it), or an admin.
 create or replace function public._test_session_participant(p_session bigint)
  returns boolean
  language plpgsql stable security definer set search_path to 'public'
 as $$
-declare v_uid uuid;
 begin
-  begin v_uid := auth.uid(); exception when others then return false; end;
-  if v_uid is null or p_session is null then return false; end if;
-  return exists (select 1 from public.test_sessions s where s.id = p_session and s.started_by = v_uid)
-      or exists (select 1 from public.test_session_actor a where a.session_id = p_session and a.user_id = v_uid);
+  if p_session is null then return false; end if;
+  return coalesce(public.test_session_mine() = p_session, false);
+exception when others then
+  return false;
 end $$;
 
 create or replace function public.test_session_end_purge(p_session bigint DEFAULT NULL::bigint)
  returns jsonb
  language plpgsql security definer set search_path to 'public'
 as $$
-declare v_id bigint; v_end jsonb; v_purge jsonb; v_uid uuid; v_kind text;
+declare v_id bigint; v_end jsonb; v_purge jsonb; v_uid uuid; v_kind text; v_mine boolean;
 begin
   v_id := coalesce(p_session, public.test_session_mine());
   if v_id is null then
@@ -703,13 +767,14 @@ begin
   if not (public._test_session_participant(v_id) or public._test_guard()) then
     return jsonb_build_object('ok',false,'error','not_owner',
       'message', public.uic('test_session.not_owner',
-        'Only the person who started this session can end it.'));
+        'Only the device that started this session, or an admin, can end it.'));
   end if;
 
   -- End (the participant may not be an admin, so the end is done here, not
   -- through the admin-guarded RPC) …
   v_kind := public._test_caller_origin();
   begin v_uid := auth.uid(); exception when others then v_uid := null; end;
+  v_mine := coalesce(public.test_session_mine() = v_id, false);
   update public.test_sessions
      set status = case when status='live' then 'ended' else status end,
          ended_at = coalesce(ended_at, now()),
@@ -725,6 +790,7 @@ begin
   return jsonb_build_object('ok', coalesce((v_purge->>'ok')::boolean, false),
     'session_id', v_id,
     'ended', true,
+    'clear_token', v_mine,
     'purge', v_purge,
     'done', coalesce((v_purge->>'done')::boolean, false),
     'message', case when coalesce((v_purge->>'done')::boolean, false)
@@ -736,88 +802,6 @@ revoke all on function public.test_session_end_purge(bigint) from public, anon;
 grant execute on function public.test_session_end_purge(bigint) to authenticated, service_role;
 revoke all on function public._test_session_participant(bigint) from public, anon;
 grant execute on function public._test_session_participant(bigint) to authenticated, service_role;
-
--- Actors: the logins a session's owner will also test from (Om starts from
--- his admin login and orders from a pharmacy login — that pharmacy login must
--- belong to the session, or its order is refused with needs_session).
-create or replace function public.test_session_actor_set(p_session bigint, p_identity text, p_on boolean DEFAULT true)
- returns jsonb
- language plpgsql security definer set search_path to 'public'
-as $$
-declare v_id bigint; v_uid uuid; v_label text; v_norm text;
-begin
-  if not public._test_guard() then return jsonb_build_object('ok',false,'error','not_authorized'); end if;
-  v_id := coalesce(p_session, public.test_session_mine(), public.test_session_live_id());
-  if v_id is null then
-    return jsonb_build_object('ok',false,'error','no_session',
-      'message', public.uic('test_session.already_off','Test mode is already off.'));
-  end if;
-  v_norm := public.identity_norm(coalesce(p_identity,''));
-  if coalesce(v_norm,'') = '' then
-    return jsonb_build_object('ok',false,'error','not_found',
-      'message', public.uic('test_session.actor_not_found','No login matches that email or phone.'));
-  end if;
-  select u.id, coalesce(u.email, u.phone) into v_uid, v_label
-    from auth.users u
-   where public.identity_norm(u.email) = v_norm or public.identity_norm(u.phone) = v_norm
-   order by u.created_at limit 1;
-  if v_uid is null then
-    select pp.user_id, coalesce(pp.pharmacy_name, pp.phone) into v_uid, v_label
-      from public.pharmacy_profiles pp
-     where pp.user_id is not null and coalesce(pp.is_deleted,false) = false
-       and (public.identity_norm(pp.phone) = v_norm or public.identity_norm(pp.email) = v_norm)
-     order by pp.created_at limit 1;
-  end if;
-  if v_uid is null then
-    return jsonb_build_object('ok',false,'error','not_found',
-      'message', public.uic('test_session.actor_not_found','No login matches that email or phone.'));
-  end if;
-  if coalesce(p_on, true) then
-    insert into public.test_session_actor (session_id, user_id, label)
-    values (v_id, v_uid, v_label)
-    on conflict (session_id, user_id) do update set label = excluded.label;
-    return jsonb_build_object('ok',true,'session_id',v_id,'user_id',v_uid,'label',v_label,
-      'message', public.uic('test_session.actor_added','Added. Orders from that login now belong to this session.'));
-  else
-    delete from public.test_session_actor where session_id = v_id and user_id = v_uid;
-    return jsonb_build_object('ok',true,'session_id',v_id,'user_id',v_uid,
-      'message', public.uic('test_session.actor_removed','Removed.'));
-  end if;
-end $$;
-
-revoke all on function public.test_session_actor_set(bigint, text, boolean) from public, anon;
-grant execute on function public.test_session_actor_set(bigint, text, boolean) to authenticated, service_role;
-
-create or replace function public.test_session_actors(p_session bigint)
- returns jsonb
- language plpgsql stable security definer set search_path to 'public'
-as $$
-declare v_rows jsonb; s public.test_sessions%rowtype;
-begin
-  select * into s from public.test_sessions where id = p_session;
-  select coalesce(jsonb_agg(jsonb_build_object(
-           'user_id', a.user_id,
-           'label', coalesce(nullif(a.label,''), u.email, u.phone, a.user_id::text),
-           'can_remove', true) order by coalesce(u.email, a.user_id::text)), '[]'::jsonb)
-    into v_rows
-    from public.test_session_actor a
-    left join auth.users u on u.id = a.user_id
-   where a.session_id = p_session;
-  return jsonb_build_object(
-    'session_id', p_session,
-    'title', public.uic('test_session.actors_title','Also testing as'),
-    'hint',  public.uic('test_session.actors_hint',''),
-    'owner_label', public.uic('test_session.owner_label','Started by') || ' ' ||
-                   coalesce(nullif(s.started_by_label,''), 'admin'),
-    'empty', public.uic('test_session.actors_empty','Only the person who started it, so far.'),
-    'add_label',  public.uic('test_session.actor_add_label','Add a login (email or phone)'),
-    'add_action', public.uic('test_session.actor_add_action','Add'),
-    'remove_action', public.uic('test_session.actor_remove_action','Remove'),
-    'rows', v_rows);
-end $$;
-
-revoke all on function public.test_session_actors(bigint) from public, anon;
-grant execute on function public.test_session_actors(bigint) to authenticated, service_role;
 
 create or replace function public.test_mode_action(p_key text, p_arg jsonb DEFAULT '{}'::jsonb)
  returns jsonb
@@ -831,8 +815,6 @@ begin
     when 'session_end'   then v := public.test_session_end(nullif(p_arg->>'session_id','')::bigint);
     when 'session_purge' then v := public.test_session_purge(nullif(p_arg->>'session_id','')::bigint);
     when 'session_end_purge' then v := public.test_session_end_purge(nullif(p_arg->>'session_id','')::bigint);
-    when 'actor_add'     then v := public.test_session_actor_set(nullif(p_arg->>'session_id','')::bigint, p_arg->>'identity', true);
-    when 'actor_remove'  then v := public.test_session_actor_set(nullif(p_arg->>'session_id','')::bigint, p_arg->>'identity', false);
     when 'run_full'      then v := public.test_run_full(nullif(btrim(coalesce(p_arg->>'label','')),''));
     when 'purge'         then v := public.test_purge(false);
     when 'purge_all'     then v := public.test_purge(true);
@@ -845,12 +827,15 @@ create or replace function public.test_mode_screen()
  returns jsonb
  language plpgsql security definer set search_path to 'public'
 as $$
-declare v jsonb; v_live bigint; v_sessions jsonb; v_actions jsonb; v_actors jsonb;
+declare v jsonb; v_live bigint; v_sessions jsonb; v_actions jsonb;
 begin
   v := public._test_mode_screen_base();
   if not coalesce((v->>'ok')::boolean, false) then return v; end if;
 
-  v_live     := public.test_session_live_id();
+  -- CMD #1848 — the action row is about THIS install: no token here means
+  -- "Test mode ON" is offered even while another device runs its own session
+  -- (the list below still shows every live run to the admin).
+  v_live     := public.test_session_mine();
   v_sessions := public.test_session_list(20);
 
   v_actions := case when v_live is null then
@@ -865,13 +850,6 @@ begin
                            'tone','danger','confirm', public.uic('test_session.confirm_purge','')))
     end;
 
-  -- CMD #1848 — the live HUMAN session's participants, so the admin who
-  -- started it can add the pharmacy / supplier login he will test from.
-  v_actors := case when v_live is not null
-                    and exists (select 1 from public.test_sessions s where s.id = v_live and s.origin = 'human')
-               then public.test_session_actors(v_live) || jsonb_build_object('has', true)
-               else jsonb_build_object('has', false) end;
-
   return v
     || jsonb_build_object('sessions', v_sessions || jsonb_build_object(
          'subtitle', public.uic('test_session.subtitle',''),
@@ -882,7 +860,6 @@ begin
          'proof_dirty',   public.uic('test_session.proof_dirty',''),
          'purge_row_label', public.uic('test_session.purge_action','Purge this session'),
          'confirm_purge',   public.uic('test_session.confirm_purge','')))
-    || jsonb_build_object('actors', v_actors)
     || jsonb_build_object('banner', public.test_session_banner())
     || jsonb_build_object('actions', v_actions || coalesce(v->'actions','[]'::jsonb));
 end $$;
@@ -891,7 +868,7 @@ end $$;
 -- COPY. Every word the app shows comes from here.
 -- ---------------------------------------------------------------------------
 insert into public.ui_copy (key, value) values
-  ('test_mode.needs_session',       to_jsonb('This is a test order, but this login has no live test session. Start test mode, or ask the admin who started it to add this login under "Also testing as", then try again.'::text)),
+  ('test_mode.needs_session',       to_jsonb('This is a test order, but this device is not in test mode. Start test mode from an admin login on this device, then try again.'::text)),
   ('test_mode.outbound_blocked',    to_jsonb('Test mode: nothing leaves the building. No payment link, QR, WhatsApp, push or email is sent for a test order.'::text)),
   ('test_mode.placed_note',         to_jsonb('Test order — it belongs to your test session only, is invisible to everyone else, and is deleted when the session is purged.'::text)),
   ('test_session.owner_label',      to_jsonb('Started by'::text)),
@@ -900,22 +877,14 @@ insert into public.ui_copy (key, value) values
   ('test_session.confirm_cancel',   to_jsonb('Keep testing'::text)),
   ('test_session.end_purged',       to_jsonb('Test session ended and its rows purged.'::text)),
   ('test_session.end_purge_partial',to_jsonb('Session ended; the purge is still running — tap again to finish.'::text)),
-  ('test_session.not_owner',        to_jsonb('Only the person who started this session can end it.'::text)),
-  ('test_session.actors_title',     to_jsonb('Also testing as'::text)),
-  ('test_session.actors_hint',      to_jsonb('Logins whose orders and writes belong to this session. Add the pharmacy or supplier login you will test from — without it, that login''s order is refused.'::text)),
-  ('test_session.actors_empty',     to_jsonb('Only the person who started it, so far.'::text)),
-  ('test_session.actor_add_label',  to_jsonb('Add a login (email or phone)'::text)),
-  ('test_session.actor_add_action', to_jsonb('Add'::text)),
-  ('test_session.actor_remove_action', to_jsonb('Remove'::text)),
-  ('test_session.actor_not_found',  to_jsonb('No login matches that email or phone.'::text)),
-  ('test_session.actor_added',      to_jsonb('Added. Orders from that login now belong to this session.'::text)),
-  ('test_session.actor_removed',    to_jsonb('Removed.'::text))
+  ('test_session.not_owner',        to_jsonb('Only the device that started this session, or an admin, can end it.'::text)),
+  ('test_session.device_note',      to_jsonb('This device is in test mode. Whoever signs in here writes test data until it ends.'::text))
 on conflict (key) do nothing;
 
 -- The banner copy now names the person, so the old platform-wide wording is
 -- replaced only where it still reads as the platform-wide claim it no longer is.
 update public.ui_copy
-   set value = to_jsonb('Banner shown to the person who started it and to the logins listed under "Also testing as"'::text)
+   set value = to_jsonb('Banner shown on the device that started it, whoever is signed in there'::text)
  where key = 'test_session.banner_shown'
    and value #>> '{}' = 'Banner shown platform-wide';
 

@@ -265,6 +265,31 @@ function httpsPost(url, headers, body) {
   });
 }
 
+// CMD #1845 — where the control plane is, without hard-coding a project ref.
+// Env first (DEV_SUPABASE_URL / DEV_SERVICE_ROLE_KEY), then the runner's own
+// env file, which is where every other script on this box reads it from. A box
+// with no control plane simply gets a pair of nulls and writes production only.
+function controlPlane() {
+  let url = process.env.DEV_SUPABASE_URL || '';
+  let key = process.env.DEV_SERVICE_ROLE_KEY || '';
+  if (!url || !key) {
+    try {
+      const envPath = require('path').join(
+        process.env.HOME || '', 'mediBO-runner', 'runner.env');
+      const text = require('fs').readFileSync(envPath, 'utf8');
+      const read = (name) => {
+        const m = text.match(new RegExp('^(?:export\\s+)?' + name + '=(.*)$', 'm'));
+        return m ? m[1].trim().replace(/^["']|["']$/g, '') : '';
+      };
+      url = url || read('SUPABASE_URL');
+      key = key || read('SERVICE_ROLE_KEY');
+      const prod = read('PROD_SUPABASE_URL');
+      if (prod && url === prod) return [null, null];
+    } catch (_) { return [null, null]; }
+  }
+  return url && key ? [url, key] : [null, null];
+}
+
 function httpsGet(url) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
@@ -1453,28 +1478,56 @@ async function main() {
   console.log(`  Production data: ${mutatedProduction ? 'MUTATED' : 'untouched'}`);
 
   // Evidence for the bug-192 journey. Never let bookkeeping change the verdict.
+  //
+  // CMD #1845 — AND ON THE CONTROL PLANE, for the reason #1802 gave the
+  // migration replay. #1761 moved dev_journey_probe (and with it
+  // _journey_qa319_version) to the medibo-dev project, which was cloned from
+  // production with pg_dump: its verify_run_log is a SNAPSHOT, frozen at the
+  // moment of the clone. The journeys qa-319-156 / qa-319-157 count runs in
+  // that table over the last 24 hours, so from the day after the clone they
+  // read runs=0 green=0 and answer `failed` on every command in the fleet —
+  // while production's own verify_run_log held the green run that had just
+  // been made. The record now goes to BOTH: production keeps the real
+  // bookkeeping, and the database the journey actually reads gets the same
+  // row, so the assertion is made against evidence instead of against a
+  // clone's fossil. Neither write may change the verdict.
+  const runPayload = {
+    commit_hash: phase1.gotHash || expectedHash,
+    build_match: !!phase1.hashOk,
+    requested_keys: requiredKeys,
+    keys_ok: !!phase1.keysOk,
+    requested_phases: [...selected],
+    phases_run: ran,
+    phases_skipped: skipped,
+    phases_failed: failed,
+    exit_code: exitCode,
+    mutated: mutatedProduction,
+    notes: { target: TARGET, expected_hash: expectedHash },
+  };
   try {
     await httpsPost(`${SUPABASE_URL}/rest/v1/rpc/verify_run_record`, {
       'apikey': ANON_KEY,
       'Authorization': `Bearer ${session.access_token}`,
       'Content-Type': 'application/json',
-    }, {
-      p_payload: {
-        commit_hash: phase1.gotHash || expectedHash,
-        build_match: !!phase1.hashOk,
-        requested_keys: requiredKeys,
-        keys_ok: !!phase1.keysOk,
-        requested_phases: [...selected],
-        phases_run: ran,
-        phases_skipped: skipped,
-        phases_failed: failed,
-        exit_code: exitCode,
-        mutated: mutatedProduction,
-        notes: { target: TARGET, expected_hash: expectedHash },
-      },
-    });
+    }, { p_payload: runPayload });
   } catch (err) {
     console.log(`  (run record not written: ${err.message})`);
+  }
+  // The control plane, when this box is configured for one and it is not the
+  // production project itself. Service-role, because the verifier's session is
+  // a production JWT that medibo-dev has never heard of.
+  const [cpUrl, cpKey] = controlPlane();
+  if (cpUrl && cpKey && cpUrl !== SUPABASE_URL) {
+    try {
+      await httpsPost(`${cpUrl}/rest/v1/rpc/verify_run_record`, {
+        'apikey': cpKey,
+        'Authorization': `Bearer ${cpKey}`,
+        'Content-Type': 'application/json',
+      }, { p_payload: runPayload });
+      console.log(`  Run record : production + control plane`);
+    } catch (err) {
+      console.log(`  (control-plane run record not written: ${err.message})`);
+    }
   }
 
   console.log(exitCode === 0 ? '\n✅ VERIFICATION PASSED\n' : '\n❌ VERIFICATION FAILED\n');

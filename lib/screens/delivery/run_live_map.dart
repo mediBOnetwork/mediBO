@@ -93,6 +93,12 @@ class RunLiveMap extends StatefulWidget {
   final double height;
   final String roadPolyline;
 
+  /// CMD #1840 — the customer's persistent map card prints the staleness line
+  /// itself, above the map and beside the expand control, so this widget's own
+  /// chip is turned off there. Two staleness lines on one screen would be two
+  /// answers to one question. The rider's and the admin's maps keep theirs.
+  final bool showLiveChip;
+
   /// Called when a frame arrives, so the host can re-read its own RPC if it
   /// wants the rest of the payload refreshed too. Throttled by the host.
   final void Function(Map<String, dynamic> frame)? onFrame;
@@ -107,6 +113,7 @@ class RunLiveMap extends StatefulWidget {
     this.animateMs = 1200,
     this.height = 240,
     this.roadPolyline = '',
+    this.showLiveChip = true,
     this.onFrame,
   });
 
@@ -258,7 +265,7 @@ class _RunLiveMapState extends State<RunLiveMap> with SingleTickerProviderStateM
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (label.isNotEmpty)
+        if (widget.showLiveChip && label.isNotEmpty)
           Padding(
             padding: EdgeInsets.only(bottom: Ds.space.x8),
             child: Row(

@@ -385,6 +385,15 @@ async function main() {
                 (error ? ` — ${error.slice(0, 160)}` : ''));
   }
 
+  // CHANGE #1823 — the backend's transient-refusal config (test_config.pipeline)
+  // is read ONCE, before any journey, and handed to the api layer so EVERY rpc
+  // of the run gets the one retry — not only test_pipeline_run. Batch 615 was
+  // sunk by the same lock timeout arriving through test_assert_pipeline.
+  let pcfg = {};
+  try { pcfg = (await api.rpc('test_config_get', { p_key: 'pipeline' }, null)) || {}; }
+  catch (_) { pcfg = {}; }
+  api.setTransientRetry(pcfg);
+
   const onlyRole = val('role', null);
   for (const f of features) {
     if (outOfTime()) break;
@@ -435,34 +444,15 @@ async function main() {
     // is the same class of fact as a role with no login — the environment could
     // not meet the precondition — and this was the one place run.js did not say
     // so. An unreadable config leaves the old behaviour exactly as it was.
-    let pcfg = {};
-    try { pcfg = (await api.rpc('test_config_get', { p_key: 'pipeline' }, null)) || {}; }
-    catch (_) { pcfg = {}; }
     let timedOut = false;
-    // CHANGE #1823 — ONE retry on a transient database refusal, in the
-    // backend's words (test_config.pipeline.retry_match / retry_wait_ms /
-    // retry_note). The first real smoke after the kill switch came back on
-    // (run 35, 6 Sep) failed 0/9 on "canceling statement due to lock timeout"
-    // (55P03): a co-running migration held a lock for longer than the
-    // authenticator role's 8 s lock_timeout. That is the box mid-deploy, not
-    // the feature — and a gate that fails a batch on it gets switched off
-    // again. A second refusal is reported exactly as before.
-    for (let attempt = 1; ; attempt++) {
-      try {
-        out = await api.rpc('test_pipeline_run', { p_run_id: runId, p_order_id: null }, null);
-        break;
-      } catch (e) {
-        const msg = String((e && e.message) || e);
-        if (attempt === 1 && pcfg.retry_match && msg.includes(pcfg.retry_match)) {
-          const waitMs = parseInt(pcfg.retry_wait_ms, 10) || 3000;
-          console.log(`[autotest] pipeline: ${pcfg.retry_note || 'transient database error'} — retrying once in ${waitMs} ms`);
-          await new Promise((r) => setTimeout(r, waitMs));
-          continue;
-        }
-        timedOut = !(e && e.status) && !!pcfg.timeout_match && msg.includes(pcfg.timeout_match);
-        out = { ok: false, detail: (timedOut ? pcfg.timeout_note : msg).slice(0, 400) };
-        break;
-      }
+    // The one retry on a transient database refusal now lives in api.rpc
+    // (CHANGE #1823, batch 615): every rpc of the run gets it, this one included.
+    try {
+      out = await api.rpc('test_pipeline_run', { p_run_id: runId, p_order_id: null }, null);
+    } catch (e) {
+      const msg = String((e && e.message) || e);
+      timedOut = !(e && e.status) && !!pcfg.timeout_match && msg.includes(pcfg.timeout_match);
+      out = { ok: false, detail: (timedOut ? pcfg.timeout_note : msg).slice(0, 400) };
     }
     const stages = (out && out.stages) || [];
     // A stage the ENVIRONMENT could not meet (no buyable catalogue on this

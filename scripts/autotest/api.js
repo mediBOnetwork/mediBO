@@ -116,15 +116,48 @@ async function request(method, url, body, headers) {
   }
 }
 
-function rpc(fn, params, token) {
+// CHANGE #1823 — ONE retry on a transient database refusal, for EVERY rpc of
+// the run. The words and the wait are the backend's (test_config.pipeline:
+// retry_match / retry_wait_ms / retry_note), handed in by run.js once the
+// config is read. Batch 615 (6 Sep) was failed by devtool.order_pipeline's
+// test_assert_pipeline answering 55P03 "canceling statement due to lock
+// timeout" while the pipeline block itself, moments later, passed 9/9: the
+// retry lived only around test_pipeline_run, and the same refusal through any
+// other door was a red that sank a real batch. A 4xx/5xx that is NOT the
+// configured transient text is still an answer and is never retried.
+let transientRetry = null;
+function setTransientRetry(cfg) {
+  const match = cfg && typeof cfg.retry_match === 'string' && cfg.retry_match.trim();
+  transientRetry = match
+    ? { match, waitMs: parseInt(cfg.retry_wait_ms, 10) || 3000, note: cfg.retry_note || 'transient database error' }
+    : null;
+}
+// Pure: says whether THIS error, on THIS attempt, earns the configured retry.
+function transientRetryFor(err, attempt, cfg) {
+  const c = cfg === undefined ? transientRetry : cfg;
+  if (!c || attempt !== 1) return null;
+  const msg = String((err && err.message) || err || '');
+  return msg.includes(c.match) ? c : null;
+}
+
+async function rpc(fn, params, token) {
   const key = token ? ANON_KEY : SERVICE_KEY;
   const bearer = token || SERVICE_KEY;
   if (!bearer) {
-    return Promise.reject(new Error(
-      'autotest: no service key. Put AUTOTEST_SERVICE_KEY in ~/.medibo/autotest.env (chmod 600).'));
+    throw new Error(
+      'autotest: no service key. Put AUTOTEST_SERVICE_KEY in ~/.medibo/autotest.env (chmod 600).');
   }
-  return request('POST', `${SUPA_URL}/rest/v1/rpc/${fn}`, params || {},
-    { apikey: key, Authorization: `Bearer ${bearer}` });
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await request('POST', `${SUPA_URL}/rest/v1/rpc/${fn}`, params || {},
+        { apikey: key, Authorization: `Bearer ${bearer}` });
+    } catch (e) {
+      const r = transientRetryFor(e, attempt);
+      if (!r) throw e;
+      console.log(`[autotest] ${fn}: ${r.note} — retrying once in ${r.waitMs} ms`);
+      await new Promise((res) => setTimeout(res, r.waitMs));
+    }
+  }
 }
 
 // Sign a role in for real. Returns the session the Flutter app itself stores,
@@ -169,5 +202,6 @@ const DEFAULT_PASSWORDS = {
 module.exports = {
   SUPA_URL, ANON_KEY, PROJECT_REF,
   hasServiceKey: () => Boolean(SERVICE_KEY), serviceHeaders,
-  rpc, signIn, storageEntry, passwordFor, request
+  rpc, signIn, storageEntry, passwordFor, request,
+  setTransientRetry, transientRetryFor
 };

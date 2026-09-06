@@ -852,6 +852,24 @@ class DevQueueService {
   Future<Map<String, dynamic>> playRefreshRequest() async =>
       _asMap(await _rpc('play_refresh_request'));
 
+  // ── The three reads CMD #1843 surfaced (wiring only) ─────────────────────
+  // Each is ONE existing RPC returned verbatim. The rest of the audit's list
+  // was already on screen (dev_ctl_get() carries health / disk / build_branch /
+  // blocked / context, StripV3Card owns strip_v3_card, RunnerOpsCard owns
+  // runner_ops_card, and Cron health owns the lane, boot and agent sessions),
+  // so nothing there is fetched twice.
+  Future<Map<String, dynamic>> deployLaneBatches({int limit = 8}) async =>
+      _asMap(await _rpc('deploy_lane_batches', params: {'p_limit': limit}));
+  Future<Map<String, dynamic>> cloudWasteGet() async =>
+      _asMap(await _rpc('dev_cloud_waste_get'));
+  Future<Map<String, dynamic>> rcHealth() async =>
+      _asMap(await _rpc('dev_rc_health'));
+
+  /// CMD #1843 — the delete half of the template list, which had a backend and
+  /// no button. Save and list were already wired.
+  Future<void> templateDelete(int id) async =>
+      _rpc('dev_cmd_template_delete', params: {'p_id': id});
+
   List<Map<String, dynamic>> _asList(dynamic v) =>
       (v as List?)
           ?.whereType<Map>()

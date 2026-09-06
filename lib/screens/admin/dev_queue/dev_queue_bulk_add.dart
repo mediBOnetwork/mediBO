@@ -55,6 +55,8 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
   bool _mediaPending = false;
 
   List<Map<String, dynamic>> _templates = const [];
+  // CMD #1843 — the picked template, so `dev_cmd_template_delete` has a subject.
+  Map<String, dynamic>? _pickedTemplate;
   List<Map<String, dynamic>> _warnings = const [];
 
   @override
@@ -255,6 +257,38 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
     } catch (_) {}
   }
 
+  /// CMD #1843 — templates could be listed and saved but never removed.
+  /// Deleting one is `dev_cmd_template_delete(id)`; the confirm reuses the
+  /// backend's own Delete / Cancel copy, and the list is re-read afterwards.
+  Future<void> _deleteTemplate() async {
+    final t = _pickedTemplate;
+    if (t == null) return;
+    final id = asInt(t['id']);
+    if (id == 0) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        content: Text((t['name'] ?? '').toString(), style: Ds.t.body),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(c('dev_queue.btn_cancel'))),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(c('dev_queue.btn_delete'))),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await widget.service.templateDelete(id);
+      if (mounted) setState(() => _pickedTemplate = null);
+      await _loadTemplates();
+    } catch (e) {
+      if (mounted) showToast(context, '$e', isError: true);
+    }
+  }
+
   void _insertTemplate(Map<String, dynamic> t) {
     final spec = (t['spec'] ?? t['spec_template'] ?? '').toString();
     if (spec.isEmpty) return;
@@ -407,11 +441,21 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
                       overflow: TextOverflow.ellipsis),
                 ),
             ],
+            value: _pickedTemplate,
             onChanged: (t) {
-              if (t != null) _insertTemplate(t);
+              if (t == null) return;
+              setState(() => _pickedTemplate = t);
+              _insertTemplate(t);
             },
           ),
         ),
+        if (_pickedTemplate != null)
+          IconButton(
+            tooltip: c('dev_queue.btn_delete'),
+            onPressed: _deleteTemplate,
+            icon: Icon(Icons.delete_outline,
+                size: Ds.t.subtitleSize, color: Ds.c.danger),
+          ),
         const SizedBox(width: 8),
         OutlinedButton.icon(
           onPressed: _saveTemplate,

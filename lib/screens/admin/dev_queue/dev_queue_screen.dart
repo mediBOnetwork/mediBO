@@ -11,6 +11,7 @@ import 'restart_safety.dart';
 import 'dev_queue_bulk_add.dart';
 import 'dev_queue_detail.dart';
 import 'dev_queue_control.dart';
+import 'dev_queue_ops.dart';
 import 'dev_queue_gcp.dart';
 import 'dev_queue_qa.dart';
 import 'dev_queue_questions.dart';
@@ -402,6 +403,14 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
                   const RunnerOpsCard(),
                 ]),
               ),
+              // CMD #1843 — the runner ops / lane / intelligence panel: the
+              // reads that had backends and no screen (health, autoscale,
+              // disk, boot, the build branch, the deploy lane and its batches,
+              // context economy, cloud waste, agent sessions, RC health). It
+              // sits under the strip because it answers the same question at
+              // more depth. Policies stay in RunnerOpsCard above — one set of
+              // toggles, per #1570.
+              SliverToBoxAdapter(child: DevQueueOps(service: _svc)),
               if (_draftBadge > 0)
                 SliverToBoxAdapter(child: _draftsStrip()),
               SliverToBoxAdapter(child: _header()),

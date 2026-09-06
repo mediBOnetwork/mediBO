@@ -13,7 +13,7 @@ VALUES
    'Approve what the bots found — fixes generate themselves',
    'Proof & QA', 'fact_check', 'triage',
    15, 'medibo', false, 'none', true, 'more_system', 'dev_tools',
-   array['super_admin'], null,
+   array['super_admin'], '/admin/go/triage',
    'triage inbox findings approve reject bot fix reopen trend coverage', null, null)
 ON CONFLICT (feature_key) DO UPDATE
   SET label        = EXCLUDED.label,
@@ -25,4 +25,5 @@ ON CONFLICT (feature_key) DO UPDATE
       surface      = EXCLUDED.surface,
       is_active    = true,
       roles_allowed= EXCLUDED.roles_allowed,
-      search_terms = EXCLUDED.search_terms;
+      search_terms = EXCLUDED.search_terms,
+      deep_link    = EXCLUDED.deep_link;

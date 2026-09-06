@@ -35,6 +35,8 @@ as $fn$
            when 'rejected'  then 'danger'
            when 'cancelled' then 'danger'
            when 'pending'   then 'warning'
+           when 'submitted' then 'warning'
+           when 'approved'  then 'success'
            else 'neutral'
          end
 $fn$;
@@ -46,26 +48,35 @@ comment on function public.supplier_status_tone(text) is
 -- ui_copy-backed so the wording is an UPDATE, never a deploy. The raw status
 -- is the fallback, which is exactly what the screen printed before, so this
 -- can never blank a chip that used to read.
-create or replace function public.supplier_status_label(p_status text)
+-- The prefix is an argument so ONE function serves every supplier surface that
+-- prints a status word: the order list reads supplier_orders.status_<status>,
+-- the add-medicine staging list reads supplier_add_medicine.status_<status>.
+-- The single-argument form is dropped first — a defaulted new signature beside
+-- a surviving old one is an ambiguous overload, not a replacement.
+drop function if exists public.supplier_status_label(text);
+
+create or replace function public.supplier_status_label(
+  p_status text,
+  p_prefix text default 'supplier_orders.status_')
 returns text
 language sql
 stable
 set search_path to 'public'
 as $fn$
   select coalesce(
-           nullif(btrim(public.uic('supplier_orders.status_' ||
+           nullif(btrim(public.uic(p_prefix ||
                                    lower(btrim(coalesce(p_status, ''))),
                                    btrim(coalesce(p_status, '')))), ''),
            btrim(coalesce(p_status, '')))
 $fn$;
 
-comment on function public.supplier_status_label(text) is
-  'CHANGE #671 — the supplier order status word, overridable per status via ui_copy key supplier_orders.status_<status>. Falls back to the raw status, which is what the screen printed before.';
+comment on function public.supplier_status_label(text, text) is
+  'CHANGE #671 — a supplier-facing status word, overridable per status via the ui_copy key <p_prefix><status>. Falls back to the raw status, which is what the screens printed before.';
 
 revoke all on function public.supplier_status_tone(text) from public;
-revoke all on function public.supplier_status_label(text) from public;
+revoke all on function public.supplier_status_label(text, text) from public;
 grant execute on function public.supplier_status_tone(text) to anon, authenticated, service_role;
-grant execute on function public.supplier_status_label(text) to anon, authenticated, service_role;
+grant execute on function public.supplier_status_label(text, text) to anon, authenticated, service_role;
 
 -- ── supplier_my_orders gains status_label + status_tone ───────────────────
 -- RETURNS TABLE cannot gain columns in place, so the function is dropped and
@@ -200,4 +211,45 @@ insert into public.ui_copy (key, value) values
   ('dispute_form_screen.qty_ordered',  to_jsonb('Ordered'::text)),
   ('dispute_form_screen.qty_received', to_jsonb('Received'::text)),
   ('dispute_form_screen.qty_missing',  to_jsonb('Missing'::text))
+on conflict (key) do nothing;
+
+-- ── pending_staging_all: the approval chip stops being a Dart switch ───────
+-- supplier_add_medicine_screen_web's _PendingRow switched on the staging status
+-- ('approved' / 'rejected' / anything-else) to pick one of three hardcoded hex
+-- pairs. Same bug, same fix: each row carries its own status_label and
+-- status_tone and the row prints them.
+-- returns jsonb, so no drop is needed — the rows simply gain two keys, and a
+-- client that ignores them is unaffected.
+create or replace function public.pending_staging_all(p_kind text)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path to 'public'
+as $function$
+declare v_table text; v jsonb;
+begin
+  if auth.uid() is null then raise exception 'not_signed_in' using errcode='28000'; end if;
+  v_table := case p_kind when 'company' then 'supplier_pending_companies'
+                         when 'medicine' then 'supplier_pending_medicines' else null end;
+  if v_table is null then raise exception 'unknown_kind: %', p_kind; end if;
+  execute format(
+    'select coalesce(jsonb_agg(
+        to_jsonb(t) || jsonb_build_object(
+          ''status_label'', public.supplier_status_label(t.status, ''supplier_add_medicine.status_''),
+          ''status_tone'',  public.supplier_status_tone(t.status))
+        order by t.created_at desc), ''[]''::jsonb) from %I t', v_table)
+    into v;
+  return jsonb_build_object('rows', v, 'count', jsonb_array_length(v));
+end $function$;
+
+revoke all on function public.pending_staging_all(text) from public;
+grant execute on function public.pending_staging_all(text) to authenticated, service_role;
+
+-- dispute_card.dart is the ONE card the supplier portal and the public token
+-- page share, and its three quantity headings were Dart literals there too.
+insert into public.ui_copy (key, value) values
+  ('dispute_card.qty_ordered',  to_jsonb('Ordered'::text)),
+  ('dispute_card.qty_received', to_jsonb('Received'::text)),
+  ('dispute_card.qty_missing',  to_jsonb('Missing'::text))
 on conflict (key) do nothing;

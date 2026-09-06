@@ -149,6 +149,23 @@ async function wheelBeforeShot(page) {
 const customerPath    = argVal('--customer-path');
 const customerShot    = argVal('--customer-shot');
 
+// CMD #671 — the SAME reachability proof, for the SUPPLIER.
+//
+// #273 gave the admin one (--admin-path) and #447 gave the shop owner one
+// (--customer-path). The supplier had neither: the only browser phase holding a
+// supplier session is the mobile LAYOUT proof, which measures a width and
+// screenshots to a fixed /tmp path. So the largest role surface in the product —
+// the portal a supplier lives in — could be rebuilt and never photographed, and
+// View-As is in-memory by design so an admin capture cannot substitute (there is
+// no URL that puts an admin inside SupplierShell).
+//
+// --supplier-shot <path> boots the root as test.sup1, which IS the supplier
+// shell, and saves those pixels. --supplier-path <route> deep-links first, for a
+// supplier route that has one. Same shape as phase 12, deliberately.
+const supplierPath    = argVal('--supplier-path');
+const supplierShot    = argVal('--supplier-shot');
+const supplierWheel   = parseInt(argVal('--supplier-wheel') || '0', 10);
+
 // CHANGE #536 — the viewport the customer phase drives.
 //
 // The phase was hardcoded to 1280x800, which is a DESKTOP proof. Om's placement
@@ -158,6 +175,8 @@ const customerShot    = argVal('--customer-shot');
 // authenticated Flutter page. `--customer-width 390` drives the phone.
 const customerWidth = parseInt(argVal('--customer-width') || '1280', 10);
 const customerHeight = parseInt(argVal('--customer-height') || '800', 10);
+const supplierWidth = parseInt(argVal('--supplier-width') || '1280', 10);
+const supplierHeight = parseInt(argVal('--supplier-height') || '800', 10);
 
 // ── Phase selection (CHANGE #192) ─────────────────────────────────────────────
 // The verifier used to run EVERY phase on every invocation, so the mandated
@@ -175,7 +194,7 @@ const customerHeight = parseInt(argVal('--customer-height') || '800', 10);
 //   --phases a,b,c     → exactly these (names below)
 const PHASE_NAMES = ['boot', 'inquiry', 'allocation', 'receiving', 'voice',
                      'arrivals', 'supplier', 'admin-mobile', 'supplier-mobile',
-                     'storefront', 'customer-path'];
+                     'storefront', 'customer-path', 'supplier-path'];
 const phasesArg = argVal('--phases');
 const wantAll   = argv.includes('--all');
 const wantApi   = argv.includes('--api');
@@ -196,6 +215,7 @@ if (phasesArg) {
   if (inquiryToken) selected.add('inquiry');
   if (supplierKeys) selected.add('supplier');
   if (customerPath) selected.add('customer-path');
+  if (supplierPath || supplierShot) selected.add('supplier-path');
   if (wantAll || wantApi) ['allocation', 'receiving', 'voice', 'arrivals'].forEach(p => selected.add(p));
   if (wantAll || wantLayout) ['admin-mobile', 'supplier-mobile'].forEach(p => selected.add(p));
 }
@@ -467,6 +487,96 @@ async function phaseCustomerPath(browser, session, expectedHash) {
 
   console.log(passed ? '\n✅ Customer deep-link phase PASSED'
                      : '\n❌ Customer deep-link phase FAILED');
+  return passed;
+}
+
+// CMD #671 — Phase 13: the supplier's own eyes.
+//
+// Boot the root with a supplier session (that IS SupplierShell), optionally deep
+// link, read the render-log there and photograph it. No admin fallback, for the
+// reason phase 12 gives: a proof that quietly swaps the viewer is worse than no
+// proof — an admin at the root gets the admin shell, not the supplier portal.
+async function phaseSupplierPath(browser, session, expectedHash) {
+  console.log(`\n── Phase 13: supplier portal ${supplierPath || '(root)'} ──────────`);
+  const wantKeys = keysForPhase('supplier-path');
+  let passed = false;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES && !passed; attempt++) {
+    console.log(`  Attempt ${attempt}/${MAX_RETRIES}`);
+    const ctx = await browser.newContext({
+      viewport: { width: supplierWidth, height: supplierHeight },
+      isMobile: supplierWidth < 900,
+      hasTouch: supplierWidth < 900,
+    });
+    await ctx.addInitScript(({ key, val }) => {
+      localStorage.setItem(key, val);
+    }, { key: STORAGE_KEY, val: JSON.stringify(session) });
+    const page = await ctx.newPage();
+    page.on('console', () => {});
+
+    try {
+      await page.goto(TARGET, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await waitForFlutter(page, 10, 'boot_status=painted');
+      console.log(`  Viewport   : ${supplierWidth}x${supplierHeight}`);
+      if (supplierPath) {
+        console.log(`  Deep link  : ${supplierPath}`);
+        await page.goto(`${TARGET}${supplierPath}`,
+          { waitUntil: 'domcontentloaded', timeout: 30000 });
+      }
+      // Wait for the KEY this phase is about, not for the path — the render log
+      // is key=value lines and a route can never appear in it (#536, finding 304).
+      await waitForFlutter(page, 3, wantKeys.length ? wantKeys[0] : undefined);
+
+      const logText = await readRenderLog(page);
+      if (supplierShot) {
+        try {
+          if (supplierWheel) {
+            const vp = page.viewportSize() || { width: supplierWidth, height: supplierHeight };
+            await page.mouse.move(Math.round(vp.width / 2), Math.round(vp.height / 2));
+            let done = 0;
+            while (done < supplierWheel) {
+              const step = Math.min(400, supplierWheel - done);
+              await page.mouse.wheel(0, step);
+              done += step;
+              await page.waitForTimeout(120);
+            }
+            await page.waitForTimeout(400);
+            console.log(`  Scrolled   : ${supplierWheel}px before the capture`);
+          }
+          await page.screenshot({ path: supplierShot, fullPage: false });
+          console.log(`  Screenshot : ${supplierShot}`);
+        } catch (e) {
+          console.log(`  Screenshot : FAILED (${e.message})`);
+        }
+      }
+
+      console.log('\n  ── Render log ─────────────────────────────────');
+      console.log(logText || '  (empty)');
+      console.log('  ──────────────────────────────────────────\n');
+
+      const log     = parseLog(logText);
+      const gotHash = log['build'];
+      const hashOk  = gotHash === expectedHash;
+      const missing = wantKeys.filter(k => !(k in log));
+
+      console.log(`  Build hash : got=${gotHash} want=${expectedHash} → ${hashOk ? '✓ MATCH' : '✗ MISMATCH'}`);
+      if (missing.length) {
+        console.log(`  Keys       : MISSING: ${missing.join(', ')}`);
+        console.log(`               present: ${Object.keys(log).join(', ')}`);
+      } else if (wantKeys.length) {
+        console.log(`  Keys       : all present (${wantKeys.join(', ')}) ✓`);
+      }
+      if (hashOk && missing.length === 0) passed = true;
+    } catch (err) {
+      console.error(`  Error: ${err.message}`);
+    } finally {
+      await ctx.close();
+    }
+    if (!passed && attempt < MAX_RETRIES) console.log('  Retrying...\n');
+  }
+
+  console.log(passed ? '\n✅ Supplier portal phase PASSED'
+                     : '\n❌ Supplier portal phase FAILED');
   return passed;
 }
 
@@ -1312,6 +1422,11 @@ async function main() {
           }
           console.log(`   ✓ Got session for ${c.user?.email}`);
           return phaseCustomerPath(browser, c, expectedHash);
+        });
+      await runPhase('supplier-path', `Phase 13 — supplier portal ${supplierPath || '(root)'}`,
+        async () => {
+          const s = await supplierSession();
+          return s ? phaseSupplierPath(browser, s, expectedHash) : false;
         });
       await runPhase('supplier', 'Phase 8 — supplier inquiry',
         async () => {

@@ -266,28 +266,45 @@ class _LiveDeliveryMapCardState extends State<LiveDeliveryMapCard> {
         // ── the trust line: what the pin means, and when it was last true ──
         Padding(
           padding: EdgeInsets.only(bottom: Ds.space.x8),
+          // The heading used to sit in a Flexible NEXT TO a Spacer. A Row
+          // splits its free space between flex children by weight, so the
+          // Spacer took half of it and "Live location" ellipsised to
+          // "Live loc…" at 420 px with visible whitespace to its right.
+          // Heading + chip now own one Expanded between them and the toggle
+          // is the only fixed child, so the heading shortens ONLY when there
+          // is genuinely no room left.
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              if (c.heading.isNotEmpty)
-                Flexible(
-                  child: Text(c.heading,
-                      style: Ds.t.bodyStrong, overflow: TextOverflow.ellipsis),
+              Expanded(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    if (c.heading.isNotEmpty)
+                      Flexible(
+                        child: Text(c.heading,
+                            style: Ds.t.bodyStrong,
+                            overflow: TextOverflow.ellipsis),
+                      ),
+                    if (t.label.isNotEmpty) ...[
+                      SizedBox(width: Ds.space.x8),
+                      Flexible(
+                        child: Container(
+                          padding: EdgeInsets.symmetric(
+                              horizontal: Ds.space.x12, vertical: Ds.space.x4),
+                          decoration: BoxDecoration(
+                            color: tone.bg,
+                            borderRadius: Ds.r.rChip,
+                          ),
+                          child: Text(t.label,
+                              style: Ds.t.caption.copyWith(color: tone.fg),
+                              overflow: TextOverflow.ellipsis),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
-              if (t.label.isNotEmpty) ...[
-                SizedBox(width: Ds.space.x8),
-                Container(
-                  padding: EdgeInsets.symmetric(
-                      horizontal: Ds.space.x12, vertical: Ds.space.x4),
-                  decoration: BoxDecoration(
-                    color: tone.bg,
-                    borderRadius: Ds.r.rChip,
-                  ),
-                  child: Text(t.label,
-                      style: Ds.t.caption.copyWith(color: tone.fg)),
-                ),
-              ],
-              const Spacer(),
+              ),
               if (toggleLabel.isNotEmpty)
                 SizedBox(
                   height: Ds.touch.minTarget,

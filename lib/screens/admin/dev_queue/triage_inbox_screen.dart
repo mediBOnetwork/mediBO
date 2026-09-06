@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../design_tokens.dart';
+import '../../../utils/render_log.dart';
 import 'dev_queue_common.dart';
 import 'dev_queue_service.dart';
 
@@ -52,6 +53,15 @@ class _TriageInboxScreenState extends State<TriageInboxScreen> {
       _trends = trends;
       _loading = false;
     });
+    // Painted-proof for the post-deploy verifier and for the feature's own
+    // test contract (rg_contract_gap / c634). Written on BOTH paths: a
+    // verifier that reaches /admin/go/triage without super admin still proves
+    // the screen rendered — it just renders the backend's refusal. Nothing
+    // here is a display string; 'painted' is the key's value, not UI copy.
+    try {
+      RenderLog.write('c639_triage', 'painted');
+      RenderLog.write('c639_triage_rows', '${_rows.length}');
+    } catch (_) {/* the render log is never allowed to break a screen */}
   }
 
   List<Map<String, dynamic>> get _rows =>

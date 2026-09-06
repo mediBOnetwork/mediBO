@@ -55,8 +55,15 @@ async function main() {
   let request = null;
   if (flag('if-requested')) {
     if (!api.hasServiceKey()) { console.error('autotest: no service key'); process.exit(3); }
-    const claimed = await api.rpc('test_run_request_claim',
-      { p_worker: process.env.DEVCMD_AGENT || require('os').hostname() }, null);
+    // CHANGE #636 — --kinds narrows the claim. A timer that must only ever run
+    // ONE job cannot use the unfiltered claim: the head of the queue may be
+    // #634's 'full' request, the entire hostile suite against production.
+    const kinds = (val('kinds', '') || '').split(',').map(k => k.trim()).filter(Boolean);
+    const claimed = kinds.length
+      ? await api.rpc('test_run_request_claim_kind',
+          { p_worker: process.env.DEVCMD_AGENT || require('os').hostname(), p_kinds: kinds }, null)
+      : await api.rpc('test_run_request_claim',
+          { p_worker: process.env.DEVCMD_AGENT || require('os').hostname() }, null);
     if (!claimed || !claimed.has) { console.log('[autotest] no run requested'); return 0; }
     request = claimed;
     // 'full' is the nightly suite the #305 dispatcher asks for: production,
@@ -72,6 +79,32 @@ async function main() {
     if (a.hostile === false) argv.push('--no-hostile');
     if (a.budget_s && !argv.includes('--budget-s')) argv.push('--budget-s', String(a.budget_s));
     console.log(`[autotest] claimed request ${claimed.request_id} (${claimed.kind})`);
+    // CHANGE #636 — the safety net is not a browser suite. It is one SQL call
+    // that takes minutes, which is exactly why #1808 had to disable its cron:
+    // run from cron_dispatch() it cancelled at the 15 s dblink budget and took
+    // every other scheduled task down with it. So the cron only ENQUEUES and
+    // this lane runs it, off the dispatcher's tick, where nothing is waiting on
+    // a budget. Handled here and returned: none of the harness below applies.
+    if (claimed.kind === 'safety_net') {
+      const a = claimed.args || {};
+      const t0 = Date.now();
+      const out = await api.rpc('autotest_safety_net_run', {
+        p_label: a.label || 'nightly safety net',
+        p_seed: a.seed == null ? null : Number(a.seed),
+        p_fuzz_rpcs: a.fuzz_rpcs == null ? 150 : Number(a.fuzz_rpcs),
+        p_variants: a.variants == null ? 2 : Number(a.variants)
+      }, null);
+      const ok = !!(out && out.ok);
+      console.log(`[autotest] safety net ${ok ? 'ran' : 'FAILED'} in ${Math.round((Date.now() - t0) / 1000)}s · `
+        + JSON.stringify(out && (out.gaps !== undefined ? { run_id: out.run_id, gaps: out.gaps } : out)).slice(0, 300));
+      await api.rpc('test_run_request_close', {
+        p_request: claimed.request_id,
+        p_status: ok ? 'done' : 'failed',
+        p_run_id: null,
+        p_note: JSON.stringify(out || {}).slice(0, 300)
+      }, null);
+      return ok ? 0 : 1;
+    }
   }
 
   const target = resolveTarget();

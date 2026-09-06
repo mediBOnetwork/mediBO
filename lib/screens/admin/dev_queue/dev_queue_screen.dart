@@ -20,6 +20,7 @@ import 'strip_v3/strip_v3_card.dart';
 import '../admin_heartbeat_screen.dart';        // CHANGE #468
 import '../test_mode_screen.dart';             // CHANGE #573, wired #468
 import 'journey_library_screen.dart';
+import 'token_dashboard_screen.dart';
 import 'triage_inbox_screen.dart';
 import 'test_coverage_screen.dart';   // CHANGE #634
 import 'journey_bot_screen.dart';     // CHANGE #635
@@ -809,6 +810,14 @@ class _Row extends StatelessWidget {
             label: (row['grade_chip']).toString(),
             tone: toneByName((row['grade_tone'] ?? 'info').toString()),
             icon: Icons.straighten),
+      // CMD #1820 — this build cost far more than its size class usually does.
+      // dev_token_anomaly_scan() decides that and writes the sentence; the card
+      // prints it so the anomaly is seen without opening the Token dashboard.
+      if ((row['anomaly_chip'] ?? '').toString().isNotEmpty)
+        ToneChip(
+            label: (row['anomaly_chip']).toString(),
+            tone: toneByName((row['anomaly_tone'] ?? 'danger').toString()),
+            icon: Icons.local_fire_department_outlined),
       if ((row['preview_chip'] ?? '').toString().isNotEmpty)
         ToneChip(
             label: (row['preview_chip']).toString(),
@@ -1215,6 +1224,10 @@ const Set<String> kDevToolKeys = <String>{
   // health, Test mode and the daily heartbeat: the things that tell an
   // operator whether the platform is still standing up.
   'runbooks',
+  // CMD #1820 — where every token and rupee went. It sits with Cron health
+  // and the heartbeat because it answers the same kind of question: what is
+  // this fleet doing with what it is being given.
+  'token_dashboard',
 };
 
 /// Open one registered tool. Returns false for a key this build does not know,
@@ -1234,6 +1247,9 @@ bool openDevTool(
   switch (toolKey) {
     case 'journey_library':
       push(JourneyLibraryScreen(service: svc));
+      return true;
+    case 'token_dashboard':
+      push(TokenDashboardScreen(service: svc));
       return true;
     case 'triage':
       push(TriageInboxScreen(service: svc));

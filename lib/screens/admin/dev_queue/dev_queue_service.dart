@@ -225,6 +225,13 @@ class DevQueueService {
   Future<Map<String, dynamic>> authDiagList({int limit = 50}) async =>
       _asMap(await _rpc('auth_diag_list', params: {'p_limit': limit}));
 
+  /// CMD #1820 — the Token dashboard, whole, in one payload. Every rupee,
+  /// token count, percentage, ratio and em-dash on that screen is a string
+  /// built by `dev_token_report()`; this method merges nothing, defaults
+  /// nothing and formats nothing.
+  Future<Map<String, dynamic>> tokenReport(String scope) async =>
+      _asMap(await _rpc('dev_token_report', params: {'p_scope': scope}));
+
   Future<List<Map<String, dynamic>>> areasGet() async =>
       _asList(await _rpc('dev_areas_get'));
 

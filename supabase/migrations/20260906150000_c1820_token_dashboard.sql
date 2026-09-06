@@ -1063,3 +1063,58 @@ end $$;
 grant execute on function public.dev_token_report(text)                       to authenticated, service_role;
 grant execute on function public.dev_cmd_cost_estimate(text,int,int,int)      to authenticated, service_role;
 grant execute on function public.dev_token_anomaly_scan()                     to service_role;
+
+-- ── 8. THE ANOMALY, LIVE ON THE COMMAND CARD ────────────────────────────────
+-- The dashboard is a place you go; the card is a place you already are. A
+-- command past the multiple gets a chip on its own row in the Dev Queue list,
+-- so the anomaly is visible without opening anything.
+--
+-- This is done in _dev_card_strip (twelve lines) rather than in _dev_cmd_rows
+-- (two hundred and sixty), on purpose: several runners edit this schema live
+-- and redefining the big row builder to add one column is how a concurrent
+-- change gets silently reverted.
+create or replace function public._dev_card_keys()
+returns text[] language sql immutable as $$
+  select array[
+    'id','title','status','kind','area','area_label','batch_label','priority',
+    'urgent','is_danger','effort','route','route_label','route_tone',
+    'claimed_by','model','model_chip','model_label','effort_label','retry_count',
+    'created_at','started_at','finished_at','heartbeat_at','eta_at',
+    'age_display','elapsed_display','remaining_display','tat_display',
+    'ttt_display','speed_display','tokens_display','cost_display','cost_note',
+    'has_eta','has_tokens','is_live','is_waiting','is_overrun','msg_count',
+    'steps_done','steps_total','steps_chip','steps_stale_chip','steps_stale_hint',
+    'spec_chip','spec_tone','spec_open','spec_total',
+    'qa_chip','qa_tone','qa_status','qa_required','qa_open_findings',
+    'journey_chip','preview_chip','preview_tone','preview_status',
+    'chain_chip','chain_tone','finish_chip','finish_tone',
+    'wait_chip','wait_tone','wait_kind','wait_reason','wait_hint','wait_state',
+    'live_chip','stall_chip','resume_chip','debug_status','debug_requested',
+    'size_class','qa_scope','diff_files','diff_rows','grade_chip','grade_tone','grade_reason',
+    'auto_finished','auto_finish_source','rolled_back',
+    -- CHANGE #1023 — agent liveness, next to the worker liveness it is not
+    'agent_chip','agent_tone','agent_rc_session','session_lost_count','started_flags',
+    'web_deploy_no','android_status','ios_status',
+    'targets_web','targets_android','targets_ios',
+    -- CMD #1820 — this build cost far more than its size class usually does
+    'anomaly_chip','anomaly_tone'
+  ]::text[];
+$$;
+
+create or replace function public._dev_card_strip(p_row jsonb)
+returns jsonb language sql stable as $$
+  select coalesce(
+    (select jsonb_object_agg(k, p_row -> k)
+       from unnest(public._dev_card_keys()) k
+      where p_row ? k
+        and p_row -> k is distinct from 'null'::jsonb
+        and p_row ->> k is distinct from ''), '{}'::jsonb)
+    || case when coalesce(p_row->>'plain_summary','') = '' then '{}'::jsonb
+            else jsonb_build_object(
+                   'plain_summary', left(p_row->>'plain_summary', 200)) end
+    || coalesce((select jsonb_build_object(
+                   'anomaly_chip', trim(to_char(a.factor,'FM990.0')) || '× its class',
+                   'anomaly_tone', 'danger')
+                   from public.dev_token_anomaly a
+                  where a.command_id = (p_row->>'id')::bigint), '{}'::jsonb);
+$$;

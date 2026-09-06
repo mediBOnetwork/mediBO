@@ -83,11 +83,23 @@ class _PartnerDocumentsScreenState extends State<PartnerDocumentsScreen> {
       final map = await _rpc('partner_documents_screen', _arg());
       final kyc = _map(map['kyc']);
       final agree = _map(map['agreement']);
+      // CHANGE #692 follow-up (CMD #998) — the ROUTE arm's own proof.
+      //
+      // The door (`partner_documents` in shellExtraRouteScreen) and the screen
+      // both existed; what could not be PROVEN was that a tap on the tile drew
+      // this block instead of falling through the shell's switch and writing
+      // `c536_route_unknown`. The admin console already publishes
+      // `c692_partner_documents` for its own copy of the card, so the partner's
+      // own page publishes the SAME key in the SAME shape: one render-log key
+      // answers "did the documents block draw", whichever surface drew it, and
+      // `via=` says which one. That is the key the command's proof reads.
       RenderLog.write(
-          'partner_documents',
-          'ok=${map['ok']} kyc_rows=${(kyc['rows'] as List?)?.length ?? 0} '
-          'agreement=${agree['status']} '
-          'golive=${_map(map['golive'])['ready']}');
+          'c692_partner_documents',
+          'card=${map['ok'] == true},'
+          'ready=${_map(map['golive'])['ready']},'
+          'agreement=${agree['status']},'
+          'kyc=${(kyc['rows'] as List?)?.length ?? 0},'
+          'via=route');
       if (!mounted) return;
       setState(() {
         _d = map;

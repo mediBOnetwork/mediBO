@@ -361,7 +361,7 @@ class _SupplierShellState extends State<SupplierShell> {
     final showBanner = _pendingInquiryCount > 0 && !_bannerDismissed && _index != 2;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F6F8),
+      backgroundColor: Ds.c.bg,
       body: Column(children: [
         _SupplierHeader(
           inboxUnread: _inboxUnread,
@@ -452,25 +452,26 @@ class _SupplierHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       height: 56,
-      padding: EdgeInsets.symmetric(horizontal: isDesktop ? 24 : 16),
-      decoration: const BoxDecoration(
-        color: Color(0xFF1B7A43),
-        boxShadow: [BoxShadow(color: Color(0x20000000), blurRadius: 4, offset: Offset(0, 2))],
+      padding: EdgeInsets.symmetric(
+          horizontal: isDesktop ? Ds.space.x24 : Ds.space.x16),
+      decoration: BoxDecoration(
+        color: Ds.c.brand,
+        boxShadow: Ds.elevation.e1,
       ),
       child: Row(children: [
-        Text(c('supplier_shell.brand'), style: const TextStyle(
-          color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700,
-          letterSpacing: -0.5,
+        Text(c('supplier_shell.brand'), style: Ds.t.title.copyWith(
+          color: Ds.c.surface, fontWeight: FontWeight.w700,
         )),
-        const SizedBox(width: 8),
+        SizedBox(width: Ds.space.x8),
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          padding: EdgeInsets.symmetric(
+              horizontal: Ds.space.x8, vertical: Ds.space.x4),
           decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.2),
-            borderRadius: BorderRadius.circular(12),
+            color: Ds.c.surface.withValues(alpha: 0.2),
+            borderRadius: Ds.r.rButton,
           ),
-          child: Text(c('supplier_shell.role_badge'), style: const TextStyle(
-            color: Colors.white, fontSize: 11, fontWeight: FontWeight.w500,
+          child: Text(c('supplier_shell.role_badge'), style: Ds.t.caption.copyWith(
+            color: Ds.c.surface, fontWeight: FontWeight.w500,
           )),
         ),
         const Spacer(),
@@ -479,11 +480,12 @@ class _SupplierHeader extends StatelessWidget {
             staffLabel.isNotEmpty
                 ? staffLabel
                 : cf('supplier_shell.greeting', {'name': supplierName}),
-            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
+            style: Ds.t.caption
+                .copyWith(color: Ds.c.surface, fontWeight: FontWeight.w500),
             overflow: TextOverflow.ellipsis,
           ),
         ),
-        const SizedBox(width: 12),
+        SizedBox(width: Ds.space.x12),
         if (onInbox != null)
           InkWell(
             onTap: onInbox,
@@ -493,8 +495,8 @@ class _SupplierHeader extends StatelessWidget {
               child: Badge(
                 isLabelVisible: inboxUnread > 0,
                 label: Text('$inboxUnread'),
-                child: const Icon(Icons.notifications_none,
-                    color: Colors.white, size: 20),
+                child: Icon(Icons.notifications_none,
+                    color: Ds.c.surface, size: 20),
               ),
             ),
           ),
@@ -504,16 +506,16 @@ class _SupplierHeader extends StatelessWidget {
             borderRadius: Ds.r.rButton,
             child: Padding(
               padding: EdgeInsets.all(Ds.space.x4),
-              child: const Icon(Icons.more_vert, color: Colors.white, size: 20),
+              child: Icon(Icons.more_vert, color: Ds.c.surface, size: 20),
             ),
           ),
         if (onLogout != null)
           InkWell(
             onTap: onLogout,
-            borderRadius: BorderRadius.circular(8),
-            child: const Padding(
-              padding: EdgeInsets.all(6),
-              child: Icon(Icons.logout, color: Colors.white, size: 20),
+            borderRadius: Ds.r.rButton,
+            child: Padding(
+              padding: EdgeInsets.all(Ds.space.x4),
+              child: Icon(Icons.logout, color: Ds.c.surface, size: 20),
             ),
           ),
       ]),
@@ -536,11 +538,12 @@ class _InquiryBanner extends StatelessWidget {
       onTap: onTap,
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        color: const Color(0xFFFEF3C7),
+        padding: EdgeInsets.symmetric(
+            horizontal: Ds.space.x16, vertical: Ds.space.x8),
+        color: Ds.c.warningSoft,
         child: Row(children: [
-          const Icon(Icons.notifications_active, color: Color(0xFF92400E), size: 18),
-          const SizedBox(width: 8),
+          Icon(Icons.notifications_active, color: Ds.c.warning, size: 18),
+          SizedBox(width: Ds.space.x8),
           Expanded(
             child: Text(
               cf(
@@ -549,14 +552,14 @@ class _InquiryBanner extends StatelessWidget {
                     : 'supplier_shell.banner_pending_many',
                 {'count': '$count'},
               ),
-              style: const TextStyle(
-                fontSize: 13, color: Color(0xFF92400E), fontWeight: FontWeight.w500,
+              style: Ds.t.caption.copyWith(
+                color: Ds.c.warning, fontWeight: FontWeight.w500,
               ),
             ),
           ),
           GestureDetector(
             onTap: onDismiss,
-            child: const Icon(Icons.close, color: Color(0xFF92400E), size: 18),
+            child: Icon(Icons.close, color: Ds.c.warning, size: 18),
           ),
         ]),
       ),
@@ -584,8 +587,8 @@ class _DesktopTabBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: Colors.white,
-      padding: const EdgeInsets.symmetric(horizontal: 24),
+      color: Ds.c.surface,
+      padding: EdgeInsets.symmetric(horizontal: Ds.space.x24),
       child: Row(
         children: List.generate(items.length, (i) {
           final item = items[i];
@@ -593,10 +596,11 @@ class _DesktopTabBar extends StatelessWidget {
           return InkWell(
             onTap: () => onTap(item.slot),
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              padding: EdgeInsets.symmetric(
+                  horizontal: Ds.space.x16, vertical: Ds.space.x12),
               decoration: BoxDecoration(
                 border: Border(bottom: BorderSide(
-                  color: selected ? const Color(0xFF1B7A43) : Colors.transparent,
+                  color: selected ? Ds.c.brand : Colors.transparent,
                   width: 2,
                 )),
               ),
@@ -604,7 +608,7 @@ class _DesktopTabBar extends StatelessWidget {
                 Stack(clipBehavior: Clip.none, children: [
                   Icon(item.icon,
                     size: 18,
-                    color: selected ? const Color(0xFF1B7A43) : const Color(0xFF6B7280),
+                    color: selected ? Ds.c.brand : Ds.c.textSecondary,
                   ),
                   if ((item.slot == 2 && pendingInquiry > 0) ||
                       (item.slot == 4 && activeDisputes > 0))
@@ -612,19 +616,18 @@ class _DesktopTabBar extends StatelessWidget {
                       right: -5, top: -3,
                       child: Container(
                         width: 8, height: 8,
-                        decoration: const BoxDecoration(
-                          color: Color(0xFFDC2626),
+                        decoration: BoxDecoration(
+                          color: Ds.c.danger,
                           shape: BoxShape.circle,
                         ),
                       ),
                     ),
                 ]),
-                const SizedBox(width: 6),
+                SizedBox(width: Ds.space.x4),
                 Text(item.label,
-                  style: TextStyle(
-                    fontSize: 14,
+                  style: Ds.t.body.copyWith(
                     fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                    color: selected ? const Color(0xFF1B7A43) : const Color(0xFF6B7280),
+                    color: selected ? Ds.c.brand : Ds.c.textSecondary,
                   ),
                 ),
               ]),
@@ -656,9 +659,9 @@ class _MobileBottomNav extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        boxShadow: [BoxShadow(color: Color(0x15000000), blurRadius: 8, offset: Offset(0, -2))],
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        boxShadow: Ds.elevation.e2,
       ),
       child: SafeArea(
         child: SizedBox(
@@ -678,31 +681,31 @@ class _MobileBottomNav extends StatelessWidget {
                       Stack(clipBehavior: Clip.none, children: [
                         Icon(item.icon,
                           size: 22,
-                          color: selected ? const Color(0xFF1B7A43) : const Color(0xFF9CA3AF),
+                          color: selected ? Ds.c.brand : Ds.c.textSecondary,
                         ),
                         if (showBadge)
                           Positioned(
                             right: -6, top: -4,
                             child: Container(
-                              padding: const EdgeInsets.all(3),
-                              decoration: const BoxDecoration(
-                                color: Color(0xFFDC2626),
+                              padding: EdgeInsets.all(Ds.space.x4),
+                              decoration: BoxDecoration(
+                                color: Ds.c.danger,
                                 shape: BoxShape.circle,
                               ),
                               child: Text(
                                 item.slot == 4 ? '$activeDisputes' : '$pendingInquiry',
-                                style: const TextStyle(color: Colors.white, fontSize: 9,
+                                style: Ds.t.caption.copyWith(
+                                    color: Ds.c.surface,
                                     fontWeight: FontWeight.w700),
                               ),
                             ),
                           ),
                       ]),
-                      const SizedBox(height: 3),
+                      SizedBox(height: Ds.space.x4),
                       Text(item.label,
-                        style: TextStyle(
-                          fontSize: 10,
+                        style: Ds.t.caption.copyWith(
                           fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                          color: selected ? const Color(0xFF1B7A43) : const Color(0xFF9CA3AF),
+                          color: selected ? Ds.c.brand : Ds.c.textSecondary,
                         ),
                       ),
                     ],
@@ -727,14 +730,14 @@ class _ViewAsReadOnlyPlaceholder extends StatelessWidget {
   Widget build(BuildContext context) {
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(32),
+        padding: EdgeInsets.all(Ds.space.x32),
         child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          const Icon(Icons.preview_outlined, size: 40, color: Color(0xFFD97706)),
-          const SizedBox(height: 12),
+          Icon(Icons.preview_outlined, size: 40, color: Ds.c.warning),
+          SizedBox(height: Ds.space.x12),
           Text(
             label,
             textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 14, color: Color(0xFF92400E)),
+            style: Ds.t.body.copyWith(color: Ds.c.warning),
           ),
         ]),
       ),

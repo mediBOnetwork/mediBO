@@ -36,6 +36,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:pharma_b2b/design_tokens.dart';
 import 'package:pharma_b2b/screens/public/inquiry_form_screen.dart';
 import 'package:pharma_b2b/screens/supplier/supplier_orders_screen.dart';
 
@@ -128,13 +129,22 @@ void main() {
       expect(InquiryBadge.from(const {'badge': {'bg': '#FFFFFF'}}).has, isFalse);
     });
 
-    test('a malformed colour falls back instead of throwing', () {
+    // CHANGE #671 (gap 51): the fallback used to be two hex literals written in
+    // this screen. It is the TOKEN layer now — Ds.c.bg / Ds.c.textSecondary —
+    // so the assertion names the tokens rather than the hexes they currently
+    // resolve to. That is the point of the change: ui_design_set() moves this
+    // fallback with the rest of the app, and re-hardcoding a hex here would
+    // fail this test again.
+    test('a malformed colour falls back to the tokens, instead of throwing',
+        () {
       final b = InquiryBadge.from(const {
         'badge': {'label': 'Available', 'bg': 'not-a-colour', 'fg': ''},
       });
       expect(b.has, isTrue);
-      expect(b.bg, const Color(0xFFF3F4F6));
-      expect(b.fg, const Color(0xFF6B7280));
+      expect(b.bg, Ds.c.bg);
+      expect(b.fg, Ds.c.textSecondary);
+      // ...and it is a REAL fallback, not the unparsed string leaking through.
+      expect(b.bg, isNot(equals(b.fg)));
     });
   });
 

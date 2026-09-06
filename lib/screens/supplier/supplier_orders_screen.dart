@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../../services/date_labels.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../design_tokens.dart';
 import '../../services/live_feed.dart';
 
 import '../../services/ui_copy.dart';
@@ -13,19 +14,15 @@ import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
 import '../../widgets/bill_actions_row.dart' show BillActionButton;
 import '../../widgets/bill_viewer.dart';
+import '../../widgets/ds_tone.dart';
 import '../../widgets/order_item_card.dart';
 import '../../widgets/po_pricing.dart';
 import '../../widgets/response_deadline.dart';
 import '../../widgets/sup_pay_panel.dart';
 import '../../widgets/supplier_po_ack.dart';
 
-// Parses a backend-supplied "#RRGGBB" (or "RRGGBB") hex colour string.
-Color _hexColor(String? hex, Color fallback) {
-  if (hex == null || hex.isEmpty) return fallback;
-  final h = hex.startsWith('#') ? hex.substring(1) : hex;
-  final v = int.tryParse(h.length == 6 ? 'FF$h' : h, radix: 16);
-  return v == null ? fallback : Color(v);
-}
+// CHANGE #671 gap 51: the private hex parser is gone — a backend-supplied
+// "#RRGGBB" is read by Ds.hex, the same parser the token layer itself uses.
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
@@ -161,24 +158,24 @@ class _SupplierOrdersScreenState extends State<SupplierOrdersScreen> {
       RenderLog.write('supplier_orders_vp_w', constraints.maxWidth.toInt());
 
       if (_loading && _firstLoad) {
-        return const Center(
-          child: CircularProgressIndicator(color: Color(0xFF1B7A43)),
+        return Center(
+          child: CircularProgressIndicator(color: Ds.c.brand),
         );
       }
 
       if (_orders.isEmpty && !_loading) {
         return Center(
           child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            const Icon(Icons.receipt_long_outlined, size: 56, color: Color(0xFFD1D5DB)),
-            const SizedBox(height: 12),
-            Text(c('supplier_orders.empty'),
-                style: const TextStyle(fontSize: 15, color: Color(0xFF6B7280))),
+            Icon(Icons.receipt_long_outlined, size: 56, color: Ds.c.divider),
+            SizedBox(height: Ds.space.x12),
+            Text(c('supplier_orders.empty'), style: Ds.t.bodySecondary),
           ]),
         );
       }
 
       return ListView.builder(
-        padding: EdgeInsets.all(constraints.maxWidth >= 900 ? 24 : 12),
+        padding: EdgeInsets.all(
+            constraints.maxWidth >= 900 ? Ds.space.x24 : Ds.space.x12),
         itemCount: _orders.length,
         itemBuilder: (context, i) {
           final order = _orders[i];
@@ -282,7 +279,7 @@ class _OrderCardState extends State<_OrderCard> {
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             child: Text(c('supplier_orders.delete'),
-                style: const TextStyle(color: Color(0xFF991B1B))),
+                style: Ds.t.body.copyWith(color: Ds.c.danger)),
           ),
         ],
       ),
@@ -526,24 +523,21 @@ class _OrderCardState extends State<_OrderCard> {
     final items = (widget.order['items'] as List<dynamic>? ?? [])
         .map((e) => Map<String, dynamic>.from(e as Map))
         .toList();
-    final status = widget.order['status'] as String? ?? '';
+    final statusLabel = (widget.order['status_label'] as String?)?.trim().isNotEmpty == true
+        ? (widget.order['status_label'] as String).trim()
+        : (widget.order['status'] as String? ?? '');
+    final statusTone = widget.order['status_tone'] as String?;
 
     // c328_sup_row fires on every card render (list-time, not tap-gated)
     RenderLog.write('c328_sup_row', 'order=${orderCode.isNotEmpty ? orderCode : _orderId.substring(0, 8)}');
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 10),
+      margin: EdgeInsets.only(bottom: Ds.space.x8),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE5E7EB), width: 0.5),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        border: Border.all(color: Ds.c.divider, width: 0.5),
+        boxShadow: Ds.elevation.e1,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -551,11 +545,11 @@ class _OrderCardState extends State<_OrderCard> {
           // ── Header ──────────────────────────────────────────────────────────
           InkWell(
             borderRadius: (widget.isOpen || _payOpen)
-                ? const BorderRadius.vertical(top: Radius.circular(12))
-                : BorderRadius.circular(12),
+                ? BorderRadius.vertical(top: Radius.circular(Ds.r.card))
+                : Ds.r.rCard,
             onTap: widget.onToggle,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+              padding: EdgeInsets.all(Ds.space.x12),
               child: Row(children: [
                 Expanded(
                   child: Column(
@@ -565,9 +559,7 @@ class _OrderCardState extends State<_OrderCard> {
                         orderNo.isNotEmpty
                             ? cf('supplier_orders.order_no', {'no': orderNo})
                             : c('supplier_orders.order'),
-                        style: const TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827),
-                        ),
+                        style: Ds.t.body.copyWith(fontWeight: FontWeight.w700),
                       ),
                       if (orderCode.isNotEmpty) ...[
                         const SizedBox(height: 2),
@@ -575,9 +567,9 @@ class _OrderCardState extends State<_OrderCard> {
                           RenderLog.write('c317_order_id_shown', orderCode);
                           return Text(
                             orderCode,
-                            style: const TextStyle(
-                              fontSize: 11, fontWeight: FontWeight.w500,
-                              color: Color(0xFF9CA3AF), letterSpacing: 0.3,
+                            style: Ds.t.caption.copyWith(
+                              fontWeight: FontWeight.w500,
+                              letterSpacing: 0.3,
                             ),
                           );
                         }),
@@ -586,7 +578,7 @@ class _OrderCardState extends State<_OrderCard> {
                         const SizedBox(height: 2),
                         Text(
                           _formatDate(createdAt),
-                          style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                          style: Ds.t.caption,
                         ),
                       ],
                     ],
@@ -596,11 +588,9 @@ class _OrderCardState extends State<_OrderCard> {
                   if (total.show) ...[
                     Text(
                       total.display,
-                      style: const TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827),
-                      ),
+                      style: Ds.t.body.copyWith(fontWeight: FontWeight.w700),
                     ),
-                    const SizedBox(width: 8),
+                    SizedBox(width: Ds.space.x8),
                   ],
                   if (itemCount > 0) ...[
                     Text(
@@ -610,19 +600,23 @@ class _OrderCardState extends State<_OrderCard> {
                             : 'supplier_orders.item_count_many',
                         {'count': '$itemCount'},
                       ),
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                      style: Ds.t.caption,
                     ),
-                    const SizedBox(width: 8),
+                    SizedBox(width: Ds.space.x8),
                   ],
-                  if (status.isNotEmpty) ...[
-                    _StatusBadge(status: status),
-                    const SizedBox(width: 8),
+                  // CHANGE #671: the word AND the tone are the backend's
+                  // (supplier_my_orders.status_label / .status_tone). Pre-#671
+                  // payloads still carry only `status`, so it is the fallback
+                  // and the chip can never go blank.
+                  if (statusLabel.isNotEmpty) ...[
+                    _StatusBadge(label: statusLabel, tone: statusTone),
+                    SizedBox(width: Ds.space.x8),
                   ],
                   Icon(
                     widget.isOpen
                         ? Icons.keyboard_arrow_up_rounded
                         : Icons.keyboard_arrow_down_rounded,
-                    color: const Color(0xFF6B7280),
+                    color: Ds.c.textSecondary,
                     size: 22,
                   ),
                 ]),
@@ -632,33 +626,35 @@ class _OrderCardState extends State<_OrderCard> {
 
           // ── Upload Bill / View Payment button row ────────────────────────────
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+            padding: EdgeInsets.fromLTRB(
+                Ds.space.x12, 0, Ds.space.x12, Ds.space.x8),
             child: Row(children: [
               // Upload Bill (left)
               Expanded(
                 child: OutlinedButton.icon(
                   onPressed: _uploading ? null : _uploadSupplierBill,
                   icon: _uploading
-                      ? const SizedBox(
+                      ? SizedBox(
                           width: 14, height: 14,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43)),
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Ds.c.brand),
                         )
                       : const Icon(Icons.upload_outlined, size: 14),
                   label: Text(
                       _uploading
                           ? c('supplier_orders.uploading')
                           : c('supplier_orders.upload_bill'),
-                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                      style: Ds.t.caption.copyWith(fontWeight: FontWeight.w600)),
                   style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 6),
-                    side: const BorderSide(color: Color(0xFFD1D5DB)),
-                    foregroundColor: const Color(0xFF374151),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                    minimumSize: const Size(0, 36),
+                    padding: EdgeInsets.symmetric(vertical: Ds.space.x4),
+                    side: BorderSide(color: Ds.c.divider),
+                    foregroundColor: Ds.c.text,
+                    shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+                    minimumSize: Size(0, Ds.touch.minTarget),
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
+              SizedBox(width: Ds.space.x8),
               // View Payment (right)
               Expanded(
                 child: GestureDetector(
@@ -668,14 +664,15 @@ class _OrderCardState extends State<_OrderCard> {
                     _loadPanel();
                   },
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    padding: EdgeInsets.symmetric(
+                        horizontal: Ds.space.x8, vertical: Ds.space.x12),
                     decoration: BoxDecoration(
-                      color: _payOpen ? const Color(0xFFEFF6FF) : const Color(0xFFF5F6F8),
-                      borderRadius: BorderRadius.circular(8),
+                      color: _payOpen ? Ds.c.infoSoft : Ds.c.bg,
+                      borderRadius: Ds.r.rButton,
                       border: Border.all(
                         color: _payOpen
-                            ? const Color(0xFF1E40AF).withValues(alpha: 0.4)
-                            : const Color(0xFFE5E7EB),
+                            ? Ds.c.info.withValues(alpha: 0.4)
+                            : Ds.c.divider,
                       ),
                     ),
                     child: Row(
@@ -685,21 +682,21 @@ class _OrderCardState extends State<_OrderCard> {
                         Flexible(
                           child: Text(
                             c('supplier_orders.view_payment'),
-                            style: TextStyle(
-                              fontSize: 12, fontWeight: FontWeight.w600,
-                              color: _payOpen ? const Color(0xFF1E40AF) : const Color(0xFF374151),
+                            style: Ds.t.caption.copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: _payOpen ? Ds.c.info : Ds.c.text,
                             ),
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                        const SizedBox(width: 4),
+                        SizedBox(width: Ds.space.x4),
                         AnimatedRotation(
                           turns: _payOpen ? 0.5 : 0.0,
-                          duration: const Duration(milliseconds: 150),
+                          duration: Ds.motion.standard,
                           child: Icon(
                             Icons.expand_more,
                             size: 14,
-                            color: _payOpen ? const Color(0xFF1E40AF) : const Color(0xFF6B7280),
+                            color: _payOpen ? Ds.c.info : Ds.c.textSecondary,
                           ),
                         ),
                       ],
@@ -750,14 +747,15 @@ class _OrderCardState extends State<_OrderCard> {
             Builder(builder: (_) {
               final packButton = Map<String, dynamic>.from(widget.order['pack_button'] as Map);
               final label = packButton['label']?.toString() ?? '';
-              final bg = _hexColor(packButton['bg']?.toString(), const Color(0xFF1B7A43));
-              final fg = _hexColor(packButton['fg']?.toString(), Colors.white);
+              final bg = Ds.hex(packButton['bg']?.toString(), Ds.c.brand);
+              final fg = Ds.hex(packButton['fg']?.toString(), Ds.c.surface);
               final nextPacked = packButton['next_packed'] == true;
               // #527 (#50): 'enabled' absent => the pre-change behaviour.
               final packEnabled = PoPackGate.enabled(packButton);
               final blockedReason = PoPackGate.blockedReason(packButton);
               return Padding(
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                padding: EdgeInsets.fromLTRB(
+                    Ds.space.x12, 0, Ds.space.x12, Ds.space.x8),
                 child: SizedBox(
                   width: double.infinity,
                   child: FilledButton(
@@ -771,8 +769,8 @@ class _OrderCardState extends State<_OrderCard> {
                             : () => _setPacked(orderCode, nextPacked),
                     style: FilledButton.styleFrom(
                       backgroundColor: bg,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+                      padding: EdgeInsets.symmetric(vertical: Ds.space.x12),
                     ),
                     child: _togglingPacked
                         ? SizedBox(
@@ -780,7 +778,8 @@ class _OrderCardState extends State<_OrderCard> {
                             child: CircularProgressIndicator(strokeWidth: 2, color: fg),
                           )
                         : Text(label,
-                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: fg)),
+                            style: Ds.t.caption
+                                .copyWith(fontWeight: FontWeight.w700, color: fg)),
                   ),
                 ),
               );
@@ -793,20 +792,22 @@ class _OrderCardState extends State<_OrderCard> {
           // ── View Bill row (#471) — only once sup_bill_file confirms a file exists ──
           if (_billInfo != null && _billInfo!['has_file'] == true) ...[
             Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+              padding: EdgeInsets.fromLTRB(
+                  Ds.space.x12, 0, Ds.space.x12, Ds.space.x8),
               child: Row(children: [
                 Expanded(
                   child: GestureDetector(
                     onTap: () => setState(() => _billViewOpen = !_billViewOpen),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      padding: EdgeInsets.symmetric(
+                          horizontal: Ds.space.x8, vertical: Ds.space.x12),
                       decoration: BoxDecoration(
-                        color: _billViewOpen ? const Color(0xFFEFF6FF) : const Color(0xFFF5F6F8),
-                        borderRadius: BorderRadius.circular(8),
+                        color: _billViewOpen ? Ds.c.infoSoft : Ds.c.bg,
+                        borderRadius: Ds.r.rButton,
                         border: Border.all(
                           color: _billViewOpen
-                              ? const Color(0xFF1E40AF).withValues(alpha: 0.4)
-                              : const Color(0xFFE5E7EB),
+                              ? Ds.c.info.withValues(alpha: 0.4)
+                              : Ds.c.divider,
                         ),
                       ),
                       child: Row(
@@ -815,26 +816,26 @@ class _OrderCardState extends State<_OrderCard> {
                         children: [
                           Icon(Icons.receipt_long_outlined,
                               size: 14,
-                              color: _billViewOpen ? const Color(0xFF1E40AF) : const Color(0xFF374151)),
-                          const SizedBox(width: 6),
+                              color: _billViewOpen ? Ds.c.info : Ds.c.text),
+                          SizedBox(width: Ds.space.x4),
                           Flexible(
                             child: Text(
                               c('supplier_orders.view_bill'),
-                              style: TextStyle(
-                                fontSize: 12, fontWeight: FontWeight.w600,
-                                color: _billViewOpen ? const Color(0xFF1E40AF) : const Color(0xFF374151),
+                              style: Ds.t.caption.copyWith(
+                                fontWeight: FontWeight.w600,
+                                color: _billViewOpen ? Ds.c.info : Ds.c.text,
                               ),
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                          const SizedBox(width: 4),
+                          SizedBox(width: Ds.space.x4),
                           AnimatedRotation(
                             turns: _billViewOpen ? 0.5 : 0.0,
-                            duration: const Duration(milliseconds: 150),
+                            duration: Ds.motion.standard,
                             child: Icon(
                               Icons.expand_more,
                               size: 14,
-                              color: _billViewOpen ? const Color(0xFF1E40AF) : const Color(0xFF6B7280),
+                              color: _billViewOpen ? Ds.c.info : Ds.c.textSecondary,
                             ),
                           ),
                         ],
@@ -843,13 +844,15 @@ class _OrderCardState extends State<_OrderCard> {
                   ),
                 ),
                 if (_billInfo!['imported'] == true) ...[
-                  const SizedBox(width: 8),
+                  SizedBox(width: Ds.space.x8),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: EdgeInsets.symmetric(
+                        horizontal: Ds.space.x8, vertical: Ds.space.x4),
                     decoration: BoxDecoration(
-                        color: const Color(0xFFD1FAE5), borderRadius: BorderRadius.circular(20)),
+                        color: Ds.c.successSoft, borderRadius: Ds.r.rChip),
                     child: Text(c('supplier_orders.imported'),
-                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF065F46))),
+                        style: Ds.t.caption.copyWith(
+                            fontWeight: FontWeight.w600, color: Ds.c.success)),
                   ),
                 ],
               ]),
@@ -861,12 +864,11 @@ class _OrderCardState extends State<_OrderCard> {
 
           // ── Expanded order items body ────────────────────────────────────────
           if (widget.isOpen) ...[
-            const Divider(height: 1, color: Color(0xFFF3F4F6)),
+            Divider(height: 1, color: Ds.c.divider),
             Padding(
-              padding: const EdgeInsets.all(12),
+              padding: EdgeInsets.all(Ds.space.x12),
               child: items.isEmpty
-                  ? Text(c('supplier_orders.no_items'),
-                      style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280)))
+                  ? Text(c('supplier_orders.no_items'), style: Ds.t.caption)
                   : Builder(builder: (_) {
                       RenderLog.write('c189_supplier_tab_shared_card', 'true');
                       return Column(children: [
@@ -890,38 +892,40 @@ class _OrderCardState extends State<_OrderCard> {
 
   Widget _buildPayPanel() {
     return Container(
-      decoration: const BoxDecoration(
-        border: Border(top: BorderSide(color: Color(0xFFF3F4F6))),
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: Ds.c.divider)),
       ),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+        padding: EdgeInsets.fromLTRB(
+            Ds.space.x12, Ds.space.x8, Ds.space.x12, Ds.space.x12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(children: [
               Text(c('supplier_orders.payment_summary'),
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                  style: Ds.t.caption.copyWith(
+                      fontWeight: FontWeight.w700, color: Ds.c.text)),
               const Spacer(),
               GestureDetector(
                 onTap: () => _loadPanel(refresh: true),
-                child: const Icon(Icons.refresh, size: 16, color: Color(0xFF6B7280)),
+                child: Icon(Icons.refresh, size: 16, color: Ds.c.textSecondary),
               ),
             ]),
-            const SizedBox(height: 8),
+            SizedBox(height: Ds.space.x8),
             if (_panelLoading)
-              const Center(
+              Center(
                 child: Padding(
-                  padding: EdgeInsets.all(16),
-                  child: CircularProgressIndicator(color: Color(0xFF1B7A43)),
+                  padding: EdgeInsets.all(Ds.space.x16),
+                  child: CircularProgressIndicator(color: Ds.c.brand),
                 ),
               )
             else if (_panelError != null)
               _PanelError(onRetry: () => _loadPanel(refresh: true))
             else if (_panelData == null || _panelData!['found'] != true)
               Padding(
-                padding: const EdgeInsets.symmetric(vertical: 12),
+                padding: EdgeInsets.symmetric(vertical: Ds.space.x12),
                 child: Text(c('supplier_orders.payment_unavailable'),
-                    style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                    style: Ds.t.caption),
               )
             else
               SupPayPanel(
@@ -948,23 +952,24 @@ class _OrderCardState extends State<_OrderCard> {
     if (path.isNotEmpty) RenderLog.write('c479_bill_bucket_resolved', bucket);
 
     return Container(
-      decoration: const BoxDecoration(
-        border: Border(top: BorderSide(color: Color(0xFFF3F4F6))),
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: Ds.c.divider)),
       ),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+        padding: EdgeInsets.fromLTRB(
+            Ds.space.x12, Ds.space.x8, Ds.space.x12, Ds.space.x12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             if (path.isEmpty)
               Padding(
-                padding: const EdgeInsets.symmetric(vertical: 12),
+                padding: EdgeInsets.symmetric(vertical: Ds.space.x12),
                 child: Text(c('supplier_orders.bill_unavailable'),
-                    style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                    style: Ds.t.caption),
               )
             else ...[
               BillFilePreview(key: ValueKey('$bucket/$path'), bucket: bucket, path: path, name: name),
-              const SizedBox(height: 12),
+              SizedBox(height: Ds.space.x12),
               Row(children: [
                 Expanded(
                   child: BillActionButton(
@@ -977,7 +982,7 @@ class _OrderCardState extends State<_OrderCard> {
                     onTap: () => _downloadBill(bucket, path, name),
                   ),
                 ),
-                const SizedBox(width: 8),
+                SizedBox(width: Ds.space.x8),
                 Expanded(
                   child: BillActionButton(
                     icon: Icons.share_outlined,
@@ -991,21 +996,23 @@ class _OrderCardState extends State<_OrderCard> {
                 ),
               ]),
               if (canDelete) ...[
-                const SizedBox(height: 10),
+                SizedBox(height: Ds.space.x8),
                 GestureDetector(
                   onTap: _deletingBill ? null : _confirmDeleteBill,
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
                     if (_deletingBill)
-                      const SizedBox(
+                      SizedBox(
                           width: 14, height: 14,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF991B1B)))
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Ds.c.danger))
                     else
-                      const Icon(Icons.delete_outline, size: 15, color: Color(0xFF991B1B)),
-                    const SizedBox(width: 6),
+                      Icon(Icons.delete_outline, size: 15, color: Ds.c.danger),
+                    SizedBox(width: Ds.space.x4),
                     Text(_deletingBill
                             ? c('supplier_orders.deleting')
                             : c('supplier_orders.delete_bill'),
-                        style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF991B1B))),
+                        style: Ds.t.caption.copyWith(
+                            fontWeight: FontWeight.w600, color: Ds.c.danger)),
                   ]),
                 ),
               ],
@@ -1032,15 +1039,15 @@ class _PanelError extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      padding: EdgeInsets.symmetric(vertical: Ds.space.x8),
       child: Row(children: [
-        Text(c('supplier_orders.panel_failed'),
-            style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
-        const SizedBox(width: 8),
+        Text(c('supplier_orders.panel_failed'), style: Ds.t.caption),
+        SizedBox(width: Ds.space.x8),
         GestureDetector(
           onTap: onRetry,
           child: Text(c('supplier_orders.retry'),
-              style: const TextStyle(fontSize: 13, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600)),
+              style: Ds.t.caption.copyWith(
+                  color: Ds.c.brand, fontWeight: FontWeight.w600)),
         ),
       ]),
     );
@@ -1049,26 +1056,30 @@ class _PanelError extends StatelessWidget {
 
 // ── Status badge ──────────────────────────────────────────────────────────────
 
+/// CHANGE #671 gap 51 — the status chip is a PRINTER.
+///
+/// It used to switch on the status STRING to pick one of five hardcoded hex
+/// pairs, which meant 'accepted' was green because Dart said so and any status
+/// this build had not been taught fell into a grey default nobody chose. Both
+/// the word and the tone NAME now come from supplier_my_orders
+/// (status_label / status_tone); the chip performs one tone -> token lookup and
+/// decides nothing.
 class _StatusBadge extends StatelessWidget {
-  final String status;
-  const _StatusBadge({required this.status});
+  final String label;
+  final String? tone;
+  const _StatusBadge({required this.label, this.tone});
 
   @override
   Widget build(BuildContext context) {
-    Color bg, fg;
-    switch (status.toLowerCase()) {
-      case 'pending':   bg = const Color(0xFFFEF3C7); fg = const Color(0xFF92400E); break;
-      case 'accepted':  bg = const Color(0xFFD1FAE5); fg = const Color(0xFF065F46); break;
-      case 'rejected':  bg = const Color(0xFFFEE2E2); fg = const Color(0xFF991B1B); break;
-      case 'completed': bg = const Color(0xFFEFF6FF); fg = const Color(0xFF1E40AF); break;
-      default:          bg = const Color(0xFFF3F4F6); fg = const Color(0xFF6B7280);
-    }
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x8, vertical: Ds.space.x4),
+      decoration:
+          BoxDecoration(color: dsToneBg(tone), borderRadius: Ds.r.rChip),
       child: Text(
-        status,
-        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg),
+        label,
+        style: Ds.t.caption
+            .copyWith(fontWeight: FontWeight.w600, color: dsToneFg(tone)),
       ),
     );
   }

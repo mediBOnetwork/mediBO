@@ -1,28 +1,14 @@
 import 'package:flutter/material.dart';
+import '../../design_tokens.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import '../../widgets/fulfill_item_sheet.dart' show ProofThumbnail;
 import '../admin/dispute/dispute_models.dart';
 
-// ── Palette ───────────────────────────────────────────────────────────────────
-const _kGreen       = Color(0xFF1B7A43);
-const _kBg          = Color(0xFFF4F6F8);
-const _kCard        = Color(0xFFFFFFFF);
-const _kBorder      = Color(0xFFE8EAED);
-const _kTextPrimary = Color(0xFF202124);
-const _kTextMuted   = Color(0xFF5F6368);
-const _kRed         = Color(0xFFDC2626);
-const _kGreenChipBg = Color(0xFFE7F4EC);
-const _kNeutralChip = Color(0xFFF1F3F4);
-const _kAmberText   = Color(0xFFB8860B);
-const _kAmberBg     = Color(0xFFFFF8E1);
-
-Color _hexColor(String? hex, Color fallback) {
-  if (hex == null || hex.isEmpty) return fallback;
-  final h = hex.startsWith('#') ? hex.substring(1) : hex;
-  final v = int.tryParse(h.length == 6 ? 'FF$h' : h, radix: 16);
-  return v == null ? fallback : Color(v);
-}
+// CHANGE #671 gap 51: the eleven-colour private palette and the private hex
+// parser are both gone. Every colour is a `Ds` token, so ui_design_set()
+// recolours this public link with no deploy, and the backend's own
+// active_colors / kind_colors / return-note hexes are read by Ds.hex.
 
 String _packQty(num n, String? packType) {
   if (packType == null || packType.trim().isEmpty) return '$n';
@@ -88,14 +74,14 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
         content: Text(
           cf('dispute_form_screen.confirm_body',
               {'a': item.productName, 'b': action.label}),
-          style: const TextStyle(fontSize: 14),
+          style: Ds.t.body,
         ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
               child: Text(c('dispute_form_screen.cancel'))),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: _kGreen),
+            style: FilledButton.styleFrom(backgroundColor: Ds.c.brand),
             onPressed: () => Navigator.pop(ctx, true),
             child: Text(c('dispute_form_screen.confirm')),
           ),
@@ -139,7 +125,7 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
               content: Text(cf('dispute_form_screen.error', {'a': e.message})),
-              backgroundColor: _kRed));
+              backgroundColor: Ds.c.danger));
       }
     } catch (_) {
       if (!mounted) return;
@@ -153,16 +139,17 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _kBg,
+      backgroundColor: Ds.c.bg,
       body: SafeArea(
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 640),
             child: _loading
                 ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-                    const CircularProgressIndicator(color: _kGreen, strokeWidth: 2.5),
-                    const SizedBox(height: 12),
-                    Text(c('dispute_form_screen.loading'), style: const TextStyle(fontSize: 14, color: _kTextMuted)),
+                    CircularProgressIndicator(color: Ds.c.brand, strokeWidth: 2.5),
+                    SizedBox(height: Ds.space.x12),
+                    Text(c('dispute_form_screen.loading'),
+                        style: Ds.t.bodySecondary),
                   ]))
                 : _error != null ? _buildErrorState() : _buildPage(),
           ),
@@ -175,46 +162,49 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
     final isInvalid = _error == 'invalid';
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(32),
+        padding: EdgeInsets.all(Ds.space.x32),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Container(
             width: 72, height: 72,
             decoration: BoxDecoration(
-              color: const Color(0xFFF1F3F4),
-              borderRadius: BorderRadius.circular(20),
+              color: Ds.c.bg,
+              borderRadius: Ds.r.rChip,
             ),
-            child: const Icon(Icons.link_off_rounded, size: 34, color: _kTextMuted),
+            child: Icon(Icons.link_off_rounded,
+                size: 34, color: Ds.c.textSecondary),
           ),
-          const SizedBox(height: 20),
+          SizedBox(height: Ds.space.x24),
+          // CHANGE #671: these two sentences were English literals in Dart —
+          // the only wording on this page that could not be changed without a
+          // deploy. They are ui_copy now, like every other string here.
           Text(
-            isInvalid
-                ? 'This dispute link is invalid or has expired.'
-                : 'Unable to load. Please try again.',
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700,
-                color: _kTextPrimary, height: 1.35),
+            c(isInvalid
+                ? 'dispute_form_screen.invalid_title'
+                : 'dispute_form_screen.load_failed_title'),
+            style: Ds.t.subtitle.copyWith(fontWeight: FontWeight.w700),
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 8),
+          SizedBox(height: Ds.space.x8),
           Text(
-            isInvalid
-                ? 'Please contact mediBO.'
-                : 'Check your connection and try again.',
-            style: const TextStyle(fontSize: 14, color: _kTextMuted, height: 1.35),
+            c(isInvalid
+                ? 'dispute_form_screen.invalid_body'
+                : 'dispute_form_screen.load_failed_body'),
+            style: Ds.t.bodySecondary,
             textAlign: TextAlign.center,
           ),
           if (!isInvalid) ...[
-            const SizedBox(height: 24),
+            SizedBox(height: Ds.space.x24),
             FilledButton.icon(
               onPressed: _load,
               style: FilledButton.styleFrom(
-                backgroundColor: _kGreen,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                backgroundColor: Ds.c.brand,
+                shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
               ),
               icon: const Icon(Icons.refresh_rounded, size: 16),
               label: Text(c('dispute_form_screen.retry')),
             ),
           ],
-          const SizedBox(height: 32),
+          SizedBox(height: Ds.space.x32),
           _footer(),
         ]),
       ),
@@ -234,25 +224,26 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
     RenderLog.write('c363_disp_group', 'where=supplier;items=${rows.length}');
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 20, 16, 48),
+      padding: EdgeInsets.fromLTRB(
+          Ds.space.x16, Ds.space.x24, Ds.space.x16, Ds.space.x48),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         _buildHeader(),
-        const SizedBox(height: 16),
+        SizedBox(height: Ds.space.x16),
         Text(c('dispute_form_screen.confirm_items_below'),
-            style: const TextStyle(fontSize: 15, color: _kTextMuted, height: 1.35)),
-        const SizedBox(height: 12),
+            style: Ds.t.bodySecondary),
+        SizedBox(height: Ds.space.x12),
         if (rows.isEmpty)
           Padding(
-            padding: const EdgeInsets.symmetric(vertical: 12),
+            padding: EdgeInsets.symmetric(vertical: Ds.space.x12),
             child: Text(c('dispute_form_screen.no_disputes'),
-                style: const TextStyle(fontSize: 13, color: _kTextMuted)),
+                style: Ds.t.caption),
           )
         else
           ...rows.map((item) => Padding(
-            padding: const EdgeInsets.only(bottom: 10),
+            padding: EdgeInsets.only(bottom: Ds.space.x8),
             child: _buildItemCard(item),
           )),
-        const SizedBox(height: 24),
+        SizedBox(height: Ds.space.x24),
         _footer(),
       ]),
     );
@@ -272,110 +263,105 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
     // verbatim, drive the badge and kind tag below.
     final activeColors = agg.activeColors;
     final activeLabel = activeColors?['label'] ?? (isActive ? 'Active' : 'Inactive');
-    final activeBg = _hexColor(activeColors?['bg'], const Color(0xFFF3F4F6));
-    final activeFg = _hexColor(activeColors?['fg'], _kTextMuted);
+    final activeBg = Ds.hex(activeColors?['bg'], Ds.c.bg);
+    final activeFg = Ds.hex(activeColors?['fg'], Ds.c.textSecondary);
     final kindTagText = item.kindLabel;
-    final kindTagBg = _hexColor(item.kindColors?['bg'], const Color(0xFFF1F5F9));
-    final kindTagFg = _hexColor(item.kindColors?['fg'], const Color(0xFF475569));
+    final kindTagBg = Ds.hex(item.kindColors?['bg'], Ds.c.bg);
+    final kindTagFg = Ds.hex(item.kindColors?['fg'], Ds.c.textSecondary);
 
     return Container(
       decoration: BoxDecoration(
-        color: _kCard,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _kBorder),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 6, offset: const Offset(0, 2)),
-        ],
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        border: Border.all(color: Ds.c.divider),
+        boxShadow: Ds.elevation.e1,
       ),
-      padding: const EdgeInsets.all(14),
+      padding: EdgeInsets.all(Ds.space.x12),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
 
         // (a) Header row
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           ClipRRect(
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: Ds.r.rButton,
             child: hasImage
                 ? Image.network(item.imageUrl!, width: 60, height: 60, fit: BoxFit.cover,
                     errorBuilder: (_, __, ___) => _imagePlaceholder())
                 : _imagePlaceholder(),
           ),
-          const SizedBox(width: 10),
+          SizedBox(width: Ds.space.x8),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(item.productName.isNotEmpty ? item.productName : '—',
-                        style: TextStyle(
-                            fontSize: 15, fontWeight: FontWeight.w700,
-                            color: isActive ? _kTextPrimary : _kTextMuted, height: 1.3),
+                        style: Ds.t.body.copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: isActive ? Ds.c.text : Ds.c.textSecondary),
                         maxLines: 2, overflow: TextOverflow.ellipsis),
                     // (a) wrong product name
                     if ((isWrong || hasFewWrong) && (item.wrongProductName ?? '').isNotEmpty) ...[
-                      const SizedBox(height: 3),
+                      SizedBox(height: Ds.space.x4),
                       Text(cf('dispute_form_screen.they_say_we_sent', {'a': item.wrongProductName ?? ''}),
-                          style: const TextStyle(fontSize: 12, color: _kRed),
+                          style: Ds.t.caption.copyWith(color: Ds.c.danger),
                           maxLines: 2, overflow: TextOverflow.ellipsis),
                     ],
                     if (kindTagText.isNotEmpty) ...[
-                      const SizedBox(height: 4),
+                      SizedBox(height: Ds.space.x4),
                       Align(
                         alignment: Alignment.centerLeft,
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          padding: EdgeInsets.symmetric(
+                              horizontal: Ds.space.x4, vertical: Ds.space.x4),
                           decoration: BoxDecoration(
-                              color: kindTagBg, borderRadius: BorderRadius.circular(5)),
+                              color: kindTagBg, borderRadius: Ds.r.rChip),
                           child: Text(kindTagText,
-                              style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
-                                  color: kindTagFg)),
+                              style: Ds.t.caption.copyWith(
+                                  fontWeight: FontWeight.w700, color: kindTagFg)),
                         ),
                       ),
                     ],
                   ]),
                 ),
-                const SizedBox(width: 6),
+                SizedBox(width: Ds.space.x4),
                 // Backend-owned (get_dispute_form): active_colors, verbatim —
                 // replaces the verbose "Awaiting supplier response" item_status_label pill.
                 Builder(builder: (_) {
                   RenderLog.write('c363_badge', 'where=supplier,active=$isActive');
                   return Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    padding: EdgeInsets.symmetric(
+                        horizontal: Ds.space.x8, vertical: Ds.space.x4),
                     decoration: BoxDecoration(
                       color: activeBg,
-                      borderRadius: BorderRadius.circular(20),
+                      borderRadius: Ds.r.rChip,
                     ),
                     child: Text(activeLabel,
-                        style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                            color: activeFg)),
+                        style: Ds.t.caption.copyWith(
+                            fontWeight: FontWeight.w700, color: activeFg)),
                   );
                 }),
               ]),
               // (b) meta
               if ((item.disputeCode ?? '').isNotEmpty) ...[
-                const SizedBox(height: 3),
+                SizedBox(height: Ds.space.x4),
                 Text(
                   item.disputeCode!,
-                  style: const TextStyle(
-                    fontSize: 11,
+                  style: Ds.t.caption.copyWith(
                     fontWeight: FontWeight.w500,
-                    color: Color(0xFF9CA3AF),
                     letterSpacing: 0.3,
                   ),
                 ),
               ],
               if ((item.category ?? '').isNotEmpty) ...[
-                const SizedBox(height: 3),
+                SizedBox(height: Ds.space.x4),
                 Text(item.category!,
-                    style: const TextStyle(fontSize: 12, color: _kTextMuted),
+                    style: Ds.t.caption,
                     maxLines: 1, overflow: TextOverflow.ellipsis),
               ],
               if ((item.company ?? '').isNotEmpty) ...[
-                const SizedBox(height: 2),
+                SizedBox(height: Ds.space.x4),
                 Text(item.company!,
-                    style: const TextStyle(fontSize: 12, color: _kTextMuted),
+                    style: Ds.t.caption,
                     maxLines: 1, overflow: TextOverflow.ellipsis),
               ],
             ]),
@@ -383,15 +369,15 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
         ]),
 
         // (c) Quantities table
-        const SizedBox(height: 12),
+        SizedBox(height: Ds.space.x12),
         _buildQtyTable(agg.orderedQty, agg.receivedQty, agg.disputedQty, item.packType),
         if (agg.disputedQty > 0) ...[
-          const SizedBox(height: 6),
+          SizedBox(height: Ds.space.x4),
           Text(
               cf('dispute_form_screen.in_dispute_units', {'a': '${agg.disputedQty.toInt()}'})
               + (agg.lines.length > 1 ? cf('dispute_form_screen.orders_suffix', {'a': '${agg.lines.length}'}) : ''),
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
-                  color: _kAmberText)),
+              style: Ds.t.caption.copyWith(
+                  fontWeight: FontWeight.w600, color: Ds.c.warning)),
         ],
 
         // (d) item_status_label — pill already in header; log only
@@ -403,21 +389,23 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
 
         // Return-note chip — backend-owned (get_dispute_form's return_note_chip), verbatim.
         if (item.returnNoteChip != null) ...[
-          const SizedBox(height: 8),
+          SizedBox(height: Ds.space.x8),
           Builder(builder: (_) {
             final chip = item.returnNoteChip!;
             return Align(
               alignment: Alignment.centerLeft,
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding: EdgeInsets.symmetric(
+                    horizontal: Ds.space.x8, vertical: Ds.space.x4),
                 decoration: BoxDecoration(
-                  color: _hexColor(chip.bg, _kNeutralChip),
-                  borderRadius: BorderRadius.circular(20),
+                  color: Ds.hex(chip.bg, Ds.c.bg),
+                  borderRadius: Ds.r.rChip,
                 ),
                 child: Text(
                   chip.labelCard,
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
-                      color: _hexColor(chip.fg, _kTextMuted)),
+                  style: Ds.t.caption.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: Ds.hex(chip.fg, Ds.c.textSecondary)),
                 ),
               ),
             );
@@ -426,21 +414,18 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
 
         // (e2) Proof photo — c194
         if ((item.proofUrl ?? '').isNotEmpty) ...[
-          const SizedBox(height: 10),
+          SizedBox(height: Ds.space.x8),
           Row(children: [
             Text(c('dispute_form_screen.proof_photo'),
-                style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: _kTextMuted)),
-            const SizedBox(width: 10),
+                style: Ds.t.caption.copyWith(fontWeight: FontWeight.w600)),
+            SizedBox(width: Ds.space.x8),
             ProofThumbnail(proofUrl: item.proofUrl!, size: 72),
           ]),
         ],
 
         // (f) Action buttons — dynamic from item.actions; only shown when array non-empty
         if (item.actions.isNotEmpty) ...[
-          const SizedBox(height: 12),
+          SizedBox(height: Ds.space.x12),
           _buildActionButtons(item, isSubmitting, agg.allActiveDisputeIds),
         ],
       ]),
@@ -450,29 +435,32 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
   Widget _imagePlaceholder() => Container(
     width: 60, height: 60,
     decoration: BoxDecoration(
-      color: const Color(0xFFF1F3F4),
-      borderRadius: BorderRadius.circular(8),
+      color: Ds.c.bg,
+      borderRadius: Ds.r.rButton,
     ),
-    child: const Icon(Icons.medication_outlined, size: 28, color: Color(0xFFBDBDBD)),
+    child: Icon(Icons.medication_outlined, size: 28, color: Ds.c.divider),
   );
 
   Widget _buildQtyTable(num ordered, num received, num short, String? packType) {
     return Container(
       decoration: BoxDecoration(
-        border: Border.all(color: _kBorder),
-        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Ds.c.divider),
+        borderRadius: Ds.r.rButton,
       ),
       child: Column(children: [
         IntrinsicHeight(
           child: Row(children: [
-            _qtyCell('Ordered', isHeader: true, isAmber: false),
+            _qtyCell(c('dispute_form_screen.qty_ordered'),
+                isHeader: true, isAmber: false),
             _vertDivider(),
-            _qtyCell('Received', isHeader: true, isAmber: false),
+            _qtyCell(c('dispute_form_screen.qty_received'),
+                isHeader: true, isAmber: false),
             _vertDivider(),
-            _qtyCell('Missing', isHeader: true, isAmber: true),
+            _qtyCell(c('dispute_form_screen.qty_missing'),
+                isHeader: true, isAmber: true),
           ]),
         ),
-        Divider(height: 1, color: _kBorder),
+        Divider(height: 1, color: Ds.c.divider),
         IntrinsicHeight(
           child: Row(children: [
             _qtyCell(_packQty(ordered, packType), isHeader: false, isAmber: false),
@@ -490,27 +478,30 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
       bool isBold = false}) {
     return Expanded(
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-        color: isAmber && !isHeader ? _kAmberBg : null,
+        padding: EdgeInsets.symmetric(
+            vertical: Ds.space.x8, horizontal: Ds.space.x4),
+        color: isAmber && !isHeader ? Ds.c.warningSoft : null,
         child: Text(text, textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: isHeader ? 11 : 13,
+          style: Ds.t.caption.copyWith(
             fontWeight: (isHeader || isBold) ? FontWeight.w700 : FontWeight.w400,
-            color: isAmber ? _kAmberText : (isHeader ? _kTextMuted : _kTextPrimary),
+            color: isAmber
+                ? Ds.c.warning
+                : (isHeader ? Ds.c.textSecondary : Ds.c.text),
           ),
         ),
       ),
     );
   }
 
-  Widget _vertDivider() => VerticalDivider(width: 1, color: _kBorder, thickness: 1);
+  Widget _vertDivider() =>
+      VerticalDivider(width: 1, color: Ds.c.divider, thickness: 1);
 
   // Dynamic buttons from item.actions — no hardcoded codes or labels
   Widget _buildActionButtons(DisputeItem item, bool isSubmitting, List<String> groupIds) {
     RenderLog.write('c190_link_buttons_rendered',
         'dispute=${item.disputeId};count=${item.actions.length}');
-    const spinner = SizedBox(width: 14, height: 14,
-        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2));
+    final spinner = SizedBox(width: 14, height: 14,
+        child: CircularProgressIndicator(color: Ds.c.surface, strokeWidth: 2));
 
     if (item.actions.length == 1) {
       final action = item.actions.first;
@@ -519,14 +510,14 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
         child: FilledButton(
           onPressed: isSubmitting ? null : () => _submitAction(item, action, alsoIds: groupIds),
           style: FilledButton.styleFrom(
-            backgroundColor: const Color(0xFFD97706),
-            disabledBackgroundColor: const Color(0xFFFDE68A),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            padding: const EdgeInsets.symmetric(vertical: 11),
+            backgroundColor: Ds.c.warning,
+            disabledBackgroundColor: Ds.c.warningSoft,
+            shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+            padding: EdgeInsets.symmetric(vertical: Ds.space.x12),
           ),
           child: isSubmitting ? spinner : Text(action.label,
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
-                  color: Colors.white)),
+              style: Ds.t.caption.copyWith(
+                  fontWeight: FontWeight.w700, color: Ds.c.surface)),
         ),
       );
     }
@@ -539,59 +530,60 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
         final isPrimary = idx == 0;
         if (isPrimary) {
           return Padding(
-            padding: const EdgeInsets.only(bottom: 6),
+            padding: EdgeInsets.only(bottom: Ds.space.x4),
             child: FilledButton(
               onPressed: isSubmitting ? null : () => _submitAction(item, action, alsoIds: groupIds),
               style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFFD97706),
-                disabledBackgroundColor: const Color(0xFFFDE68A),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                padding: const EdgeInsets.symmetric(vertical: 11),
+                backgroundColor: Ds.c.warning,
+                disabledBackgroundColor: Ds.c.warningSoft,
+                shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+                padding: EdgeInsets.symmetric(vertical: Ds.space.x12),
               ),
               child: isSubmitting ? spinner : Text(action.label,
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
-                      color: Colors.white)),
+                  style: Ds.t.caption.copyWith(
+                      fontWeight: FontWeight.w700, color: Ds.c.surface)),
             ),
           );
         }
         return OutlinedButton(
           onPressed: isSubmitting ? null : () => _submitAction(item, action, alsoIds: groupIds),
           style: OutlinedButton.styleFrom(
-            foregroundColor: _kTextPrimary,
-            side: const BorderSide(color: _kBorder),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            padding: const EdgeInsets.symmetric(vertical: 11),
+            foregroundColor: Ds.c.text,
+            side: BorderSide(color: Ds.c.divider),
+            shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+            padding: EdgeInsets.symmetric(vertical: Ds.space.x12),
           ),
           child: Text(action.label,
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              style: Ds.t.caption.copyWith(fontWeight: FontWeight.w600)),
         );
       }).toList(),
     );
   }
 
   Widget _buildHeader() => Container(
-    padding: const EdgeInsets.all(20),
-    decoration: BoxDecoration(color: _kGreen, borderRadius: BorderRadius.circular(16)),
+    padding: EdgeInsets.all(Ds.space.x16),
+    decoration: BoxDecoration(color: Ds.c.brand, borderRadius: Ds.r.rCard),
     child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
       Container(
         width: 48, height: 48,
         decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.16),
-          borderRadius: BorderRadius.circular(12),
+          color: Ds.c.surface.withValues(alpha: 0.16),
+          borderRadius: Ds.r.rButton,
         ),
-        child: const Icon(Icons.local_shipping_outlined, color: Colors.white, size: 26),
+        child: Icon(Icons.local_shipping_outlined, color: Ds.c.surface, size: 26),
       ),
-      const SizedBox(width: 14),
+      SizedBox(width: Ds.space.x12),
       Expanded(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(c('dispute_form_screen.header_kicker'),
-              style: TextStyle(color: Colors.white.withValues(alpha: 0.70),
-                  fontSize: 11, fontWeight: FontWeight.w500,
-                  letterSpacing: 0.5, height: 1.3)),
-          const SizedBox(height: 4),
+              style: Ds.t.caption.copyWith(
+                  color: Ds.c.surface.withValues(alpha: 0.70),
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: 0.5)),
+          SizedBox(height: Ds.space.x4),
           Text(cf('dispute_form_screen.hi_supplier', {'a': _supplierName}),
-              style: const TextStyle(color: Colors.white, fontSize: 21,
-                  fontWeight: FontWeight.w800, height: 1.2),
+              style: Ds.t.display.copyWith(
+                  color: Ds.c.surface, fontWeight: FontWeight.w800),
               maxLines: 2, overflow: TextOverflow.ellipsis),
         ]),
       ),
@@ -599,7 +591,6 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
   );
 
   Widget _footer() => Center(
-    child: Text(c('dispute_form_screen.footer'),
-        style: const TextStyle(fontSize: 11, color: _kTextMuted)),
+    child: Text(c('dispute_form_screen.footer'), style: Ds.t.caption),
   );
 }

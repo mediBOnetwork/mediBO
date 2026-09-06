@@ -8,16 +8,10 @@ import '../../utils/render_log.dart';
 import '../../widgets/inquiry_v12.dart';
 import '../../widgets/response_deadline.dart';
 
-const _kGreen = Color(0xFF1B7A43);
-
-/// CHANGE #464 gap 46: backend badge colours arrive as hex strings on the
-/// payload. The fallback is only ever reached when the payload sent none.
-Color _hex(String? hex, Color fallback) {
-  if (hex == null || hex.isEmpty) return fallback;
-  final h = hex.startsWith('#') ? hex.substring(1) : hex;
-  final v = int.tryParse(h.length == 6 ? 'FF$h' : h, radix: 16);
-  return v == null ? fallback : Color(v);
-}
+/// CHANGE #671 gap 51: the page's own green literal and its own hex parser are
+/// gone. The brand colour is `Ds.c.brand` (a backend design token, recolourable
+/// with `ui_design_set` and no deploy) and a badge hex from the payload is read
+/// by `Ds.hex`, which is the same parser the token layer itself uses.
 
 /// CHANGE #464 gap 46 — the answer badge on the read-only receipt.
 ///
@@ -36,8 +30,8 @@ class InquiryBadge {
 
   bool get has => label.isNotEmpty;
 
-  static const Color _fallbackBg = Color(0xFFF3F4F6);
-  static const Color _fallbackFg = Color(0xFF6B7280);
+  static Color get _fallbackBg => Ds.c.bg;
+  static Color get _fallbackFg => Ds.c.textSecondary;
 
   static InquiryBadge from(Map<String, dynamic> item) {
     final badge = item['badge'] is Map
@@ -45,8 +39,8 @@ class InquiryBadge {
         : const <String, dynamic>{};
     return InquiryBadge(
       label: (badge['label'] as String?) ?? '',
-      bg: _hex(badge['bg'] as String?, _fallbackBg),
-      fg: _hex(badge['fg'] as String?, _fallbackFg),
+      bg: Ds.hex(badge['bg'] as String?, _fallbackBg),
+      fg: Ds.hex(badge['fg'] as String?, _fallbackFg),
     );
   }
 }
@@ -626,7 +620,7 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(c('inquiry_form_screen.submission_failed')),
-            backgroundColor: const Color(0xFFDC2626),
+            backgroundColor: Ds.c.danger,
           ),
         );
       }
@@ -656,15 +650,15 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F6F8),
+      backgroundColor: Ds.c.bg,
       body: SafeArea(
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 600),
             child: _loading
-                ? const Center(
+                ? Center(
                     child: CircularProgressIndicator(
-                        color: _kGreen, strokeWidth: 2.5))
+                        color: Ds.c.brand, strokeWidth: 2.5))
                 : _error != null
                     ? _buildError()
                     : _buildForm(),
@@ -678,7 +672,7 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
     final isExpired = _error == 'expired';
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(32),
+        padding: EdgeInsets.all(Ds.space.x32),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -686,15 +680,15 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
               width: 72,
               height: 72,
               decoration: BoxDecoration(
-                color: const Color(0xFFF3F4F6),
-                borderRadius: BorderRadius.circular(20),
+                color: Ds.c.bg,
+                borderRadius: Ds.r.rChip,
               ),
               child: Icon(
                 isExpired
                     ? Icons.timer_off_outlined
                     : Icons.link_off_outlined,
                 size: 36,
-                color: const Color(0xFF9CA3AF),
+                color: Ds.c.textSecondary,
               ),
             ),
             const SizedBox(height: 20),
@@ -705,11 +699,7 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
               c(isExpired
                   ? 'inquiry_form_screen.expired_title'
                   : 'inquiry_form_screen.invalid_title'),
-              style: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF374151),
-              ),
+              style: Ds.t.subtitle.copyWith(fontWeight: FontWeight.w700),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 8),
@@ -717,8 +707,7 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
               c(isExpired
                   ? 'inquiry_form_screen.expired_body'
                   : 'inquiry_form_screen.invalid_body'),
-              style: const TextStyle(
-                  fontSize: 14, color: Color(0xFF6B7280)),
+              style: Ds.t.bodySecondary,
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 32),
@@ -743,16 +732,15 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Container(
-          padding: const EdgeInsets.all(16),
+          padding: EdgeInsets.all(Ds.space.x16),
           decoration: BoxDecoration(
-            color: const Color(0xFFD1FAE5),
-            borderRadius: BorderRadius.circular(10),
+            color: Ds.c.successSoft,
+            borderRadius: Ds.r.rButton,
           ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Icon(Icons.check_circle,
-                  color: Color(0xFF065F46), size: 22),
+              Icon(Icons.check_circle, color: Ds.c.success, size: 22),
               const SizedBox(width: 10),
               Expanded(
                 child: Column(
@@ -760,16 +748,13 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
                   children: [
                     Text(
                       c('inquiry_form_screen.response_submitted'),
-                      style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF065F46)),
+                      style: Ds.t.body.copyWith(
+                          fontWeight: FontWeight.w700, color: Ds.c.success),
                     ),
                     const SizedBox(height: 2),
                     Text(
                       c('inquiry_form_screen.already_answered_receipt'),
-                      style: const TextStyle(
-                          fontSize: 12, color: Color(0xFF065F46)),
+                      style: Ds.t.caption.copyWith(color: Ds.c.success),
                     ),
                   ],
                 ),
@@ -793,12 +778,12 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
     final badge = InquiryBadge.from(item);
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(12),
+      margin: EdgeInsets.only(bottom: Ds.space.x8),
+      padding: EdgeInsets.all(Ds.space.x12),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rButton,
+        border: Border.all(color: Ds.c.divider),
       ),
       child: Row(
         children: [
@@ -806,20 +791,20 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: const Color(0xFFF3F4F6),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFFE5E7EB), width: 0.5),
+              color: Ds.c.bg,
+              borderRadius: Ds.r.rButton,
+              border: Border.all(color: Ds.c.divider, width: 0.5),
             ),
             clipBehavior: Clip.antiAlias,
             child: imageUrl != null && imageUrl.isNotEmpty
                 ? Image.network(imageUrl,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => const Icon(
+                    errorBuilder: (_, __, ___) => Icon(
                         Icons.medication_outlined,
                         size: 20,
-                        color: Color(0xFFD1D5DB)))
-                : const Icon(Icons.medication_outlined,
-                    size: 20, color: Color(0xFFD1D5DB)),
+                        color: Ds.c.divider))
+                : Icon(Icons.medication_outlined,
+                    size: 20, color: Ds.c.divider),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -828,10 +813,7 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
               children: [
                 Text(
                   name,
-                  style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF111827)),
+                  style: Ds.t.body.copyWith(fontWeight: FontWeight.w600),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -839,8 +821,7 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
                   const SizedBox(height: 2),
                   Text(
                     company,
-                    style: const TextStyle(
-                        fontSize: 12, color: Color(0xFF6B7280)),
+                    style: Ds.t.caption,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -853,13 +834,14 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
           if (badge.has) ...[
             const SizedBox(width: 8),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              decoration: BoxDecoration(
-                  color: badge.bg, borderRadius: BorderRadius.circular(20)),
+              padding: EdgeInsets.symmetric(
+                  horizontal: Ds.space.x8, vertical: Ds.space.x4),
+              decoration:
+                  BoxDecoration(color: badge.bg, borderRadius: Ds.r.rChip),
               child: Text(
                 badge.label,
-                style: TextStyle(
-                    fontSize: 12, fontWeight: FontWeight.w500, color: badge.fg),
+                style: Ds.t.caption.copyWith(
+                    fontWeight: FontWeight.w500, color: badge.fg),
               ),
             ),
           ],
@@ -874,27 +856,28 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
     final allDone = unanswered.isEmpty && _items.isNotEmpty;
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 24, 16, 48),
+      padding: EdgeInsets.fromLTRB(
+          Ds.space.x16, Ds.space.x24, Ds.space.x16, Ds.space.x48),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // ── Header card ──────────────────────────────────────────────────
           Container(
-            padding: const EdgeInsets.all(16),
+            padding: EdgeInsets.all(Ds.space.x16),
             decoration: BoxDecoration(
-              color: _kGreen,
-              borderRadius: BorderRadius.circular(12),
+              color: Ds.c.brand,
+              borderRadius: Ds.r.rButton,
             ),
             child: Row(children: [
               Container(
                 width: 44,
                 height: 44,
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.18),
-                  borderRadius: BorderRadius.circular(10),
+                  color: Ds.c.surface.withValues(alpha: 0.18),
+                  borderRadius: Ds.r.rButton,
                 ),
-                child: const Icon(Icons.medication_outlined,
-                    color: Colors.white, size: 24),
+                child: Icon(Icons.medication_outlined,
+                    color: Ds.c.surface, size: 24),
               ),
               const SizedBox(width: 14),
               Expanded(
@@ -903,19 +886,16 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
                   children: [
                     Text(
                       c('inquiry_form_screen.header_kicker'),
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 11,
+                      style: Ds.t.caption.copyWith(
+                          color: Ds.c.surface,
                           fontWeight: FontWeight.w500,
                           letterSpacing: 0.5),
                     ),
                     const SizedBox(height: 3),
                     Text(
                       _supplierName ?? '',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 17,
-                          fontWeight: FontWeight.w800),
+                      style: Ds.t.subtitle.copyWith(
+                          color: Ds.c.surface, fontWeight: FontWeight.w800),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -945,22 +925,20 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
           // ── New items banner ─────────────────────────────────────────────
           if (_newItemsAdded) ...[
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              padding: EdgeInsets.symmetric(
+                  horizontal: Ds.space.x12, vertical: Ds.space.x8),
               decoration: BoxDecoration(
-                color: const Color(0xFFFFFBEB),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFFFCD34D)),
+                color: Ds.c.warningSoft,
+                borderRadius: Ds.r.rButton,
+                border: Border.all(color: Ds.c.warning),
               ),
               child: Row(children: [
-                const Icon(Icons.info_outline,
-                    size: 16, color: Color(0xFFD97706)),
+                Icon(Icons.info_outline, size: 16, color: Ds.c.warning),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     c('inquiry_form_screen.new_items_added'),
-                    style: const TextStyle(
-                        fontSize: 13, color: Color(0xFF92400E)),
+                    style: Ds.t.caption.copyWith(color: Ds.c.warning),
                   ),
                 ),
               ]),
@@ -971,23 +949,21 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
           // ── All done banner ──────────────────────────────────────────────
           if (allDone) ...[
             Container(
-              padding: const EdgeInsets.all(16),
+              padding: EdgeInsets.all(Ds.space.x16),
               decoration: BoxDecoration(
-                color: const Color(0xFFECFDF5),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xFF6EE7B7)),
+                color: Ds.c.successSoft,
+                borderRadius: Ds.r.rButton,
+                border: Border.all(color: Ds.c.success),
               ),
               child: Row(children: [
-                const Icon(Icons.check_circle_outline,
-                    color: _kGreen, size: 22),
+                Icon(Icons.check_circle_outline,
+                    color: Ds.c.brand, size: 22),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
                     c('inquiry_form_screen.all_responses_submitted'),
-                    style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: _kGreen),
+                    style: Ds.t.body.copyWith(
+                        fontWeight: FontWeight.w600, color: Ds.c.brand),
                   ),
                 ),
               ]),
@@ -1001,25 +977,21 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
               onTap: () => setState(
                   () => _respondedExpanded = !_respondedExpanded),
               child: Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 14, vertical: 12),
+                padding: EdgeInsets.symmetric(
+                    horizontal: Ds.space.x12, vertical: Ds.space.x12),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFF9FAFB),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: const Color(0xFFE5E7EB)),
+                  color: Ds.c.bg,
+                  borderRadius: Ds.r.rButton,
+                  border: Border.all(color: Ds.c.divider),
                 ),
                 child: Row(children: [
-                  const Icon(Icons.check_circle_outline,
-                      size: 16, color: Color(0xFF6B7280)),
+                  Icon(Icons.check_circle_outline,
+                      size: 16, color: Ds.c.textSecondary),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       cf('inquiry_form_screen.already_responded', {'a': '${locked.length}'}),
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF6B7280),
-                      ),
+                      style: Ds.t.caption.copyWith(fontWeight: FontWeight.w600),
                     ),
                   ),
                   Icon(
@@ -1027,7 +999,7 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
                         ? Icons.keyboard_arrow_up_rounded
                         : Icons.keyboard_arrow_down_rounded,
                     size: 20,
-                    color: const Color(0xFF9CA3AF),
+                    color: Ds.c.textSecondary,
                   ),
                 ]),
               ),
@@ -1048,10 +1020,9 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
           if (unanswered.isNotEmpty) ...[
             Text(
               c('inquiry_form_screen.pending_response_required'),
-              style: const TextStyle(
-                fontSize: 10,
+              style: Ds.t.caption.copyWith(
                 fontWeight: FontWeight.w700,
-                color: Color(0xFF374151),
+                color: Ds.c.text,
                 letterSpacing: 1.0,
               ),
             ),
@@ -1085,23 +1056,21 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
               child: FilledButton(
                 onPressed: (_canSubmit && !_submitting) ? _submit : null,
                 style: FilledButton.styleFrom(
-                  backgroundColor: _kGreen,
-                  disabledBackgroundColor: const Color(0xFFD1FAE5),
+                  backgroundColor: Ds.c.brand,
+                  disabledBackgroundColor: Ds.c.successSoft,
                   shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10)),
+                      borderRadius: Ds.r.rButton),
                 ),
                 child: _submitting
-                    ? const SizedBox(
+                    ? SizedBox(
                         width: 20,
                         height: 20,
                         child: CircularProgressIndicator(
-                            color: Colors.white, strokeWidth: 2))
+                            color: Ds.c.surface, strokeWidth: 2))
                     : Text(
                         c('inquiry_form_screen.submit_responses'),
-                        style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                            color: Colors.white),
+                        style: Ds.t.subtitle.copyWith(
+                            fontWeight: FontWeight.w700, color: Ds.c.surface),
                       ),
               ),
             ),
@@ -1109,11 +1078,8 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
             Center(
               child: Text(
                 c('inquiry_form_screen.all_fields_required'),
-                style: TextStyle(
-                    fontSize: 12,
-                    color: _canSubmit
-                        ? const Color(0xFF9CA3AF)
-                        : const Color(0xFFDC2626)),
+                style: Ds.t.caption.copyWith(
+                    color: _canSubmit ? Ds.c.textSecondary : Ds.c.danger),
               ),
             ),
           ],
@@ -1122,8 +1088,7 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
           Center(
             child: Text(
               c('inquiry_form_screen.footer'),
-              style: const TextStyle(
-                  fontSize: 11, color: Color(0xFF9CA3AF)),
+              style: Ds.t.caption.copyWith(color: Ds.c.textSecondary),
             ),
           ),
         ],

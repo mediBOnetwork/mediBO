@@ -1,3 +1,4 @@
+-- replay-target: production
 -- CMD #1847 — the two gates. Both are EXISTING choke points; each gains one
 -- named reason, so every surface that already reads them obeys the cut-off
 -- without learning anything new.

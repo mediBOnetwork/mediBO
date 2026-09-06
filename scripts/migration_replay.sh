@@ -200,7 +200,7 @@ for f in "${pending[@]}"; do
     # else still fails the batch, and pool_set() can turn this off.
     if [ "$PROD_SOFT" = "true" ] && [ -n "$DEVDB" ] && [ -z "$target" ] \
        && grep -qEi "(^|[^A-Za-z0-9_])(${CP_RE})([^A-Za-z0-9_]|$)" "$f" \
-       && grep -qEi 'ERROR: +(function|relation|column) .* does not exist' /tmp/replay_$v.log; then
+       && grep -qEi 'ERROR: +(function|relation|column|type|schema) .* does not exist' /tmp/replay_$v.log; then
       log "SKIPPED $b on production (control-plane-only symbol): $err — control plane still gets it, batch continues"
       psql "$DEVDB" -q -c "insert into public.rg_alerts(fingerprint,severity,kind,name,detail)
          values ('replay_prod_misroute_$b','warn','deploy','migration mis-routed to production',
@@ -251,7 +251,15 @@ for f in "${pending[@]}"; do
         # production symbol on the control plane means the file was mis-ROUTED,
         # which is a routing bug to alert on, not a reason to stop the fleet
         # deploying. Anything else still fails the batch.
-        if [ "$CP_SOFT" = "true" ] && grep -qEi 'ERROR: +(function|relation|column) .* does not exist' /tmp/replay_dev_$v.log; then
+        # CHANGE #1847 — `type` and `schema` join that list. #1847's
+        # 20260906120400_c1847_cutoff_settings names app_settings, so the
+        # heuristic routed it to the control plane, where it died on
+        # `type "public.order_alert_config" does not exist`. Postgres says
+        # "type", not "relation", for a composite row type — one word outside
+        # the pattern, and a file that had ALREADY landed on production failed
+        # the whole batch. Same class as #1819, same verdict: mis-routed, not
+        # broken.
+        if [ "$CP_SOFT" = "true" ] && grep -qEi 'ERROR: +(function|relation|column|type|schema) .* does not exist' /tmp/replay_dev_$v.log; then
           log "SKIPPED $b on the control plane (production-only symbol): $err — production applied, batch continues"
           psql "$DEVDB" -q -c "insert into public.migration_replay_dev_ledger(file) values ($(printf "%s" "$b" | sed "s/'/''/g; s/^/'/; s/$/'/")) on conflict do nothing" >/dev/null 2>&1
           psql "$DEVDB" -q -c "insert into public.rg_alerts(fingerprint,severity,kind,name,detail)

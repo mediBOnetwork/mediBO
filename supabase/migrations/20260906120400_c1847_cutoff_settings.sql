@@ -1,3 +1,4 @@
+-- replay-target: production
 -- CMD #1847 — full control from the app. Every value here is stored and
 -- editable; the screen that already saves the auto-cancel saves these too.
 

@@ -1,3 +1,4 @@
+-- replay-target: production
 -- CMD #1847 — the Om-facing half: the console (orders on the clock with their
 -- countdown), the per-order actions, and the settings folded into the screen
 -- that already saves the auto-cancel.

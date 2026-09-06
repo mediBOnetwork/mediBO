@@ -1,3 +1,4 @@
+-- replay-target: production
 -- CMD #1847 — the cut-off engine. Helpers, the tick, and the one cron row.
 
 -- The cut-off instant for a zone on a day: the zone's own time, else the first

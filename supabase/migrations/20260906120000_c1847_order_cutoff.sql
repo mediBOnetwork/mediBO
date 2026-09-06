@@ -1,3 +1,4 @@
+-- replay-target: production
 -- CMD #1847 — Order-hours cutoff, unpaid auto-cancel and the restoration window.
 --
 -- Every knob Om asked for lives on the settings row that ALREADY carries his

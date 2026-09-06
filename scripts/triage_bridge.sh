@@ -5,6 +5,7 @@
 # test_coverage) and the dev queue lives on the CONTROL PLANE (medibo-dev).
 # Nothing in SQL can cross that line, so this is the one process that does:
 #
+#   0. control plane: open qa_findings     → production: triage_file_qa()
 #   1. production: triage_batch_pending()  → batches Om approved
 #   2. control plane: dev_cmd_bulk_add()   → real fix commands
 #   3. production: triage_batch_bind()     → the command id comes home
@@ -100,6 +101,18 @@ send_batches() {
   echo "$sent"
 }
 
+# ── 0. hostile-QA findings live on the control plane; carry them over ────
+carry_qa() {
+  local rows n
+  rows="$(curl -sS --max-time 30 \
+    "$SUPABASE_URL/rest/v1/qa_findings?status=eq.open&select=id,command_id,severity,title,detail&limit=200" \
+    -H "apikey: $SERVICE_ROLE_KEY" -H "Authorization: Bearer $SERVICE_ROLE_KEY" 2>/dev/null)"
+  echo "$rows" | jq -e 'type=="array" and length>0' >/dev/null 2>&1 || return 0
+  n="$(prod triage_file_qa "$(jq -nc --argjson r "$rows" '{p_rows:$r}')" | jq -r '.filed // 0')"
+  [ "${n:-0}" != "0" ] && log "carried $n hostile-QA finding(s) into triage"
+  return 0
+}
+
 # ── 4-6. completed commands get their scenarios re-run ───────────────────
 reverify_completed() {
   local open cmds done=0
@@ -110,8 +123,15 @@ reverify_completed() {
 
   local c status res
   for c in $cmds; do
-    status="$(ctl dev_cmd_get "{\"p_id\":$c}" | jq -r '.status // .row.status // empty')"
+    got="$(ctl dev_cmd_get "{\"p_id\":$c}")"
+    status="$(echo "$got" | jq -r '.status // .row.status // empty')"
     [ "$status" != "completed" ] && continue
+    # The QA round is the control plane's record; stamp it on production first
+    # so the re-run below can read it like any other piece of evidence.
+    qa="$(echo "$got" | jq -r '.qa_status // .row.qa_status // empty')"
+    case "$qa" in
+      passed|failed) prod triage_qa_verdict "{\"p_command_id\":$c,\"p_verdict\":\"$qa\"}" >/dev/null;;
+    esac
     res="$(prod triage_batch_completed "{\"p_command_id\":$c}")"
     log "command #$c re-verified: $(echo "$res" | jq -c '{fixed,reopened,escalated,still_checking}' 2>/dev/null || echo "$res" | head -c 200)"
     done=$((done+1))
@@ -121,9 +141,11 @@ reverify_completed() {
 
 case "${1:-run}" in
   send)     send_batches ;;
+  qa)       carry_qa ;;
   reverify) reverify_completed ;;
   run|*)
     prod triage_intake '{"p_limit":200}' >/dev/null
+    carry_qa
     prod triage_generate_commands '{}'   >/dev/null
     send_batches      >/dev/null
     reverify_completed >/dev/null

@@ -2,7 +2,14 @@
 -- Om approves on the phone, commands generate themselves, the bot re-verifies.
 -- Idempotent: safe to replay on live at deploy time.
 
-DROP TRIGGER IF EXISTS triage_on_cmd_complete ON public.dev_commands;
+-- A build branch may still carry the trigger shape this change abandoned; live
+-- has no dev_commands at all (that table is the CONTROL PLANE's), so the drop
+-- is guarded rather than unconditional.
+DO $legacy$ BEGIN
+  IF to_regclass('public.dev_commands') IS NOT NULL THEN
+    EXECUTE 'DROP TRIGGER IF EXISTS triage_on_cmd_complete ON public.dev_commands';
+  END IF;
+END $legacy$;
 DROP FUNCTION IF EXISTS public._triage_on_cmd_complete_trg();
 
 -- ─────────────────────────────────────────────────────────────
@@ -281,118 +288,130 @@ BEGIN
   PERFORM _dev_guard();
   SELECT count(*) INTO v_before FROM triage_finding;
 
-  -- 4a. VISUAL BOT — a rule fired on a screenshot nobody has reviewed.
-  FOR rec IN
-    SELECT s.id, s.feature_key, s.role, s.viewport, s.rule_key, s.detail, s.bucket, s.path, s.diff_pct
-      FROM visual_shot s
-     WHERE s.rule_key IS NOT NULL AND coalesce(s.reviewed,false) = false
-     ORDER BY s.id DESC LIMIT p_limit
-  LOOP
-    PERFORM _triage_file('visual',
-      rec.feature_key||':'||coalesce(rec.role,'-')||':'||coalesce(rec.viewport,'-')||':'||rec.rule_key,
-      rec.feature_key, NULL, rec.rule_key, rec.detail, NULL,
-      jsonb_build_array(
-        'Sign in as '||coalesce(rec.role,'admin'),
-        'Open the '||rec.feature_key||' screen',
-        'Use a '||coalesce(rec.viewport,'phone')||'-width window',
-        'Compare against the approved baseline'),
-      jsonb_build_object('kind','visual','shot_id',rec.id,'feature_key',rec.feature_key,
-                         'role',rec.role,'viewport',rec.viewport,'rule_key',rec.rule_key),
-      rec.bucket, rec.path);
-  END LOOP;
+  IF to_regclass('public.visual_shot') IS NOT NULL THEN
+    -- 4a. VISUAL BOT — a rule fired on a screenshot nobody has reviewed.
+    FOR rec IN
+      SELECT s.id, s.feature_key, s.role, s.viewport, s.rule_key, s.detail, s.bucket, s.path, s.diff_pct
+        FROM visual_shot s
+       WHERE s.rule_key IS NOT NULL AND coalesce(s.reviewed,false) = false
+       ORDER BY s.id DESC LIMIT p_limit
+    LOOP
+      PERFORM _triage_file('visual',
+        rec.feature_key||':'||coalesce(rec.role,'-')||':'||coalesce(rec.viewport,'-')||':'||rec.rule_key,
+        rec.feature_key, NULL, rec.rule_key, rec.detail, NULL,
+        jsonb_build_array(
+          'Sign in as '||coalesce(rec.role,'admin'),
+          'Open the '||rec.feature_key||' screen',
+          'Use a '||coalesce(rec.viewport,'phone')||'-width window',
+          'Compare against the approved baseline'),
+        jsonb_build_object('kind','visual','shot_id',rec.id,'feature_key',rec.feature_key,
+                           'role',rec.role,'viewport',rec.viewport,'rule_key',rec.rule_key),
+        rec.bucket, rec.path);
+    END LOOP;
+  END IF;
 
-  -- 4b. PERMISSION MATRIX — a role reached something it must not.
-  FOR rec IN
-    SELECT a.proname, a.role_key, a.expected, a.observed, a.severity, a.evidence
-      FROM autotest_auth_check a
-     WHERE a.verdict = 'fail'
-     ORDER BY a.checked_at DESC LIMIT p_limit
-  LOOP
-    PERFORM _triage_file('auth', rec.proname||':'||rec.role_key, rec.proname, NULL, '*',
-      'Role '||rec.role_key||' got "'||coalesce(rec.observed,'?')||'" from '||rec.proname
-        ||' when it should have been "'||coalesce(rec.expected,'?')||'".',
-      rec.evidence::text,
-      jsonb_build_array('Sign in as '||rec.role_key, 'Call '||rec.proname,
-                        'Expected: '||coalesce(rec.expected,'?')),
-      jsonb_build_object('kind','auth','proname',rec.proname,'role_key',rec.role_key),
-      NULL, NULL,
-      -- A role that should have been DENIED and was not is never a middling
-      -- problem, whatever the probe recorded: it is a way in.
-      CASE WHEN rec.expected = 'deny' AND coalesce(rec.observed,'') <> 'deny' THEN 'critical'
-           WHEN rec.severity IN ('critical','high','medium','low') THEN rec.severity
-           ELSE NULL END);
-  END LOOP;
+  IF to_regclass('public.autotest_auth_check') IS NOT NULL THEN
+    -- 4b. PERMISSION MATRIX — a role reached something it must not.
+    FOR rec IN
+      SELECT a.proname, a.role_key, a.expected, a.observed, a.severity, a.evidence
+        FROM autotest_auth_check a
+       WHERE a.verdict = 'fail'
+       ORDER BY a.checked_at DESC LIMIT p_limit
+    LOOP
+      PERFORM _triage_file('auth', rec.proname||':'||rec.role_key, rec.proname, NULL, '*',
+        'Role '||rec.role_key||' got "'||coalesce(rec.observed,'?')||'" from '||rec.proname
+          ||' when it should have been "'||coalesce(rec.expected,'?')||'".',
+        rec.evidence::text,
+        jsonb_build_array('Sign in as '||rec.role_key, 'Call '||rec.proname,
+                          'Expected: '||coalesce(rec.expected,'?')),
+        jsonb_build_object('kind','auth','proname',rec.proname,'role_key',rec.role_key),
+        NULL, NULL,
+        -- A role that should have been DENIED and was not is never a middling
+        -- problem, whatever the probe recorded: it is a way in.
+        CASE WHEN rec.expected = 'deny' AND coalesce(rec.observed,'') <> 'deny' THEN 'critical'
+             WHEN rec.severity IN ('critical','high','medium','low') THEN rec.severity
+             ELSE NULL END);
+    END LOOP;
+  END IF;
 
-  -- 4c. FUZZ — a call crashed instead of refusing.
-  FOR rec IN
-    SELECT f.case_id, c.proname, c.role_key, c.args_label, f.sqlstate, f.message, f.severity, f.assertion
-      FROM autotest_fuzz_result f JOIN autotest_fuzz_case c ON c.id = f.case_id
-     WHERE f.verdict = 'fail'
-     ORDER BY f.ran_at DESC LIMIT p_limit
-  LOOP
-    PERFORM _triage_file('fuzz', rec.proname||':'||coalesce(rec.role_key,'-')||':'||coalesce(rec.assertion,'crash'),
-      rec.proname, NULL, '*',
-      rec.proname||' crashed ('||coalesce(rec.sqlstate,'?')||') on a '||coalesce(rec.role_key,'guest')
-        ||' call instead of refusing it politely.',
-      rec.message,
-      jsonb_build_array('Sign in as '||coalesce(rec.role_key,'guest'),
-                        'Call '||rec.proname||' with: '||coalesce(rec.args_label,'hostile arguments'),
-                        'Expected a clean refusal, got SQLSTATE '||coalesce(rec.sqlstate,'?')),
-      jsonb_build_object('kind','fuzz','case_id',rec.case_id,'proname',rec.proname,'role_key',rec.role_key),
-      NULL, NULL,
-      CASE WHEN rec.severity IN ('critical','high','medium','low') THEN rec.severity ELSE NULL END);
-  END LOOP;
+  IF to_regclass('public.autotest_fuzz_result') IS NOT NULL THEN
+    -- 4c. FUZZ — a call crashed instead of refusing.
+    FOR rec IN
+      SELECT f.case_id, c.proname, c.role_key, c.args_label, f.sqlstate, f.message, f.severity, f.assertion
+        FROM autotest_fuzz_result f JOIN autotest_fuzz_case c ON c.id = f.case_id
+       WHERE f.verdict = 'fail'
+       ORDER BY f.ran_at DESC LIMIT p_limit
+    LOOP
+      PERFORM _triage_file('fuzz', rec.proname||':'||coalesce(rec.role_key,'-')||':'||coalesce(rec.assertion,'crash'),
+        rec.proname, NULL, '*',
+        rec.proname||' crashed ('||coalesce(rec.sqlstate,'?')||') on a '||coalesce(rec.role_key,'guest')
+          ||' call instead of refusing it politely.',
+        rec.message,
+        jsonb_build_array('Sign in as '||coalesce(rec.role_key,'guest'),
+                          'Call '||rec.proname||' with: '||coalesce(rec.args_label,'hostile arguments'),
+                          'Expected a clean refusal, got SQLSTATE '||coalesce(rec.sqlstate,'?')),
+        jsonb_build_object('kind','fuzz','case_id',rec.case_id,'proname',rec.proname,'role_key',rec.role_key),
+        NULL, NULL,
+        CASE WHEN rec.severity IN ('critical','high','medium','low') THEN rec.severity ELSE NULL END);
+    END LOOP;
+  END IF;
 
-  -- 4d. INVARIANTS — a rule that must always hold, does not.
-  FOR rec IN
-    SELECT DISTINCT ON (r.key) r.key, r.violations, r.sample, r.severity, i.title, i.detail, i.family
-      FROM autotest_invariant_result r JOIN autotest_invariant i ON i.key = r.key
-     WHERE r.verdict = 'fail'
-     ORDER BY r.key, r.ran_at DESC LIMIT p_limit
-  LOOP
-    PERFORM _triage_file('invariant', rec.key, coalesce(rec.family, rec.key), NULL, '*',
-      coalesce(rec.title, rec.key)||' — '||coalesce(rec.violations,0)||' row(s) break this rule right now.',
-      rec.detail,
-      jsonb_build_array('Rule: '||coalesce(rec.title, rec.key),
-                        'Broken rows: '||coalesce(rec.violations,0),
-                        'Sample: '||left(coalesce(rec.sample::text,'-'), 400)),
-      jsonb_build_object('kind','invariant','key',rec.key,'family',rec.family),
-      NULL, NULL,
-      CASE WHEN rec.severity IN ('critical','high','medium','low') THEN rec.severity ELSE NULL END);
-  END LOOP;
+  IF to_regclass('public.autotest_invariant_result') IS NOT NULL THEN
+    -- 4d. INVARIANTS — a rule that must always hold, does not.
+    FOR rec IN
+      SELECT DISTINCT ON (r.key) r.key, r.violations, r.sample, r.severity, i.title, i.detail, i.family
+        FROM autotest_invariant_result r JOIN autotest_invariant i ON i.key = r.key
+       WHERE r.verdict = 'fail'
+       ORDER BY r.key, r.ran_at DESC LIMIT p_limit
+    LOOP
+      PERFORM _triage_file('invariant', rec.key, coalesce(rec.family, rec.key), NULL, '*',
+        coalesce(rec.title, rec.key)||' — '||coalesce(rec.violations,0)||' row(s) break this rule right now.',
+        rec.detail,
+        jsonb_build_array('Rule: '||coalesce(rec.title, rec.key),
+                          'Broken rows: '||coalesce(rec.violations,0),
+                          'Sample: '||left(coalesce(rec.sample::text,'-'), 400)),
+        jsonb_build_object('kind','invariant','key',rec.key,'family',rec.family),
+        NULL, NULL,
+        CASE WHEN rec.severity IN ('critical','high','medium','low') THEN rec.severity ELSE NULL END);
+    END LOOP;
+  END IF;
 
-  -- 4e. JOURNEYS — a scenario that used to pass now fails.
-  FOR rec IN
-    SELECT DISTINCT ON (j.name) j.name, j.area, j.required, r.evidence, r.commit_sha
-      FROM dev_journey_runs r JOIN dev_journeys j ON j.id = r.journey_id
-     WHERE r.status = 'failed'
-     ORDER BY j.name, r.at DESC LIMIT p_limit
-  LOOP
-    PERFORM _triage_file('journey', rec.name, rec.name, rec.area, '*',
-      'The journey "'||rec.name||'" fails: the thing it guards is broken again.',
-      left(coalesce(rec.evidence::text,''), 2000),
-      jsonb_build_array('Run the journey: '||rec.name,
-                        'Area: '||coalesce(rec.area,'global'),
-                        'Last seen on commit '||coalesce(rec.commit_sha,'?')),
-      jsonb_build_object('kind','journey','name',rec.name),
-      NULL, NULL,
-      CASE WHEN rec.required THEN 'critical' ELSE NULL END);
-  END LOOP;
+  IF to_regclass('public.dev_journey_runs') IS NOT NULL THEN
+    -- 4e. JOURNEYS — a scenario that used to pass now fails.
+    FOR rec IN
+      SELECT DISTINCT ON (j.name) j.name, j.area, j.required, r.evidence, r.commit_sha
+        FROM dev_journey_runs r JOIN dev_journeys j ON j.id = r.journey_id
+       WHERE r.status = 'failed'
+       ORDER BY j.name, r.at DESC LIMIT p_limit
+    LOOP
+      PERFORM _triage_file('journey', rec.name, rec.name, rec.area, '*',
+        'The journey "'||rec.name||'" fails: the thing it guards is broken again.',
+        left(coalesce(rec.evidence::text,''), 2000),
+        jsonb_build_array('Run the journey: '||rec.name,
+                          'Area: '||coalesce(rec.area,'global'),
+                          'Last seen on commit '||coalesce(rec.commit_sha,'?')),
+        jsonb_build_object('kind','journey','name',rec.name),
+        NULL, NULL,
+        CASE WHEN rec.required THEN 'critical' ELSE NULL END);
+    END LOOP;
+  END IF;
 
-  -- 4f. HOSTILE QA — an open finding from a QA round.
-  FOR rec IN
-    SELECT q.id, q.command_id, q.severity, q.title, q.detail, c.area
-      FROM qa_findings q LEFT JOIN dev_commands c ON c.id = q.command_id
-     WHERE q.status = 'open'
-     ORDER BY q.id DESC LIMIT p_limit
-  LOOP
-    PERFORM _triage_file('qa', 'qa:'||rec.id, coalesce(rec.area,'app'), rec.area, rec.severity,
-      coalesce(rec.title, 'QA finding'),
-      rec.detail,
-      jsonb_build_array('Filed by hostile QA on #'||coalesce(rec.command_id::text,'?'),
-                        coalesce(left(rec.detail, 600), 'No further detail was recorded.')),
-      jsonb_build_object('kind','qa','finding_id',rec.id,'command_id',rec.command_id));
-  END LOOP;
+  IF to_regclass('public.qa_findings') IS NOT NULL THEN
+    -- 4f. HOSTILE QA — an open finding from a QA round.
+    FOR rec IN
+      SELECT q.id, q.command_id, q.severity, q.title, q.detail, NULL::text AS area
+        FROM qa_findings q
+       WHERE q.status = 'open'
+       ORDER BY q.id DESC LIMIT p_limit
+    LOOP
+      PERFORM _triage_file('qa', 'qa:'||rec.id, coalesce(rec.area,'app'), rec.area, rec.severity,
+        coalesce(rec.title, 'QA finding'),
+        rec.detail,
+        jsonb_build_array('Filed by hostile QA on #'||coalesce(rec.command_id::text,'?'),
+                          coalesce(left(rec.detail, 600), 'No further detail was recorded.')),
+        jsonb_build_object('kind','qa','finding_id',rec.id,'command_id',rec.command_id));
+    END LOOP;
+  END IF;
 
   SELECT count(*) INTO v_after FROM triage_finding;
   v_new := (v_after - v_before)::int;
@@ -1006,13 +1025,16 @@ BEGIN
     RETURN jsonb_build_object('verdict','unknown','detail','waiting for a fresh screenshot of this screen');
 
   ELSIF k = 'qa' THEN
-    -- A hostile-QA finding is proven by the fix command's own QA round.
-    IF f.fix_command IS NOT NULL
-       AND (SELECT c.qa_status FROM dev_commands c WHERE c.id = f.fix_command) = 'passed'
-    THEN RETURN jsonb_build_object('verdict','green','detail','hostile QA passed on the fix'); END IF;
-    IF f.fix_command IS NOT NULL
-       AND (SELECT c.qa_status FROM dev_commands c WHERE c.id = f.fix_command) = 'failed'
-    THEN RETURN jsonb_build_object('verdict','red','detail','hostile QA failed again on the fix'); END IF;
+    -- A hostile-QA finding is proven by the fix command's own QA round, and
+    -- that round is recorded on the CONTROL PLANE. Production cannot read it,
+    -- so the bridge stamps the verdict here with triage_qa_verdict() and this
+    -- branch only reads what it was told. Unstamped stays 'unknown', which
+    -- never counts as green.
+    IF f.scenario->>'qa_verdict' = 'passed' THEN
+      RETURN jsonb_build_object('verdict','green','detail','hostile QA passed on the fix');
+    ELSIF f.scenario->>'qa_verdict' = 'failed' THEN
+      RETURN jsonb_build_object('verdict','red','detail','hostile QA failed again on the fix');
+    END IF;
     RETURN jsonb_build_object('verdict','unknown','detail','waiting for the QA round on the fix');
   END IF;
 
@@ -1105,6 +1127,44 @@ BEGIN
                               FROM triage_finding t
                              WHERE t.fix_command = p_command_id OR p_command_id = ANY(t.attempted_fixes)), '')
       END);
+END $fn$;
+
+-- The bridge hands over the control plane's QA verdict for a fix command; the
+-- re-run above then reads it like any other piece of evidence.
+CREATE OR REPLACE FUNCTION public.triage_qa_verdict(p_command_id bigint, p_verdict text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $fn$
+DECLARE n int;
+BEGIN
+  PERFORM _dev_guard();
+  IF p_verdict NOT IN ('passed','failed') THEN
+    RETURN jsonb_build_object('ok', false, 'message', 'verdict must be passed or failed');
+  END IF;
+  WITH upd AS (
+    UPDATE triage_finding
+       SET scenario = scenario || jsonb_build_object('qa_verdict', p_verdict)
+     WHERE fix_command = p_command_id AND scenario->>'kind' = 'qa'
+    RETURNING id)
+  SELECT count(*) INTO n FROM upd;
+  RETURN jsonb_build_object('ok', true, 'stamped', n);
+END $fn$;
+
+-- Hostile-QA findings are filed on the control plane, so the bridge carries
+-- them over rather than production reaching for a table it does not have.
+CREATE OR REPLACE FUNCTION public.triage_file_qa(p_rows jsonb)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $fn$
+DECLARE r jsonb; n int := 0;
+BEGIN
+  PERFORM _dev_guard();
+  FOR r IN SELECT * FROM jsonb_array_elements(coalesce(p_rows,'[]'::jsonb)) LOOP
+    IF _triage_file('qa', 'qa:'||(r->>'id'), coalesce(r->>'area','app'), r->>'area',
+         r->>'severity', r->>'title', r->>'detail',
+         jsonb_build_array('Filed by hostile QA on #'||coalesce(r->>'command_id','?'),
+                           coalesce(left(r->>'detail', 600), 'No further detail was recorded.')),
+         jsonb_build_object('kind','qa','finding_id',(r->>'id'),
+                            'command_id',(r->>'command_id'))) IS NOT NULL
+    THEN n := n + 1; END IF;
+  END LOOP;
+  RETURN jsonb_build_object('ok', true, 'filed', n);
 END $fn$;
 
 -- Cron entry point: re-verify every command with rows waiting on it.
@@ -1275,6 +1335,8 @@ GRANT EXECUTE ON FUNCTION public.triage_batch_bind(bigint,bigint)          TO se
 GRANT EXECUTE ON FUNCTION public.triage_batch_fail(bigint,text)            TO service_role;
 GRANT EXECUTE ON FUNCTION public.triage_batch_completed(bigint)            TO service_role;
 GRANT EXECUTE ON FUNCTION public.triage_batch_open_commands()              TO service_role;
+GRANT EXECUTE ON FUNCTION public.triage_qa_verdict(bigint,text)            TO service_role;
+GRANT EXECUTE ON FUNCTION public.triage_file_qa(jsonb)                     TO service_role;
 
 -- ─────────────────────────────────────────────────────────────
 -- 11. THE TOOL ROW — Triage is reachable, or it does not exist (§11)

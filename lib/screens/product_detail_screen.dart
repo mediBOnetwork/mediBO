@@ -1846,15 +1846,21 @@ class _TrustStrip extends StatelessWidget {
                     ),
                   ),
                 ),
-                SizedBox(width: Ds.space.x8),
-                Expanded(
-                  child: Text(
-                    chip.note,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: Ds.t.caption,
+                // CMD #1835 — a note only when the backend sent one. The
+                // fill-rate chip no longer carries a sentence, so nothing is
+                // laid out beside it; the cold-chain chip still explains
+                // itself in the backend's own words.
+                if (chip.note.isNotEmpty) ...[
+                  SizedBox(width: Ds.space.x8),
+                  Expanded(
+                    child: Text(
+                      chip.note,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Ds.t.caption,
+                    ),
                   ),
-                ),
+                ],
               ],
             ),
           ),

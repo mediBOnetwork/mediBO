@@ -1214,24 +1214,9 @@ class _StockRow extends StatelessWidget {
         fg: const Color(0xFF15803D),
       );
     }
-    // CMD #451 row 84 — a banned / discontinued / not-for-sale product is not
-    // "out of stock", and saying so beside a supplier count was the exact
-    // contradiction the register row was raised for. The chip's words and the
-    // reason under it are the backend's.
-    if (data.blockedByStatus && data.statusLabel.isNotEmpty) {
-      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        _Chip(
-          text: data.statusLabel,
-          bg: Ds.c.dangerSoft,
-          fg: Ds.c.danger,
-        ),
-        if (data.statusReason.isNotEmpty)
-          Padding(
-            padding: EdgeInsets.only(top: Ds.space.x4),
-            child: Text(data.statusReason, style: Ds.t.caption),
-          ),
-      ]);
-    }
+    // CMD #1812 — the red catalogue-status chip is gone. 1mg's scraped word
+    // never described mediBO's supply, so there is exactly one non-available
+    // state left and the backend words it: out of stock in this zone.
     return Text(
       data.label('stock_out_label'),
       style: const TextStyle(
@@ -1549,17 +1534,9 @@ class _StickyBar extends StatelessWidget {
             ],
             // CHANGE #638 — an unbuyable product offers Notify instead of a
             // dead disabled button.
-            // CMD #451 row 84 — Notify is for stock that can come back. A
-            // product blocked by its catalogue status never will, so the bar
-            // prints the backend's verdict instead of a subscription control.
-            if (!canAdd && data.blockedByStatus)
-              Expanded(
-                child: Text(
-                  av?.ctaLabel ?? data.statusLabel,
-                  style: Ds.t.bodyStrong.copyWith(color: Ds.c.danger),
-                ),
-              )
-            else if (!canAdd)
+            // CMD #1812 — and it ALWAYS offers Notify now: the only way to be
+            // unavailable is zone standby 0, which is stock that can come back.
+            if (!canAdd)
               NotifyControl(
                 productId: data.id,
                 initiallySubscribed: subscribed,

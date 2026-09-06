@@ -795,7 +795,9 @@ class Product {
     final tClass = (map['therapeutic_class'] as String?)?.trim() ?? '';
     final rxRequired = (map['rx_required'] as String?)?.trim() ?? '';
     final isPrescription = rxRequired == 'Rx';
-    final status = (map['status'] as String?)?.trim() ?? '';
+    // CMD #1812 — there is no `status` on a catalogue row any more. 1mg's
+    // scraped word never decided anything here; availability is the backend's
+    // `availability` block, which is the zone's standby count and nothing else.
     final mrp = parseMrp(map['mrp']);
     final b2bPrice = mrp;
 

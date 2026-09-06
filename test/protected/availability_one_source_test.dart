@@ -138,7 +138,6 @@ Map<String, dynamic> _payload({
         'buyable': legacyBuyable,
         'has_supplier_label': hasSupplierLabel,
         'supplier_label': hasSupplierLabel ? 'AV • 11S' : '',
-        'blocked_by_status': false,
       },
       'overview': const <Map<String, dynamic>>[],
       'has_highlight': false,

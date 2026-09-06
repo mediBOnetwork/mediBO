@@ -82,16 +82,6 @@ class ProductDetail {
   final bool hasSupplierLabel;
   final String supplierLabel;
 
-  /// CMD #451 (register row 84) — the catalogue status blocks this product for
-  /// EVERYONE: banned, discontinued, not for sale. It is a backend flag, never
-  /// derived here from [buyable] or from a supplier count, and
-  /// [statusLabel]/[statusReason] are the backend's own words for it. When it
-  /// is true the page states the reason instead of offering Notify — you
-  /// cannot be notified about a product that will never come back.
-  final bool blockedByStatus;
-  final String statusLabel;
-  final String statusReason;
-
   /// CMD #367 (row 177) — the supply trust strip. Fill rate + cold chain,
   /// computed and worded by `product_trust_strip()`. There is deliberately NO
   /// expiry field: expiry and batch change with every purchase, so a
@@ -179,9 +169,6 @@ class ProductDetail {
     required this.availability,
     required this.pricing,
     required this.buyable,
-    this.blockedByStatus = false,
-    this.statusLabel = '',
-    this.statusReason = '',
     required this.hasSupplierLabel,
     required this.supplierLabel,
     required this.trust,
@@ -266,13 +253,6 @@ class ProductDetail {
       // CHANGE #640 — one source. The verdict wins whenever there is one; the
       // legacy column is the outage fallback, never a second opinion.
       buyable: av?.isAvailable ?? (stock['buyable'] == true),
-      blockedByStatus: stock['blocked_by_status'] == true,
-      statusLabel: _s((stock['status_block'] is Map
-          ? (stock['status_block'] as Map)['label']
-          : null)),
-      statusReason: _s((stock['status_block'] is Map
-          ? (stock['status_block'] as Map)['reason']
-          : null)),
       hasSupplierLabel: stock['has_supplier_label'] == true,
       supplierLabel: _s(stock['supplier_label']),
       trust: PdTrust.fromMap(m['trust']),
@@ -336,9 +316,6 @@ class ProductDetail {
         availability: null,
         pricing: null,
         buyable: false,
-        blockedByStatus: false,
-        statusLabel: '',
-        statusReason: '',
         hasSupplierLabel: false,
         supplierLabel: '',
         trust: const PdTrust.empty(),

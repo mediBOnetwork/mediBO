@@ -329,6 +329,13 @@ Current files and what they hold down:
   absent URL and a URL with no label each omit their row instead of dashing
   it; an unknown tone stays neutral; and androidTone knows 'published' and
   'skipped', which before #1802 both fell to the same grey as never-built.
+- `storefront_status_free_test.dart` — 1mg's scraped catalogue word decides
+  NOTHING (CMD #1812): a payload that still carries status / status_reason / a
+  whole status_block changes not one pixel, a product 1mg called DISCONTINUED
+  offers the backend's Add while its zone standby > 0, standby 0 is the only
+  refusal left and it prints Out of stock + Notify (never a red chip, never
+  "Not for sale"), and neither ProductDetail nor Product exposes a status field
+  a screen could render.
 - `cart_unavailable_test.dart` — the cart's red state is the backend's flag:
   per-line unavailable/qty_locked are carried through untouched,
   unavailable_badge prints verbatim (never pluralised in Dart), the badge is

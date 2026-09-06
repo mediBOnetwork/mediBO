@@ -192,6 +192,13 @@ class DevQueueService {
   Future<Map<String, dynamic>> buildLane({int days = 7}) async =>
       _asMap(await _rpc('build_contention_status', params: {'p_days': days}));
 
+  /// CHANGE #1819 — the Waiting lane: what waiting COST, in tokens.
+  /// Its own RPC beside the other three lanes, so a refused read of one never
+  /// blanks the others. Every label, total, before/after sentence and tone is
+  /// built in `dev_wait_report()`; the section prints it in payload order.
+  Future<Map<String, dynamic>> waitingLane({int hours = 24}) async =>
+      _asMap(await _rpc('dev_wait_report', params: {'p_hours': hours}));
+
   /// CHANGE #530 — the boot doctor's verdict per runner: what a crash left
   /// behind, what was repaired, and which runners are refusing to claim. Its
   /// own RPC beside the three lanes, so a refused read of one never blanks the

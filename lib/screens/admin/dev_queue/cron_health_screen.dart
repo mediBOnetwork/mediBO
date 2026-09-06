@@ -4,6 +4,7 @@ import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/render_log.dart';
 import 'build_lane_section.dart';
+import 'waiting_lane_section.dart';
 import 'cron_budget_section.dart';
 import 'claude_auth_section.dart';
 import 'masked_calling_section.dart';
@@ -48,6 +49,8 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
   // CHANGE #327 — and the same failure a third time, in a third resource:
   // builds fighting for one FILE. Its own RPC, same reason as the other two.
   Map<String, dynamic> _build = const {};
+  // CHANGE #1819 — the fourth lane: what waiting cost.
+  Map<String, dynamic> _waiting = const {};
   // CHANGE #404 — masked calling. Not a lane, but the same question the three
   // lanes answer: is this switched on right now, and what is still missing.
   Map<String, dynamic> _calls = const {};
@@ -103,6 +106,12 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
       } catch (_) {
         // Same contract once more: a panel, never the page.
       }
+      Map<String, dynamic> wl = const {};
+      try {
+        wl = await _svc.waitingLane();
+      } catch (_) {
+        // Same contract as every lane above: a panel, never the page.
+      }
       Map<String, dynamic> rg = const {};
       try {
         rg = await _svc.guardCard();
@@ -123,6 +132,7 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
         _db = db;
         _lane = lane;
         _build = bl;
+        _waiting = wl;
         _calls = mc;
         _data = d;
         _loading = false;
@@ -154,6 +164,14 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
         RenderLog.write(
           'c327_build_lane',
           _build['ok'] == true ? 'ok' : (_build.isEmpty ? 'absent' : 'refused'),
+        );
+        // CHANGE #1819 — painted-proof for the waiting lane, same contract
+        // as the three lanes above it.
+        RenderLog.write(
+          'c1819_waiting_lane',
+          (_waiting['has'] ?? false) == true
+              ? 'ok'
+              : (_waiting.isEmpty ? 'absent' : 'refused'),
         );
         // CHANGE #530 — painted-proof for the runner boot section, same
         // contract as the lanes: 'ok' only when the backend answered AND the
@@ -301,6 +319,14 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
                     if (_build.isNotEmpty) ...[
                       SizedBox(height: Ds.space.x24),
                       BuildLaneSection(data: _build),
+                    ],
+                    // CHANGE #1819 — and its own condition again: the waiting
+                    // lane is what the other three cost. The three above say
+                    // what is serialised; this one says what a runner burned
+                    // while it was.
+                    if ((_waiting['has'] ?? false) == true) ...[
+                      SizedBox(height: Ds.space.x24),
+                      WaitingLaneSection(data: _waiting),
                     ],
                     // CHANGE #404 — and its own condition again: masked calling
                     // is a panel like the three above it, never the page.

@@ -385,10 +385,12 @@ async function main() {
                 (error ? ` — ${error.slice(0, 160)}` : ''));
   }
 
-  // CHANGE #1823 — the backend's transient-refusal config (test_config.pipeline)
-  // is read ONCE, before any journey, and handed to the api layer so EVERY rpc
-  // of the run gets the one retry — not only test_pipeline_run. Batch 615 was
-  // sunk by the same lock timeout arriving through test_assert_pipeline.
+  // CHANGE #1823 — the backend's transient-refusal config (test_config.pipeline:
+  // which refusals, how many attempts, the wait, the words) is read ONCE, before
+  // any journey, and handed to the api layer so EVERY rpc of the run gets the
+  // retry — not only test_pipeline_run. Batch 615 was sunk by a lock timeout
+  // arriving through test_assert_pipeline; batch 620 by PGRST002 (PostgREST
+  // reloading its schema cache after the migrate phase) through test_result_report.
   let pcfg = {};
   try { pcfg = (await api.rpc('test_config_get', { p_key: 'pipeline' }, null)) || {}; }
   catch (_) { pcfg = {}; }
@@ -445,8 +447,8 @@ async function main() {
     // not meet the precondition — and this was the one place run.js did not say
     // so. An unreadable config leaves the old behaviour exactly as it was.
     let timedOut = false;
-    // The one retry on a transient database refusal now lives in api.rpc
-    // (CHANGE #1823, batch 615): every rpc of the run gets it, this one included.
+    // The retry on a transient database refusal lives in api.rpc (CHANGE #1823,
+    // batches 615 and 620): every rpc of the run gets it, this one included.
     try {
       out = await api.rpc('test_pipeline_run', { p_run_id: runId, p_order_id: null }, null);
     } catch (e) {

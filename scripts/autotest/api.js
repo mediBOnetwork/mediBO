@@ -116,28 +116,50 @@ async function request(method, url, body, headers) {
   }
 }
 
-// CHANGE #1823 — ONE retry on a transient database refusal, for EVERY rpc of
-// the run. The words and the wait are the backend's (test_config.pipeline:
-// retry_match / retry_wait_ms / retry_note), handed in by run.js once the
-// config is read. Batch 615 (6 Sep) was failed by devtool.order_pipeline's
-// test_assert_pipeline answering 55P03 "canceling statement due to lock
-// timeout" while the pipeline block itself, moments later, passed 9/9: the
-// retry lived only around test_pipeline_run, and the same refusal through any
-// other door was a red that sank a real batch. A 4xx/5xx that is NOT the
-// configured transient text is still an answer and is never retried.
+// CHANGE #1823 — a transient database refusal earns a retry, for EVERY rpc of
+// the run. WHICH refusals, how many attempts, how long to wait and what to say
+// are the backend's (test_config.pipeline: retry_match — one string or a list —
+// retry_attempts, retry_wait_ms, retry_note, retry_notes[match]), handed in by
+// run.js once the config is read. Two batches taught this: 615 (6 Sep) was
+// failed by devtool.order_pipeline's test_assert_pipeline answering 55P03
+// "canceling statement due to lock timeout" while the pipeline block itself,
+// moments later, passed 9/9 — the retry lived only around test_pipeline_run;
+// and 620 was failed by test_result_report answering 503 PGRST002 "Could not
+// query the database for the schema cache. Retrying." — PostgREST reloading its
+// cache right after the batch's own migrate phase. Both are the box mid-deploy,
+// not the feature, and a gate that fails batches on them gets switched off
+// again. A 4xx/5xx that is NOT a configured transient text is still an answer
+// and is never retried.
 let transientRetry = null;
 function setTransientRetry(cfg) {
-  const match = cfg && typeof cfg.retry_match === 'string' && cfg.retry_match.trim();
-  transientRetry = match
-    ? { match, waitMs: parseInt(cfg.retry_wait_ms, 10) || 3000, note: cfg.retry_note || 'transient database error' }
-    : null;
+  const raw = cfg ? cfg.retry_match : null;
+  const matches = (Array.isArray(raw) ? raw : [raw])
+    .filter((m) => typeof m === 'string' && m.trim()).map((m) => m.trim());
+  transientRetry = matches.length ? {
+    matches,
+    attempts: Math.max(1, parseInt(cfg.retry_attempts, 10) || 1),
+    waitMs: parseInt(cfg.retry_wait_ms, 10) || 3000,
+    note: cfg.retry_note || 'transient database error',
+    notes: (cfg.retry_notes && typeof cfg.retry_notes === 'object') ? cfg.retry_notes : {}
+  } : null;
 }
 // Pure: says whether THIS error, on THIS attempt, earns the configured retry.
+// Returns { match, attempts, waitMs, note } or null.
 function transientRetryFor(err, attempt, cfg) {
   const c = cfg === undefined ? transientRetry : cfg;
-  if (!c || attempt !== 1) return null;
+  if (!c) return null;
+  const matches = Array.isArray(c.matches) ? c.matches
+    : (Array.isArray(c.match) ? c.match : [c.match]).filter(Boolean);
+  const attempts = Math.max(1, parseInt(c.attempts, 10) || 1);
+  if (!(attempt >= 1 && attempt <= attempts)) return null;
   const msg = String((err && err.message) || err || '');
-  return msg.includes(c.match) ? c : null;
+  const hit = matches.find((m) => typeof m === 'string' && m && msg.includes(m));
+  if (!hit) return null;
+  return {
+    match: hit, attempts,
+    waitMs: parseInt(c.waitMs, 10) || 3000,
+    note: (c.notes && c.notes[hit]) || c.note || 'transient database error'
+  };
 }
 
 async function rpc(fn, params, token) {
@@ -154,7 +176,7 @@ async function rpc(fn, params, token) {
     } catch (e) {
       const r = transientRetryFor(e, attempt);
       if (!r) throw e;
-      console.log(`[autotest] ${fn}: ${r.note} — retrying once in ${r.waitMs} ms`);
+      console.log(`[autotest] ${fn}: ${r.note} — retry ${attempt}/${r.attempts} in ${r.waitMs} ms`);
       await new Promise((res) => setTimeout(res, r.waitMs));
     }
   }

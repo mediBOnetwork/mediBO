@@ -8,25 +8,34 @@ import '../../services/ui_copy.dart';
 
 /// CHANGE #460 / feature_gaps 164 — the customer edits their own details.
 ///
-/// my_session().profile carried the note "To update your details, contact
-/// support." and the profile screen rendered every field read-only, so a
-/// pharmacy that moved, changed its WhatsApp number or corrected a typo had to
-/// raise a ticket for it.
+/// CMD #1815 — there is ONE profile screen now. This used to be a Scaffold of
+/// its own, reached from My Account → Profile & KYC, which printed the very
+/// same fields read-only and then handed the customer off to it. Two editors
+/// for one set of fields is one too many, so the form moved INTO the tab: the
+/// backend places it there as `{"kind":"embed","widget":"profile_form"}` and
+/// this file is the body it draws. `ProfileEditScreen` is gone; every entry
+/// point that named it now opens My Account.
 ///
-/// This screen decides NOTHING. The form itself — which sections exist, which
-/// fields are in them, their order, labels, hints, keyboard type, length caps,
+/// The form itself still decides NOTHING. Which sections exist, which fields
+/// are in them, their order, labels, hints, keyboard type, length caps,
 /// whether a field may be edited at all and the sentence shown when it may not
-/// — is `my_profile_edit()`'s answer, drawn from the `customer_profile_field`
-/// table. Opening a locked field up later is an UPDATE, not a deploy. Every
-/// validation message on screen is `my_profile_save()`'s own.
-class ProfileEditScreen extends StatefulWidget {
-  const ProfileEditScreen({super.key});
+/// — all of it is `my_profile_edit()`'s answer, drawn from the
+/// `customer_profile_field` table. Licence numbers and GSTIN are locked there,
+/// with their own "contact support" note. Opening a locked field up later is an
+/// UPDATE, not a deploy. Every validation message on screen is
+/// `my_profile_save()`'s own.
+class CustomerProfileForm extends StatefulWidget {
+  /// Called after a successful save, so the surface holding this form can
+  /// refresh whatever else it printed from the same profile.
+  final VoidCallback? onSaved;
+
+  const CustomerProfileForm({super.key, this.onSaved});
 
   @override
-  State<ProfileEditScreen> createState() => _ProfileEditScreenState();
+  State<CustomerProfileForm> createState() => _CustomerProfileFormState();
 }
 
-class _ProfileEditScreenState extends State<ProfileEditScreen> {
+class _CustomerProfileFormState extends State<CustomerProfileForm> {
   final _sb = Supabase.instance.client;
   final Map<String, TextEditingController> _ctl = {};
   Map<String, dynamic>? _p;
@@ -103,47 +112,45 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
     setState(() => _saving = false);
     final msg = _s(m, 'message');
     if (msg.isNotEmpty) showToast(context, msg, isError: m['ok'] != true);
-    if (m['ok'] == true) Navigator.of(context).pop(true);
+    if (m['ok'] == true) widget.onSaved?.call();
   }
 
   @override
   Widget build(BuildContext context) {
     final p = _p ?? const {};
-    return Scaffold(
-      backgroundColor: Ds.c.bg,
-      appBar: AppBar(title: Text(_s(p, 'title'))),
-      body: _loading
-          ? const _FormSkeleton()
-          : (p['ok'] != true)
-              ? _LoadError(
-                  message: _s(p, 'message').isNotEmpty
-                      ? _s(p, 'message')
-                      : c('cust_profile.load_failed'),
-                  retryLabel: c('cust_profile.retry'),
-                  onRetry: _load,
-                )
-              : ListView(
-                  padding: EdgeInsets.fromLTRB(
-                      Ds.space.x16, Ds.space.x16, Ds.space.x16, Ds.space.x32),
-                  children: [
-                    if (_s(p, 'note').isNotEmpty) ...[
-                      Text(_s(p, 'note'), style: Ds.t.caption),
-                      SizedBox(height: Ds.space.x16),
-                    ],
-                    for (final sec in _sections()) ...[
-                      _sectionCard(sec, _s(p, 'locked_chip')),
-                      SizedBox(height: Ds.space.x16),
-                    ],
-                    SizedBox(height: Ds.space.x8),
-                    SizedBox(
-                      height: Ds.touch.minTarget,
-                      child: FilledButton(
-                        onPressed: _saving ? null : _save,
-                        child: Text(_s(p, 'save_label')),
-                      ),
-                    ),
-                  ],
-                ),
+    if (_loading) return const _FormSkeleton();
+    if (p['ok'] != true) {
+      return _LoadError(
+        message: _s(p, 'message').isNotEmpty
+            ? _s(p, 'message')
+            : c('cust_profile.load_failed'),
+        retryLabel: c('cust_profile.retry'),
+        onRetry: _load,
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (_s(p, 'title').isNotEmpty) ...[
+          Text(_s(p, 'title'), style: Ds.t.subtitle),
+          SizedBox(height: Ds.space.x8),
+        ],
+        if (_s(p, 'note').isNotEmpty) ...[
+          Text(_s(p, 'note'), style: Ds.t.caption),
+          SizedBox(height: Ds.space.x12),
+        ],
+        for (final sec in _sections()) ...[
+          _sectionCard(sec, _s(p, 'locked_chip')),
+          SizedBox(height: Ds.space.x12),
+        ],
+        SizedBox(
+          height: Ds.touch.minTarget,
+          child: FilledButton(
+            onPressed: _saving ? null : _save,
+            child: Text(_s(p, 'save_label')),
+          ),
+        ),
+      ],
     );
   }
 
@@ -231,8 +238,7 @@ class _FormSkeleton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: EdgeInsets.all(Ds.space.x16),
+    return Column(
       children: [
         for (int i = 0; i < 3; i++) ...[
           Container(
@@ -248,7 +254,6 @@ class _FormSkeleton extends StatelessWidget {
     );
   }
 }
-
 
 /// The one shape all three #460 screens use when their RPC refused or threw.
 /// The sentence is the backend's when there is one and boot copy when the call

@@ -348,16 +348,33 @@ class _Body extends StatelessWidget {
           ),
           const SizedBox(height: 8),
         ],
-        Text(
-          data.name,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            fontSize: 19,
-            height: 1.28,
-            fontWeight: FontWeight.w800,
-            color: Color(0xFF111827),
-          ),
+        // CMD #1825 — the prescription class is a small tag beside the name,
+        // nothing more. mediBO's buyers are licence-verified pharmacies, so
+        // the old full-width red "your licence must be on file" block was a
+        // warning aimed at nobody; the licence RULE itself is unchanged and
+        // still speaks at the cart (rx_licence_gate). Label and tone are
+        // rx_badge()'s; `has:false` draws no tag at all.
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Text(
+                data.name,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 19,
+                  height: 1.28,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF111827),
+                ),
+              ),
+            ),
+            if (data.hasRxTag) ...[
+              SizedBox(width: Ds.space.x8),
+              _RxTag(data: data),
+            ],
+          ],
         ),
         if (data.company.isNotEmpty) ...[
           const SizedBox(height: 5),
@@ -406,19 +423,10 @@ class _Body extends StatelessWidget {
             fg: const Color(0xFF1D4ED8),
           ),
         ],
-        // CHANGE #461/#170 — the prescription class. header.rx_required came
-        // back false on EVERY product until this change (including packs whose
-        // "MEDICINE".rx_required reads 'Rx'), so this banner had never once
-        // fired. The block below is rx_badge()'s: title, note and both tone
-        // colours are the backend's, and an Rx product also prints whether
-        // this pharmacy's drug licence is on file for it.
-        if (data.hasRxBlock) ...[
-          const SizedBox(height: 12),
-          _C461RxBlock(data: data),
-        ] else if (data.rxRequired) ...[
-          const SizedBox(height: 12),
-          _RxBanner(text: data.label('pdp_rx_banner')),
-        ],
+        // CMD #1825 — the CHANGE #461 prescription block (title + licence
+        // note in a full-width tinted box) and the older `pdp_rx_banner`
+        // fallback both left this spot. The class is the tag beside the name;
+        // the regulatory detail stays in the Product details fact row.
         const SizedBox(height: 12),
         _StockRow(data: data),
         // CMD #367 (row 177) — the supply trust strip. `has` is the backend's
@@ -1774,41 +1782,6 @@ class _Chip extends StatelessWidget {
       );
 }
 
-class _RxBanner extends StatelessWidget {
-  final String text;
-  const _RxBanner({required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    if (text.isEmpty) return const SizedBox.shrink();
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFF7ED),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFFED7AA)),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.receipt_long_outlined,
-              size: 16, color: Color(0xFFB45309)),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              text,
-              style: const TextStyle(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFFB45309),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 /// The trust strip: chips printed in payload order, each with the backend's
 /// own label, note and tone. The only mapping done here is tone-name → design
@@ -1890,57 +1863,26 @@ class _TrustStrip extends StatelessWidget {
   }
 }
 
-/// CHANGE #461/#170 — the PDP's prescription block. Class chip, the backend's
-/// title and note, and (for an Rx pack, signed in) the licence line. Nothing
-/// here decides what a schedule is or what colour it should be.
-class _C461RxBlock extends StatelessWidget {
+/// CMD #1825 — the PDP's prescription class as a compact tag: the backend's
+/// label in the backend's tone, chip radius, caption size, medium weight. No
+/// container wider than its text, no sentence, no icon. It decides nothing:
+/// what "Rx" means and what colour it wears both arrive in rx_badge().
+class _RxTag extends StatelessWidget {
   final ProductDetail data;
-  const _C461RxBlock({required this.data});
+  const _RxTag({required this.data});
 
   @override
   Widget build(BuildContext context) {
+    if (data.rxLabel.isEmpty) return const SizedBox.shrink();
     final bg = Ds.hex(data.rxTone?['bg'], Ds.c.infoSoft);
-    final fg = Ds.hex(data.rxTone?['fg'], Ds.c.text);
-    final licenceNote = data.rxLicenceNote;
-
+    final fg = Ds.hex(data.rxTone?['fg'], Ds.c.info);
     return Container(
-      width: double.infinity,
-      padding: EdgeInsets.all(Ds.space.x12),
-      decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rCard),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              if (data.rxLabel.isNotEmpty)
-                Container(
-                  padding: EdgeInsets.symmetric(
-                      horizontal: Ds.space.x8, vertical: Ds.space.x4 / 2),
-                  decoration: BoxDecoration(
-                      color: Ds.c.surface, borderRadius: Ds.r.rChip),
-                  child: Text(data.rxLabel,
-                      style: Ds.t.caption.copyWith(color: fg)),
-                ),
-              if (data.rxLabel.isNotEmpty) SizedBox(width: Ds.space.x8),
-              Expanded(
-                child: Text(data.rxTitle,
-                    style: Ds.t.subtitle.copyWith(color: fg),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis),
-              ),
-            ],
-          ),
-          if (data.rxNote.isNotEmpty) ...[
-            SizedBox(height: Ds.space.x4),
-            Text(data.rxNote, style: Ds.t.body.copyWith(color: fg)),
-          ],
-          // Only an Rx pack viewed by a signed-in pharmacy carries this.
-          if (data.isRx && licenceNote.isNotEmpty) ...[
-            SizedBox(height: Ds.space.x4),
-            Text(licenceNote, style: Ds.t.caption.copyWith(color: fg)),
-          ],
-        ],
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x8, vertical: Ds.space.x4),
+      decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rChip),
+      child: Text(
+        data.rxLabel,
+        style: Ds.t.caption.copyWith(color: fg, fontWeight: FontWeight.w500),
       ),
     );
   }

@@ -78,6 +78,35 @@ class DeployLaneSection extends StatelessWidget {
             (lane['held_label'] as String?) ?? '',
             (lane['tone'] as String?) ?? 'neutral',
           ),
+          // CHANGE #1822 — the RENEWAL line. The lane is held by liveness now
+          // (a ticker renews a 2-minute TTL while the worker deploys), and a
+          // lane that is quietly expiring must be readable here instead of
+          // inferred from a wall of failed batches. Sentence, chip and tone
+          // are deploy_lane_status()'s; nothing about hold time or renewals
+          // is ever re-derived in Dart.
+          if (((lane['renewal_label'] as String?) ?? '').isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Text(
+                    (lane['renewal_label'] as String?) ?? '',
+                    style: Ds.t.caption.copyWith(color: kTextLo),
+                  ),
+                ),
+                if (((lane['renewal_chip'] as String?) ?? '').isNotEmpty) ...[
+                  SizedBox(width: Ds.space.x8),
+                  ToneChip(
+                    label: (lane['renewal_chip'] as String?) ?? '',
+                    tone: toneByName(
+                      (lane['renewal_tone'] as String?) ?? 'neutral',
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ],
 
           // ── what is waiting ────────────────────────────────────────────
           SizedBox(height: Ds.space.x24),
@@ -126,6 +155,15 @@ class DeployLaneSection extends StatelessWidget {
               (batch['value_label'] as String?) ?? '',
               (batch['tone'] as String?) ?? 'neutral',
             ),
+            // CHANGE #1822 — how many times THIS batch renewed the lane, as
+            // the backend worded it; an empty string draws nothing.
+            if (((batch['renewal_label'] as String?) ?? '').isNotEmpty) ...[
+              SizedBox(height: Ds.space.x4),
+              Text(
+                (batch['renewal_label'] as String?) ?? '',
+                style: Ds.t.caption.copyWith(color: kTextLo),
+              ),
+            ],
             // CHANGE #1674 — per-phase timings. "held 891s" never said WHICH
             // half; each phase names its own seconds and whether the lane was
             // held for it, and the backend already wrote both into the label.

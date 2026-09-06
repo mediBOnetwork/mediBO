@@ -420,6 +420,14 @@ Current files and what they hold down:
   payload order; and absence is explicit — no live recording draws Start plus
   the backend's own reason, never a fabricated "0 steps so far".
 
+- `merge_lane_touch_test.dart` — the Deploy lane card is a PRINTER of
+  deploy_lane_status() (#1822): the renewal sentence ("lane renewed 14 times,
+  held 470s · expires in 97s") prints verbatim while the fixture's held_label
+  and numeric renewals deliberately disagree with it, the chip is renewal_chip
+  coloured by renewal_tone through one lookup (unknown stays neutral), an
+  absent sentence draws no line and no stand-in, and the batch's own renewal
+  sentence is the backend's too.
+
 The suite runs on the Dart VM in ~2s. Keep it that way: no network, no goldens,
 no Supabase, no camera — mock RPC payloads inline. If a widget resists mocking,
 extract its decisions into a pure class and test that.

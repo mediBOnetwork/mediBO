@@ -1,3 +1,17 @@
+-- replay-target: both
+--
+-- WHY THE TARGET IS DECLARED (CHANGE #1802's escape hatch): this file names
+-- ui_copy and feature_gaps, which live on the CONTROL PLANE, and it defines
+-- RPCs over supplier_orders and the staging tables, which live on PRODUCTION.
+-- The table-name heuristic therefore routes it to both — correctly — and the
+-- first attempt died on the control plane at `function public.uic(text, text)
+-- does not exist`, which failed the whole batch even though the production
+-- pass had already succeeded.
+--
+-- So every block below is GUARDED on the objects it actually needs. Each half
+-- of this file lands on the database that holds its dependencies and is a
+-- silent no-op on the other; nothing is half-applied, and a future clone that
+-- gains one of these objects picks the block up on the next replay.
 -- CHANGE #671 — feature_gaps row 51: the supplier screens sit outside the
 -- design token system.
 --
@@ -53,8 +67,14 @@ comment on function public.supplier_status_tone(text) is
 -- the add-medicine staging list reads supplier_add_medicine.status_<status>.
 -- The single-argument form is dropped first — a defaulted new signature beside
 -- a surviving old one is an ambiguous overload, not a replacement.
-drop function if exists public.supplier_status_label(text);
-
+do $mig$
+begin
+  if to_regprocedure('public.uic(text,text)') is null then
+    raise notice 'c671: public.uic(text,text) absent — skipping supplier_status_label here';
+    return;
+  end if;
+  execute $ddl$drop function if exists public.supplier_status_label(text)$ddl$;
+  execute $ddl$
 create or replace function public.supplier_status_label(
   p_status text,
   p_prefix text default 'supplier_orders.status_')
@@ -62,28 +82,43 @@ returns text
 language sql
 stable
 set search_path to 'public'
-as $fn$
+as $body$
   select coalesce(
            nullif(btrim(public.uic(p_prefix ||
                                    lower(btrim(coalesce(p_status, ''))),
                                    btrim(coalesce(p_status, '')))), ''),
            btrim(coalesce(p_status, '')))
-$fn$;
+$body$
+$ddl$;
+  execute $ddl$revoke all on function public.supplier_status_label(text, text) from public$ddl$;
+  execute $ddl$grant execute on function public.supplier_status_label(text, text) to anon, authenticated, service_role$ddl$;
+end $mig$;
 
-comment on function public.supplier_status_label(text, text) is
-  'CHANGE #671 — a supplier-facing status word, overridable per status via the ui_copy key <p_prefix><status>. Falls back to the raw status, which is what the screens printed before.';
+do $mig$
+begin
+  if to_regprocedure('public.supplier_status_label(text,text)') is null then return; end if;
+  execute $ddl$comment on function public.supplier_status_label(text, text) is 'CHANGE #671 — a supplier-facing status word, overridable per status via the ui_copy key <p_prefix><status>. Falls back to the raw status, which is what the screens printed before.'$ddl$;
+end $mig$;
 
 revoke all on function public.supplier_status_tone(text) from public;
-revoke all on function public.supplier_status_label(text, text) from public;
 grant execute on function public.supplier_status_tone(text) to anon, authenticated, service_role;
-grant execute on function public.supplier_status_label(text, text) to anon, authenticated, service_role;
 
 -- ── supplier_my_orders gains status_label + status_tone ───────────────────
 -- RETURNS TABLE cannot gain columns in place, so the function is dropped and
 -- recreated in the same batch. Only supplier_orders_screen.dart calls it, and
 -- it is recreated four lines later.
-drop function if exists public.supplier_my_orders(uuid);
-
+do $mig$
+begin
+  -- PRODUCTION-side only: supplier_orders and the pricing/accept helpers do
+  -- not exist on the control plane, and neither does the label function this
+  -- body calls.
+  if to_regclass('public.supplier_orders') is null
+     or to_regprocedure('public.supplier_status_label(text,text)') is null then
+    raise notice 'c671: supplier_orders absent — skipping supplier_my_orders here';
+    return;
+  end if;
+  execute $ddl$drop function if exists public.supplier_my_orders(uuid)$ddl$;
+  execute $ddl$
 create function public.supplier_my_orders(p_supplier_id uuid default null::uuid)
  returns table(order_id uuid, order_no integer, created_at timestamp with time zone,
                status text, status_label text, status_tone text,
@@ -93,7 +128,7 @@ create function public.supplier_my_orders(p_supplier_id uuid default null::uuid)
  language plpgsql
  security definer
  set search_path to 'public'
-as $function$
+as $body$
 declare v_name text;
 begin
   if p_supplier_id is null then
@@ -187,10 +222,11 @@ begin
   from supplier_orders so
   where so.supplier_name = v_name
   order by so.created_at desc, so.order_no desc;
-end $function$;
-
-revoke all on function public.supplier_my_orders(uuid) from public;
-grant execute on function public.supplier_my_orders(uuid) to authenticated, service_role;
+end $body$
+$ddl$;
+  execute $ddl$revoke all on function public.supplier_my_orders(uuid) from public$ddl$;
+  execute $ddl$grant execute on function public.supplier_my_orders(uuid) to authenticated, service_role$ddl$;
+end $mig$;
 
 -- ── The last English sentences that lived in Dart on the public dispute link ─
 -- dispute_form_screen.dart printed four error sentences and three qty column
@@ -199,6 +235,10 @@ grant execute on function public.supplier_my_orders(uuid) to authenticated, serv
 -- rows now, read through c() like every other word on that screen.
 -- ON CONFLICT DO NOTHING: an existing row (a wording someone already tuned)
 -- always wins over this seed, and the file replays cleanly.
+do $mig$
+begin
+  if to_regclass('public.ui_copy') is null then return; end if;
+  execute $ddl$
 insert into public.ui_copy (key, value) values
   ('dispute_form_screen.invalid_title',
    to_jsonb('This dispute link is invalid or has expired.'::text)),
@@ -211,7 +251,9 @@ insert into public.ui_copy (key, value) values
   ('dispute_form_screen.qty_ordered',  to_jsonb('Ordered'::text)),
   ('dispute_form_screen.qty_received', to_jsonb('Received'::text)),
   ('dispute_form_screen.qty_missing',  to_jsonb('Missing'::text))
-on conflict (key) do nothing;
+on conflict (key) do nothing
+$ddl$;
+end $mig$;
 
 -- ── pending_staging_all: the approval chip stops being a Dart switch ───────
 -- supplier_add_medicine_screen_web's _PendingRow switched on the staging status
@@ -220,13 +262,22 @@ on conflict (key) do nothing;
 -- status_tone and the row prints them.
 -- returns jsonb, so no drop is needed — the rows simply gain two keys, and a
 -- client that ignores them is unaffected.
+do $mig$
+begin
+  -- PRODUCTION-side only: the staging tables live there.
+  if to_regclass('public.supplier_pending_companies') is null
+     or to_regprocedure('public.supplier_status_label(text,text)') is null then
+    raise notice 'c671: supplier_pending_companies absent — skipping pending_staging_all here';
+    return;
+  end if;
+  execute $ddl$
 create or replace function public.pending_staging_all(p_kind text)
 returns jsonb
 language plpgsql
 stable
 security definer
 set search_path to 'public'
-as $function$
+as $body$
 declare v_table text; v jsonb;
 begin
   if auth.uid() is null then raise exception 'not_signed_in' using errcode='28000'; end if;
@@ -241,26 +292,39 @@ begin
         order by t.created_at desc), ''[]''::jsonb) from %I t', v_table)
     into v;
   return jsonb_build_object('rows', v, 'count', jsonb_array_length(v));
-end $function$;
-
-revoke all on function public.pending_staging_all(text) from public;
-grant execute on function public.pending_staging_all(text) to authenticated, service_role;
+end $body$
+$ddl$;
+  execute $ddl$revoke all on function public.pending_staging_all(text) from public$ddl$;
+  execute $ddl$grant execute on function public.pending_staging_all(text) to authenticated, service_role$ddl$;
+end $mig$;
 
 -- dispute_card.dart is the ONE card the supplier portal and the public token
 -- page share, and its three quantity headings were Dart literals there too.
+do $mig$
+begin
+  if to_regclass('public.ui_copy') is null then return; end if;
+  execute $ddl$
 insert into public.ui_copy (key, value) values
   ('dispute_card.qty_ordered',  to_jsonb('Ordered'::text)),
   ('dispute_card.qty_received', to_jsonb('Received'::text)),
   ('dispute_card.qty_missing',  to_jsonb('Missing'::text))
-on conflict (key) do nothing;
+on conflict (key) do nothing
+$ddl$;
+end $mig$;
 
 -- dispute_token_page's invalid-link title and body were Dart literals too, on
 -- the /dispute?token=<token> page a supplier opens straight from WhatsApp.
+do $mig$
+begin
+  if to_regclass('public.ui_copy') is null then return; end if;
+  execute $ddl$
 insert into public.ui_copy (key, value) values
   ('dispute_token_page.invalid_title', to_jsonb('Link invalid'::text)),
   ('dispute_token_page.invalid_body',
    to_jsonb('This dispute link has expired or is not valid.'::text))
-on conflict (key) do nothing;
+on conflict (key) do nothing
+$ddl$;
+end $mig$;
 
 -- ── feature_gaps row 51 → done ─────────────────────────────────────────────
 -- "Supplier screens sit outside the design token system." #465 closed the
@@ -277,6 +341,15 @@ on conflict (key) do nothing;
 --
 -- Idempotent, and a no-op on a build branch whose feature_gaps table does not
 -- carry this row; the merge worker replays it once on live.
+do $mig$
+begin
+  -- CONTROL-PLANE side: feature_gaps moved there in #1761. On a
+  -- database that does not carry it this is a silent no-op.
+  if to_regclass('public.feature_gaps') is null then
+    raise notice 'c671: feature_gaps absent here — gap 51 not updated on this database';
+    return;
+  end if;
+  execute $ddl$
 update public.feature_gaps
    set status         = 'done',
        dev_command_id = 671,
@@ -302,4 +375,6 @@ update public.feature_gaps
          'Twelve English sentences that lived as Dart literals on the public dispute pages moved to ui_copy.')
  where id = 51
    -- Replay-safe: the note block is appended once, never stacked.
-   and coalesce(notes, '') not like '%CHANGE #671 — CLOSED%';
+   and coalesce(notes, '') not like '%CHANGE #671 — CLOSED%'
+$ddl$;
+end $mig$;

@@ -25,7 +25,6 @@ import '../../utils/toast.dart';
 import '../../widgets/backend_chip.dart';
 import '../kyc/kyc_panel.dart';
 import 'profile_account_menu.dart' show customerMenuScreen;
-import 'profile_edit_screen.dart' show CustomerProfileForm;
 
 class MyAccountScreen extends StatefulWidget {
   /// A tab_key from the backend registry. Anything the registry does not offer
@@ -674,10 +673,10 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
     switch (_s(b['widget'])) {
       case 'kyc_panel':
         return const KycPanel();
-      // CMD #1815 — THE profile editor, embedded where the backend put it.
-      // There is no separate Edit profile screen any more.
-      case 'profile_form':
-        return CustomerProfileForm(onSaved: _loadTab);
+      // CMD #1834 — 'profile_form' is deliberately NOT here. #1815 embedded
+      // the old Edit profile form in this tab; Profile & KYC is the licence
+      // page and nothing else lives in it. A payload that still names the
+      // widget draws nothing rather than resurrecting the screen.
       default:
         return const SizedBox.shrink();
     }

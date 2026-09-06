@@ -95,6 +95,7 @@ import 'screens/admin/admin_delivery_waves_screen.dart';
 import 'screens/public/near_screen.dart'; // CMD #426 — /near, /near/p/<token>
 import 'services/feature_gaps_service.dart'; // CHANGE #312
 import 'services/ui_copy.dart';
+import 'services/session_recorder.dart';
 import 'supabase_config.dart';
 import 'theme.dart';
 import 'design_tokens.dart';
@@ -685,7 +686,13 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
             scaffoldMessengerKey: VersionWatcher.instance.messengerKey,
             // CHANGE #473 — navigation breadcrumbs. Route NAMES only; a route's
             // arguments can carry an order id or a customer name.
-            navigatorObservers: [CrashReporting.navigatorObserver],
+            // CHANGE #638 — the session recorder rides the same list. It is
+            // inert until a walkthrough is started from the Chaos lab, and it
+            // records route NAMES only, for the same reason #473 does.
+            navigatorObservers: [
+              CrashReporting.navigatorObserver,
+              SessionRecorder.instance.observer,
+            ],
             theme: buildTheme(),
             scrollBehavior: const SmoothScrollBehavior(),
             // Belt-and-suspenders: clear any stray text decoration on Flutter web.

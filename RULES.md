@@ -1029,6 +1029,18 @@ Current files and what they hold down:
   link and code stay on screen, and a tap calls the parent exactly once and
   talks to no network.
 
+- `chaos_lab_test.dart` — the Chaos lab is a PRINTER, on the one screen whose
+  job is telling the truth about failure: the run chip says "All 9 degraded
+  safely" over THREE rows and a counts_label that agrees with neither, so a
+  screen that counted its own rows fails; the verdict WORD and the verdict TONE
+  are two independent fields (one row reads "Degraded safely" in danger, another
+  carries a tone name this build has never heard of and stays neutral);
+  promote.can is the backend's decision, so a stopped walkthrough with steps
+  still shows no button when the payload says no; step counts print verbatim
+  ("1 step", "12 steps"); scenarios, recordings and live steps all render in
+  payload order; and absence is explicit — no live recording draws Start plus
+  the backend's own reason, never a fabricated "0 steps so far".
+
 The suite runs on the Dart VM in ~2s. Keep it that way: no network, no goldens,
 no Supabase, no camera — mock RPC payloads inline. If a widget resists mocking,
 extract its decisions into a pure class and test that.

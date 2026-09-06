@@ -34,6 +34,8 @@ import '../../fulfill/fulfill_lookups.dart';
 import '../../utils/render_log.dart';
 import '../../widgets/delivery_arrival_card.dart';
 import '../../widgets/delivery_proof_card.dart';
+import '../../widgets/live_delivery_map.dart';
+import '../../widgets/rider_vehicle_card.dart';
 import 'run_live_map.dart';
 
 Color get _kText => FulfillLookups.instance.color('c_ff111827', const Color(0xFF111827));
@@ -138,6 +140,15 @@ class DeliveryTrackingData {
   /// Postal-area names of the stops in front of this one, in run order.
   final List<String> stopsAheadAreas;
 
+  // CMD #1840 — the three blocks the live map is made of, each a finished
+  // payload. `mapContract` says how big the map is and what the two buttons
+  // say; `trust` says whether the pin can be believed and whether the location
+  // stream should still be open; `riderCard` is the person, the vehicle and
+  // the ways to reach them. Nothing in this view derives any of it.
+  final LiveMapContract mapContract;
+  final LiveMapTrust trust;
+  final Map<String, dynamic> riderCard;
+
   // CHANGE #701 — "share live link with staff". Offered only when the BACKEND
   // says so: the public /track page has no identity to authorise a send, so it
   // never receives this block and the button simply is not there.
@@ -187,6 +198,9 @@ class DeliveryTrackingData {
     this.routeHeading = '',
     this.hasRoute = false,
     this.stopsAheadAreas = const [],
+    this.mapContract = LiveMapContract.absent,
+    this.trust = LiveMapTrust.absent,
+    this.riderCard = const {},
     this.hasShare = false,
     this.shareLabel = '',
     this.shareRpc = '',
@@ -209,6 +223,9 @@ class DeliveryTrackingData {
 
   static double _d(dynamic v) => (v as num?)?.toDouble() ?? 0;
   static String _s(dynamic v) => v?.toString() ?? '';
+
+  static Map<String, dynamic> _block(Map<String, dynamic> m, String k) =>
+      m[k] is Map ? Map<String, dynamic>.from(m[k] as Map) : const {};
 
   /// customer_track_order() — nulls mean "nothing to show", which is the
   /// backend's own encoding of absence for this RPC.
@@ -268,6 +285,9 @@ class DeliveryTrackingData {
       routeHeading: _s(_route(m)['heading']),
       hasRoute: _route(m)['has'] == true,
       stopsAheadAreas: _areas(_route(m)),
+      mapContract: LiveMapContract.from(_block(m, 'map')),
+      trust: LiveMapTrust.from(_block(m, 'trust')),
+      riderCard: _block(m, 'rider_card'),
       hasShare: ((m['share'] as Map?) ?? const {})['has'] == true,
       shareLabel: _s(((m['share'] as Map?) ?? const {})['label']),
       shareRpc: _s(((m['share'] as Map?) ?? const {})['rpc']),
@@ -318,6 +338,12 @@ class DeliveryTrackingData {
       routeHeading: _s(_route(m)['heading']),
       hasRoute: _route(m)['has'] == true,
       stopsAheadAreas: _areas(_route(m)),
+      // CMD #1840 — the public page reads the SAME three blocks. The only
+      // thing it cannot have is the private run channel, which is why
+      // `channel` above stays empty here and nowhere else differs.
+      mapContract: LiveMapContract.from(_block(m, 'map')),
+      trust: LiveMapTrust.from(_block(m, 'trust')),
+      riderCard: _block(m, 'rider_card'),
       title: _s(m['title']),
       message: _s(m['message']),
     );
@@ -352,6 +378,21 @@ class _DeliveryTrackingViewState extends State<DeliveryTrackingView> {
   }
 
   @override
+  void didUpdateWidget(covariant DeliveryTrackingView old) {
+    super.didUpdateWidget(old);
+    // CMD #1840 — a refetch that arrives with stream:'stop' (the rider marked
+    // it delivered) closes the location watch in the same frame. Waiting for
+    // the sheet to be dismissed is how a finished order kept paying for a feed.
+    if (!widget.data.trust.streaming && _channel != null) {
+      try {
+        _channel?.unsubscribe();
+      } catch (_) {}
+      _channel = null;
+      RenderLog.write('c1840_track_stream', 'closed');
+    }
+  }
+
+  @override
   void dispose() {
     _debounce?.cancel();
     try {
@@ -379,8 +420,17 @@ class _DeliveryTrackingViewState extends State<DeliveryTrackingView> {
     // /track/{token} page, which has no signed-in identity and so cannot pass
     // the private channel's RLS check. One surface gains realtime; the other
     // keeps exactly what it had.
+    // CMD #1840 — the backend closes the stream, not a status word read here.
+    // `trust.stream == 'stop'` the moment the stop is delivered or failed, and
+    // nothing below opens a socket after that. The public /track page used to
+    // keep an unfiltered location watch open on a delivered order forever.
+    if (!widget.data.trust.streaming) {
+      RenderLog.write('c1840_track_stream', 'stop');
+      return;
+    }
     if (widget.data.channel.isNotEmpty) {
       RenderLog.write('c700_track_realtime', 'broadcast');
+      RenderLog.write('c1840_track_stream', 'broadcast');
       return;
     }
     try {
@@ -445,31 +495,19 @@ class _DeliveryTrackingViewState extends State<DeliveryTrackingView> {
           const SizedBox(height: 2),
           Text(d.orderCode, style: TextStyle(fontSize: 12.5, color: _kSub)),
         ],
-        if (d.partnerName.isNotEmpty) ...[
+        // CMD #1840 — the rider's name, face and masked call button used to be
+        // a loose row here AND inside the doorbell card AND nowhere near the
+        // map. They now live in ONE place, RiderVehicleCard under the map,
+        // which is also the only place the vehicle and its plate can go. The
+        // backend still sends the same `rider_photo` / `call_action` blocks;
+        // only where they are drawn changed.
+        //
+        // The name survives here for the ONE case the card cannot cover: an
+        // order the backend named a partner for but has no rider card for yet
+        // (an agency that has not named a rider — #704's agency_pending).
+        if (d.partnerName.isNotEmpty && d.riderCard['has'] != true) ...[
           const SizedBox(height: 2),
-          // CHANGE #463 register row 121 unblocks register row 117's other
-          // half: the name now has a verified face beside it.
-          Row(children: [
-            if (d.hasPhoto) ...[
-              _RiderAvatar(bucket: d.photoBucket, path: d.photoPath),
-              SizedBox(width: Ds.space.x8),
-            ],
-            Expanded(
-              child: Text(d.partnerName,
-                  style: TextStyle(fontSize: 13, color: _kSub)),
-            ),
-          ]),
-        ],
-        // CHANGE #463 gap 117 — "the customer cannot contact the rider at
-        // all". The masking layer was already built and enabled; this payload
-        // just never asked for it.
-        if (d.hasCall) ...[
-          const SizedBox(height: 8),
-          _MaskedCallButton(
-            orderId: d.callOrderId,
-            label: d.callLabel,
-            privacyNote: d.callPrivacyNote,
-          ),
+          Text(d.partnerName, style: TextStyle(fontSize: 13, color: _kSub)),
         ],
         // CHANGE #691 (register row 122) — "3 stops before you" WAS the whole
         // answer, because deliveries.eta_min was stamped once by the optimiser
@@ -510,7 +548,14 @@ class _DeliveryTrackingViewState extends State<DeliveryTrackingView> {
         // answered — so this view and the admin's show the same dot.
         if (d.tracking && (d.hasDestination || d.hasRiderLocation)) ...[
           const SizedBox(height: 12),
-          RunLiveMap(
+          // CMD #1840 — the map is now PERSISTENT: created once, resized
+          // between a small and a large height, never unmounted and never
+          // re-created (which is what every Google Maps JS reload was). The
+          // two heights, the two button words and the staleness line above it
+          // are all the backend's.
+          LiveDeliveryMapCard(
+            contract: d.mapContract,
+            trust: d.trust,
             channel: d.channel,
             stops: stops,
             live: d.live,
@@ -524,8 +569,26 @@ class _DeliveryTrackingViewState extends State<DeliveryTrackingView> {
             // The map draws whatever polyline it is handed; the decision about
             // how much of the run that is was made in _c701_route_segment.
             roadPolyline: d.routePolyline,
-            height: 240,
             onFrame: (_) => _bump(),
+          ),
+          // CMD #1840 — under the map, the person and the vehicle at the door.
+          //
+          // The call button is hosted here UNLESS the doorbell is already up:
+          // the arrival card owns the action while the rider is at the gate,
+          // and one backend action drawn twice on one screen is two buttons
+          // for one thing. This is where a widget sits, not what it says.
+          RiderVehicleCard(
+            card: d.riderCard,
+            avatar: d.hasPhoto
+                ? _RiderAvatar(bucket: d.photoBucket, path: d.photoPath)
+                : null,
+            call: (d.hasCall && d.arrival['has'] != true)
+                ? _MaskedCallButton(
+                    orderId: d.callOrderId,
+                    label: d.callLabel,
+                    privacyNote: d.callPrivacyNote,
+                  )
+                : null,
           ),
           // Distance and who is in front, both printed verbatim. The areas are
           // postal areas, never addresses — the payload carries nothing finer.

@@ -144,6 +144,14 @@ if [ -n "$DEVDB" ]; then
   fi
 fi
 
+# CHANGE #1819 — knob, not a constant: pool_set() can turn the soft skip off the
+# day a control-plane migration genuinely needs to fail the batch.
+CP_SOFT=true
+if [ -n "$DEVDB" ]; then
+  CP_SOFT=$(psql "$DEVDB" -Atc "select case when coalesce((value->'replay'->>'cp_soft_missing')::boolean, true) then 'true' else 'false' end from dev_runner_config where key='worker_pool'" 2>/dev/null || echo true)
+  [ -n "$CP_SOFT" ] || CP_SOFT=true
+fi
+
 rc=0
 for f in "${pending[@]}"; do
   b=$(basename "$f" .sql); v="${b%%_*}"; n="${b#*_}"
@@ -181,8 +189,27 @@ for f in "${pending[@]}"; do
         psql "$DEVDB" -q -c "insert into public.migration_replay_dev_ledger(file) values ($(printf "%s" "$b" | sed "s/'/''/g; s/^/'/; s/$/'/")) on conflict do nothing" >/dev/null 2>&1
         log "applied $b on the control plane too"
       else
-        log "FAILED $b on the CONTROL PLANE: $(grep -m1 -i 'error' /tmp/replay_dev_$v.log)"
-        rc=1; break
+        err=$(grep -m1 -i 'error' /tmp/replay_dev_$v.log)
+        # CHANGE #1819 — three of the last eight batches died here, and not one
+        # of them was a broken migration: 20260906120000 named a control-plane
+        # table AND called viewer_is_approved_customer(), 20260906090000 called
+        # my_customer_id() — production functions that medibo-dev has never had.
+        # The file had already landed on production, so nothing was half-applied;
+        # the only casualty was every OTHER branch in the batch. A missing
+        # production symbol on the control plane means the file was mis-ROUTED,
+        # which is a routing bug to alert on, not a reason to stop the fleet
+        # deploying. Anything else still fails the batch.
+        if [ "$CP_SOFT" = "true" ] && grep -qEi 'ERROR: +(function|relation|column) .* does not exist' /tmp/replay_dev_$v.log; then
+          log "SKIPPED $b on the control plane (production-only symbol): $err — production applied, batch continues"
+          psql "$DEVDB" -q -c "insert into public.migration_replay_dev_ledger(file) values ($(printf "%s" "$b" | sed "s/'/''/g; s/^/'/; s/$/'/")) on conflict do nothing" >/dev/null 2>&1
+          psql "$DEVDB" -q -c "insert into public.rg_alerts(fingerprint,severity,kind,name,detail)
+             values ('replay_cp_misroute_$b','warn','deploy','migration mis-routed to the control plane',
+                     jsonb_build_object('file','$b','fix','add -- replay-target: production to the file'))
+             on conflict (fingerprint) do update set last_seen=now(), seen_count=rg_alerts.seen_count+1" >/dev/null 2>&1 || true
+        else
+          log "FAILED $b on the CONTROL PLANE: $err"
+          rc=1; break
+        fi
       fi
     fi
   fi

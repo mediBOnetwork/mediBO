@@ -1,3 +1,11 @@
+-- replay-target: production
+--   feature_registry is in scripts/control_plane_tables.txt, so the replay
+--   heuristic routes any file naming it to BOTH databases — and the control
+--   plane's copy of the table has no test_* columns, so the control-plane pass
+--   dies on `column "test_automatable" does not exist` and takes the WHOLE
+--   batch down with it (batch 585, and every batch this branch would join).
+--   The test contract is a production concern: the guard that reads it,
+--   rg_contract_gap(), only exists there. Same directive #637 and #998 needed.
 -- CMD #992 — the two scorecard features declare their test contract.
 --
 -- Activating a feature_registry row is not free: rg_check's behaviour test

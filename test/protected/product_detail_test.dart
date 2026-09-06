@@ -59,6 +59,8 @@ Map<String, dynamic> _payload({
   bool buyable = true,
   bool hasSupplierLabel = true,
   bool rxRequired = false,
+  Map<String, dynamic>? rx,
+  Map<String, dynamic>? rxLicence,
   bool hasHistory = false,
   bool showWishlist = false,
   bool isWishlisted = false,
@@ -67,6 +69,11 @@ Map<String, dynamic> _payload({
     {
       'ok': true,
       'id': 176026,
+      // CMD #1825 — rx_badge()'s block and the buyer's licence state, exactly
+      // as product_detail() sends them side by side. Absent when null, which
+      // is what an anonymous visitor or a pack with no class gets.
+      if (rx != null) 'rx': rx,
+      if (rxLicence != null) 'rx_licence': rxLicence,
       'labels': _labels,
       'header': {
         'name': 'Alkacel 100mg Injection',
@@ -150,6 +157,33 @@ int _pumpSeq = 0;
 /// The surface is deliberately tall: the page is a ListView, so a short
 /// viewport simply would not build the lower sections and the assertions below
 /// would pass or fail on scroll position rather than on what the page renders.
+/// rx_badge('Rx') as CMD #1825 sends it: soft-info tone, never danger red.
+/// `title` and `note` are still in the payload (other surfaces may want
+/// them) — the assertions below prove the PDP does not print them.
+const Map<String, dynamic> _rxTag = {
+  'has': true,
+  'is_rx': true,
+  'label': 'Rx',
+  'title': 'Prescription medicine',
+  'note': 'Schedule H / H1 stock. Your pharmacy drug licence must be on file to order this.',
+  'tone': {'bg': '#EFF6FF', 'fg': '#1E40AF'},
+};
+
+const Map<String, dynamic> _otcTag = {
+  'has': true,
+  'is_rx': false,
+  'label': 'OTC',
+  'title': 'Over the counter',
+  'note': 'No prescription needed for this pack.',
+  'tone': {'bg': '#D1FAE5', 'fg': '#065F46'},
+};
+
+/// Every Container painted in the danger-red the old block used.
+Finder _dangerContainers(WidgetTester tester) => find.byWidgetPredicate((w) =>
+    w is Container &&
+    w.decoration is BoxDecoration &&
+    (w.decoration as BoxDecoration).color == const Color(0xFFFEE2E2));
+
 Future<void> _pump(WidgetTester tester, Map<String, dynamic> payload) async {
   tester.view.physicalSize = const Size(1200, 4000);
   tester.view.devicePixelRatio = 1.0;
@@ -295,13 +329,101 @@ void main() {
           reason: 'the sentence is composed in Postgres, printed here');
     });
 
-    testWidgets('rx_required gates the Rx banner and uses the backend wording',
-        (tester) async {
-      await _pump(tester, _payload());
-      expect(find.text('Prescription required'), findsNothing);
+  });
 
+  // CMD #1825 — Om's decision, 6 Sep 2026: the product page shows Rx or OTC
+  // ONLY. mediBO's buyers are licence-verified pharmacies, so the CHANGE #461
+  // full-width red "your drug licence must be on file" block (and the older
+  // `pdp_rx_banner` fallback under it) was a warning aimed at nobody, and a
+  // red that fires on every Schedule H pack is a red nobody reads. The
+  // licence RULE is untouched — it still speaks at the cart — this file only
+  // pins where the class is shown and that nothing else is.
+  //
+  // This is the one command allowed to edit these assertions: it explicitly
+  // changes the protected behaviour they held down.
+  group('prescription class (CMD #1825)', () {
+    testWidgets('an Rx product prints the backend label as a tag and nothing else',
+        (tester) async {
+      await _pump(
+        tester,
+        _payload(
+          rxRequired: true,
+          rx: _rxTag,
+          rxLicence: const {
+            'has': true,
+            'reason': 'ok',
+            'licence': 'MH-MUM-20B-1234',
+            'ok_note': 'Licence MH-MUM-20B-1234 on file',
+          },
+        ),
+      );
+      expect(find.text('Rx'), findsOneWidget,
+          reason: 'the label is rx_badge()\'s, printed verbatim');
+      // No sentence of any kind: not the block title, not the licence note,
+      // not the ok-note, not the legacy banner.
+      expect(find.text('Prescription medicine'), findsNothing);
+      expect(find.textContaining('drug licence must be on file'), findsNothing);
+      expect(find.textContaining('Licence MH-MUM-20B-1234'), findsNothing);
+      expect(find.text('Prescription required'), findsNothing);
+      expect(find.byIcon(Icons.receipt_long_outlined), findsNothing);
+
+      // The tag wears the payload's own tone — and it is not the danger red
+      // the block used to paint.
+      final tag = tester.widget<Container>(find.ancestor(
+        of: find.text('Rx'),
+        matching: find.byType(Container),
+      ).first);
+      final deco = tag.decoration as BoxDecoration;
+      expect(deco.color, const Color(0xFFEFF6FF),
+          reason: 'tone.bg is the backend\'s, applied verbatim');
+      expect(_dangerContainers(tester), findsNothing,
+          reason: 'no #FEE2E2 surface anywhere on the page');
+      // A tag, not a block: it is no wider than its text plus padding.
+      expect(tester.getSize(find.byWidget(tag)).width, lessThan(80));
+    });
+
+    testWidgets('an OTC product prints its own label the same way',
+        (tester) async {
+      await _pump(tester, _payload(rx: _otcTag));
+      expect(find.text('OTC'), findsOneWidget);
+      expect(find.text('Rx'), findsNothing);
+      expect(find.text('Over the counter'), findsNothing);
+      expect(find.text('No prescription needed for this pack.'), findsNothing);
+      expect(_dangerContainers(tester), findsNothing);
+    });
+
+    testWidgets('the label is printed verbatim, never mapped in Dart',
+        (tester) async {
+      // A label this build has never seen: if the page decided what an Rx
+      // class is called, it would print "Rx" (or nothing). It prints this.
+      await _pump(
+        tester,
+        _payload(rx: {..._rxTag, 'label': 'Sch. H1'}),
+      );
+      expect(find.text('Sch. H1'), findsOneWidget);
+      expect(find.text('Rx'), findsNothing);
+    });
+
+    testWidgets('rx.has false draws nothing at all, even when rx_required is set',
+        (tester) async {
+      await _pump(
+        tester,
+        _payload(
+          rxRequired: true,
+          rx: const {'has': false, 'is_rx': false},
+        ),
+      );
+      expect(find.text('Rx'), findsNothing);
+      expect(find.text('OTC'), findsNothing);
+      expect(find.text('Prescription required'), findsNothing,
+          reason: 'the pdp_rx_banner fallback is gone: header.rx_required '
+              'alone no longer draws anything');
+      expect(_dangerContainers(tester), findsNothing);
+
+      // And an absent block is the same as has:false.
       await _pump(tester, _payload(rxRequired: true));
-      expect(find.text('Prescription required'), findsOneWidget);
+      expect(find.text('Rx'), findsNothing);
+      expect(find.text('Prescription required'), findsNothing);
     });
   });
 

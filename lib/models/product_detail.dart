@@ -26,14 +26,19 @@ class ProductDetail {
   final String formChip;
   final bool rxRequired;
 
-  /// CHANGE #461/#170 — the prescription class block from `rx_badge()`, and
-  /// the buyer's drug-licence state for it. Both are the backend's words:
+  /// CHANGE #461/#170 — the prescription class from `rx_badge()`, and the
+  /// buyer's drug-licence state for it. Both are the backend's words:
   /// `rx` is `{has,is_rx,label,title,note,tone}` and `rxLicence` is
   /// `{has,reason,licence,ok_note,...}`. Absent → the PDP shows nothing.
+  ///
+  /// CMD #1825 — the PDP renders `rx` as a small tag (label + tone) beside
+  /// the name. `title` and `note` stay parsed for other surfaces; the licence
+  /// state is carried untouched for the cart, where the rule still speaks.
   final Map<String, dynamic>? rx;
   final Map<String, dynamic>? rxLicence;
 
-  bool get hasRxBlock => rx?['has'] == true;
+  bool get hasRxTag => rx?['has'] == true;
+  bool get hasRxBlock => hasRxTag;
   bool get isRx => rx?['is_rx'] == true;
   String get rxLabel => (rx?['label'] ?? '').toString();
   String get rxTitle => (rx?['title'] ?? '').toString();

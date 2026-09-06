@@ -80,6 +80,11 @@ class CustomerOrderCard {
   /// opens onto a refusal is worse than no chip.
   final Map<String, dynamic> holdSheet;
 
+  /// CMD #1848 — the word the backend puts on a TEST-session order on the
+  /// buyer's own list (`test_badge`, empty on a real order). The card prints
+  /// it; it never decides what "test" means.
+  final String testBadge;
+
   const CustomerOrderCard({
     required this.id,
     required this.orderCode,
@@ -102,6 +107,7 @@ class CustomerOrderCard {
     this.eta = const {},
     this.hold = const {},
     this.holdSheet = const {},
+    this.testBadge = '',
   });
 
   factory CustomerOrderCard.fromPayload(Map<String, dynamic> row) {
@@ -130,6 +136,7 @@ class CustomerOrderCard {
       actionLabel: (act['label'] ?? '').toString(),
       actionTone: (act['tone'] ?? '').toString(),
       situation: (row['situation'] ?? '').toString(),
+      testBadge: (row['test_badge'] ?? '').toString(),
       placedByAdmin: row['placed_by_admin'] == true,
       placedByAdminLabel: (row['placed_by_admin_label'] ?? '').toString(),
       eta: row['eta'] is Map
@@ -255,6 +262,12 @@ class OrderCardLean extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                         style: Ds.t.subtitle),
                   ),
+                  // CMD #1848 — a stamped order says so, in the backend's
+                  // word, only when the payload sent one.
+                  if (card.testBadge.isNotEmpty) ...[
+                    SizedBox(width: Ds.space.x8),
+                    _TestBadge(text: card.testBadge),
+                  ],
                   SizedBox(width: Ds.space.x8),
                   Text(card.dateLabel, style: Ds.t.caption),
                 ],
@@ -443,6 +456,29 @@ class OrdersFilterChip extends StatelessWidget {
 /// CHANGE #708 — the parked badge. One sentence, the payload's own, in the
 /// warning tone every held surface uses. It computes nothing: no date
 /// arithmetic, no reason mapping, no plural.
+/// CMD #1848 — the TEST chip on a stamped order. Danger tone: it is the same
+/// red as the platform banner, so the two never disagree about what is real.
+class _TestBadge extends StatelessWidget {
+  final String text;
+  const _TestBadge({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    if (text.isEmpty) return const SizedBox.shrink();
+    return Container(
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x8, vertical: Ds.space.x4),
+      decoration: BoxDecoration(
+        color: Ds.c.dangerSoft,
+        borderRadius: Ds.r.rChip,
+      ),
+      child: Text(text,
+          style: Ds.t.caption
+              .copyWith(color: Ds.c.danger, fontWeight: FontWeight.w700)),
+    );
+  }
+}
+
 class _HoldBadge extends StatelessWidget {
   final String text;
   const _HoldBadge({required this.text});

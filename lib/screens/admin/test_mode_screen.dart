@@ -123,6 +123,9 @@ class _TestModeScreenState extends State<TestModeScreen> {
   String? _error;
 
   final _phone = TextEditingController();
+
+  /// CMD #1848 — the login (email or phone) to add under "Also testing as".
+  final _actor = TextEditingController();
   bool _phoneTouched = false;
 
   @override
@@ -134,6 +137,7 @@ class _TestModeScreenState extends State<TestModeScreen> {
   @override
   void dispose() {
     _phone.dispose();
+    _actor.dispose();
     super.dispose();
   }
 
@@ -303,6 +307,13 @@ class _TestModeScreenState extends State<TestModeScreen> {
                   SizedBox(height: Ds.space.x24),
                   _sessionsCard(Map<String, dynamic>.from(sessions)),
                   SizedBox(height: Ds.space.x24),
+                  // CMD #1848 — who else is inside the live session. Drawn
+                  // only when the backend sent the block (a live HUMAN
+                  // session); a bot run has no such card.
+                  if ((_s['actors'] as Map?)?['has'] == true) ...[
+                    _actorsCard(Map<String, dynamic>.from(_s['actors'] as Map)),
+                    SizedBox(height: Ds.space.x24),
+                  ],
                   _proofCard(Map<String, dynamic>.from(proof)),
                   SizedBox(height: Ds.space.x24),
                   _fixturesCard(Map<String, dynamic>.from(fixtures)),
@@ -441,6 +452,109 @@ class _TestModeScreenState extends State<TestModeScreen> {
     );
   }
 
+
+  /// CMD #1848 — "Also testing as": the logins whose orders and writes belong
+  /// to the live session. Om starts test mode from his admin login and orders
+  /// from a pharmacy login; that login must be listed here or its order is
+  /// refused with test_mode.needs_session. Title, hint, empty line, button
+  /// words and every row label are the payload's (test_session_actors()).
+  Widget _actorsCard(Map<String, dynamic> a) {
+    final rows = (a['rows'] as List?) ?? const [];
+    final sessionId = (a['session_id'] ?? '').toString();
+    RenderLog.write('c1848_actor_rows', rows.length);
+    return _card(
+      accent: Ds.c.danger,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text((a['title'] ?? '').toString(), style: Ds.t.subtitle),
+          SizedBox(height: Ds.space.x4),
+          Text((a['owner_label'] ?? '').toString(), style: Ds.t.caption),
+          if ((a['hint'] ?? '').toString().isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text((a['hint'] ?? '').toString(), style: Ds.t.caption),
+          ],
+          SizedBox(height: Ds.space.x16),
+          if (rows.isEmpty)
+            Text((a['empty'] ?? '').toString(), style: Ds.t.caption)
+          else
+            ...rows.map((r) {
+              final row = Map<String, dynamic>.from(r as Map);
+              return Padding(
+                padding: EdgeInsets.only(bottom: Ds.space.x8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text((row['label'] ?? '').toString(),
+                          style: Ds.t.body,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis),
+                    ),
+                    if (row['can_remove'] == true)
+                      SizedBox(
+                        height: Ds.touch.minTarget,
+                        child: TextButton(
+                          onPressed: _busy
+                              ? null
+                              : () => _fire({
+                                    'key': 'actor_remove',
+                                    'label': '',
+                                    'confirm': '',
+                                    'arg': {
+                                      'session_id': sessionId,
+                                      'identity':
+                                          (row['label'] ?? '').toString(),
+                                    },
+                                  }),
+                          child: Text(
+                              (a['remove_action'] ?? '').toString(),
+                              style:
+                                  Ds.t.body.copyWith(color: Ds.c.danger)),
+                        ),
+                      ),
+                  ],
+                ),
+              );
+            }),
+          SizedBox(height: Ds.space.x12),
+          TextField(
+            controller: _actor,
+            keyboardType: TextInputType.emailAddress,
+            decoration: InputDecoration(
+              labelText: (a['add_label'] ?? '').toString(),
+            ),
+          ),
+          SizedBox(height: Ds.space.x12),
+          SizedBox(
+            width: double.infinity,
+            height: Ds.touch.minTarget,
+            child: OutlinedButton(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Ds.c.brand,
+                side: BorderSide(color: _busy ? Ds.c.divider : Ds.c.brand),
+                shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+              ),
+              onPressed: _busy
+                  ? null
+                  : () async {
+                      final identity = _actor.text.trim();
+                      if (identity.isEmpty) return;
+                      await _fire({
+                        'key': 'actor_add',
+                        'label': '',
+                        'confirm': '',
+                        'arg': {'session_id': sessionId, 'identity': identity},
+                      });
+                      if (mounted) _actor.clear();
+                    },
+              child: Text((a['add_action'] ?? '').toString(),
+                  style: Ds.t.body.copyWith(color: Ds.c.brand)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _card({required Widget child, Color? accent}) => Container(
         width: double.infinity,

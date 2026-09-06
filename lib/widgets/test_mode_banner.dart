@@ -12,6 +12,14 @@ import '../services/test_session.dart';
 ///
 /// The host reflows the page (SafeArea + Column) rather than floating over it,
 /// because a banner that can be scrolled behind is a banner he can forget.
+///
+/// CMD #1848 — the session is PER-USER now. `test_session_banner()` answers
+/// `on:true` only for the person who started the session and the logins they
+/// listed under "Also testing as"; everyone else's app shows nothing, because
+/// nothing of theirs is being stamped. The strip names WHOSE session it is
+/// (`owner_label`), when it auto-ends (`ends_label`), and carries the one
+/// action — End & purge — whose every word, confirm sentence and result
+/// message are the backend's.
 class TestModeBannerHost extends StatelessWidget {
   const TestModeBannerHost({super.key, required this.child});
 
@@ -25,7 +33,10 @@ class TestModeBannerHost extends StatelessWidget {
         if (payload['on'] != true) return child;
         return Column(
           children: [
-            TestModeBanner(payload: payload),
+            TestModeBanner(
+              payload: payload,
+              onEndPurge: TestSessionState.instance.endAndPurge,
+            ),
             Expanded(child: child),
           ],
         );
@@ -35,21 +46,98 @@ class TestModeBannerHost extends StatelessWidget {
 }
 
 /// The strip itself — pure presentation, so a widget test mounts it with a
-/// fixture payload and no network, no timer and no service singleton.
+/// fixture payload and no network, no timer and no service singleton. The
+/// End & purge tap calls [onEndPurge]; absent, the button is inert.
 class TestModeBanner extends StatelessWidget {
-  const TestModeBanner({super.key, required this.payload});
+  const TestModeBanner({super.key, required this.payload, this.onEndPurge});
 
   final Map<String, dynamic> payload;
+
+  /// Runs the backend's end-and-purge and returns its payload; the banner
+  /// shows that payload's `message` verbatim.
+  final Future<Map<String, dynamic>> Function()? onEndPurge;
 
   String _s(String key) {
     final v = payload[key];
     return v is String ? v : '';
   }
 
+  /// The action is drawn only when the BACKEND says this person may end the
+  /// session (`can_end`) and has a word for the button. No Dart rule.
+  bool get _showEnd => payload['can_end'] == true && _s('end_action').isNotEmpty;
+
+  Future<void> _confirmAndEnd(BuildContext context) async {
+    final confirm = _s('end_confirm');
+    final action = _s('end_action');
+    final cancel = _s('end_cancel');
+    var ok = true;
+    if (confirm.isNotEmpty) {
+      ok = await showModalBottomSheet<bool>(
+            context: context,
+            backgroundColor: Ds.c.surface,
+            shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+            builder: (ctx) => SafeArea(
+              child: Padding(
+                padding: EdgeInsets.all(Ds.space.x24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(confirm, style: Ds.t.body),
+                    SizedBox(height: Ds.space.x24),
+                    SizedBox(
+                      width: double.infinity,
+                      height: Ds.touch.minTarget,
+                      child: FilledButton(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Ds.c.danger,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: Ds.r.rButton),
+                        ),
+                        onPressed: () => Navigator.pop(ctx, true),
+                        child: Text(action,
+                            style:
+                                Ds.t.body.copyWith(color: Ds.c.surface)),
+                      ),
+                    ),
+                    if (cancel.isNotEmpty) ...[
+                      SizedBox(height: Ds.space.x8),
+                      SizedBox(
+                        width: double.infinity,
+                        height: Ds.touch.minTarget,
+                        child: TextButton(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          child: Text(cancel,
+                              style: Ds.t.body
+                                  .copyWith(color: Ds.c.textSecondary)),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ) ==
+          true;
+    }
+    if (!ok) return;
+    final run = onEndPurge;
+    if (run == null) return;
+    final res = await run();
+    if (!context.mounted) return;
+    final msg = (res['message'] ?? res['error'] ?? '').toString();
+    if (msg.isNotEmpty) {
+      ScaffoldMessenger.maybeOf(context)
+          ?.showSnackBar(SnackBar(content: Text(msg)));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final label = _s('label');
+    final owner = _s('owner_label');
     final ends = _s('ends_label');
+    final caption = [label, owner, ends].where((s) => s.isNotEmpty).join('  ·  ');
     return Material(
       color: Ds.c.danger,
       child: SafeArea(
@@ -93,16 +181,41 @@ class TestModeBanner extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
-                    if (label.isNotEmpty || ends.isNotEmpty)
+                    if (caption.isNotEmpty)
                       Text(
-                        [label, ends].where((s) => s.isNotEmpty).join('  ·  '),
+                        caption,
                         style: Ds.t.caption.copyWith(color: Ds.c.surface),
-                        maxLines: 1,
+                        maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       ),
                   ],
                 ),
               ),
+              if (_showEnd) ...[
+                SizedBox(width: Ds.space.x12),
+                SizedBox(
+                  height: Ds.touch.minTarget,
+                  child: OutlinedButton(
+                    key: const ValueKey('test_session_end_purge'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Ds.c.surface,
+                      side: BorderSide(color: Ds.c.surface),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: Ds.r.rButton),
+                      padding: EdgeInsets.symmetric(
+                          horizontal: Ds.space.x12),
+                    ),
+                    onPressed: () => _confirmAndEnd(context),
+                    child: Text(
+                      _s('end_action'),
+                      style: Ds.t.caption.copyWith(
+                        color: Ds.c.surface,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),

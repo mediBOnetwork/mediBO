@@ -73,6 +73,27 @@ class TestSessionState {
     });
   }
 
+  /// CMD #1848 — End & purge, one tap. The backend ends the caller's OWN
+  /// session and purges its rows; `done:false` means the bounded purge wants
+  /// another call, so this obeys that flag rather than deciding when a wipe
+  /// is finished. Returns the last payload verbatim (its `message` is what the
+  /// banner shows). Never throws: a failure comes back as an `error` map.
+  Future<Map<String, dynamic>> endAndPurge({int maxRounds = 30}) async {
+    Map<String, dynamic> res = const {};
+    try {
+      var rounds = 0;
+      do {
+        final raw = await Supabase.instance.client.rpc('test_session_end_purge');
+        res = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
+        rounds++;
+      } while (res['done'] == false && res['ok'] == true && rounds < maxRounds);
+    } catch (e) {
+      res = {'ok': false, 'error': '$e'};
+    }
+    await refresh();
+    return res;
+  }
+
   /// One read. A failure leaves the last payload standing: losing the network
   /// must never make a live test session look like production.
   Future<void> refresh() async {

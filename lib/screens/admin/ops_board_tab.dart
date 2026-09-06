@@ -171,17 +171,53 @@ class OpsBoardTabState extends State<OpsBoardTab>
       return;
     }
     if (!mounted) return;
-    RenderLog.write('c688_ops_sla',
-        'ok=${cfg['ok']};rows=${opsRows(cfg['rows']).length};can_edit=${cfg['can_edit'] == true}');
+    RenderLog.write(
+        'cmd1845_stage_deadlines',
+        'ok=${cfg['ok']};rows=${opsRows(cfg['rows']).length};'
+        'modes=${opsRows(cfg['modes']).length};can_edit=${cfg['can_edit'] == true}');
     final saved = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Ds.c.surface,
       shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
-      builder: (_) => _SlaSheet(
-          config: cfg, zoneId: AdminZoneScope.instance.selectedZoneId),
+      builder: (_) => StageDeadlineSheetView(
+        config: cfg,
+        zoneId: AdminZoneScope.instance.selectedZoneId,
+        formatTime: _timeLabel,
+        onSave: _saveDeadlines,
+      ),
     );
     if (saved == true) await _load();
+  }
+
+  /// CMD #1845 — a time the super admin just picked is worded by the BACKEND.
+  /// A 12-hour string built in Dart is exactly what this change removed, so the
+  /// picker's own hour/minute go to ops_time_label and the reply is printed.
+  Future<String> _timeLabel(int hour, int minute) async {
+    try {
+      final res = await Supabase.instance.client
+          .rpc('ops_time_label', params: {'p_hour': hour, 'p_minute': minute});
+      final m = res is Map ? Map<String, dynamic>.from(res) : const {};
+      return m['label']?.toString() ?? '';
+    } catch (e) {
+      RenderLog.write('cmd1845_time_label_err', e.toString());
+      return '';
+    }
+  }
+
+  Future<Map<String, dynamic>> _saveDeadlines(
+      Map<String, dynamic> payload) async {
+    try {
+      final res = await Supabase.instance.client
+          .rpc('ops_sla_config_set', params: {'p': payload});
+      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      RenderLog.write('cmd1845_stage_deadlines_save',
+          'ok=${m['ok']};saved=${m['saved'] ?? 0};skipped=${m['skipped'] ?? 0}');
+      return m;
+    } catch (e) {
+      RenderLog.write('cmd1845_stage_deadlines_save_err', e.toString());
+      return <String, dynamic>{'ok': false, 'message': ''};
+    }
   }
 
   @override
@@ -239,161 +275,6 @@ class _BoardSkeleton extends StatelessWidget {
     );
   }
 }
-
-/// The SLA panel. Minutes per stage, saved straight back to sla_config — the
-/// board picks the new number up on its next refresh, with no deploy.
-class _SlaSheet extends StatefulWidget {
-  final Map<String, dynamic> config;
-  final int? zoneId;
-
-  const _SlaSheet({required this.config, this.zoneId});
-
-  @override
-  State<_SlaSheet> createState() => _SlaSheetState();
-}
-
-class _SlaSheetState extends State<_SlaSheet> {
-  final Map<String, TextEditingController> _ctrl = {};
-  bool _saving = false;
-  String _message = '';
-
-  @override
-  void initState() {
-    super.initState();
-    for (final r in opsRows(widget.config['rows'])) {
-      _ctrl[r['stage_key']?.toString() ?? ''] = TextEditingController(
-          text: (r['sla_minutes'] as num?)?.toInt().toString() ?? '');
-    }
-  }
-
-  @override
-  void dispose() {
-    for (final c in _ctrl.values) {
-      c.dispose();
-    }
-    super.dispose();
-  }
-
-  Future<void> _save() async {
-    setState(() => _saving = true);
-    final rows = <Map<String, dynamic>>[];
-    for (final r in opsRows(widget.config['rows'])) {
-      final k = r['stage_key']?.toString() ?? '';
-      final v = int.tryParse(_ctrl[k]?.text.trim() ?? '');
-      if (k.isEmpty || v == null) continue;
-      rows.add({'stage_key': k, 'sla_minutes': v, 'amber_pct': r['amber_pct']});
-    }
-    try {
-      final res = await Supabase.instance.client.rpc('ops_sla_config_set',
-          params: {
-            'p': {'zone_id': widget.zoneId, 'rows': rows}
-          });
-      final m = res is Map ? Map<String, dynamic>.from(res) : const {};
-      RenderLog.write(
-          'c688_ops_sla_save', 'ok=${m['ok']};saved=${m['saved'] ?? 0}');
-      if (!mounted) return;
-      if (m['ok'] == true) {
-        Navigator.of(context).pop(true);
-        return;
-      }
-      setState(() {
-        _saving = false;
-        _message = m['message']?.toString() ?? '';
-      });
-    } catch (e) {
-      RenderLog.write('c688_ops_sla_save_err', e.toString());
-      if (!mounted) return;
-      setState(() => _saving = false);
-    }
-  }
-
-  String _s(Map<String, dynamic> m, String k) => m[k]?.toString() ?? '';
-
-  @override
-  Widget build(BuildContext context) {
-    final cfg = widget.config;
-    final rows = opsRows(cfg['rows']);
-    final canEdit = cfg['can_edit'] == true;
-    return SafeArea(
-      child: Padding(
-        padding: EdgeInsets.all(Ds.space.x16),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(_s(cfg, 'title'), style: Ds.t.subtitle),
-              SizedBox(height: Ds.space.x4),
-              Text(
-                  [_s(cfg, 'subtitle'), _s(cfg, 'zone_label')]
-                      .where((e) => e.isNotEmpty)
-                      .join(' · '),
-                  style: Ds.t.caption),
-            ]),
-          ),
-          SizedBox(height: Ds.space.x16),
-          Flexible(
-            child: ListView.separated(
-              shrinkWrap: true,
-              itemCount: rows.length,
-              separatorBuilder: (_, _) => SizedBox(height: Ds.space.x12),
-              itemBuilder: (_, i) {
-                final r = rows[i];
-                final k = r['stage_key']?.toString() ?? '';
-                return Row(children: [
-                  Expanded(
-                    child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(_s(r, 'label'), style: Ds.t.body),
-                          Text(
-                              [_s(r, 'owner_label'), _s(r, 'source_label')]
-                                  .where((e) => e.isNotEmpty)
-                                  .join(' · '),
-                              style: Ds.t.caption),
-                        ]),
-                  ),
-                  SizedBox(width: Ds.space.x12),
-                  SizedBox(
-                    width: Ds.touch.minTarget * 2,
-                    child: TextField(
-                      controller: _ctrl[k],
-                      enabled: canEdit && !_saving,
-                      keyboardType: TextInputType.number,
-                      textAlign: TextAlign.right,
-                      style: Ds.t.body,
-                      decoration: InputDecoration(
-                        isDense: true,
-                        hintText: _s(cfg, 'minutes_label'),
-                        contentPadding: EdgeInsets.symmetric(
-                            horizontal: Ds.space.x8, vertical: Ds.space.x8),
-                      ),
-                    ),
-                  ),
-                ]);
-              },
-            ),
-          ),
-          if (_message.isNotEmpty) ...[
-            SizedBox(height: Ds.space.x12),
-            Text(_message, style: Ds.t.caption.copyWith(color: Ds.c.danger)),
-          ],
-          SizedBox(height: Ds.space.x16),
-          SizedBox(
-            width: double.infinity,
-            height: Ds.touch.minTarget,
-            child: FilledButton(
-              onPressed: (!canEdit || _saving) ? null : _save,
-              child: Text(canEdit
-                  ? _s(cfg, 'save_label')
-                  : _s(cfg, 'readonly_message')),
-            ),
-          ),
-        ]),
-      ),
-    );
-  }
-}
-
 
 /// Holds the timeline payload for the open sheet so an action's own reply — the
 /// backend hands the whole fresh timeline back — repaints it without a second

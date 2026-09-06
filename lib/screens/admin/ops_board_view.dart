@@ -59,6 +59,14 @@ List<Map<String, dynamic>> opsRows(dynamic v) => v is List
 
 String _s(Map<String, dynamic> m, String k) => m[k]?.toString() ?? '';
 
+/// CMD #1845 — a key ALIAS, not a decision: the backend sends the deadline
+/// wording under its new name and under the old `sla_*` name, so a browser
+/// still holding the previous bundle keeps printing. Nothing is composed here.
+String _deadlineText(Map<String, dynamic> m, String preferred, String legacy) {
+  final v = _s(m, preferred);
+  return v.isNotEmpty ? v : _s(m, legacy);
+}
+
 /// The whole board, drawn from one payload.
 class OpsBoardView extends StatelessWidget {
   final Map<String, dynamic> payload;
@@ -149,7 +157,10 @@ class _Header extends StatelessWidget {
           if (payload['can_edit_sla'] == true && onEditSla != null)
             TextButton(
               onPressed: onEditSla,
-              child: Text(_s(payload, 'sla_button'),
+              // CMD #1845 — the button is "Stage deadline settings" now. Both
+              // keys carry the same backend string; the old one is read second
+              // so a payload from before the rename still prints something.
+              child: Text(_deadlineText(payload, 'deadline_button', 'sla_button'),
                   style: Ds.t.body.copyWith(color: Ds.c.brand)),
             ),
         ]),
@@ -254,8 +265,13 @@ class OpsBoardRow extends StatelessWidget {
                                   .toString(),
                               tone: 'amber'),
                         _Pill(text: _s(row, 'clock_label'), tone: tone),
-                        if (_s(row, 'sla_label').isNotEmpty)
-                          Text(_s(row, 'sla_label'), style: Ds.t.caption),
+                        // CMD #1845 — "Deadline 12:00 PM" (a clock stage) or
+                        // "Deadline 30m" (a duration one), computed and worded
+                        // by ops_board().
+                        if (_deadlineText(row, 'deadline_label', 'sla_label')
+                            .isNotEmpty)
+                          Text(_deadlineText(row, 'deadline_label', 'sla_label'),
+                              style: Ds.t.caption),
                         if (_s(row, 'entered_label').isNotEmpty)
                           Text(_s(row, 'entered_label'), style: Ds.t.caption),
                       ],
@@ -444,8 +460,9 @@ class OpsOrderDetailView extends StatelessWidget {
                   Text(_s(st, 'spent_label'),
                       style: Ds.t.caption
                           .copyWith(color: OpsTone.fg(st['tone']?.toString()))),
-                if (_s(st, 'sla_label').isNotEmpty)
-                  Text(_s(st, 'sla_label'), style: Ds.t.caption),
+                if (_deadlineText(st, 'deadline_label', 'sla_label').isNotEmpty)
+                  Text(_deadlineText(st, 'deadline_label', 'sla_label'),
+                      style: Ds.t.caption),
               ]),
             ]),
           ),
@@ -617,6 +634,391 @@ class _OpsHoldPanelState extends State<OpsHoldPanel> {
           ],
         ],
       ]),
+    );
+  }
+}
+
+/// ── CMD #1845 — the Stage deadlines sheet ─────────────────────────────────
+///
+/// The pure half of the sheet: given the `ops_sla_config_get()` payload it
+/// draws the stage list, the mode switch, the working week and the save
+/// button, and it decides nothing. Every word — the title, the mode names, the
+/// day names, the "Due 12:00 PM" preview, the save caption and the read-only
+/// sentence — is a string the backend sent.
+///
+/// The two things it cannot do alone are handed back to the host:
+///   * [formatTime] — a time the user has just PICKED still has to be worded by
+///     the backend (ops_time_label), because a 12-hour string written in Dart
+///     is exactly the rule this change exists to enforce.
+///   * [onSave] — one RPC, one payload, and the host reports the result.
+/// showTimePicker itself stays here: it is Material, not data, and it is forced
+/// to 12-hour so a device set to 24-hour cannot smuggle "16:30" onto the screen.
+class StageDeadlineSheetView extends StatefulWidget {
+  final Map<String, dynamic> config;
+  final int? zoneId;
+
+  /// Asks the backend for the 12-hour wording of an hour/minute the user picked.
+  final Future<String> Function(int hour, int minute) formatTime;
+
+  /// Sends the sheet back. Returns the RPC's own reply.
+  final Future<Map<String, dynamic>> Function(Map<String, dynamic> payload)
+      onSave;
+
+  const StageDeadlineSheetView({
+    super.key,
+    required this.config,
+    required this.formatTime,
+    required this.onSave,
+    this.zoneId,
+  });
+
+  @override
+  State<StageDeadlineSheetView> createState() => _StageDeadlineSheetViewState();
+}
+
+class _StageDeadlineSheetViewState extends State<StageDeadlineSheetView> {
+  // Per stage: what the sheet currently holds. Seeded from the payload and
+  // never recomputed from it again, so a pick survives a rebuild.
+  final Map<String, String> _mode = {};
+  final Map<String, int?> _hour = {};
+  final Map<String, int?> _minute = {};
+  final Map<String, String> _timeText = {};
+  final Map<String, TextEditingController> _minutesCtrl = {};
+  final Set<int> _days = <int>{};
+
+  bool _saving = false;
+  String _message = '';
+
+  @override
+  void initState() {
+    super.initState();
+    for (final r in opsRows(widget.config['rows'])) {
+      final k = _s(r, 'stage_key');
+      if (k.isEmpty) continue;
+      _mode[k] = _s(r, 'mode').isEmpty ? 'clock' : _s(r, 'mode');
+      _hour[k] = (r['due_hour'] as num?)?.toInt();
+      _minute[k] = (r['due_minute'] as num?)?.toInt();
+      _timeText[k] = _s(r, 'due_time_display');
+      _minutesCtrl[k] = TextEditingController(
+          text: (r['sla_minutes'] as num?)?.toInt().toString() ?? '');
+    }
+    final week = widget.config['week'];
+    for (final d in opsRows(week is Map ? week['days'] : null)) {
+      final n = (d['n'] as num?)?.toInt();
+      if (n != null && d['on'] == true) _days.add(n);
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final c in _minutesCtrl.values) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  bool get _canEdit => widget.config['can_edit'] == true;
+
+  Future<void> _pick(String stageKey) async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime:
+          TimeOfDay(hour: _hour[stageKey] ?? 12, minute: _minute[stageKey] ?? 0),
+      helpText: _s(widget.config, 'time_picker_title'),
+      // 12-hour, always — the app's time format is a product rule, not the
+      // device's setting.
+      builder: (ctx, child) => MediaQuery(
+        data: MediaQuery.of(ctx).copyWith(alwaysUse24HourFormat: false),
+        child: child ?? const SizedBox.shrink(),
+      ),
+    );
+    if (picked == null) return;
+    final label = await widget.formatTime(picked.hour, picked.minute);
+    if (!mounted) return;
+    setState(() {
+      _hour[stageKey] = picked.hour;
+      _minute[stageKey] = picked.minute;
+      _timeText[stageKey] = label;
+    });
+  }
+
+  Future<void> _save() async {
+    setState(() {
+      _saving = true;
+      _message = '';
+    });
+    final rows = <Map<String, dynamic>>[];
+    for (final r in opsRows(widget.config['rows'])) {
+      final k = _s(r, 'stage_key');
+      if (k.isEmpty) continue;
+      rows.add({
+        'stage_key': k,
+        'mode': _mode[k],
+        'due_hour': _hour[k],
+        'due_minute': _minute[k],
+        'sla_minutes': int.tryParse(_minutesCtrl[k]?.text.trim() ?? ''),
+        'amber_pct': r['amber_pct'],
+      });
+    }
+    final res = await widget.onSave({
+      'zone_id': widget.zoneId,
+      'rows': rows,
+      'week_days': (_days.toList()..sort()),
+    });
+    if (!mounted) return;
+    if (res['ok'] == true) {
+      Navigator.of(context).pop(true);
+      return;
+    }
+    setState(() {
+      _saving = false;
+      _message = res['message']?.toString() ?? '';
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cfg = widget.config;
+    final rows = opsRows(cfg['rows']);
+    final modes = opsRows(cfg['modes']);
+    final week = cfg['week'] is Map
+        ? Map<String, dynamic>.from(cfg['week'] as Map)
+        : const <String, dynamic>{};
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.all(Ds.space.x16),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(_s(cfg, 'title'), style: Ds.t.subtitle),
+              SizedBox(height: Ds.space.x4),
+              Text(
+                  [
+                    _s(cfg, 'subtitle'),
+                    _s(cfg, 'zone_label'),
+                    _s(cfg, 'date_label')
+                  ].where((e) => e.isNotEmpty).join(' · '),
+                  style: Ds.t.caption),
+            ]),
+          ),
+          SizedBox(height: Ds.space.x24),
+          Flexible(
+            child: ListView(shrinkWrap: true, children: [
+              for (final r in rows) ...[
+                _StageDeadlineRow(
+                  row: r,
+                  modes: modes,
+                  mode: _mode[_s(r, 'stage_key')] ?? 'clock',
+                  timeText: _timeText[_s(r, 'stage_key')] ?? '',
+                  minutesCtrl: _minutesCtrl[_s(r, 'stage_key')],
+                  timeLabel: _s(cfg, 'time_label'),
+                  minutesLabel: _s(cfg, 'minutes_label'),
+                  enabled: _canEdit && !_saving,
+                  onMode: (m) =>
+                      setState(() => _mode[_s(r, 'stage_key')] = m),
+                  onPickTime: () => _pick(_s(r, 'stage_key')),
+                ),
+                SizedBox(height: Ds.space.x16),
+              ],
+              if (week.isNotEmpty) ...[
+                SizedBox(height: Ds.space.x8),
+                Text(_s(week, 'title'), style: Ds.t.body),
+                SizedBox(height: Ds.space.x4),
+                Text(_s(week, 'subtitle'), style: Ds.t.caption),
+                SizedBox(height: Ds.space.x12),
+                Wrap(
+                  spacing: Ds.space.x8,
+                  runSpacing: Ds.space.x8,
+                  children: [
+                    for (final d in opsRows(week['days']))
+                      _DayChip(
+                        label: _s(d, 'label'),
+                        on: _days.contains((d['n'] as num?)?.toInt() ?? -1),
+                        enabled: _canEdit && !_saving,
+                        onTap: () {
+                          final n = (d['n'] as num?)?.toInt();
+                          if (n == null) return;
+                          setState(() =>
+                              _days.contains(n) ? _days.remove(n) : _days.add(n));
+                        },
+                      ),
+                  ],
+                ),
+              ],
+            ]),
+          ),
+          if (_message.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x12),
+            Text(_message, style: Ds.t.caption.copyWith(color: Ds.c.danger)),
+          ],
+          SizedBox(height: Ds.space.x16),
+          SizedBox(
+            width: double.infinity,
+            height: Ds.touch.minTarget,
+            child: FilledButton(
+              onPressed: (!_canEdit || _saving) ? null : _save,
+              child: Text(_canEdit
+                  ? _s(cfg, 'save_label')
+                  : _s(cfg, 'readonly_message')),
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+/// One stage. The mode buttons come from the payload's `modes`, so a third mode
+/// added in SQL appears here with no deploy.
+class _StageDeadlineRow extends StatelessWidget {
+  final Map<String, dynamic> row;
+  final List<Map<String, dynamic>> modes;
+  final String mode;
+  final String timeText;
+  final TextEditingController? minutesCtrl;
+  final String timeLabel;
+  final String minutesLabel;
+  final bool enabled;
+  final ValueChanged<String> onMode;
+  final VoidCallback onPickTime;
+
+  const _StageDeadlineRow({
+    required this.row,
+    required this.modes,
+    required this.mode,
+    required this.timeText,
+    required this.minutesCtrl,
+    required this.timeLabel,
+    required this.minutesLabel,
+    required this.enabled,
+    required this.onMode,
+    required this.onPickTime,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(_s(row, 'label'), style: Ds.t.body),
+      Text(
+          [_s(row, 'owner_label'), _s(row, 'source_label'), _s(row, 'preview_label')]
+              .where((e) => e.isNotEmpty)
+              .join(' · '),
+          style: Ds.t.caption),
+      SizedBox(height: Ds.space.x8),
+      Row(children: [
+        Expanded(
+          child: Wrap(
+            spacing: Ds.space.x8,
+            children: [
+              for (final m in modes)
+                _ModeChip(
+                  label: _s(m, 'label'),
+                  selected: _s(m, 'key') == mode,
+                  enabled: enabled,
+                  onTap: () => onMode(_s(m, 'key')),
+                ),
+            ],
+          ),
+        ),
+        SizedBox(width: Ds.space.x12),
+        if (mode == 'duration')
+          SizedBox(
+            width: Ds.touch.minTarget * 2,
+            child: TextField(
+              controller: minutesCtrl,
+              enabled: enabled,
+              keyboardType: TextInputType.number,
+              textAlign: TextAlign.right,
+              style: Ds.t.body,
+              decoration: InputDecoration(
+                isDense: true,
+                hintText: minutesLabel,
+                contentPadding: EdgeInsets.symmetric(
+                    horizontal: Ds.space.x8, vertical: Ds.space.x8),
+              ),
+            ),
+          )
+        else
+          SizedBox(
+            height: Ds.touch.minTarget,
+            child: OutlinedButton(
+              onPressed: enabled ? onPickTime : null,
+              child: Text(timeText.isEmpty ? timeLabel : timeText,
+                  style: Ds.t.body.copyWith(color: Ds.c.brand)),
+            ),
+          ),
+      ]),
+    ]);
+  }
+}
+
+class _ModeChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  const _ModeChip({
+    required this.label,
+    required this.selected,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: enabled ? onTap : null,
+      borderRadius: Ds.r.rChip,
+      child: Container(
+        constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+        alignment: Alignment.center,
+        padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
+        decoration: BoxDecoration(
+          color: selected ? Ds.c.successSoft : Ds.c.bg,
+          borderRadius: Ds.r.rChip,
+        ),
+        child: Text(label,
+            style: Ds.t.caption
+                .copyWith(color: selected ? Ds.c.brand : Ds.c.textSecondary)),
+      ),
+    );
+  }
+}
+
+class _DayChip extends StatelessWidget {
+  final String label;
+  final bool on;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  const _DayChip({
+    required this.label,
+    required this.on,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: enabled ? onTap : null,
+      borderRadius: Ds.r.rChip,
+      child: Container(
+        constraints: BoxConstraints(
+            minHeight: Ds.touch.minTarget, minWidth: Ds.touch.minTarget),
+        alignment: Alignment.center,
+        padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
+        decoration: BoxDecoration(
+          color: on ? Ds.c.successSoft : Ds.c.bg,
+          borderRadius: Ds.r.rChip,
+        ),
+        child: Text(label,
+            style: Ds.t.caption
+                .copyWith(color: on ? Ds.c.brand : Ds.c.textSecondary)),
+      ),
     );
   }
 }

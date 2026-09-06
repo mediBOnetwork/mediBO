@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../design_tokens.dart';
 import '../../services/live_feed.dart';
 
 import '../../services/fulfill_realtime.dart' show kC416;
@@ -11,23 +12,11 @@ import '../../utils/render_log.dart';
 import '../../widgets/fulfill_item_sheet.dart' show ProofThumbnail;
 import '../admin/dispute/dispute_models.dart';
 
-const _kGreen       = Color(0xFF1B7A43);
-const _kText        = Color(0xFF111827);
-const _kSub         = Color(0xFF6B7280);
-const _kBorder      = Color(0xFFE5E7EB);
-const _kCard        = Colors.white;
-const _kRed         = Color(0xFFDC2626);
-const _kAmberText   = Color(0xFFB8860B);
-const _kAmberBg     = Color(0xFFFFF8E1);
-const _kNeutralChip = Color(0xFFF1F3F4);
-const _kGreenChipBg = Color(0xFFE7F4EC);
-
-Color _hexColor(String? hex, Color fallback) {
-  if (hex == null || hex.isEmpty) return fallback;
-  final h = hex.startsWith('#') ? hex.substring(1) : hex;
-  final v = int.tryParse(h.length == 6 ? 'FF$h' : h, radix: 16);
-  return v == null ? fallback : Color(v);
-}
+// CHANGE #671 gap 51: this screen carried its own ten-colour palette and its
+// own copy of the hex parser. Both are gone — every colour is a `Ds` token, so
+// ui_design_set() recolours the supplier dispute list with no deploy, and a
+// backend-supplied "#RRGGBB" (active_colors / kind_colors / the return-note
+// chip) is read by Ds.hex, the same parser the token layer itself uses.
 
 String _packQty(num n, String? packType) {
   if (packType == null || packType.trim().isEmpty) return '$n';
@@ -158,14 +147,14 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
         content: Text(
           cf('supplier_disputes.confirm_body',
               {'product': item.productName, 'action': action.label}),
-          style: const TextStyle(fontSize: 14),
+          style: Ds.t.body,
         ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
               child: Text(c('supplier_disputes.cancel'))),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: _kGreen),
+            style: FilledButton.styleFrom(backgroundColor: Ds.c.brand),
             onPressed: () => Navigator.pop(ctx, true),
             child: Text(c('supplier_disputes.confirm')),
           ),
@@ -218,32 +207,31 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Center(
-          child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
+      return Center(
+          child: CircularProgressIndicator(color: Ds.c.brand, strokeWidth: 2));
     }
     if (_error != null) {
       final isNoSupplier = _error == 'no_supplier';
       return Center(
         child: Padding(
-          padding: const EdgeInsets.all(32),
+          padding: EdgeInsets.all(Ds.space.x32),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             Icon(isNoSupplier ? Icons.store_outlined : Icons.wifi_off_rounded,
-                size: 48, color: _kSub),
-            const SizedBox(height: 12),
+                size: 48, color: Ds.c.textSecondary),
+            SizedBox(height: Ds.space.x12),
             Text(isNoSupplier
                 ? c('supplier_disputes.no_supplier')
                 : c('supplier_disputes.load_failed'),
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _kSub)),
+                style: Ds.t.subtitle.copyWith(color: Ds.c.textSecondary)),
             if (!isNoSupplier) ...[
-              const SizedBox(height: 8),
-              Text(_error!, style: const TextStyle(fontSize: 12, color: _kSub),
-                  textAlign: TextAlign.center),
-              const SizedBox(height: 16),
+              SizedBox(height: Ds.space.x8),
+              Text(_error!, style: Ds.t.caption, textAlign: TextAlign.center),
+              SizedBox(height: Ds.space.x16),
               FilledButton.icon(
                 onPressed: _load,
                 style: FilledButton.styleFrom(
-                  backgroundColor: _kGreen,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  backgroundColor: Ds.c.brand,
+                  shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
                 ),
                 icon: const Icon(Icons.refresh_rounded, size: 16),
                 label: Text(c('supplier_disputes.retry')),
@@ -256,11 +244,11 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
     if (_disputes.isEmpty) {
       return Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.check_circle_outline_rounded, size: 48, color: _kGreen),
-          const SizedBox(height: 12),
+          Icon(Icons.check_circle_outline_rounded, size: 48, color: Ds.c.brand),
+          SizedBox(height: Ds.space.x12),
           Text(c('supplier_disputes.empty'),
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _kSub)),
-          const SizedBox(height: 16),
+              style: Ds.t.subtitle.copyWith(color: Ds.c.textSecondary)),
+          SizedBox(height: Ds.space.x16),
           TextButton.icon(
             onPressed: _load,
             icon: const Icon(Icons.refresh_rounded, size: 16),
@@ -280,32 +268,34 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
 
     return RefreshIndicator(
       onRefresh: _load,
-      color: _kGreen,
+      color: Ds.c.brand,
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 640),
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+            padding: EdgeInsets.fromLTRB(
+                Ds.space.x16, Ds.space.x16, Ds.space.x16, Ds.space.x32),
             children: [
               // Acting-as banner
               if (_acting) ...[
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: EdgeInsets.symmetric(
+                      horizontal: Ds.space.x12, vertical: Ds.space.x8),
+                  margin: EdgeInsets.only(bottom: Ds.space.x12),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFEF3C7),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xFFFBBF24)),
+                    color: Ds.c.warningSoft,
+                    borderRadius: Ds.r.rButton,
+                    border: Border.all(color: Ds.c.warning),
                   ),
                   child: Row(children: [
-                    const Icon(Icons.admin_panel_settings_outlined,
-                        size: 16, color: Color(0xFF92400E)),
-                    const SizedBox(width: 8),
+                    Icon(Icons.admin_panel_settings_outlined,
+                        size: 16, color: Ds.c.warning),
+                    SizedBox(width: Ds.space.x8),
                     Expanded(
                       child: Text(
                         cf('supplier_disputes.viewing_as', {'name': _supplierName}),
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
-                            color: Color(0xFF92400E)),
+                        style: Ds.t.caption.copyWith(
+                            fontWeight: FontWeight.w600, color: Ds.c.warning),
                       ),
                     ),
                   ]),
@@ -315,22 +305,22 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
               // Active section
               _sectionLabel(c('supplier_disputes.section_active'),
                   activeItems.length, active: true),
-              const SizedBox(height: 8),
+              SizedBox(height: Ds.space.x8),
               if (activeItems.isEmpty)
                 Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  padding: EdgeInsets.symmetric(vertical: Ds.space.x12),
                   child: Text(c('supplier_disputes.no_active'),
-                      style: const TextStyle(fontSize: 13, color: _kSub)),
+                      style: Ds.t.caption),
                 )
               else
                 ...activeItems.map((item) => Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
+                  padding: EdgeInsets.only(bottom: Ds.space.x8),
                   child: _buildItemCard(item),
                 )),
 
               // Closed section
               if (closedItems.isNotEmpty) ...[
-                const SizedBox(height: 8),
+                SizedBox(height: Ds.space.x8),
                 GestureDetector(
                   onTap: () => setState(() => _closedExpanded = !_closedExpanded),
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -341,30 +331,29 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
                             : 'supplier_disputes.show_closed',
                         {'count': '${closedItems.length}'},
                       ),
-                      style: const TextStyle(fontSize: 13, color: _kSub,
-                          fontWeight: FontWeight.w600),
+                      style: Ds.t.caption.copyWith(fontWeight: FontWeight.w600),
                     ),
-                    const SizedBox(width: 4),
+                    SizedBox(width: Ds.space.x4),
                     AnimatedRotation(
                       turns: _closedExpanded ? 0.5 : 0.0,
-                      duration: const Duration(milliseconds: 280),
+                      duration: Ds.motion.sheet,
                       curve: Curves.easeInOutCubic,
-                      child: const Icon(Icons.keyboard_arrow_down_rounded,
-                          size: 16, color: _kSub),
+                      child: Icon(Icons.keyboard_arrow_down_rounded,
+                          size: 16, color: Ds.c.textSecondary),
                     ),
                   ]),
                 ),
                 AnimatedSize(
-                  duration: const Duration(milliseconds: 280),
+                  duration: Ds.motion.sheet,
                   curve: Curves.easeInOutCubic,
                   clipBehavior: Clip.antiAlias,
                   child: _closedExpanded
                       ? Padding(
-                          padding: const EdgeInsets.only(top: 8),
+                          padding: EdgeInsets.only(top: Ds.space.x8),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: closedItems.map((item) => Padding(
-                              padding: const EdgeInsets.only(bottom: 10),
+                              padding: EdgeInsets.only(bottom: Ds.space.x8),
                               child: _buildItemCard(item),
                             )).toList(),
                           ),
@@ -384,17 +373,18 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
       Container(
         width: 8, height: 8,
         decoration: BoxDecoration(
-          color: active ? _kGreen : _kSub,
+          color: active ? Ds.c.brand : Ds.c.textSecondary,
           shape: BoxShape.circle,
         ),
       ),
-      const SizedBox(width: 6),
+      SizedBox(width: Ds.space.x4),
       Text(label,
-          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
-              color: active ? _kText : _kSub)),
-      const SizedBox(width: 4),
+          style: Ds.t.caption.copyWith(
+              fontWeight: FontWeight.w700,
+              color: active ? Ds.c.text : Ds.c.textSecondary)),
+      SizedBox(width: Ds.space.x4),
       Text(cf('supplier_disputes.section_count', {'count': '$count'}),
-          style: const TextStyle(fontSize: 12, color: _kSub)),
+          style: Ds.t.caption),
     ]);
   }
 
@@ -411,116 +401,111 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
     // construction, so there is no client-side Active/Inactive fallback.
     final activeColors = agg.activeColors;
     final activeLabel = activeColors?['label'] ?? '';
-    final activeBg = _hexColor(activeColors?['bg'], const Color(0xFFF3F4F6));
-    final activeFg = _hexColor(activeColors?['fg'], _kSub);
+    final activeBg = Ds.hex(activeColors?['bg'], Ds.c.bg);
+    final activeFg = Ds.hex(activeColors?['fg'], Ds.c.textSecondary);
     final kindTagText = item.kindLabel;
-    final kindTagBg = _hexColor(item.kindColors?['bg'], const Color(0xFFF1F5F9));
-    final kindTagFg = _hexColor(item.kindColors?['fg'], const Color(0xFF475569));
+    final kindTagBg = Ds.hex(item.kindColors?['bg'], Ds.c.bg);
+    final kindTagFg = Ds.hex(item.kindColors?['fg'], Ds.c.textSecondary);
 
     RenderLog.write('c348_card', 'kind=${item.kind}');
 
     return Container(
       decoration: BoxDecoration(
-        color: _kCard,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _kBorder),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 6, offset: const Offset(0, 2)),
-        ],
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        border: Border.all(color: Ds.c.divider),
+        boxShadow: Ds.elevation.e1,
       ),
-      padding: const EdgeInsets.all(14),
+      padding: EdgeInsets.all(Ds.space.x12),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
 
         // (a) Header row: image + info
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           ClipRRect(
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: Ds.r.rButton,
             child: hasImage
                 ? Image.network(item.imageUrl!, width: 60, height: 60,
                     fit: BoxFit.cover,
                     errorBuilder: (_, __, ___) => _imagePlaceholder())
                 : _imagePlaceholder(),
           ),
-          const SizedBox(width: 10),
+          SizedBox(width: Ds.space.x8),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(item.productName.isNotEmpty ? item.productName : '—',
-                        style: TextStyle(
-                            fontSize: 15, fontWeight: FontWeight.w700,
-                            color: isActive ? _kText : _kSub, height: 1.3),
+                        style: Ds.t.body.copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: isActive ? Ds.c.text : Ds.c.textSecondary),
                         maxLines: 2, overflow: TextOverflow.ellipsis),
                     // B1b: wrong_product_name
                     if ((item.wrongProductName ?? '').isNotEmpty) ...[
-                      const SizedBox(height: 3),
+                      SizedBox(height: Ds.space.x4),
                       Text(cf('supplier_disputes.wrong_product',
                               {'name': '${item.wrongProductName}'}),
-                          style: const TextStyle(fontSize: 12, color: _kRed),
+                          style: Ds.t.caption.copyWith(color: Ds.c.danger),
                           maxLines: 2, overflow: TextOverflow.ellipsis),
                     ],
                     if (kindTagText.isNotEmpty) ...[
-                      const SizedBox(height: 4),
+                      SizedBox(height: Ds.space.x4),
                       Align(
                         alignment: Alignment.centerLeft,
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          padding: EdgeInsets.symmetric(
+                              horizontal: Ds.space.x4, vertical: Ds.space.x4),
                           decoration: BoxDecoration(
-                              color: kindTagBg, borderRadius: BorderRadius.circular(5)),
+                              color: kindTagBg, borderRadius: Ds.r.rChip),
                           child: Text(kindTagText,
-                              style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
-                                  color: kindTagFg)),
+                              style: Ds.t.caption.copyWith(
+                                  fontWeight: FontWeight.w700, color: kindTagFg)),
                         ),
                       ),
                     ],
                   ]),
                 ),
-                const SizedBox(width: 6),
+                SizedBox(width: Ds.space.x4),
                 // Backend-owned (supplier_my_disputes): active_colors, verbatim —
                 // replaces the verbose "Awaiting supplier response" item_status_label pill.
                 Builder(builder: (_) {
                   RenderLog.write('c362_badge', 'where=supplier,active=$isActive');
                   return Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    padding: EdgeInsets.symmetric(
+                        horizontal: Ds.space.x8, vertical: Ds.space.x4),
                     decoration: BoxDecoration(
                       color: activeBg,
-                      borderRadius: BorderRadius.circular(20),
+                      borderRadius: Ds.r.rChip,
                     ),
                     child: Text(activeLabel,
-                        style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                            color: activeFg)),
+                        style: Ds.t.caption.copyWith(
+                            fontWeight: FontWeight.w700, color: activeFg)),
                   );
                 }),
               ]),
               if ((item.disputeCode ?? '').isNotEmpty) ...[
-                const SizedBox(height: 3),
+                SizedBox(height: Ds.space.x4),
                 Builder(builder: (_) {
                   RenderLog.write('c317_dispute_id_shown', item.disputeCode!);
                   return Text(
                     item.disputeCode!,
-                    style: const TextStyle(
-                      fontSize: 11,
+                    style: Ds.t.caption.copyWith(
                       fontWeight: FontWeight.w500,
-                      color: Color(0xFF9CA3AF),
                       letterSpacing: 0.3,
                     ),
                   );
                 }),
               ],
               if ((item.category ?? '').isNotEmpty) ...[
-                const SizedBox(height: 3),
+                SizedBox(height: Ds.space.x4),
                 Text(item.category!,
-                    style: const TextStyle(fontSize: 12, color: _kSub),
+                    style: Ds.t.caption,
                     maxLines: 1, overflow: TextOverflow.ellipsis),
               ],
               if ((item.company ?? '').isNotEmpty) ...[
-                const SizedBox(height: 2),
+                SizedBox(height: Ds.space.x4),
                 Text(item.company!,
-                    style: const TextStyle(fontSize: 12, color: _kSub),
+                    style: Ds.t.caption,
                     maxLines: 1, overflow: TextOverflow.ellipsis),
               ],
             ]),
@@ -528,10 +513,10 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
         ]),
 
         // (c) Quantities table + "In dispute: N units"
-        const SizedBox(height: 12),
+        SizedBox(height: Ds.space.x12),
         _buildQtyTable(agg.orderedQty, agg.receivedQty, agg.disputedQty, item.packType),
         if (agg.disputedQty > 0) ...[
-          const SizedBox(height: 6),
+          SizedBox(height: Ds.space.x4),
           Text(
               cf(
                 agg.lines.length > 1
@@ -542,25 +527,24 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
                   'orders': '${agg.lines.length}',
                 },
               ),
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
-                  color: _kAmberText)),
+              style: Ds.t.caption.copyWith(
+                  fontWeight: FontWeight.w600, color: Ds.c.warning)),
         ],
 
         // Proof photo thumbnail
         if ((item.proofUrl ?? '').isNotEmpty) ...[
-          const SizedBox(height: 10),
+          SizedBox(height: Ds.space.x8),
           Row(children: [
             Text(c('supplier_disputes.proof_photo'),
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
-                    color: _kSub)),
-            const SizedBox(width: 10),
+                style: Ds.t.caption.copyWith(fontWeight: FontWeight.w600)),
+            SizedBox(width: Ds.space.x8),
             ProofThumbnail(proofUrl: item.proofUrl!, size: 72),
           ]),
         ],
 
         // (d) item_status_label badge — hidden while awaiting (meaningless to supplier)
         if (!item.isAwaitingSupplier) ...[
-          const SizedBox(height: 10),
+          SizedBox(height: Ds.space.x8),
           Builder(builder: (_) {
             RenderLog.write('c191_reminder_awaiting_hidden', 'false;dispute=${item.disputeId};status=${item.statusCode}');
             return const SizedBox.shrink(); // pill is already in header row
@@ -574,23 +558,24 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
 
         // Return-note chip — backend-owned (supplier_my_disputes' return_note_chip), verbatim.
         if (item.returnNoteChip != null) ...[
-          const SizedBox(height: 8),
+          SizedBox(height: Ds.space.x8),
           Builder(builder: (_) {
             final chip = item.returnNoteChip!;
             RenderLog.write('c348_return_chip', 'open=${chip.isOpen}');
             return Align(
               alignment: Alignment.centerLeft,
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding: EdgeInsets.symmetric(
+                    horizontal: Ds.space.x8, vertical: Ds.space.x4),
                 decoration: BoxDecoration(
-                  color: _hexColor(chip.bg, _kNeutralChip),
-                  borderRadius: BorderRadius.circular(20),
+                  color: Ds.hex(chip.bg, Ds.c.bg),
+                  borderRadius: Ds.r.rChip,
                 ),
                 child: Text(
                   chip.labelCard,
-                  style: TextStyle(
-                    fontSize: 11, fontWeight: FontWeight.w600,
-                    color: _hexColor(chip.fg, _kSub),
+                  style: Ds.t.caption.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: Ds.hex(chip.fg, Ds.c.textSecondary),
                   ),
                 ),
               ),
@@ -601,7 +586,7 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
         // Supplier action buttons (item.actions only). C362 point-8: a response fans out to
         // every underlying order-line of this aggregated product.
         if (item.actions.isNotEmpty) ...[
-          const SizedBox(height: 12),
+          SizedBox(height: Ds.space.x12),
           _buildSupplierButtons(item, isResponding, agg.allActiveDisputeIds),
         ],
       ]),
@@ -611,17 +596,17 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
   Widget _imagePlaceholder() => Container(
     width: 60, height: 60,
     decoration: BoxDecoration(
-      color: const Color(0xFFF1F3F4),
-      borderRadius: BorderRadius.circular(8),
+      color: Ds.c.bg,
+      borderRadius: Ds.r.rButton,
     ),
-    child: const Icon(Icons.medication_outlined, size: 28, color: Color(0xFFBDBDBD)),
+    child: Icon(Icons.medication_outlined, size: 28, color: Ds.c.divider),
   );
 
   Widget _buildQtyTable(num ordered, num received, num short, String? packType) {
     return Container(
       decoration: BoxDecoration(
-        border: Border.all(color: _kBorder),
-        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Ds.c.divider),
+        borderRadius: Ds.r.rButton,
       ),
       child: Column(children: [
         IntrinsicHeight(
@@ -633,7 +618,7 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
             _qtyCell(c('supplier_disputes.qty_missing'), isHeader: true, isAmber: true),
           ]),
         ),
-        const Divider(height: 1, color: Color(0xFFE5E7EB)),
+        Divider(height: 1, color: Ds.c.divider),
         IntrinsicHeight(
           child: Row(children: [
             _qtyCell(_packQty(ordered, packType), isHeader: false, isAmber: false),
@@ -651,13 +636,15 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
       bool isBold = false}) {
     return Expanded(
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-        color: isAmber && !isHeader ? _kAmberBg : null,
+        padding: EdgeInsets.symmetric(
+            vertical: Ds.space.x8, horizontal: Ds.space.x4),
+        color: isAmber && !isHeader ? Ds.c.warningSoft : null,
         child: Text(text, textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: isHeader ? 11 : 13,
+          style: Ds.t.caption.copyWith(
             fontWeight: (isHeader || isBold) ? FontWeight.w700 : FontWeight.w400,
-            color: isAmber ? _kAmberText : (isHeader ? _kSub : _kText),
+            color: isAmber
+                ? Ds.c.warning
+                : (isHeader ? Ds.c.textSecondary : Ds.c.text),
           ),
         ),
       ),
@@ -665,15 +652,15 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
   }
 
   Widget _vertDivider() =>
-      const VerticalDivider(width: 1, color: Color(0xFFE5E7EB), thickness: 1);
+      VerticalDivider(width: 1, color: Ds.c.divider, thickness: 1);
 
   // Supplier buttons from item.actions
   Widget _buildSupplierButtons(DisputeItem item, bool isResponding, List<String> groupIds) {
     RenderLog.write('c189_supplier_buttons_rendered',
         'dispute=${item.disputeId};count=${item.actions.length}');
     RenderLog.write('c348_actions', 'n=${item.actions.length}');
-    const spinner = SizedBox(width: 14, height: 14,
-        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2));
+    final spinner = SizedBox(width: 14, height: 14,
+        child: CircularProgressIndicator(color: Ds.c.surface, strokeWidth: 2));
     if (item.actions.length == 1) {
       final action = item.actions.first;
       return SizedBox(
@@ -681,14 +668,14 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
         child: FilledButton(
           onPressed: isResponding ? null : () => _respondSupplier(item, action, alsoIds: groupIds),
           style: FilledButton.styleFrom(
-            backgroundColor: _kGreen,
-            disabledBackgroundColor: _kGreen.withValues(alpha: 0.4),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            padding: const EdgeInsets.symmetric(vertical: 11),
+            backgroundColor: Ds.c.brand,
+            disabledBackgroundColor: Ds.c.brand.withValues(alpha: 0.4),
+            shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+            padding: EdgeInsets.symmetric(vertical: Ds.space.x12),
           ),
           child: isResponding ? spinner : Text(action.label,
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
-                  color: Colors.white)),
+              style: Ds.t.caption.copyWith(
+                  fontWeight: FontWeight.w700, color: Ds.c.surface)),
         ),
       );
     }
@@ -700,31 +687,31 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
         final isPrimary = idx == 0;
         if (isPrimary) {
           return Padding(
-            padding: const EdgeInsets.only(bottom: 6),
+            padding: EdgeInsets.only(bottom: Ds.space.x4),
             child: FilledButton(
               onPressed: isResponding ? null : () => _respondSupplier(item, action, alsoIds: groupIds),
               style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFFD97706),
-                disabledBackgroundColor: const Color(0xFFFDE68A),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                padding: const EdgeInsets.symmetric(vertical: 11),
+                backgroundColor: Ds.c.warning,
+                disabledBackgroundColor: Ds.c.warningSoft,
+                shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+                padding: EdgeInsets.symmetric(vertical: Ds.space.x12),
               ),
               child: isResponding ? spinner : Text(action.label,
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
-                      color: Colors.white)),
+                  style: Ds.t.caption.copyWith(
+                      fontWeight: FontWeight.w700, color: Ds.c.surface)),
             ),
           );
         } else {
           return OutlinedButton(
             onPressed: isResponding ? null : () => _respondSupplier(item, action, alsoIds: groupIds),
             style: OutlinedButton.styleFrom(
-              foregroundColor: _kText,
-              side: const BorderSide(color: Color(0xFFE5E7EB)),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              padding: const EdgeInsets.symmetric(vertical: 11),
+              foregroundColor: Ds.c.text,
+              side: BorderSide(color: Ds.c.divider),
+              shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+              padding: EdgeInsets.symmetric(vertical: Ds.space.x12),
             ),
             child: Text(action.label,
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                style: Ds.t.caption.copyWith(fontWeight: FontWeight.w600)),
           );
         }
       }).toList(),

@@ -180,3 +180,24 @@ end $function$;
 
 revoke all on function public.supplier_my_orders(uuid) from public;
 grant execute on function public.supplier_my_orders(uuid) to authenticated, service_role;
+
+-- ── The last English sentences that lived in Dart on the public dispute link ─
+-- dispute_form_screen.dart printed four error sentences and three qty column
+-- headings as Dart string literals, which meant a wording change on the page a
+-- supplier reaches from a WhatsApp link required a deploy. They are ui_copy
+-- rows now, read through c() like every other word on that screen.
+-- ON CONFLICT DO NOTHING: an existing row (a wording someone already tuned)
+-- always wins over this seed, and the file replays cleanly.
+insert into public.ui_copy (key, value) values
+  ('dispute_form_screen.invalid_title',
+   to_jsonb('This dispute link is invalid or has expired.'::text)),
+  ('dispute_form_screen.invalid_body',
+   to_jsonb('Please contact mediBO.'::text)),
+  ('dispute_form_screen.load_failed_title',
+   to_jsonb('Unable to load. Please try again.'::text)),
+  ('dispute_form_screen.load_failed_body',
+   to_jsonb('Check your connection and try again.'::text)),
+  ('dispute_form_screen.qty_ordered',  to_jsonb('Ordered'::text)),
+  ('dispute_form_screen.qty_received', to_jsonb('Received'::text)),
+  ('dispute_form_screen.qty_missing',  to_jsonb('Missing'::text))
+on conflict (key) do nothing;

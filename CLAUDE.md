@@ -342,6 +342,15 @@ Current files and what they hold down:
   absent at count 0, re-rendering after a removal clears both because the
   SERVER recomputed them, and CartOrderRefusal treats only
   error:'unavailable_in_cart' as that refusal, keeping its message verbatim.
+- `test_session_isolation_test.dart` — test mode is an install-bound session the
+  REAL checkout honours (CMD #1848): no session means the ordinary payload
+  verbatim (no TEST chip, no banner), `on:false` is honoured even when every
+  live-banner word is present, `can_end:false` draws no End button, a stamped
+  order carries only the badge the payload put there and lists render exactly
+  the rows given, End & purge's button/confirm/result are all backend words,
+  and `headersWith()` — the ONE place the x-medibo-test-session header is
+  attached — adds or removes only that header and never rebuilds
+  apikey/Authorization.
 
 - `synthetic_isolation_test.dart` — a synthetic pharmacy is never visible to a
   real viewer (#668). Invisibility is decided in SQL before a payload exists, so

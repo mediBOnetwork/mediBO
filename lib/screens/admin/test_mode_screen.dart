@@ -243,6 +243,9 @@ class _TestModeScreenState extends State<TestModeScreen> {
         rounds++;
         res = await _svc.act(key, arg: params);
       }
+      // CMD #1848 — the session token is the backend's to give and take:
+      // `token` puts THIS install into test mode, `clear_token` takes it out.
+      await TestSessionState.instance.absorb(res);
       return res;
     });
   }

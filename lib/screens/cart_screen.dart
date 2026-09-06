@@ -690,6 +690,9 @@ class _CartScreenState extends State<CartScreen> {
           orderNumber: displayCode,
           // #571 — the backend formats the money. No rupees() in Dart here.
           amount: amountDisplay,
+          // CMD #1848 — both keys exist only on a test-session order.
+          testBadge: (placed['test_badge'] ?? '').toString(),
+          testNote: (placed['test_note'] ?? '').toString(),
           onDone: () {
             Navigator.of(context).pop();
             widget.onOrderPlaced?.call();
@@ -709,7 +712,16 @@ class _CartScreenState extends State<CartScreen> {
       // this normal-flow catch only ever needs to handle order_hours_closed.
       final isOrderHoursClosed =
           e.message.contains('order_hours_closed') || (e.code ?? '').contains('order_hours_closed');
-      if (isOrderHoursClosed) {
+      // CMD #1848 — a test order from a login that is not inside a live test
+      // session is refused by enforce_order_approval with its OWN reason
+      // (test_mode.needs_session), never account_pending_approval. The copy
+      // shown is that key's ui_copy sentence — this file words nothing.
+      final needsSession = e.message.contains('test_mode.needs_session') ||
+          (e.hint ?? '').isNotEmpty && e.message.contains('needs_session');
+      if (needsSession) {
+        RenderLog.write('c1848_needs_session', 'true');
+        showToast(context, c('test_mode.needs_session'), isError: true);
+      } else if (isOrderHoursClosed) {
         RenderLog.write('c444_cust_blocked', 'true');
         final oh = OrderHoursState.read(context);
         await oh.refresh();
@@ -2662,10 +2674,18 @@ class _OrderPlacedDialog extends StatelessWidget {
   final String amount;
   final VoidCallback onDone;
 
+  /// CMD #1848 — present ONLY on a test-session order (`test_badge` /
+  /// `test_note` from place_order_v2). Empty on a real order, so the ordinary
+  /// dialog is byte-identical to before.
+  final String testBadge;
+  final String testNote;
+
   const _OrderPlacedDialog({
     required this.orderNumber,
     required this.amount,
     required this.onDone,
+    this.testBadge = '',
+    this.testNote = '',
   });
 
   @override
@@ -2696,6 +2716,21 @@ class _OrderPlacedDialog extends StatelessWidget {
                     color: Color(0xFF16A34A), size: 44),
               ),
               const SizedBox(height: 20),
+              if (testBadge.isNotEmpty) ...[
+                Container(
+                  key: const ValueKey('placed_test_badge'),
+                  padding: EdgeInsets.symmetric(
+                      horizontal: Ds.space.x12, vertical: Ds.space.x4),
+                  decoration: BoxDecoration(
+                    color: Ds.c.dangerSoft,
+                    borderRadius: Ds.r.rChip,
+                  ),
+                  child: Text(testBadge,
+                      style: Ds.t.caption.copyWith(
+                          color: Ds.c.danger, fontWeight: FontWeight.w700)),
+                ),
+                SizedBox(height: Ds.space.x12),
+              ],
               Text(
                 c('cart.placed_title'),
                 style: const TextStyle(
@@ -2717,6 +2752,14 @@ class _OrderPlacedDialog extends StatelessWidget {
                 style: const TextStyle(
                     fontSize: 12, color: Color(0xFF6B7280), height: 1.5),
               ),
+              if (testNote.isNotEmpty) ...[
+                SizedBox(height: Ds.space.x8),
+                Text(
+                  testNote,
+                  textAlign: TextAlign.center,
+                  style: Ds.t.caption.copyWith(color: Ds.c.danger),
+                ),
+              ],
               const SizedBox(height: 24),
               SizedBox(
                 width: double.infinity,

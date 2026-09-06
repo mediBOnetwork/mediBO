@@ -314,6 +314,13 @@ void main() {
       try { RenderLog.write('boot_error', 'supabase_init_failed'); } catch (_) {}
     }
 
+    // CMD #1848 — an install in test mode carries its session token on every
+    // request (x-medibo-test-session). Read from shared_preferences and
+    // attached here, before the first RPC, so nothing this install writes
+    // can escape the session. Crash-isolated: a failure means NOT in test
+    // mode, never the reverse.
+    try { await TestSessionState.instance.loadToken(); } catch (_) {}
+
     // One-shot URL cleanup: strip ?code= / #access_token= immediately after SDK processes them.
     // Prevents browser session-restore from re-presenting the OAuth callback URL on reopen,
     // which would trigger a second PKCE exchange (400 bad_code_verifier) → spurious signedOut.

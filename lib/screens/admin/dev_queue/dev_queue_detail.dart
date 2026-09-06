@@ -184,6 +184,10 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
                 AndroidReleaseCard(row: _row, onOpen: _open),
                 if (_status == 'needs_input') _needsInputBanner(),
                 if (_row['is_waiting'] == true) _waitingBanner(),
+                // CHANGE #1856 — the cost of the waiting, whether or not the
+                // command is still waiting. A row that cold-resumed four times
+                // has to say so after it finishes, or the price stays invisible.
+                _resumeCostLine(),
                 const SizedBox(height: 12),
                 _targets(),
                 if (_status == 'building') _filesLocked(),
@@ -588,6 +592,33 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
               Text(w.hint, style: Ds.t.body.copyWith(color: w.tone.fg)),
             ],
           ]),
+        ),
+      ]),
+    );
+  }
+
+  /// CHANGE #1856 — WHAT THE WAITING COST, on the command that paid it.
+  ///
+  /// A hold keeps the session alive and costs nothing; a cold resume tears it
+  /// down and the next session re-reads the whole context. #1848 did the second
+  /// one four times and spent 9.7M tokens. The sentence, the counts and the
+  /// tone are all `dev_cmd_list`'s — this widget pluralises nothing and adds up
+  /// nothing, and an empty line draws nothing at all rather than a zero.
+  Widget _resumeCostLine() {
+    final w = WaitView.fromRow(_row);
+    if (w.costLine.isEmpty) return const SizedBox.shrink();
+    return Container(
+      margin: EdgeInsets.only(top: Ds.space.x12),
+      padding: EdgeInsets.all(Ds.space.x12),
+      decoration:
+          BoxDecoration(color: w.costTone.bg, borderRadius: Ds.r.rButton),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(Icons.hourglass_bottom,
+            size: Ds.space.x16 + Ds.space.x4, color: w.costTone.fg),
+        SizedBox(width: Ds.space.x8),
+        Expanded(
+          child: Text(w.costLine,
+              style: Ds.t.body.copyWith(color: w.costTone.fg)),
         ),
       ]),
     );

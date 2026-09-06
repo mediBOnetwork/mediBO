@@ -197,8 +197,28 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       _ => null,
     };
 
-/// The one route that must reach its stage before the matrix has loaded.
-const Map<String, String> _coldBootStages = {'exceptions': 'exceptions'};
+/// The routes that must reach their stage BEFORE the matrix has loaded.
+///
+/// The pairing itself is the backend's (`access_boot().routes[].stage`) and it
+/// always wins; this map is only what a deep link falls back to while that
+/// answer is still in flight. It exists because the wait is bounded:
+/// [shellWhenAccessResolved] gives up after 5 seconds and opens the route
+/// anyway, and on an unresolved matrix `fulfillStageForRoute` knows nothing —
+/// so a slow or failed `access_boot()` (a cold app on mobile data, which is
+/// exactly how a push notification is opened) drops the route into the
+/// switch's `default:` and prints "not in your app yet" for a stage that is
+/// sitting right there in the bar.
+///
+/// CMD #757 — `ops_board` is the second entry, and it is here for the same
+/// reason `exceptions` (#690) is: both are digest/alert destinations, so the
+/// cold boot IS their normal boot. Anything reachable from a notification, a
+/// WhatsApp button or an SLA digest belongs on this list; a stage a person
+/// only ever reaches by tapping the bar does not, because by then the matrix
+/// has long since resolved.
+const Map<String, String> _coldBootStages = {
+  'exceptions': 'exceptions',
+  'ops_board': 'ops_board',
+};
 
 /// CHANGE #754 — a route whose screen now lives in the Fulfill pipeline opens
 /// Fulfill on that stage, wherever the link came from: an old nav row, a

@@ -242,6 +242,22 @@ class DevQueueService {
   Future<List<Map<String, dynamic>>> areasGet() async =>
       _asList(await _rpc('dev_areas_get'));
 
+  /// CMD #1824 — Build intelligence. One RPC, one fully rendered payload:
+  /// tiles, sections, every label, value, sub-line, tone and empty state are
+  /// the backend's. This method merges nothing, defaults nothing and formats
+  /// nothing.
+  Future<Map<String, dynamic>> buildIntelligence() async =>
+      _asMap(await _rpc('dev_build_intelligence'));
+
+  /// Apply one open waste proposal. The PIN goes through untouched: pool_set
+  /// verifies it, and the returned `message` is what the screen prints.
+  Future<Map<String, dynamic>> buildProposalApply(int id, String pin) async =>
+      _asMap(await _rpc('dev_build_proposal_apply',
+          params: {'p_id': id, 'p_pin': pin}));
+
+  Future<Map<String, dynamic>> buildProposalDismiss(int id) async =>
+      _asMap(await _rpc('dev_build_proposal_dismiss', params: {'p_id': id}));
+
   /// CHANGE #634 — the coverage ledger. One RPC, one payload, printed as it
   /// arrives: this method merges nothing and defaults nothing. It reads
   /// PRODUCTION's own feature_registry and test_coverage, so it is routed

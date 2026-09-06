@@ -819,3 +819,38 @@ if to_regclass('public.cron_task') is not null then
 end if;
 end
 $burn$;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 16. THE LANE SWEEP KILLED A LIVE BATCH (spec item 6).
+--     deploy_lane_sweep expired any batch whose OPENED_AT was older than
+--     claim_ttl_minutes. A real pass is merge + the full protected suite +
+--     flutter build + upload + verify: batch 598 opened 06:48:08, finished its
+--     deploy phase at 07:07:54 and was expired at 07:09 — nineteen minutes of
+--     healthy work thrown away one minute from the end, and its three branches
+--     sent back to 'waiting'. 597 survived the same 21-minute pass only by
+--     finishing on the right side of the clock.
+--     Batching MORE branches per pass (which is what item 6 asks for) makes a
+--     pass longer, so a wall-clock TTL gets more wrong the better the lane
+--     works. Staleness is now measured from the batch's LAST PHASE: a dead
+--     worker stops logging and still expires; a worker grinding through a long
+--     phase does not.
+-- ═══════════════════════════════════════════════════════════════════════════
+do $sweep$
+declare d text; n text; anchor text;
+begin
+  if to_regprocedure('public.deploy_lane_sweep()') is null then return; end if;
+  d := pg_get_functiondef(to_regprocedure('public.deploy_lane_sweep()'));
+  if position('c1819_liveness' in d) > 0 then return; end if;
+  anchor := 'and b.opened_at < now() - make_interval(mins => v_ttl))';
+  if position(anchor in d) = 0 or position('and opened_at < now() - make_interval(mins => v_ttl)' in d) = 0 then
+    raise exception 'c1819: deploy_lane_sweep no longer expires on opened_at — re-check the liveness patch';
+  end if;
+  n := replace(d, anchor,
+    'and coalesce((select max((e->>''at'')::timestamptz) from jsonb_array_elements(coalesce(b.log,''[]''::jsonb)) e), b.opened_at)
+         < now() - make_interval(mins => v_ttl))  /* c1819_liveness */');
+  n := replace(n, 'and opened_at < now() - make_interval(mins => v_ttl)',
+    'and coalesce((select max((e->>''at'')::timestamptz) from jsonb_array_elements(coalesce(log,''[]''::jsonb)) e), opened_at)
+         < now() - make_interval(mins => v_ttl)');
+  execute n;
+end
+$sweep$;

@@ -545,7 +545,7 @@ class _DevQueueControlState extends State<DevQueueControl> {
             _row('claude', c('dev_queue.ctl_claude'), Icons.terminal, _claudeChip()),
           // CHANGE #1816 — the login behind that toggle: when it was made, how
           // long it lasts, and whether it has lapsed. Printed verbatim from
-          // dev_ctl_get().claude_login; absent until the VM has reported one.
+          // claude_login_line(); absent until the VM has reported one.
           if ((_claudeLogin['has'] ?? false) == true)
             ClaudeLoginLine(payload: _claudeLogin),
             _divider(),

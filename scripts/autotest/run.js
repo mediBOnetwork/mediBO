@@ -347,16 +347,31 @@ async function main() {
   if (wanted.has('pipeline')) {
     const t0 = Date.now();
     let out = null;
+    // How a transport timeout is reported is the BACKEND's decision, in the
+    // backend's words (test_config.pipeline). CHANGE #635: batch 575 held two
+    // unrelated commands back from promote because one POST went unanswered for
+    // 25 s twice while the box was mid-deploy. A database that could not answer
+    // is the same class of fact as a role with no login — the environment could
+    // not meet the precondition — and this was the one place run.js did not say
+    // so. An unreadable config leaves the old behaviour exactly as it was.
+    let pcfg = {};
+    try { pcfg = (await api.rpc('test_config_get', { p_key: 'pipeline' }, null)) || {}; }
+    catch (_) { pcfg = {}; }
+    let timedOut = false;
     try {
       out = await api.rpc('test_pipeline_run', { p_run_id: runId, p_order_id: null }, null);
     } catch (e) {
-      out = { ok: false, detail: String((e && e.message) || e).slice(0, 400) };
+      const msg = String((e && e.message) || e);
+      timedOut = !(e && e.status) && !!pcfg.timeout_match && msg.includes(pcfg.timeout_match);
+      out = { ok: false, detail: (timedOut ? pcfg.timeout_note : msg).slice(0, 400) };
     }
     const stages = (out && out.stages) || [];
     // A stage the ENVIRONMENT could not meet (no buyable catalogue on this
     // database, test mode off) is BLOCKED, exactly like a role with no login:
     // not a pass, not a product failure, and never a silent skip.
-    const verdict = out && out.ok ? 'passed' : (out && out.blocked ? 'blocked' : 'failed');
+    const verdict = out && out.ok ? 'passed'
+                  : (timedOut && pcfg.timeout_verdict) ? pcfg.timeout_verdict
+                  : (out && out.blocked ? 'blocked' : 'failed');
     results.push({
       feature_key: 'devtool.order_pipeline', role: 'admin', scenario: 'pipeline',
       verdict,

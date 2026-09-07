@@ -138,8 +138,9 @@ revoke all on function public.today_eff() from public;
 grant execute on function public.today_eff() to anon, authenticated, service_role;
 revoke all on function public.test_clock_session() from public;
 grant execute on function public.test_clock_session() to anon, authenticated, service_role;
-revoke all on function public.test_clock_of(bigint) from public, anon;
-grant execute on function public.test_clock_of(bigint) to authenticated, service_role;
+-- Only the stamping trigger (which runs as the owner) needs this one.
+revoke all on function public.test_clock_of(bigint) from public, anon, authenticated;
+grant execute on function public.test_clock_of(bigint) to service_role;
 
 -- ---------------------------------------------------------------------------
 -- 3. A WRITE UNDER A PINNED CLOCK RECORDS BOTH TIMES
@@ -483,9 +484,14 @@ end $$;
 
 -- Grants — the state is a read anyone carrying the token may make; SETTING the
 -- clock is never anonymous.
+-- Supabase grants EXECUTE to anon+authenticated by DEFAULT PRIVILEGES, so a
+-- bare `revoke ... from public` leaves both roles holding it. _test_clock_write
+-- takes a session id and would let any signed-in person move SOMEBODY ELSE's
+-- clock, so it is revoked from the named roles explicitly, not from public.
 revoke all on function public._test_clock_steps() from public, anon;
 revoke all on function public._test_clock_presets() from public, anon;
-revoke all on function public._test_clock_write(bigint, text, text, interval, interval) from public, anon;
+revoke all on function public._test_clock_write(bigint, text, text, interval, interval)
+  from public, anon, authenticated;
 grant execute on function public._test_clock_steps() to authenticated, service_role;
 grant execute on function public._test_clock_presets() to authenticated, service_role;
 grant execute on function public._test_clock_write(bigint, text, text, interval, interval) to service_role;
@@ -494,6 +500,7 @@ grant execute on function public.test_clock_state() to anon, authenticated, serv
 revoke all on function public.test_clock_pin(text) from public, anon;
 revoke all on function public.test_clock_step(integer) from public, anon;
 revoke all on function public.test_clock_release() from public, anon;
+revoke all on function public.test_clock_pin(text) from anon;
 grant execute on function public.test_clock_pin(text)     to authenticated, service_role;
 grant execute on function public.test_clock_step(integer) to authenticated, service_role;
 grant execute on function public.test_clock_release()     to authenticated, service_role;

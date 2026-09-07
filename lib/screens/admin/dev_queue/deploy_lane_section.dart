@@ -52,6 +52,13 @@ class DeployLaneSection extends StatelessWidget {
         (data['batches'] as Map?)?.cast<String, dynamic>() ?? const {};
     final batchRows = (batches['rows'] as List?) ?? const [];
     final stale = (data['stale'] as List?) ?? const [];
+    // CMD #1866 — the WAIT GATE's own decisions. #1863 parked on the deploy
+    // lock its own deploy was holding and cold-read its whole context; the only
+    // record was four dev_context_event rows you had to infer the mode from.
+    // Every string here (title, subtitle, chip, each row's verdict and
+    // sentence) is dev_wait_gate_recent()'s. has:false draws nothing at all.
+    final gate = (data['gate'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final gateRows = (gate['rows'] as List?) ?? const [];
 
     return DqCard(
       child: Column(
@@ -88,6 +95,20 @@ class DeployLaneSection extends StatelessWidget {
             (lane['held_label'] as String?) ?? '',
             (lane['tone'] as String?) ?? 'neutral',
           ),
+          // CMD #1866 — WHOSE deploy holds the lock. "deploy lock — #1863 (own)"
+          // and "deploy lock — #1864" are one backend string with one backend
+          // tone; ownership is never re-derived here from a holder name.
+          if (((lane['lock_label'] as String?) ?? '').isNotEmpty) ...[
+            SizedBox(height: Ds.space.x8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: ToneChip(
+                label: (lane['lock_label'] as String?) ?? '',
+                tone: toneByName((lane['lock_tone'] as String?) ?? 'neutral'),
+              ),
+            ),
+          ],
+
           // CHANGE #1822 — the RENEWAL line. The lane is held by liveness now
           // (a ticker renews a 2-minute TTL while the worker deploys), and a
           // lane that is quietly expiring must be readable here instead of
@@ -129,6 +150,59 @@ class DeployLaneSection extends StatelessWidget {
               (smoke['verdict'] as String?) ?? '',
               (smoke['tone'] as String?) ?? 'neutral',
             ),
+          ],
+
+          // ── the wait gate (CMD #1866) ─────────────────────────────────
+          // Which blockers the gate saw, who held them, and what it decided:
+          // mine / free / sleep / hold / park-refused / park. A park is the only
+          // decision that costs a cold re-read, so it is the only red one.
+          if (gate['has'] == true) ...[
+            SizedBox(height: Ds.space.x24),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    (gate['title'] as String?) ?? '',
+                    style: Ds.t.body.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: kTextHi,
+                    ),
+                  ),
+                ),
+                if (((gate['chip'] as String?) ?? '').isNotEmpty) ...[
+                  SizedBox(width: Ds.space.x8),
+                  ToneChip(
+                    label: (gate['chip'] as String?) ?? '',
+                    tone: toneByName((gate['chip_tone'] as String?) ?? 'neutral'),
+                  ),
+                ],
+              ],
+            ),
+            SizedBox(height: Ds.space.x4),
+            Text(
+              (gate['subtitle'] as String?) ?? '',
+              style: Ds.t.caption.copyWith(color: kTextLo),
+            ),
+            if (((gate['parks_24h_label'] as String?) ?? '').isNotEmpty) ...[
+              SizedBox(height: Ds.space.x4),
+              Text(
+                (gate['parks_24h_label'] as String?) ?? '',
+                style: Ds.t.caption.copyWith(
+                  color: toneByName(
+                    (gate['parks_24h_tone'] as String?) ?? 'neutral',
+                  ).fg,
+                ),
+              ),
+            ],
+            for (final g in gateRows) ...[
+              SizedBox(height: Ds.space.x12),
+              _row(
+                ((g as Map)['label'] as String?) ?? '',
+                (g['detail'] as String?) ?? '',
+                (g['value'] as String?) ?? '',
+                (g['tone'] as String?) ?? 'neutral',
+              ),
+            ],
           ],
 
           // ── recent batches, and whether they are failing in a row ──────

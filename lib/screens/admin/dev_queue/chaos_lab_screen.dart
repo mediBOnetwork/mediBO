@@ -141,6 +141,17 @@ class _ChaosLabScreenState extends State<ChaosLabScreen> {
   Future<void> _promote(int id, String label) =>
       _guard(() => _svc.recordingPromote(id, title: label));
 
+  /// CMD #1851 — replay one recorded walkthrough. Nothing here reads the
+  /// verdict: the message, the step that diverged and the words for it are the
+  /// backend's, kept against the recording id and printed as they arrived.
+  final Map<int, Map<String, dynamic>> _replays = <int, Map<String, dynamic>>{};
+
+  Future<void> _replay(int id) => _guard(() async {
+        final res = await _svc.recordingReplay(id);
+        if (mounted) setState(() => _replays[id] = res);
+        return res;
+      });
+
   @override
   Widget build(BuildContext context) {
     final mode = _map(_payload['test_mode']);
@@ -551,6 +562,12 @@ class _ChaosLabScreenState extends State<ChaosLabScreen> {
     final why = (promote['disabled_reason'] ?? '').toString();
     final journey = (r['journey_label'] ?? '').toString();
     final note = (r['note'] ?? '').toString();
+    final replay = _map(r['replay']);
+    final replayCan = replay['can'] == true && id != null;
+    final replayWhy = (replay['disabled_reason'] ?? '').toString();
+    final verdict = id == null
+        ? const <String, dynamic>{}
+        : (_replays[id] ?? const <String, dynamic>{});
     return Padding(
       padding: EdgeInsets.only(bottom: Ds.space.x12),
       child: DqCard(
@@ -587,6 +604,49 @@ class _ChaosLabScreenState extends State<ChaosLabScreen> {
                 style: Ds.t.caption.copyWith(
                     color: toneByName('success').fg,
                     fontWeight: FontWeight.w600)),
+          ],
+          if (replayCan) ...[
+            SizedBox(height: Ds.space.x12),
+            Semantics(
+              identifier: 'chaos_recording_replay',
+              button: true,
+              child: SizedBox(
+                width: double.infinity,
+                height: 44,
+                child: OutlinedButton.icon(
+                  onPressed: _busy ? null : () => _replay(id),
+                  icon: const Icon(Icons.replay_outlined, size: 18),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: kBrand,
+                    side: const BorderSide(color: kBrand),
+                    shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+                  ),
+                  label: Text((replay['label'] ?? '').toString()),
+                ),
+              ),
+            ),
+          ] else if (replayWhy.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x8),
+            Text(replayWhy, style: Ds.t.caption.copyWith(color: kTextLo)),
+          ],
+          if (verdict.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x8),
+            Text((verdict['message'] ?? '').toString(),
+                style: Ds.t.caption.copyWith(
+                    color: toneByName(verdict['passed'] == true
+                            ? 'success'
+                            : 'danger')
+                        .fg,
+                    fontWeight: FontWeight.w600)),
+            for (final st in _list(verdict['steps']))
+              if ((st['status'] ?? '').toString() == 'failed')
+                Padding(
+                  padding: EdgeInsets.only(top: Ds.space.x4),
+                  child: Text(
+                      '${st['n']}. ${st['label']} — ${st['why']}',
+                      style: Ds.t.caption
+                          .copyWith(color: toneByName('danger').fg)),
+                ),
           ],
           if (can) ...[
             SizedBox(height: Ds.space.x12),

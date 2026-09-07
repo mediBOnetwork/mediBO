@@ -14,6 +14,8 @@
 import 'package:flutter/material.dart';
 
 import '../design_tokens.dart';
+import '../services/ui_copy.dart';
+import '../utils/render_log.dart';
 
 /// One toggle, exactly as `supplier_toggle_chips()` sent it.
 @immutable
@@ -188,4 +190,199 @@ class SupplierToggleChipRow extends StatelessWidget {
       ],
     ]);
   }
+}
+
+/// CHANGE #1890 — the Automation strip.
+///
+/// Om, 08 Sep: the AutoFlow / Bundle toggles were inside the tab BODY — on
+/// inquiry they were squeezed onto the SEND-ALL READINESS header line (which
+/// is what crushed that label to one character wide) and on Supplier orders
+/// they were floating in the tab header row. There is now exactly ONE place
+/// they live: a single-line strip directly under the tab bar, the same strip
+/// on both tabs, carrying whichever chips the backend sent for that tab.
+///
+/// Still nothing decided here. `supplier_toggle_chips()` sends the label, the
+/// ON/OFF word and the tone; `admin_supplier.automation_pill` decides how the
+/// two are joined; `admin_supplier.settings_<chip key>_title` / `_body` is the
+/// long-press sheet. A new toggle is rows in those two tables and no Dart.
+class SupplierAutomationStrip extends StatelessWidget {
+  const SupplierAutomationStrip({
+    super.key,
+    required this.chips,
+    required this.onToggle,
+    this.onSettings,
+    this.busyKeys = const {},
+  });
+
+  final List<SupplierToggleChip> chips;
+
+  /// (chip, nextValue) — the screen calls the setting RPC it already owned.
+  final void Function(SupplierToggleChip chip, bool next) onToggle;
+
+  /// Long-press. Null means the strip offers no settings affordance.
+  final void Function(SupplierToggleChip chip)? onSettings;
+
+  /// Keys whose RPC is in flight; those pills spin and refuse taps.
+  final Set<String> busyKeys;
+
+  /// The strip is one line and stays one line: a fixed height nothing inside
+  /// it can grow past, so the tab body below never shifts when a word changes
+  /// from OFF to ON.
+  static double get height => Ds.touch.minTarget + Ds.space.x16;
+
+  @override
+  Widget build(BuildContext context) {
+    // A tab whose backend sent no toggles gets no strip at all — an empty bar
+    // under the tab bar is the thing #754 removed and must not come back.
+    if (chips.isEmpty) return const SizedBox.shrink();
+    RenderLog.write('c1890_automation_strip',
+        chips.map((c) => '${c.key}=${c.tone}').join(','));
+    return Container(
+      height: height,
+      padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        border: Border(bottom: BorderSide(color: Ds.c.divider)),
+      ),
+      child: Row(children: [
+        // The title is a fixed-size child, never a flexible one — that is the
+        // whole lesson of the readiness label this change also repaired.
+        Text(c('admin_supplier.automation_title'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Ds.t.caption.copyWith(fontWeight: FontWeight.w700)),
+        SizedBox(width: Ds.space.x12),
+        Expanded(
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            physics: const ClampingScrollPhysics(),
+            itemCount: chips.length,
+            separatorBuilder: (_, _) => SizedBox(width: Ds.space.x8),
+            itemBuilder: (_, i) => Center(child: _pill(chips[i])),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _pill(SupplierToggleChip chip) {
+    final busy = busyKeys.contains(chip.key);
+    // A tone, never a colour: `ui_design_set()` restyles this with no deploy.
+    final on = chip.tone == 'on';
+    final fg = on ? Ds.c.brand : Ds.c.textSecondary;
+    return Tooltip(
+      message: c('admin_supplier.automation_hint'),
+      child: InkWell(
+        borderRadius: Ds.r.rChip,
+        onTap: busy ? null : () => onToggle(chip, !chip.on),
+        onLongPress:
+            onSettings == null ? null : () => onSettings!(chip),
+        child: Container(
+          constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+          padding: EdgeInsets.symmetric(
+              horizontal: Ds.space.x12, vertical: Ds.space.x8),
+          decoration: BoxDecoration(
+            color: on ? Ds.c.brandSoft : Ds.c.bg,
+            borderRadius: Ds.r.rChip,
+            border: Border.all(color: on ? Ds.c.brand : Ds.c.divider),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            // ON carries a dot; OFF is grey and carries none. The dot is the
+            // state, so a colour-blind reading of the strip still works.
+            if (on) ...[
+              Container(
+                width: Ds.space.x8,
+                height: Ds.space.x8,
+                decoration: BoxDecoration(
+                    color: Ds.c.brand, shape: BoxShape.circle),
+              ),
+              SizedBox(width: Ds.space.x8),
+            ],
+            if (busy)
+              SizedBox(
+                width: Ds.t.captionSize,
+                height: Ds.t.captionSize,
+                child: CircularProgressIndicator(strokeWidth: 2, color: fg),
+              )
+            else
+              Text(
+                cf('admin_supplier.automation_pill',
+                    {'label': chip.label, 'state': chip.stateLabel}),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Ds.t.caption
+                    .copyWith(fontWeight: FontWeight.w700, color: fg),
+              ),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// The long-press sheet. Title and body are addressed BY THE CHIP'S OWN KEY,
+/// so this function never learns which toggle it is looking at, and the chip's
+/// extra affordance (Bundle's re-optimise) appears only because the payload
+/// named one.
+Future<void> showAutomationSettingsSheet(
+  BuildContext context,
+  SupplierToggleChip chip, {
+  required void Function(SupplierToggleChip chip, bool next) onToggle,
+  void Function(SupplierToggleChip chip)? onAction,
+}) {
+  RenderLog.write('c1890_automation_settings', chip.key);
+  return showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: Ds.c.surface,
+    shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+    builder: (sheetCtx) => SafeArea(
+      child: Padding(
+        padding: EdgeInsets.all(Ds.space.x24),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(c('admin_supplier.settings_${chip.key}_title'),
+              style: Ds.t.subtitle),
+          SizedBox(height: Ds.space.x12),
+          Text(c('admin_supplier.settings_${chip.key}_body'),
+              style: Ds.t.bodySecondary),
+          SizedBox(height: Ds.space.x24),
+          SizedBox(
+            width: double.infinity,
+            height: Ds.touch.minTarget,
+            child: FilledButton(
+              onPressed: () {
+                Navigator.of(sheetCtx).pop();
+                onToggle(chip, !chip.on);
+              },
+              child: Text(cf('admin_supplier.automation_pill',
+                  {'label': chip.label, 'state': chip.stateLabel})),
+            ),
+          ),
+          if (chip.on && chip.hasAction && onAction != null) ...[
+            SizedBox(height: Ds.space.x12),
+            SizedBox(
+              width: double.infinity,
+              height: Ds.touch.minTarget,
+              child: OutlinedButton.icon(
+                onPressed: () {
+                  Navigator.of(sheetCtx).pop();
+                  onAction(chip);
+                },
+                icon: Icon(Icons.auto_fix_high_outlined, size: Ds.t.bodySize),
+                label: Text(chip.actionLabel),
+              ),
+            ),
+          ],
+          SizedBox(height: Ds.space.x12),
+          SizedBox(
+            width: double.infinity,
+            height: Ds.touch.minTarget,
+            child: TextButton(
+              onPressed: () => Navigator.of(sheetCtx).pop(),
+              child: Text(c('admin_supplier.settings_close')),
+            ),
+          ),
+        ]),
+      ),
+    ),
+  );
 }

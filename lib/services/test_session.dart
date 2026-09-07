@@ -140,6 +140,60 @@ class TestSessionState {
   @visibleForTesting
   void debugSet(Map<String, dynamic> payload) => banner.value = payload;
 
+  /// CMD #1850 — THE SESSION CLOCK, verbatim from `test_clock_state()`.
+  ///
+  /// A live session may pin an effective time so that the order cut-off,
+  /// order hours, an expiring token and every SLA countdown can be walked
+  /// through in seconds instead of waited out. Everything here is the
+  /// backend's: the rendered time, the sub-line, the step sizes, the preset
+  /// moments and every word on every control. The app sends what was tapped
+  /// and prints what came back.
+  final ValueNotifier<Map<String, dynamic>> clock =
+      ValueNotifier<Map<String, dynamic>>(const {});
+
+  @visibleForTesting
+  void debugSetClock(Map<String, dynamic> payload) => clock.value = payload;
+
+  /// One read, made only while a session is actually on — an install that is
+  /// not testing never asks what time it thinks it is.
+  Future<void> refreshClock() async {
+    try {
+      final raw = await Supabase.instance.client.rpc('test_clock_state');
+      if (raw is Map) clock.value = Map<String, dynamic>.from(raw);
+    } catch (_) {
+      // Keep the last known state: a dropped request must never make a
+      // pinned clock look like the real one.
+    }
+  }
+
+  /// The three verbs. Each returns the backend's own reply verbatim (its
+  /// `message` is what the sheet shows) and adopts the state it came with,
+  /// so the control redraws from the server's answer and never from a guess
+  /// about what the tap did.
+  Future<Map<String, dynamic>> pinClock(String at) =>
+      _clockCall('test_clock_pin', {'p_at': at});
+
+  Future<Map<String, dynamic>> stepClock(int minutes) =>
+      _clockCall('test_clock_step', {'p_minutes': minutes});
+
+  Future<Map<String, dynamic>> releaseClock() =>
+      _clockCall('test_clock_release', const {});
+
+  Future<Map<String, dynamic>> _clockCall(
+      String fn, Map<String, dynamic> params) async {
+    Map<String, dynamic> res;
+    try {
+      final raw = params.isEmpty
+          ? await Supabase.instance.client.rpc(fn)
+          : await Supabase.instance.client.rpc(fn, params: params);
+      res = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
+    } catch (e) {
+      return {'ok': false, 'error': '$e'};
+    }
+    if (res['has'] == true) clock.value = res;
+    return res;
+  }
+
   /// Starts the poll. Safe to call more than once — the interval is whatever
   /// the backend last said (`poll_ms`), so it is retuned without a deploy.
   /// CHANGE #1821 — RESUMING IS A READ, NEVER A REMEMBERED FLAG.
@@ -209,6 +263,13 @@ class TestSessionState {
       final raw = await Supabase.instance.client.rpc('test_session_banner');
       if (raw is Map) {
         banner.value = Map<String, dynamic>.from(raw);
+      }
+      // CMD #1850 — the clock rides the banner's own cadence. Off means there
+      // is nothing to read and nothing to draw.
+      if (banner.value['on'] == true) {
+        await refreshClock();
+      } else if (clock.value.isNotEmpty) {
+        clock.value = const {};
       }
     } catch (_) {
       // Keep the last known state.

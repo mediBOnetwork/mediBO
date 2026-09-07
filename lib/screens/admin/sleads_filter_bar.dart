@@ -19,6 +19,7 @@
 import 'package:flutter/material.dart';
 
 import '../../design_tokens.dart';
+import '../../utils/render_log.dart';
 
 /// The canonical filter map, exactly the shape `_sleads_filters_norm` returns.
 ///
@@ -176,6 +177,14 @@ class SLeadsFilterBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (!model.ok) return const SizedBox.shrink();
+    // CMD #1868 — the render-log proof for this row. A screenshot shows pixels;
+    // this is the count the verification rule asks for: the bar is only
+    // rendering if the backend actually sent chips, toggles and a count chip.
+    RenderLog.write(
+        'c1868_sleads_filters',
+        'chips=${model.chips.length};toggles=${model.toggles.length}'
+        ';views=${model.viewItems.length};score=${model.state.minScore}'
+        ';count=${model.countChip}');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

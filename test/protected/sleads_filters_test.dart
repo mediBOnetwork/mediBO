@@ -35,6 +35,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pharma_b2b/screens/admin/sleads_filter_bar.dart';
+import 'package:pharma_b2b/utils/render_log.dart';
 
 Map<String, dynamic> _filters({
   List<String> classes = const [],
@@ -148,6 +149,10 @@ Future<void> _pump(
 }
 
 void main() {
+  // CMD #1868 — SLeadsFilterBar.build writes a render-log key; its 800 ms
+  // debounce is a real Timer and would outlive the test.
+  setUpAll(() => RenderLog.flushEnabled = false);
+
   group('1 — the chips are the payload, in payload order', () {
     test('labels and counts are read, never composed from a Dart table', () {
       final m = SLeadsFilterModel.fromPayload(_payload());

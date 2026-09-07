@@ -57,6 +57,7 @@ class DevQueueService {
     'recording_step_add',
     'recording_stop',
     'recording_promote',
+    'recording_replay',
     // CHANGE #636 — the safety net judges PRODUCTION's own RPC surface: its
     // pg_proc, its grants, its guards, its money and its stock. Pointing it at
     // the control plane would grade the wrong database and pass.
@@ -332,6 +333,13 @@ class DevQueueService {
         'p_title': title,
         'p_area': area,
       }));
+
+  /// CMD #1851 — replay a recorded walkthrough: every RPC it recorded is called
+  /// again with the arguments it was given, the answers are compared against
+  /// the ones it got, and every write is rolled back. The verdict, the step
+  /// that diverged and the words for it are all the backend's.
+  Future<Map<String, dynamic>> recordingReplay(int recording) async =>
+      _asMap(await _rpc('recording_replay', params: {'p_recording': recording}));
 
   /// The journey library: every enabled journey, optionally scoped to an area.
   /// Rendered verbatim in the Journey Library screen.

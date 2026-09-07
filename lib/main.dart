@@ -95,6 +95,7 @@ import 'screens/public/near_screen.dart'; // CMD #426 — /near, /near/p/<token>
 import 'services/feature_gaps_service.dart'; // CHANGE #312
 import 'services/ui_copy.dart';
 import 'services/session_recorder.dart';
+import 'services/recording_tap.dart'; // CMD #1851
 import 'supabase_config.dart';
 import 'theme.dart';
 import 'design_tokens.dart';
@@ -286,6 +287,14 @@ void main() {
     usePathUrlStrategy();
 
     // Supabase init is crash-isolated: failure renders app in signed-out state.
+    // CMD #1851 — the client BELOW the tap is kept: the recording flush posts
+    // through it, so a flush can never observe itself.
+    final medibotHttp = ResilientClient(
+      http.Client(),
+      probeUri: Uri.parse('${SupabaseConfig.url}/rest/v1/'),
+      probeHeaders: const {'apikey': SupabaseConfig.anonKey},
+    );
+    RecordingCapture.instance.useFlushClient(medibotHttp);
     try {
       await Supabase.initialize(
         url: SupabaseConfig.url,
@@ -299,11 +308,13 @@ void main() {
         // or a timeout, and the Reconnecting strip is raised. The breadcrumb
         // therefore records what the SCREEN got (200 + x-medibo-cached), which
         // is the truth an outage report needs.
-        httpClient: CrashReporting.breadcrumbHttpClient(ResilientClient(
-          http.Client(),
-          probeUri: Uri.parse('${SupabaseConfig.url}/rest/v1/'),
-          probeHeaders: const {'apikey': SupabaseConfig.anonKey},
-        )),
+        // CMD #1851 — outermost sits the recording tap. It is a single
+        // boolean test until a live TEST SESSION says a walkthrough is
+        // recording; only then does it keep the function name, the arguments
+        // and the answer of each call so the walk can be replayed later. With
+        // no session it adds nothing at all — see RecordingTap.
+        httpClient: RecordingTap.wrap(
+            CrashReporting.breadcrumbHttpClient(medibotHttp)),
         authOptions: const FlutterAuthClientOptions(
           authFlowType: AuthFlowType.pkce,
           autoRefreshToken: true,
@@ -320,6 +331,9 @@ void main() {
     // can escape the session. Crash-isolated: a failure means NOT in test
     // mode, never the reverse.
     try { await TestSessionState.instance.loadToken(); } catch (_) {}
+    // CMD #1851 — the tap follows the banner every screen already polls:
+    // `recording_state()` rides on it, and nothing else turns recording on.
+    try { RecordingCapture.instance.bind(); } catch (_) {}
 
     // One-shot URL cleanup: strip ?code= / #access_token= immediately after SDK processes them.
     // Prevents browser session-restore from re-presenting the OAuth callback URL on reopen,

@@ -1236,6 +1236,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             // are chips on the readiness line — which left a blank strip with
             // a ⋮ floating in it.
             if (_headerHasContent) _buildHeader(isDesktop),
+            // CHANGE #1890 — ONE Automation strip, directly under the tab bar
+            // (the pipeline's when embedded, this screen's own otherwise) and
+            // above every tab body. Inquiry gets AutoFlow + Bundle, Supplier
+            // orders gets AutoFlow only; both lists are the backend's.
+            _buildAutomationStrip(),
             _buildContent(isDesktop),
           ]),
         ),
@@ -1249,9 +1254,36 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   /// the per-tab controls, and on inquiry there are none any more.
   bool get _headerHasContent {
     if (!widget.embedded) return true;
-    if (_filter == _SupFilter.orders) return true;   // the AutoFlow chip
+    // CHANGE #1890 — the order tab's AutoFlow chip moved to the Automation
+    // strip, so this row has nothing left to draw on that tab either and is
+    // skipped exactly as it already was on inquiry.
     if (_filter == _SupFilter.suppliers) return true; // sort + map companies
-    return _filter != _SupFilter.inquiry;
+    return _filter != _SupFilter.inquiry && _filter != _SupFilter.orders;
+  }
+
+  /// CHANGE #1890 — the Automation strip.
+  ///
+  /// One line, directly under the tab bar, holding whichever toggles
+  /// `supplier_toggle_chips()` sent for the tab that is open. Tap switches it,
+  /// long-press opens its settings sheet. A tab the backend sent no toggles
+  /// for draws nothing at all — never an empty bar.
+  Widget _buildAutomationStrip() {
+    final chips = switch (_filter) {
+      _SupFilter.inquiry => _chipSet.inquiry,
+      _SupFilter.orders => _chipSet.order,
+      _ => const <SupplierToggleChip>[],
+    };
+    return SupplierAutomationStrip(
+      chips: chips,
+      busyKeys: _busyChipKeys,
+      onToggle: _onToggleChip,
+      onSettings: (chip) => showAutomationSettingsSheet(
+        context,
+        chip,
+        onToggle: _onToggleChip,
+        onAction: (_) => _reoptimize(),
+      ),
+    );
   }
 
   Widget _buildHeader(bool isDesktop) {
@@ -1300,20 +1332,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               ]),
             ),
           ),
-          // ── CHANGE #754 — the AutoFlow chip, on the tab header line ────────
-          // Om: on the Supplier order tab the ⋮ sat alone on an otherwise empty
-          // row, and everything it held was this one toggle. So the toggle
-          // comes out as a chip and the ⋮ goes. It is the SAME chip on mobile
-          // and on desktop — a control that hides itself behind a menu at one
-          // width is how the empty row happened in the first place.
-          if (_filter == _SupFilter.orders) ...[
-            SizedBox(width: Ds.space.x8),
-            SupplierToggleChipRow(
-              chips: _chipSet.order,
-              busyKeys: _busyChipKeys,
-              onToggle: _onToggleChip,
-            ),
-          ],
+          // ── CHANGE #1890 — the AutoFlow chip is NOT on this line any more.
+          // #754 moved it here off the ⋮ menu; it now lives in the Automation
+          // strip under the tab bar, which is the ONE place both tabs' toggles
+          // are drawn. See _buildAutomationStrip().
           // ── MOBILE: 3-dot overflow menu holds all controls ─────────────────
           // CHANGE #754 — only where it still holds something that is NOT a
           // toggle. On inquiry and order it held toggles only, and both are
@@ -2763,6 +2785,14 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }
   }
 
+  // ── CHANGE #1890 — the readiness card's header block is a FIXED size. ──────
+  // Two stacked rows, both token-sized: the label owns the first on its own,
+  // the status/date chips scroll sideways in the second. Because neither
+  // height depends on `_readinessExpanded`, the card measures the same open or
+  // closed and expanding only ever adds body BELOW them.
+  double get _readinessLabelH => Ds.space.x16;
+  double get _readinessChipsH => Ds.space.x24 + Ds.space.x4;
+
   Widget _buildReadinessAndSlider(double pad) {
     final readiness = _inquiryReadiness;
     final checks = (readiness?['checks'] as List?)
@@ -2818,6 +2848,15 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       try { RenderLog.write('c468_inquiry_toggle_off_always', (!locked || sliderEnabled).toString()); } catch (_) {}
     }
     try { RenderLog.write('c503_readiness_collapsed_default', 'true'); } catch (_) {}
+    // CHANGE #1890 — the label is on a row of its own and the header block is
+    // the same height in both states. Both are read straight off the widgets
+    // that draw them, so a regression shows up in the render-log, not in a
+    // screenshot nobody took.
+    try {
+      RenderLog.write('c1890_readiness_label_row', 'own_row');
+      RenderLog.write('c1890_readiness_header_h',
+          (_readinessLabelH + _readinessChipsH).toStringAsFixed(0));
+    } catch (_) {}
 
     return Padding(
       padding: EdgeInsets.fromLTRB(pad, 12, pad, 4),
@@ -2836,42 +2875,64 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             GestureDetector(
               behavior: HitTestBehavior.opaque,
               onTap: () => setState(() => _readinessExpanded = !_readinessExpanded),
-              child: Row(children: [
-                Expanded(
-                  child: Text(title,
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
-                          letterSpacing: 0.6, color: Color(0xFF6B7280))),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                // ── CHANGE #1890, line 1: the label, alone, full width. ─────
+                // #754 put this Text in an Expanded and then dropped the
+                // AutoFlow / Bundle chips into the same Row. Once the chips
+                // were wide enough the Expanded was squeezed to a single
+                // character column and SEND-ALL READINESS wrapped one letter
+                // per line (Om, 08 Sep 01:31). The label now shares its row
+                // with nothing at all, so there is no flexible sibling left
+                // that can starve it, and it clips rather than wraps.
+                SizedBox(
+                  height: _readinessLabelH,
+                  width: double.infinity,
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(title,
+                        maxLines: 1,
+                        softWrap: false,
+                        overflow: TextOverflow.ellipsis,
+                        style: Ds.t.caption.copyWith(
+                            fontWeight: FontWeight.w700, letterSpacing: 0.6)),
+                  ),
                 ),
-                if (statusLabel != null) ...[
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: _readinessToneBg(statusTone),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Text(statusLabel,
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
-                            color: _readinessToneFg(statusTone))),
+                // ── line 2: the chips, in a strip that scrolls sideways. ────
+                // Fixed height and drawn in BOTH states, so the header block
+                // measures exactly the same open or closed and the card never
+                // jumps under the finger that just tapped it.
+                SizedBox(
+                  height: _readinessChipsH,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    physics: const ClampingScrollPhysics(),
+                    children: [
+                      if (statusLabel != null) ...[
+                        Center(
+                          child: Container(
+                            padding: EdgeInsets.symmetric(
+                                horizontal: Ds.space.x12, vertical: Ds.space.x4),
+                            decoration: BoxDecoration(
+                              color: _readinessToneBg(statusTone),
+                              borderRadius: Ds.r.rChip,
+                            ),
+                            child: Text(statusLabel,
+                                style: Ds.t.caption.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                    color: _readinessToneFg(statusTone))),
+                          ),
+                        ),
+                        SizedBox(width: Ds.space.x8),
+                      ],
+                      if (dateLabel != null)
+                        Center(
+                          child: Text(dateLabel,
+                              style: Ds.t.caption
+                                  .copyWith(fontWeight: FontWeight.w600)),
+                        ),
+                    ],
                   ),
-                  const SizedBox(width: 8),
-                ],
-                if (dateLabel != null)
-                  Text(dateLabel,
-                      style: const TextStyle(
-                          fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF))),
-                // CHANGE #754 — AutoFlow and Bundle, on the line Om asked for:
-                // readiness on the left, the chips on the right. Each chip is
-                // its own tap target, so tapping one toggles the setting and
-                // never expands the readiness card underneath.
-                if (_chipSet.inquiry.isNotEmpty) ...[
-                  SizedBox(width: Ds.space.x8),
-                  SupplierToggleChipRow(
-                    chips: _chipSet.inquiry,
-                    busyKeys: _busyChipKeys,
-                    onToggle: _onToggleChip,
-                    onAction: (_) => _reoptimize(),
-                  ),
-                ],
+                ),
               ]),
             ),
             // Expanding/collapsing is purely visual — no re-fetch — so it can

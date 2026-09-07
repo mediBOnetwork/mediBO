@@ -17,6 +17,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../design_tokens.dart';
 import '../utils/render_log.dart';
+import 'store_pin_picker.dart';
 
 /// Holds the schema and one TextEditingController per field, so a caller can
 /// pre-fill, read values and submit without knowing which fields exist.
@@ -55,6 +56,41 @@ class CustomerFormController extends ChangeNotifier {
       ((_schema?['required_fields'] as List?) ?? const [])
           .map((e) => e.toString())
           .toList();
+
+  /// CHANGE #1888 — customer_form_schema().geo: every label the map pin
+  /// prints, plus the fallback centre and zoom. Empty on a payload that
+  /// predates the change, which simply means no pin field is listed either.
+  Map<String, dynamic> get geo =>
+      Map<String, dynamic>.from((_schema?['geo'] as Map?) ?? const {});
+
+  /// customer_form_schema().gst — which key is the "no GST" answer, and the
+  /// backend's own copy for the two ways it can be wrong.
+  Map<String, dynamic> get gst =>
+      Map<String, dynamic>.from((_schema?['gst'] as Map?) ?? const {});
+
+  String get _latKey => (geo['lat_key'] ?? 'latitude').toString();
+  String get _lngKey => (geo['lng_key'] ?? 'longitude').toString();
+
+  /// Checkbox answers. Kept apart from the text controllers because a boolean
+  /// is not a string, and because "unticked" and "never asked" must not be the
+  /// same thing on the wire.
+  final Map<String, bool> _checks = {};
+
+  bool checkValue(String key) => _checks[key] ?? false;
+
+  void setCheck(String key, bool value) {
+    _checks[key] = value;
+    notifyListeners();
+  }
+
+  /// The pin's own coordinates, as the map reported them.
+  String get pinLat => (_ctl[_latKey]?.text ?? '').trim();
+  String get pinLng => (_ctl[_lngKey]?.text ?? '').trim();
+
+  void setPin(String lat, String lng) {
+    controllerFor(_latKey).text = lat;
+    controllerFor(_lngKey).text = lng;
+  }
 
   String text(String key) => (_schema?[key] ?? '').toString();
 
@@ -113,17 +149,41 @@ class CustomerFormController extends ChangeNotifier {
     final out = <String, dynamic>{};
     for (final f in fields) {
       final k = f['key'].toString();
+      if (f['type'].toString() == 'checkbox') {
+        // A checkbox is only sent once it has been touched: the backend can
+        // then tell "said no GST" from "was never asked".
+        if (_checks.containsKey(k)) out[k] = _checks[k];
+        continue;
+      }
+      if (f['type'].toString() == 'geo') continue; // it writes lat/lng, not itself
       final v = (_ctl[k]?.text ?? '').trim();
       if (v.isNotEmpty) out[k] = v;
+    }
+    // The pin's coordinates ride along even though no field is named after
+    // them — the backend refuses a save without them.
+    if (pinLat.isNotEmpty && pinLng.isNotEmpty) {
+      out[_latKey] = pinLat;
+      out[_lngKey] = pinLng;
     }
     return out;
   }
 
-  /// Required keys with nothing typed in them — the backend's own list.
-  List<String> missingRequired() => [
-        for (final k in requiredKeys)
-          if ((_ctl[k]?.text ?? '').trim().isEmpty) k,
-      ];
+  /// Required keys with nothing in them — the backend's own list. A map-pin
+  /// field carries no text of its own, so it counts as filled once the two
+  /// coordinates it writes are there.
+  List<String> missingRequired() {
+    final types = {
+      for (final f in fields) f['key'].toString(): f['type'].toString()
+    };
+    final out = <String>[];
+    for (final k in requiredKeys) {
+      final empty = types[k] == 'geo'
+          ? (pinLat.isEmpty || pinLng.isEmpty)
+          : (_ctl[k]?.text ?? '').trim().isEmpty;
+      if (empty) out.add(k);
+    }
+    return out;
+  }
 
   String labelOf(String key) {
     for (final f in fields) {
@@ -264,10 +324,14 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
     final labelText =
         required ? '$label${ctrl.text('required_suffix')}' : label;
 
+    // The checkbox prints its own label beside the tick, so the field header
+    // would say it twice.
+    final showHeader = type != 'checkbox';
+
     return Padding(
       padding: EdgeInsets.only(bottom: Ds.space.x12),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
+        if (showHeader) Row(children: [
           Flexible(child: Text(labelText, style: Ds.t.bodyStrong)),
           if (flagged) ...[
             SizedBox(width: Ds.space.x8),
@@ -282,12 +346,42 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
             ),
           ],
         ]),
-        SizedBox(height: Ds.space.x4),
-        if (type == 'select' && options.isNotEmpty)
+        if (showHeader) SizedBox(height: Ds.space.x4),
+        if (type == 'geo')
+          StorePinPicker(
+            geo: ctrl.geo,
+            lat: ctrl.pinLat,
+            lng: ctrl.pinLng,
+            onPicked: ctrl.setPin,
+          )
+        else if (type == 'checkbox')
+          _checkbox(key, label)
+        else if (type == 'select' && options.isNotEmpty)
           _dropdown(key, options, flagged)
         else
           _input(key, type, hint, f['max_lines'], flagged),
       ]),
+    );
+  }
+
+  /// A tick is an ANSWER, not a style: "I don't have GST" is how a shop with
+  /// no GSTIN stops being indistinguishable from a shop nobody has asked.
+  Widget _checkbox(String key, String label) {
+    final ctrl = widget.controller;
+    return InkWell(
+      onTap: () => setState(() => ctrl.setCheck(key, !ctrl.checkValue(key))),
+      borderRadius: Ds.r.rButton,
+      child: SizedBox(
+        height: 44,
+        child: Row(children: [
+          Checkbox(
+            value: ctrl.checkValue(key),
+            activeColor: Ds.c.brand,
+            onChanged: (v) => setState(() => ctrl.setCheck(key, v ?? false)),
+          ),
+          Flexible(child: Text(label, style: Ds.t.body)),
+        ]),
+      ),
     );
   }
 

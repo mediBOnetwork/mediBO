@@ -873,6 +873,42 @@ class DevQueueService {
   Future<Map<String, dynamic>> rcHealth() async =>
       _asMap(await _rpc('dev_rc_health'));
 
+  // ── The three controls CMD #1863's audit found with no button or card ────
+  // Same rule as #1843: ONE existing RPC each, rendered verbatim, no new
+  // backend. The rest of that audit's list was already reachable — 27 called
+  // by name here, and five more (health / disk / blocked / build_branch /
+  // context) ride inside `dev_ctl_get()`, so nothing below is fetched twice.
+  //
+  // Three of the audited names are deliberately NOT here: `deploy_status()` is
+  // a rawer, label-less subset of `deploy_lane_status()`, which is already on
+  // the Deploy lane card; `qa_report` refuses anything but service_role, so no
+  // button using the app's console ticket could ever call it; and
+  // `dev_cmd_retry` does not exist on either project — retry lives inside
+  // `dev_cmd_fail`. All three need backend work this wiring-only change bans.
+
+  /// CMD #1863 — "stop after this command". `strip_v3_drain_set(p_id)` writes
+  /// `drain_after` and returns `strip_v3_card()`; a null id clears it. The
+  /// Runners card has PRINTED the resulting `drain_label` since #1367 — there
+  /// was simply never a way to set it.
+  Future<Map<String, dynamic>> drainAfter(int? id) async =>
+      _asMap(await _rpc('strip_v3_drain_set', params: {'p_id': id}));
+
+  /// CMD #1863 — the build-branch ledger: every branch that has existed, how
+  /// long it lived, how many builds used it and why it was created. The
+  /// Runners panel's BuildBranchCard shows the LIVE branch and its recent
+  /// attempts; this is the history behind that one line.
+  Future<Map<String, dynamic>> buildBranchLog({int days = 7}) async =>
+      _asMap(await _rpc('build_branch_log', params: {'p_days': days}));
+
+  /// CMD #1863 — the standing lessons for a command's area. Every runner reads
+  /// these before it builds (`devcmd.sh lessons_get`); nothing ever put them in
+  /// front of Om. An absent area asks for all of them, which is what the
+  /// backend does with a null `p_area`.
+  Future<List<Map<String, dynamic>>> lessons({String? area, int? cmd}) async =>
+      _asList(await _rpc('dev_lessons_get',
+          params: {'p_area': (area != null && area.isEmpty) ? null : area,
+                   'p_cmd': cmd}));
+
   /// CMD #1843 — the delete half of the template list, which had a backend and
   /// no button. Save and list were already wired.
   Future<void> templateDelete(int id) async =>

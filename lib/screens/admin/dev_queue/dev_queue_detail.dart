@@ -45,6 +45,11 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
   bool _busy = false;
   // CHANGE #656: dev_model_options() — the picker's options, labels and titles.
   Map<String, dynamic> _mo = const {};
+  // CMD #1863 — dev_lessons_get(area, id): the standing constraints every
+  // runner is handed for this command's area. Read ONCE per open, never on the
+  // 5s poll: the RPC stamps last_used_at and writes a dev_lesson_read row, and
+  // a screen that re-read it every five seconds would forge that ledger.
+  List<Map<String, dynamic>> _lessons = const [];
   Timer? _tick; // 1s ticker for the live ATR countdown while building
   DateTime _now = DateTime.now();
 
@@ -60,6 +65,7 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
     }
     _load();
     _loadModelOptions();
+    _loadLessons();
     _poll = Timer.periodic(const Duration(seconds: 5), (_) {
       if (_active) _load(silent: true);
     });
@@ -194,6 +200,7 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
                 const SizedBox(height: 12),
                 _actions(),
                 _specChecklist(),
+                _lessonsCard(),
                 QaJourneySection(id: widget.id, svc: _svc),
                 const SizedBox(height: 12),
                 _chat(),
@@ -818,15 +825,19 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
   // also from the Targets chips) so there are no duplicate buttons.
   Widget _actions() {
     final btns = <Widget>[];
-    void add(String key, VoidCallback onTap,
+    void addLabel(String label, VoidCallback onTap,
         {Color? color, IconData? icon, bool primary = false}) {
       btns.add(_ActionBtn(
-          label: c(key),
+          label: label,
           onTap: _busy ? null : onTap,
           color: color,
           icon: icon,
           primary: primary));
     }
+
+    void add(String key, VoidCallback onTap,
+            {Color? color, IconData? icon, bool primary = false}) =>
+        addLabel(c(key), onTap, color: color, icon: icon, primary: primary);
 
     Future<void> apk() => _run(() => _svc.requestAndroid(widget.id, buildType: 'apk'));
     Future<void> aab() => _run(() => _svc.requestAndroid(widget.id, buildType: 'aab'));
@@ -836,6 +847,8 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
         add('dev_queue.btn_edit', _editSpec, icon: Icons.edit_outlined, primary: true);
         add('dev_queue.btn_model', _editModel, icon: Icons.memory);
         add('dev_queue.btn_pause', () => _run(() => _svc.pause(widget.id)));
+        addLabel(cf('dev_queue.v3_drain', {'id': '${widget.id}'}), _drainAfter,
+            icon: Icons.stop_circle_outlined);
         add('dev_queue.btn_cancel', () => _cancel(), color: const Color(0xFF991B1B));
         break;
       case 'paused':
@@ -855,6 +868,12 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
       case 'building':
         add('dev_queue.btn_debug', _debug, icon: Icons.bug_report_outlined, primary: true);
         add('dev_queue.btn_pause', () => _run(() => _svc.pause(widget.id)));
+        // CMD #1863 — "Stop after #N": let the fleet finish THIS command and
+        // claim nothing more. The label is ui_copy's own template, so the
+        // number in the button and the number in the Runners card's
+        // "Draining: will stop after #N" are the same string from the same row.
+        addLabel(cf('dev_queue.v3_drain', {'id': '${widget.id}'}), _drainAfter,
+            icon: Icons.stop_circle_outlined);
         break;
       case 'completed':
         add('dev_queue.btn_build_apk', apk, icon: Icons.android, color: kBrand, primary: true);
@@ -938,6 +957,18 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
     try {
       final o = await _svc.modelOptions();
       if (mounted) setState(() => _mo = o);
+    } catch (_) {}
+  }
+
+  /// CMD #1863 — the area's standing lessons. A card, never the page: the
+  /// screen has to open with its result and its log even when this read is
+  /// refused, so a failure leaves the list empty and draws nothing.
+  Future<void> _loadLessons() async {
+    try {
+      final l = await _svc.lessons(
+          area: (widget.initialRow?['area'] ?? _row['area'] ?? '').toString(),
+          cmd: widget.id);
+      if (mounted) setState(() => _lessons = l);
     } catch (_) {}
   }
 
@@ -1610,6 +1641,74 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
           kv(c('dev_queue.label_finished'), istShort(_row['finished_at'].toString())),
       ]),
     );
+  }
+
+  /// CMD #1863 — `dev_lessons_get(area, id)`, printed verbatim.
+  ///
+  /// These are the standing constraints the RUNNER is handed before it starts
+  /// this command ("treat every lesson as a HARD constraint"), and until now
+  /// the only way to read them was to run devcmd.sh on the VM. The card
+  /// computes nothing: the heading, the empty line, each title, each lesson
+  /// body and the area chip are all backend strings, and the order is the
+  /// backend's. An area this build has never heard of still draws.
+  Widget _lessonsCard() {
+    if (_lessons.isEmpty) return const SizedBox.shrink();
+    return _section(
+      c('dev_queue.gcp_lessons'),
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        for (final l in _lessons)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x12),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Icon(Icons.lightbulb_outline,
+                    size: Ds.space.x12 + Ds.space.x4, color: Ds.c.brand),
+                SizedBox(width: Ds.space.x8),
+                Expanded(
+                  child: Text((l['title'] ?? '').toString(),
+                      style: Ds.t.body.copyWith(
+                          fontWeight: FontWeight.w700, color: Ds.c.text)),
+                ),
+                if ((l['area'] ?? '').toString().isNotEmpty)
+                  ToneChip(
+                      label: (l['area']).toString(),
+                      tone: statusTone('paused'),
+                      icon: Icons.category_outlined),
+              ]),
+              if ((l['lesson'] ?? '').toString().isNotEmpty)
+                Padding(
+                  padding:
+                      EdgeInsets.only(left: Ds.space.x24, top: Ds.space.x4),
+                  child: Text((l['lesson']).toString(),
+                      style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+                ),
+            ]),
+          ),
+      ]),
+    );
+  }
+
+  /// CMD #1863 — "stop after this command", the only setter `drain_after` has
+  /// ever had.
+  ///
+  /// The Runners card has printed `drain_label` ("Draining: will stop after
+  /// #N") since #1367 and nothing could write it, so the fleet could only be
+  /// stopped mid-build. `strip_v3_drain_set(p_id)` takes THIS row's id — no
+  /// parsing, no guessing which command is live — and returns
+  /// `strip_v3_card()`, whose own `drain_label` is the toast. A backend that
+  /// declines simply sends an empty label and nothing is claimed on its behalf.
+  Future<void> _drainAfter() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    String label = '';
+    try {
+      label = (await _svc.drainAfter(widget.id))['drain_label']?.toString() ?? '';
+    } catch (_) {
+      // Same rule as every other action here: the backend's own words or none.
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    if (mounted && label.isNotEmpty) showToast(context, label);
   }
 
   // ── Section scaffolding ────────────────────────────────────────────────────

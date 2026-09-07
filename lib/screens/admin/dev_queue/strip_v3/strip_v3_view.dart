@@ -309,6 +309,16 @@ class StripV3View extends StatelessWidget {
     final actualLabel =
         (actual ? t['actual_label'] : t['not_actual_label'] ?? '')?.toString() ??
             '';
+    // CMD #1864 — WHETHER the state word is shown, and in what tone, are the
+    // backend's calls now. Drawing it only on a mismatch made the chip a
+    // restatement of the switch: with the VM row it meant a box that had gone
+    // down while the switch was still on showed the disagreement, but a box
+    // whose real state simply could not be read showed nothing at all. The VM
+    // row sends its word always; the other two still send it only on a gap.
+    // An older payload without these keys keeps the previous behaviour exactly.
+    final actualChip =
+        (t['actual_chip'] ?? (mismatch ? actualLabel : '')).toString();
+    final actualTone = (t['actual_tone'] ?? 'warning').toString();
 
     return Padding(
       padding: EdgeInsets.only(bottom: Ds.space.x12),
@@ -323,9 +333,9 @@ class StripV3View extends StatelessWidget {
               // frontend on the one card whose entire purpose is to print the
               // backend's account of itself. They arrive in the payload now,
               // and a toggle that sends neither shows no chip.
-              if (mismatch && actualLabel.isNotEmpty) ...[
+              if (actualChip.isNotEmpty) ...[
                 SizedBox(width: Ds.space.x8),
-                ToneChip(label: actualLabel, tone: toneByName('warning')),
+                ToneChip(label: actualChip, tone: toneByName(actualTone)),
               ],
             ]),
             if (sub.isNotEmpty) ...[

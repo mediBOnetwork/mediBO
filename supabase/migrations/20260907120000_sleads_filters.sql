@@ -587,3 +587,148 @@ $function$;
 
 revoke all on function public.sleads_filters(jsonb) from public, anon;
 grant execute on function public.sleads_filters(jsonb) to authenticated, service_role;
+
+-- ── 9. sleads_page — the list envelope now speaks the canonical filter ────
+-- p_filters wins whole when present; the legacy scalar params stay so the
+-- currently-deployed bundle keeps working during the deploy window.
+
+drop function if exists public.sleads_page(text, text, boolean, boolean, text, text, boolean, boolean, integer, integer, text[], boolean);
+drop function if exists public.sleads_page(text, text, boolean, boolean, text, text, boolean, boolean, integer, integer, text[], boolean, jsonb);
+
+create or replace function public.sleads_page(
+  p_city           text    default null,
+  p_class          text    default null,
+  p_targets_only   boolean default true,
+  p_with_phone     boolean default false,
+  p_search         text    default null,
+  p_status         text    default null,
+  p_open_now       boolean default false,
+  p_with_email     boolean default false,
+  p_limit          integer default 50,
+  p_offset         integer default 0,
+  p_classes        text[]  default null,
+  p_include_closed boolean default false,
+  p_filters        jsonb   default null)
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+declare
+  v_copy   jsonb;
+  v_rows   jsonb := '[]'::jsonb;
+  v_total  bigint := 0;
+  v_n      integer := 0;
+  v_limit  integer := least(greatest(coalesce(p_limit, 50), 1), 100);
+  v_offset integer := greatest(coalesce(p_offset, 0), 0);
+  v_next   integer;
+  v_more   boolean;
+  v_f      jsonb;
+  v_cls    text[];
+begin
+  if get_my_role() not in ('admin','super_admin') then raise exception 'not_authorized'; end if;
+
+  select coalesce(jsonb_object_agg(key, value), '{}'::jsonb)
+    into v_copy from ui_copy where key like 'sleads.%';
+
+  -- One filter shape, whichever way the caller spelled it.
+  v_f := case
+           when p_filters is not null then public._sleads_filters_norm(p_filters)
+           else public._sleads_filters_norm(jsonb_build_object(
+                  'city', p_city,
+                  'search', p_search,
+                  'status', p_status,
+                  'with_phone', coalesce(p_with_phone,false),
+                  'open_now', coalesce(p_open_now,false),
+                  'with_email', coalesce(p_with_email,false),
+                  'show_non_targets', not coalesce(p_targets_only, true),
+                  'show_closed', coalesce(p_include_closed,false),
+                  'show_matched', coalesce(p_include_closed,false),
+                  'classes', case when coalesce(p_classes, case when nullif(btrim(coalesce(p_class,'')),'') is null
+                                                            then null
+                                                            else string_to_array(p_class, ',') end) is null
+                               then '[]'::jsonb
+                               else to_jsonb(coalesce(p_classes, string_to_array(p_class, ','))) end))
+         end;
+
+  select coalesce(array_agg(x), null) into v_cls
+    from jsonb_array_elements_text(v_f->'classes') x;
+
+  with page as (
+    select g.*, row_number() over () as ord
+      from public.get_scraped_leads(
+             p_city             => v_f->>'city',
+             p_class            => null,
+             p_targets_only     => true,
+             p_with_phone       => (v_f->>'with_phone')::boolean,
+             p_search           => v_f->>'search',
+             p_status           => v_f->>'status',
+             p_open_now         => (v_f->>'open_now')::boolean,
+             p_with_email       => (v_f->>'with_email')::boolean,
+             p_limit            => v_limit,
+             p_offset           => v_offset,
+             p_classes          => v_cls,
+             p_include_closed   => false,
+             p_min_score        => (v_f->>'min_score')::int,
+             p_show_non_targets => (v_f->>'show_non_targets')::boolean,
+             p_show_closed      => (v_f->>'show_closed')::boolean,
+             p_show_matched     => (v_f->>'show_matched')::boolean,
+             p_show_stale       => (v_f->>'show_stale')::boolean,
+             p_preset           => v_f->>'preset') g
+  )
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id',            p.id,
+           'title',         p.name,
+           'type_label',    nullif(btrim(coalesce(p.type_label, '')), ''),
+           'rating_label',  case when p.rating is not null
+                              then trim(to_char(p.rating, 'FM90.0')) || ' ★'
+                                   || case when coalesce(p.user_ratings, 0) > 0
+                                        then ' (' || to_char(p.user_ratings, 'FM999,999,999') || ')'
+                                        else '' end
+                            end,
+           'open_label',    case when p.open_now is true
+                                 then coalesce(v_copy->>'sleads.open_now', 'Open now')
+                                 when p.open_now is false
+                                 then coalesce(v_copy->>'sleads.closed_now', 'Closed now') end,
+           'open_bg',       case when p.open_now is true then '#D1FAE5'
+                                 when p.open_now is false then '#FEE2E2' end,
+           'open_fg',       case when p.open_now is true then '#065F46'
+                                 when p.open_now is false then '#991B1B' end,
+           'address_label', nullif(btrim(coalesce(p.short_address, p.address, '')), ''),
+           'phone_label',   nullif(btrim(coalesce(p.phone, '')), ''),
+           'has_photo',     (p.photo_url is not null and p.photo_url <> '')
+         ) order by p.ord), '[]'::jsonb),
+         coalesce(max(p.total_count), 0),
+         count(*)
+    into v_rows, v_total, v_n
+    from page p;
+
+  v_next := v_offset + v_n;
+  v_more := v_next < v_total;
+
+  return jsonb_build_object(
+    'ok',            true,
+    'page_size',     v_limit,
+    'offset',        v_offset,
+    'rows',          v_rows,
+    'total',         v_total,
+    'filters',       v_f,
+    'count_chip',    replace(coalesce(v_copy->>'sleads.filters.count_chip','S Leads ({n})'),
+                             '{n}', to_char(v_total, 'FM999,999,999')),
+    'count_label',   replace(case when v_total = 1
+                               then coalesce(v_copy->>'sleads.count_one',  '{n} lead')
+                               else coalesce(v_copy->>'sleads.count_many', '{n} leads') end,
+                             '{n}', to_char(v_total, 'FM999,999,999')),
+    'has_more',      v_more,
+    'next_offset',   case when v_more then v_next end,
+    'empty_label',   coalesce(v_copy->>'sleads.empty', '0 leads match these filters'),
+    'more_label',    coalesce(v_copy->>'sleads.loading_more', 'Loading more…'),
+    'end_label',     case when v_total > 0 and not v_more
+                       then replace(coalesce(v_copy->>'sleads.end', 'All {n} leads shown'),
+                                    '{n}', to_char(v_total, 'FM999,999,999')) end
+  );
+end;
+$function$;
+
+revoke all on function public.sleads_page(text,text,boolean,boolean,text,text,boolean,boolean,integer,integer,text[],boolean,jsonb) from public, anon;
+grant execute on function public.sleads_page(text,text,boolean,boolean,text,text,boolean,boolean,integer,integer,text[],boolean,jsonb) to authenticated, service_role;

@@ -200,6 +200,9 @@ class DsSpace {
   double get x24 => _at(4);
   double get x32 => _at(5);
   double get x48 => _at(6);
+  /// A hairline rule — the one sub-scale width the design system allows
+  /// (dividers, 1px borders). Defined here so screens never write `1`.
+  double get hairline => 1;
   double call(int i) => _at(i);
 }
 

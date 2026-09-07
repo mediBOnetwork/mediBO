@@ -28,6 +28,19 @@ returns text language sql stable as $$
               else to_char(p_ts at time zone 'Asia/Kolkata', 'DD Mon YYYY, HH12:MI am') end;
 $$;
 
+
+-- Every caption on a row's controls, so Dart holds no word of its own.
+create or replace function public._c1886_actions()
+returns jsonb language sql stable as $$
+  select jsonb_build_object(
+    'assign_label',  public.uic('cust_pipeline.assign_button','Assign'),
+    'save_label',    public.uic('cust_pipeline.save','Save'),
+    'owner_label',   public.uic('cust_pipeline.col_owner','Owner'),
+    'date_label',    public.uic('cust_pipeline.col_next','Next action'),
+    'no_date_label', public.uic('cust_pipeline.no_next_action','No date set'),
+    'note_label',    public.uic('cust_pipeline.note_label','Note'));
+$$;
+
 -- ── the "Signed up" tab ────────────────────────────────────────────────────
 create or replace function public.customers_signed_up()
 returns jsonb language plpgsql stable security definer set search_path = public as $$
@@ -88,6 +101,7 @@ begin
       jsonb_build_object('key','owner',       'label', public.uic('cust_pipeline.col_owner','Owner')),
       jsonb_build_object('key','next',        'label', public.uic('cust_pipeline.col_next','Next action')),
       jsonb_build_object('key','action',      'label', public.uic('cust_pipeline.col_action','Action'))),
+    'actions', public._c1886_actions(),
     'rows', v_rows);
 end $$;
 
@@ -174,6 +188,7 @@ begin
       jsonb_build_object('key','missing', 'label', public.uic('cust_pipeline.col_missing','Missing')),
       jsonb_build_object('key','owner',   'label', public.uic('cust_pipeline.col_owner','Owner')),
       jsonb_build_object('key','action',  'label', public.uic('cust_pipeline.col_action','Action'))),
+    'actions', public._c1886_actions(),
     'rows', v_rows);
 end $$;
 
@@ -245,7 +260,16 @@ begin
       jsonb_build_object('key','stage',  'label', public.uic('cust_pipeline.col_stage','Stage')),
       jsonb_build_object('key','next',   'label', public.uic('cust_pipeline.col_next','Next action')),
       jsonb_build_object('key','action', 'label', public.uic('cust_pipeline.col_action','Action'))),
+    'actions', public._c1886_actions(),
     'rows', v_rows);
 end $$;
 
+commit;
+
+-- captions this file's payloads name
+begin;
+insert into public.ui_copy(key, value) values
+  ('cust_pipeline.save',       '"Save"'::jsonb),
+  ('cust_pipeline.note_label', '"Note"'::jsonb)
+on conflict (key) do update set value = excluded.value, updated_at = now();
 commit;

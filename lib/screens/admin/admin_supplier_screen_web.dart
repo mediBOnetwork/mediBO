@@ -249,6 +249,25 @@ class AdminSupplierScreen extends StatefulWidget {
   static void triggerFocus() =>
       _screenKey.currentState?._onScreenFocus();
 
+  /// CMD #1891 — open one of this screen's own sub-tabs on the shell's
+  /// instance, by the SAME key the tab row uses (`pending`, `staging`, …).
+  /// The counterpart of [AdminCustomerScreen.openTab], and it retries for a
+  /// few frames for the same reason: the caller is the Dashboard, tapping a
+  /// tile the frame BEFORE this screen's state exists. Null, empty, unknown
+  /// or not-granted is ignored rather than thrown on — a sub-tab key must
+  /// never widen a grant (#528).
+  static void openTab(String? filterName, {int tries = 12}) {
+    if (filterName == null || filterName.isEmpty) return;
+    final st = _screenKey.currentState;
+    if (st != null) {
+      st._openTabByName(filterName);
+      return;
+    }
+    if (tries <= 0) return;
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => openTab(filterName, tries: tries - 1));
+  }
+
   @override
   State<AdminSupplierScreen> createState() => _AdminSupplierScreenState();
 }
@@ -480,6 +499,17 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           _tabOn(_tabKeys[_tabOrder[i]] ?? ''));
 
   bool _filterAllowed(_SupFilter f) => _tabAllowed(_tabOrder.indexOf(f));
+
+  /// CMD #1891 — see [AdminSupplierScreen.openTab]. The grant check is the
+  /// same one initState uses, so a tile can never open a tab #528 hid.
+  void _openTabByName(String filterName) {
+    for (final f in _SupFilter.values) {
+      if (f.name != filterName || !_filterAllowed(f)) continue;
+      if (!mounted) return;
+      setState(() => _filter = f);
+      return;
+    }
+  }
   _SupSortMode _sortMode = _SupSortMode.spnDesc;
   // Server-side search over the Suppliers list via admin_list_suppliers RPC
   // (matches company names, not just supplier name/code/city).

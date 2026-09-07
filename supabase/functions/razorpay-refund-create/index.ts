@@ -19,6 +19,7 @@
 // the refund.processed webhook is what marks it paid (rzp_webhook_apply ->
 // _rzp_refund_apply).
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { outboundPaymentGate } from '../_shared/outbound_gate.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -75,6 +76,14 @@ Deno.serve(async (req: Request) => {
   if (!refundId) return reply({ ok: false, error: 'missing_refund_id' });
 
   if (!(await isPrivileged(req))) return reply({ ok: false, error: 'not_authorized' }, 403);
+
+  // CMD #1849 — refund_prepare below already refuses a stamped row, but it runs
+  // on the service-role client and so never sees the CALLER's session header.
+  // This asks the same dispatcher with that header forwarded.
+  const gate = await outboundPaymentGate(SUPABASE_URL, SERVICE_KEY, req, 'refund.create');
+  if (!gate.allowed) {
+    return reply({ ok: false, error: 'test_mode_outbound_blocked', message: gate.message });
+  }
 
   // 1. Ask the backend what to send. This also takes the row out of 'pending',
   //    so a double click cannot mint a second refund at Razorpay.

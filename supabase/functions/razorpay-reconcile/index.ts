@@ -16,6 +16,7 @@
 //
 // No rupee value, no status word and no display string is computed here.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { outboundPaymentGate } from '../_shared/outbound_gate.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -73,6 +74,13 @@ Deno.serve(async (req: Request) => {
 
   if (!RZP_KEY_ID || !RZP_KEY_SECRET) {
     return reply({ ok: false, error: 'razorpay_keys_not_configured' }, 503);
+  }
+
+  // CMD #1849 — one chokepoint. rzp_reconcile_due is gated in SQL; this carries
+  // the caller's own session header to the same dispatcher.
+  const gate = await outboundPaymentGate(SUPABASE_URL, SERVICE_KEY, req, 'reconcile.fetch');
+  if (!gate.allowed) {
+    return reply({ ok: false, error: 'test_mode_outbound_blocked', message: gate.message });
   }
 
   const { data: due, error } = await admin.rpc('rzp_reconcile_due', { p_limit: null });

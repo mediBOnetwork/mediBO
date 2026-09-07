@@ -546,10 +546,11 @@ class _HomeShellState extends State<HomeShell> {
       });
       return;
     }
-    // CHANGE #1867 — /admin/customers[?tab=sLeads|routes], read like /orders below.
+    // #1867 — /admin/customers[?tab=sLeads|routes]. initialSearch(), not
+    // Uri.base: boot's rewrite erases the query (#747).
     if (path == '/admin/customers') {
       _index = 6;
-      AdminCustomerScreen.openTab(Uri.base.queryParameters['tab']);
+      AdminCustomerScreen.openTab(Uri.splitQueryString(initialSearch().replaceFirst('?', ''))['tab']);
       return;
     }
     if (path.startsWith('/c/')) {

@@ -107,6 +107,15 @@ begin
                           when 'starting' then 'awaiting_approval'
                           when 'stopping' then 'awaiting_approval'
                           else 'paused' end,
+    -- The Runners strip draws its chips through a different tone vocabulary
+    -- (toneByName: success/warning/error/info/neutral) than the control strip
+    -- (statusTone). Both are named HERE so neither widget has to translate.
+    'strip_tone',       case v_status
+                          when 'running'  then 'success'
+                          when 'stopped'  then 'warning'
+                          when 'starting' then 'info'
+                          when 'stopping' then 'info'
+                          else 'warning' end,
     'poll', jsonb_build_object(
       'interval_ms', coalesce((v_poll->>'interval_ms')::int, 6000),
       'max_polls',   coalesce((v_poll->>'max_polls')::int, 20)));
@@ -427,18 +436,40 @@ begin
       'actual',  v_vm_state = 'running',
       'actual_label', v_vm->>'chip_label',
       'not_actual_label', v_vm->>'chip_label',
+      -- actual_chip is drawn WHENEVER it is non-empty. The other two rows send
+      -- it only when the switch and reality disagree, which is what the strip
+      -- has always done; the VM row sends it always, because "which state is
+      -- EC2 actually in" is the question this row exists to answer and hiding
+      -- the word whenever it agrees with the switch is how a chip ends up
+      -- meaning "the switch", not "the box".
+      'actual_chip', v_vm->>'chip_label',
+      'actual_tone', v_vm->>'strip_tone',
       'sub', ''),
     jsonb_build_object('key','claude', 'label', _c_or('dev_queue.v3_start','Start building'),
       'desired', coalesce(d->>'claude','off') = 'on',
       'actual',  coalesce((a->>'building')::int,0) > 0,
       'actual_label', _c_or('dev_queue.v3_running','running'),
       'not_actual_label', _c_or('dev_queue.v3_not_running','not running'),
+      'actual_chip', case when (coalesce(d->>'claude','off') = 'on')
+                            <> (coalesce((a->>'building')::int,0) > 0)
+                          then case when coalesce((a->>'building')::int,0) > 0
+                                    then _c_or('dev_queue.v3_running','running')
+                                    else _c_or('dev_queue.v3_not_running','not running') end
+                          else '' end,
+      'actual_tone', 'warning',
       'sub', _c_or('dev_queue.v3_start_sub','')),
     jsonb_build_object('key','workflow', 'label', _c_or('dev_queue.v3_parallel','Parallel building'),
       'desired', coalesce(d->>'workflow','off') = 'on',
       'actual',  coalesce((a->>'building')::int,0) > 1,
       'actual_label', _c_or('dev_queue.v3_running','running'),
       'not_actual_label', _c_or('dev_queue.v3_not_running','not running'),
+      'actual_chip', case when (coalesce(d->>'workflow','off') = 'on')
+                            <> (coalesce((a->>'building')::int,0) > 1)
+                          then case when coalesce((a->>'building')::int,0) > 1
+                                    then _c_or('dev_queue.v3_running','running')
+                                    else _c_or('dev_queue.v3_not_running','not running') end
+                          else '' end,
+      'actual_tone', 'warning',
       'sub', replace(_c_or('dev_queue.v3_parallel_sub',''), '{n}', v_max::text)));
 
   return jsonb_build_object(

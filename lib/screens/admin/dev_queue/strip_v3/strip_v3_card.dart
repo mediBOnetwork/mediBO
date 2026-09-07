@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../../services/ui_copy.dart';
 import '../../../../utils/toast.dart';
 import '../dev_queue_service.dart';
+import '../vm_toggle_policy.dart';
 import 'strip_v3_view.dart';
 
 /// CHANGE #1367 — the fetching half of the runner strip.
@@ -133,22 +134,51 @@ class _StripV3CardState extends State<StripV3Card> {
   Future<void> _toggle(String key, bool on) async {
     if (_busy) return;
     setState(() => _busy = true);
+    Map<String, dynamic> verdict = const {};
     try {
       // dev_ctl_set takes the VALUE as text ('on'/'off'), matching what
       // desired_state stores — not a boolean.
-      await (await _client()).rpc('dev_ctl_set',
-          params: {'p_key': key, 'p_value': on ? 'on' : 'off'});
+      verdict = _asMap(await (await _client()).rpc('dev_ctl_set',
+          params: {'p_key': key, 'p_value': on ? 'on' : 'off'}));
     } catch (_) {
       // Swallowed for the same reason; the re-read below tells the truth.
     } finally {
       if (mounted) setState(() => _busy = false);
     }
     await _load();
+    // CMD #1864 — this strip used to drop the verdict on the floor, and the VM
+    // toggle was the one key where that mattered: `dev_ctl_set` answered with a
+    // cloud errand nobody ran, so turning the VM ON moved the switch and asked
+    // AWS nothing at all. The backend makes the EC2 call itself now, and the
+    // verdict carries the cadence to watch it land on. Every number and every
+    // stop condition below is the payload's.
+    await _chaseState(verdict);
     // The supervisor reconciles on its own tick, so the gap may take a few
     // seconds to close. Re-read once more rather than leave a stale blocker.
     Future.delayed(const Duration(seconds: 8), () {
       if (mounted) _load();
     });
+  }
+
+  /// Follow a flip until the BACKEND says the state has settled.
+  ///
+  /// `dev_vm_poll` collects vm-control's reply on the control plane, writes it
+  /// into the `vm_status` row this card reads, and answers with the interval
+  /// and the cap to keep asking on. A verdict that carries no chase — every
+  /// non-VM toggle — stops here on its first look.
+  Future<void> _chaseState(Map<String, dynamic> verdict) async {
+    var plan = VmTogglePolicy.pollState(verdict);
+    for (var i = 0; plan.again && i < plan.maxPolls; i++) {
+      await Future<void>.delayed(plan.delay);
+      if (!mounted) return;
+      try {
+        plan = VmTogglePolicy.pollState(
+            _asMap(await (await _client()).rpc('dev_vm_poll')));
+      } catch (_) {
+        return; // transport trouble: the periodic re-read still runs
+      }
+      await _load();
+    }
   }
 
   /// CHANGE #1570 — Stop / Restart on one worker.

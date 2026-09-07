@@ -730,11 +730,25 @@ class DevQueueService {
   Future<Map<String, dynamic>> claudeAuthRelogin() async =>
       _asMap(await _rpc('claude_auth_relogin_request'));
 
-  /// Flip one toggle (vm|claude|workflow → on|off). Returns the backend verdict
-  /// (for 'vm' it carries call_edge:true + action so the caller invokes the fn).
+  /// Flip one toggle (vm|claude|workflow → on|off). Returns the backend verdict.
+  ///
+  /// CMD #1864 — a 'vm' flip no longer hands the caller a cloud errand. The
+  /// control plane makes the EC2 call itself (`call_edge:false`) and answers
+  /// with the vm block, the poll cadence and its own toast; the caller chases
+  /// [vmPoll] until the payload says `settled`.
   Future<Map<String, dynamic>> ctlSet(String key, String value) async => _asMap(
     await _rpc('dev_ctl_set', params: {'p_key': key, 'p_value': value}),
   );
+
+  /// CMD #1864 — one poll of the live EC2 state, run BY the control plane.
+  ///
+  /// vm-control writes `vm_status` with a service client for whichever project
+  /// it lives in, and the copy holding a working AWS key is production's — so a
+  /// browser calling it directly could never feed the chip, which reads the
+  /// control plane. `dev_vm_poll` collects that reply on the control plane,
+  /// writes it there, and returns the render-ready block plus the cadence to
+  /// ask again on. Nothing about the answer is interpreted here.
+  Future<Map<String, dynamic>> vmPoll() async => _asMap(await _rpc('dev_vm_poll'));
 
   /// Start/stop/status the builder VM via the vm-control edge function (carries
   /// the user's JWT; the function re-checks super_admin). Which cloud it drives

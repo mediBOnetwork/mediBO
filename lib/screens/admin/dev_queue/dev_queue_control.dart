@@ -287,10 +287,10 @@ class _DevQueueControlState extends State<DevQueueControl> {
     setState(() => _busy.add(key));
     try {
       final res = await widget.service.ctlSet(key, val);
-      // Whether the cloud is touched at all, and with which action, is the
-      // backend's verdict — see VmTogglePolicy. There is deliberately no
-      // "already in that state, skip it" check here: vm-control answers that
-      // from a live DescribeInstances read, so a stale cache cannot eat a flip.
+      // CMD #1864 — the cloud call is made by the BACKEND now, inside
+      // dev_ctl_set, so a 'vm' verdict arrives with call_edge:false and its own
+      // toast. The legacy branch stays for a backend that still hands the
+      // errand out; nothing here decides whether AWS is touched, or with what.
       final plan = VmTogglePolicy.plan(res);
       if (plan.invoke) {
         // The edge function words its own outcome (start sent / stopping /
@@ -313,6 +313,16 @@ class _DevQueueControlState extends State<DevQueueControl> {
         } catch (_) {
           if (mounted) showToast(context, c('dev_queue.ctl_edge_failed'), isError: true);
         }
+      } else {
+        // The backend's own sentence for what it just did — printed verbatim,
+        // and absent when it had nothing to say.
+        final toast = (res['toast'] ?? '').toString();
+        if (mounted && toast.isNotEmpty) {
+          showToast(context, toast, isError: res['asked_ok'] == false);
+        }
+        // starting / stopping: keep asking the control plane until IT says the
+        // state has settled.
+        _chaseVmPoll(res);
       }
       await _load();
     } catch (e) {
@@ -350,6 +360,26 @@ class _DevQueueControlState extends State<DevQueueControl> {
     }
   }
 
+  /// CMD #1864 — the same chase, run against the control plane.
+  ///
+  /// `dev_vm_poll` collects the pg_net reply from vm-control, writes it into
+  /// the vm_status row the chip actually reads, and answers with the cadence to
+  /// ask again on. The loop ends when the PAYLOAD says settled — never when
+  /// Dart decides the word looks final.
+  Future<void> _chaseVmPoll(Map<String, dynamic> reply) async {
+    var plan = VmTogglePolicy.pollState(reply);
+    for (var i = 0; plan.again && i < plan.maxPolls; i++) {
+      await Future<void>.delayed(plan.delay);
+      if (!mounted) return;
+      try {
+        plan = VmTogglePolicy.pollState(await widget.service.vmPoll());
+      } catch (_) {
+        return; // transport trouble: stop chasing, the 10s _load still runs
+      }
+      await _load();
+    }
+  }
+
   /// One live EC2 read when the BACKEND says the cached chip reading is too old
   /// to trust (`vm.needs_live_check`). Without this the chip is only as fresh as
   /// the last writer — and while the box is off, its own status timer is the
@@ -361,7 +391,10 @@ class _DevQueueControlState extends State<DevQueueControl> {
     if (_vmChecking) return;
     _vmChecking = true;
     try {
-      await widget.service.vmControl('status');
+      // CMD #1864 — through the control plane, which is where vm_status is
+      // read from. Calling the edge function from here wrote the answer into
+      // production's config row instead, so the chip never got fresher.
+      await widget.service.vmPoll();
       if (mounted) await _load();
     } catch (_) {
       // A refusal (no key / IAM) already surfaces on a real flip; a background
@@ -1040,14 +1073,12 @@ class _DevQueueControlState extends State<DevQueueControl> {
   /// missing. That is the answer to "why won't it start?" without power-cycling
   /// anything, and it is reachable in one tap from the Dev Queue.
   Widget _vmChip() {
-    final s = (_vm['status'] ?? 'unknown').toString();
-    const map = {
-      'running': ['dev_queue.ctl_vm_running', 'completed'],
-      'stopped': ['dev_queue.ctl_vm_stopped', 'paused'],
-      'starting': ['dev_queue.ctl_vm_starting', 'awaiting_approval'],
-      'stopping': ['dev_queue.ctl_vm_stopping', 'awaiting_approval'],
-    };
-    final e = map[s] ?? const ['dev_queue.ctl_vm_unknown', 'paused'];
+    // CMD #1864 — the word and the tone are the backend's (`chip_label` /
+    // `chip_tone`, composed from vm_status + ui_copy). The status→label map
+    // that used to live here was the last display decision in the VM path, and
+    // it is exactly the kind that keeps a chip alive after its source has died.
+    final chip = VmTogglePolicy.chip(_vm);
+    if (!chip.has) return const SizedBox.shrink();
     return Semantics(
       button: true,
       label: c('dev_queue.ctl_vm_check'),
@@ -1057,7 +1088,8 @@ class _DevQueueControlState extends State<DevQueueControl> {
         // A chip is short; pad the hit box out to the token min target.
         child: ConstrainedBox(
           constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
-          child: Center(child: ToneChip(label: c(e[0]), tone: statusTone(e[1]))),
+          child: Center(
+              child: ToneChip(label: chip.label, tone: statusTone(chip.tone))),
         ),
       ),
     );
@@ -1069,7 +1101,7 @@ class _DevQueueControlState extends State<DevQueueControl> {
     if (_vmChecking) return;
     _vmChecking = true;
     try {
-      await widget.service.vmControl('status');
+      await widget.service.vmPoll();
       if (mounted) await _load();
       final out =
           VmTogglePolicy.outcome(await widget.service.vmControl('preflight'));

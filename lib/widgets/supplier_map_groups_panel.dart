@@ -262,7 +262,7 @@ class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel>
           Wrap(
             spacing: Ds.space.x8,
             runSpacing: Ds.space.x8,
-            children: [for (final b in v.badges) _badgePill(b)],
+            children: [for (final b in v.badges) _badgePill(b, fill: false)],
           ),
           SizedBox(height: Ds.space.x8),
         ],
@@ -430,7 +430,13 @@ class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel>
     );
   }
 
-  Widget _badgePill(Map<String, dynamic> badge) {
+  /// [fill] is the collapsed grid's cell, which is a fixed half-column and
+  /// wants the pill to fill it. The open card lays the same pills out in a
+  /// Wrap, where they must be as wide as their WORD — the first live build
+  /// drew five 1220 px bars of saturated yellow and green across the card,
+  /// because a Center inside loose constraints expands to the widest it is
+  /// allowed and dragged the pill with it.
+  Widget _badgePill(Map<String, dynamic> badge, {bool fill = true}) {
     final selected = badge['selected'] == true;
     final bg = _hexColor(badge['fill']?.toString(), Ds.c.bg);
     final fg = _hexColor(badge['fg']?.toString(), Ds.c.text);
@@ -447,7 +453,10 @@ class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel>
           border: Border.all(color: selected ? fg : Colors.transparent, width: 2),
         ),
         child: Center(
+          widthFactor: fill ? null : 1.0,
           child: Text(badge['text']?.toString() ?? '',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: Ds.t.caption.copyWith(fontWeight: FontWeight.w700, color: fg)),
         ),
       ),

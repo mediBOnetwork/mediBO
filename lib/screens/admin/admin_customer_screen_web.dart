@@ -49,6 +49,8 @@ import 'admin_customer_360_screen.dart'; // CHANGE #396
 import 'admin_customer_page.dart'; // CHANGE #810
 import 'leads_paging.dart'; // CHANGE #1867 — PagedList / SLeadRow
 import '../../widgets/customer_console_row.dart'; // CHANGE #810
+import '../../widgets/customer_payment_term_sheet.dart'; // CHANGE #1888
+import '../../widgets/customer_autofill_strip.dart'; // CHANGE #1888
 
 // CHANGE #242: payment-image sharing now goes through the platform-conditional
 // download_bytes wrapper (Web Share API on web / share_plus on Android), so no
@@ -2130,6 +2132,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         ),
       ),
       _buildCusChips(pad),
+      // CHANGE #1888 — the book's own completeness, above the list that has
+      // the holes in it.
+      CustomerAutofillStrip(
+          padding: EdgeInsets.fromLTRB(pad, 0, pad, Ds.space.x8)),
       _buildCusFollowups(pad),
       if (_cusLoading && _cusList('rows').isEmpty)
         Padding(
@@ -4436,6 +4442,34 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 children: sections[si].$2
                     .map((f) => fieldCell(f.$1, f.$2))
                     .toList(),
+              ),
+            ],
+            // CHANGE #1888 — the payment term is the one field on this panel a
+            // human still decides, so it is the one that gets a control. Its
+            // options, its copy and its refusal all come from
+            // customer_payment_term_panel(); this button only opens it.
+            if (_str(rawData['id']).isNotEmpty) ...[
+              SizedBox(height: Ds.space.x16),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: SizedBox(
+                  height: 44,
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: Ds.c.brand),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: Ds.r.rButton),
+                    ),
+                    icon: Icon(Icons.account_balance_wallet_outlined,
+                        size: Ds.space.x16, color: Ds.c.brand),
+                    label: Text(
+                      c('customer_form.term_title'),
+                      style: Ds.t.body.copyWith(color: Ds.c.brand),
+                    ),
+                    onPressed: () => CustomerPaymentTermSheet.open(
+                        ctx, _str(rawData['id'])),
+                  ),
+                ),
               ),
             ],
           ],

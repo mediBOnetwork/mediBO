@@ -1093,6 +1093,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // #147: scroll controller for the supplier list + per-row keys for ensureVisible
   final ScrollController _listScrollCtrl = ScrollController();
+
+  /// CHANGE #1890 — the Supplier Shop tab's OUTER scroll, the one that carries
+  /// the map card away. The inner list keeps [_listScrollCtrl] and with it the
+  /// open/close scroll restoration (#152) exactly as it was.
+  final ScrollController _shopScrollCtrl = ScrollController();
   final Map<String, GlobalKey> _rowKeys = {};
   // #152: saved scroll offset — restored when a supplier is closed
   double _savedScrollOffset = 0.0;
@@ -1400,6 +1405,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     FulfillRealtime.instance.removeListener(_onVoiceMentionsRealtime);
     AdminDateScope.instance.removeListener(_onDateScopeChanged);
     _listScrollCtrl.dispose();
+    _shopScrollCtrl.dispose();
     _agentBubbleEntry?.remove();
     _agentBubbleEntry = null;
     _spokenPopupEntry?.remove();
@@ -4434,14 +4440,34 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     // orders, because the only thing on screen was a centred empty state and
     // the card was inside it).
     if (widget.arrivals) return _buildCollectBody(context);
-    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      Padding(
-        padding: EdgeInsets.fromLTRB(
-            Ds.space.x16, Ds.space.x12, Ds.space.x16, 0),
-        child: _mapPanel,
-      ),
-      Expanded(child: _buildCollectBody(context)),
-    ]);
+    // CHANGE #1890 — the WHOLE tab is one scroll view.
+    //
+    // The map card used to be pinned above an Expanded body, so on a phone it
+    // ate the top of the viewport permanently and the supplier list lived in
+    // whatever was left (Om: the list was unreachable once the map opened).
+    // Now the card is the first sliver: scroll and it leaves, and the body
+    // underneath gets the full viewport height it always had — which is what
+    // keeps the wide layout's Expanded item table working unchanged.
+    //
+    // _mapPanel is still ONE widget built above the branch, exactly as #754
+    // requires; only where it is rendered changed.
+    RenderLog.write('c1890_shop_one_scroll', 'slivers=map+body');
+    return CustomScrollView(
+      controller: _shopScrollCtrl,
+      slivers: [
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+                Ds.space.x16, Ds.space.x12, Ds.space.x16, 0),
+            child: _mapPanel,
+          ),
+        ),
+        SliverFillRemaining(
+          hasScrollBody: true,
+          child: _buildCollectBody(context),
+        ),
+      ],
+    );
   }
 
   Widget _buildCollectBody(BuildContext context) {

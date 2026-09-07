@@ -74,6 +74,17 @@ begin
     end loop;
   end if;
 
+  -- test_session_purge() runs its deletes with session_replication_role set to
+  -- 'replica' and medibo.test_purging ON, both transaction-local. This sweep
+  -- rides the shared cron dispatcher, so it hands the transaction back the way
+  -- it found it rather than leaving every trigger in the database switched off
+  -- for whatever the dispatcher runs next.
+  begin
+    set local session_replication_role = 'origin';
+  exception when others then null;
+  end;
+  perform set_config('medibo.test_purging', 'off', true);
+
   select count(*) into v_stuck from public.test_sessions
    where purged_at is null and purge_started_at is not null
      and purge_started_at < now() - make_interval(mins => greatest(1, coalesce(c.purge_stuck_minutes, 30)));

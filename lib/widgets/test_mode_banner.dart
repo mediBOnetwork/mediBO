@@ -345,6 +345,17 @@ class _TestClockSheetState extends State<TestClockSheet> {
     _clock = widget.clock;
   }
 
+  /// The banner keeps polling while this sheet is open, so a fresher state
+  /// from the BACKEND replaces the one this sheet is holding. The server is
+  /// the authority on what time this session is at — never this widget.
+  @override
+  void didUpdateWidget(TestClockSheet old) {
+    super.didUpdateWidget(old);
+    if (!identical(widget.clock, old.clock) && widget.clock['has'] == true) {
+      _clock = widget.clock;
+    }
+  }
+
   @override
   void dispose() {
     _at.dispose();

@@ -815,3 +815,90 @@ begin
 end $function$;
 
 commit;
+
+-- ---------------------------------------------------------------------------
+-- THE TWO INVARIANTS, AS PERMANENT LIVE PROBES
+-- ---------------------------------------------------------------------------
+-- The protected Dart suite holds down the printer half of spec 5 (the unpinned
+-- banner is byte-identical, one install's pinned time never reaches another's
+-- screen). These two hold down the SQL half, on the live database, on every
+-- rg_check run. Both bodies end in RG_ROLLBACK, so neither ever leaves a row.
+begin;
+
+insert into public.rg_behavior_tests(name, body, enabled, note) values
+('c1850_clock_unpinned_is_identical', $probe$
+do $b$
+declare v_stored boolean; v_zone smallint; v_eff boolean;
+begin
+  perform set_config('request.headers', '{}', true);
+  if public.test_clock_session() is not null then
+    raise exception 'a clock resolved for a request carrying no session header';
+  end if;
+  if public.now_eff() <> now() then
+    raise exception 'now_eff() drifted from now() with no session';
+  end if;
+  if public.today_eff() <> (now() at time zone 'Asia/Kolkata')::date then
+    raise exception 'today_eff() drifted with no session';
+  end if;
+  select zone_id, is_open into v_zone, v_stored from public.order_hours order by id limit 1;
+  if v_zone is not null then
+    v_eff := public.order_hours_open_eff(v_zone);
+    if v_eff is distinct from coalesce(v_stored, true) then
+      raise exception 'order_hours_open_eff() diverged from the stored flag with no session';
+    end if;
+  end if;
+  if (public.order_hours_tick() ? 'skipped') then
+    raise exception 'the order-hours tick refused to run for a caller with no pinned clock';
+  end if;
+  raise exception 'RG_ROLLBACK';
+end $b$;
+$probe$, true,
+ 'CMD #1850 — with no session header every clock reader is the real clock and every tick runs.'),
+
+('c1850_clock_is_one_sessions_own', $probe$
+do $b$
+declare v_tok text := 'rg1850' || replace(gen_random_uuid()::text, '-', '');
+        v_id bigint; v_want text := '23:47';
+begin
+  -- Only one session may be live at a time (#573's index). Ending whatever is
+  -- live is rolled back with everything else in this body.
+  update public.test_sessions set status = 'ended', ended_at = coalesce(ended_at, now())
+   where status = 'live';
+  insert into public.test_sessions(label, scope, status, origin, started_by_label,
+                                   expires_at, token)
+  values ('rg c1850', 'install', 'live', 'human', 'rg', now() + interval '10 minutes', v_tok)
+  returning id into v_id;
+
+  perform set_config('request.headers',
+    json_build_object('x-medibo-test-session', v_tok)::text, true);
+  if coalesce((public.test_clock_pin(
+        (now() at time zone 'Asia/Kolkata')::date::text || ' ' || v_want) ->> 'ok')::boolean,
+      false) is not true then
+    raise exception 'test_clock_pin refused a live session';
+  end if;
+  if public.test_clock_session() is distinct from v_id then
+    raise exception 'the pin did not bind to the session that set it';
+  end if;
+  if to_char(public.now_eff() at time zone 'Asia/Kolkata', 'HH24:MI') <> v_want then
+    raise exception 'the pinned clock did not move';
+  end if;
+
+  -- The same database, the same instant, a request that carries no token.
+  perform set_config('request.headers', '{}', true);
+  if public.test_clock_session() is not null then
+    raise exception 'a pinned session was visible to a request that is not in it';
+  end if;
+  if public.now_eff() <> now() then
+    raise exception 'a pinned clock reached a reader outside the session';
+  end if;
+  if (public.order_hours_tick() ? 'skipped') then
+    raise exception 'a pinned session made a scheduled job refuse for everyone';
+  end if;
+  raise exception 'RG_ROLLBACK';
+end $b$;
+$probe$, true,
+ 'CMD #1850 — a pinned clock moves time for its own header and for nothing else.')
+on conflict (name) do update
+  set body = excluded.body, enabled = true, note = excluded.note;
+
+commit;

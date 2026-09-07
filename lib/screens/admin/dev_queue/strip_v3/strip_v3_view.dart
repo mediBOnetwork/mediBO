@@ -89,6 +89,12 @@ class StripV3View extends StatelessWidget {
     RenderLog.write('c1570_strip',
         'gauges=${gauges.length} workers=${workers.length} builds=${branch['builds_label'] ?? ''}');
     RenderLog.write('c1570_cards', 1);
+    // CMD #1862 — how many of the three switches actually reached the screen.
+    // It read 0 (the key was absent entirely) for as long as this card was
+    // asking production for a control-plane RPC, which is the only evidence
+    // that separates "the toggles are back" from "the code that draws them
+    // compiled".
+    RenderLog.write('c1862_toggles', toggles.length);
 
     return DqCard(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

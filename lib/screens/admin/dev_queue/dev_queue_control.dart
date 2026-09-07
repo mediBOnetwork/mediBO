@@ -5,7 +5,6 @@ import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
-import 'claude_auth_banner.dart';
 import 'dev_queue_branch.dart';
 import 'dev_queue_claude_login.dart';
 import 'dev_queue_common.dart';
@@ -51,6 +50,7 @@ class DevQueueControl extends StatefulWidget {
     required this.service,
     this.startExpanded = false,
     this.embedded = false,
+    this.showToggles = true,
   });
 
   /// CHANGE #1197 — open the panel on arrival.
@@ -73,6 +73,19 @@ class DevQueueControl extends StatefulWidget {
   /// Container, no margin, no shadow, and no VM/Claude/Workflow rows — v3
   /// already draws those three, with `actual` beside `desired`.
   final bool embedded;
+
+  /// CMD #1862 — whether THIS card draws the VM / Start building / Parallel
+  /// building rows.
+  ///
+  /// #1570 suppressed them whenever [embedded] was true, on the reasoning that
+  /// v3 above already drew the same three keys. That reasoning held only while
+  /// v3 could actually read its payload: after #1761 moved the control plane
+  /// onto its own project, `strip_v3_card` answered PGRST202 on every tick, v3
+  /// drew nothing — and because the suppression was welded to `embedded` and
+  /// not to what v3 had ACTUALLY drawn, Dev Queue shipped with no way to start
+  /// the fleet at all. The strip now says which of the two is drawing them, so
+  /// there is no build in which neither does.
+  final bool showToggles;
 
   @override
   State<DevQueueControl> createState() => _DevQueueControlState();
@@ -98,7 +111,6 @@ class _DevQueueControlState extends State<DevQueueControl> {
   };
   OverlayEntry? _mini; // the single live mini popup
   bool _vmChecking = false; // a live EC2 read is already in flight
-  bool _reloginBusy = false; // a claude re-login request is already in flight
 
   @override
   void initState() {
@@ -223,38 +235,6 @@ class _DevQueueControlState extends State<DevQueueControl> {
   /// dev_ctl_get poll as the toggles so it can never be a beat behind them.
   Map<String, dynamic> get _health =>
       (_snap['health'] as Map?)?.cast<String, dynamic>() ?? const {};
-
-  /// CHANGE #1401 — the Claude login, delivered on the poll this card already
-  /// makes. `dev_ctl_get().claude_auth` is `claude_auth_status()` verbatim, so
-  /// nothing here decides whether the login is healthy, what red says, or
-  /// whether a re-login may be offered at all.
-  Map<String, dynamic> get _claudeAuth => ClaudeAuthSnap.read(_snap);
-
-  /// The one tap, on the card where every other fleet-stopping state is
-  /// already reported. It is the same RPC the Cron health panel calls: the
-  /// backend starts the login on the VM, answers with the whole claude_auth
-  /// block, and publishes the link and the code onto it as the VM scrapes them
-  /// off its own login pane. So this asks, folds the reply into the snapshot
-  /// the card is already rendering, and re-reads — it never guesses at the
-  /// states between "requested" and the link appearing.
-  Future<void> _relogin() async {
-    if (_reloginBusy) return;
-    setState(() => _reloginBusy = true);
-    try {
-      final r = await widget.service.claudeAuthRelogin();
-      if (!mounted) return;
-      // Folded, never assigned: the reply carries the login block alone, and
-      // the toggles, the breaker and the pool on this same snapshot must
-      // survive it untouched.
-      setState(() => _snap = ClaudeAuthSnap.fold(_snap, r));
-    } catch (_) {
-      // Same contract as every badge on this strip: the line degrades, the
-      // card does not.
-    } finally {
-      if (mounted) setState(() => _reloginBusy = false);
-    }
-    _reReadAfter(const [5, 15, 30]);
-  }
 
   bool _isOn(String k) => (_desired[k] ?? 'off') == 'on';
 
@@ -520,38 +500,31 @@ class _DevQueueControlState extends State<DevQueueControl> {
         // OUTSIDE the expand gate on purpose: the one state Om must never have
         // to open a panel to discover is "the fleet paused itself".
         _breakerBadge(),
-        // CHANGE #1401 — outside the expand gate for the same reason the
-        // breaker above it is: on 5 Sep the VM's Claude login expired and
-        // every runner claimed, registered a NULL pid, spent nothing and
-        // handed its row back — 28 claims in 40 minutes with no surface able
-        // to say why. "No worker can start a session at all" is not a state
-        // Om should have to open a panel to discover. A healthy login draws
-        // NOTHING, so this adds no clutter while it is green.
-        ClaudeAuthBanner(
-            auth: _claudeAuth, busy: _reloginBusy, onRelogin: _relogin),
+        // CMD #1862 — the Claude login banner is NOT drawn on Dev Queue.
+        // #1401 put it here because a lapsed login stops the fleet silently;
+        // in practice Om logs in on the VM by hand, so the banner's stale-check
+        // title, its OAuth link and its "Re-login from here" button were a
+        // permanent strip of noise above the controls he actually came for.
+        // It still lives on Cron health (ClaudeAuthSection), and the small
+        // "Claude app · session / no session" chip below still says whether a
+        // session exists at all.
         // CHANGE #1365 — outside the expand gate, like the breaker above:
         // a usage sync that has stopped working is exactly the state Om
         // must not have to open a panel to discover, because the card
         // otherwise keeps printing a comfortable "synced Nh ago" over a
         // figure the supervisor is still obeying.
         _syncFailureBadge(),
+        // CMD #1862 — when the strip could not draw the three toggles they are
+        // drawn HERE, and OUTSIDE the expand gate: a fallback that is itself
+        // hidden behind a header tap is not a fallback. In the normal case v3
+        // drew them, showToggles is false, and nothing renders in either place.
+        if (widget.embedded && widget.showToggles) ..._toggleRows(),
         if (_expanded) ...[
           const SizedBox(height: 4),
-          // The three toggles are v3's when embedded — two sets of switches for
-          // the same three keys is how a card starts disagreeing with itself.
-          if (!widget.embedded) ...[
-            _row('vm', c('dev_queue.ctl_vm'), Icons.dns_outlined, _vmChip()),
-            _divider(),
-            _row('claude', c('dev_queue.ctl_claude'), Icons.terminal, _claudeChip()),
-          // CHANGE #1816 — the login behind that toggle: when it was made, how
-          // long it lasts, and whether it has lapsed. Printed verbatim from
-          // claude_login_line(); absent until the VM has reported one.
-          if ((_claudeLogin['has'] ?? false) == true)
-            ClaudeLoginLine(payload: _claudeLogin),
-            _divider(),
-            _row('workflow', c('dev_queue.ctl_workflow'), Icons.sync, _workflowChip()),
-            _divider(),
-          ],
+          // The three toggles are v3's when v3 drew them — two sets of
+          // switches for the same three keys is how a card starts disagreeing
+          // with itself. When it did not, they are ours (CMD #1862).
+          if (!widget.embedded && widget.showToggles) ..._toggleRows(),
           WorkerGridCard(
             pool: (_snap['pool'] as Map?)?.cast<String, dynamic>() ?? const {},
             disk: _disk,
@@ -726,6 +699,23 @@ class _DevQueueControlState extends State<DevQueueControl> {
   }
 
   Widget _blockedBanner() => RunnersBlockedBanner(blocked: _blocked);
+
+  /// The three switches, in the backend's own order: VM, then Start building,
+  /// then Parallel building. Every label is `ui_copy`'s and every chip is the
+  /// payload's — this decides only where the group is drawn (CMD #1862).
+  List<Widget> _toggleRows() => [
+        _row('vm', c('dev_queue.ctl_vm'), Icons.dns_outlined, _vmChip()),
+        _divider(),
+        _row('claude', c('dev_queue.ctl_claude'), Icons.terminal, _claudeChip()),
+        // CHANGE #1816 — the login behind that toggle: when it was made, how
+        // long it lasts, and whether it has lapsed. Printed verbatim from
+        // claude_login_line(); absent until the VM has reported one.
+        if ((_claudeLogin['has'] ?? false) == true)
+          ClaudeLoginLine(payload: _claudeLogin),
+        _divider(),
+        _row('workflow', c('dev_queue.ctl_workflow'), Icons.sync, _workflowChip()),
+        _divider(),
+      ];
 
   Widget _expandedHeader() => Row(children: [
         Text(c('dev_queue.ctl_section'),

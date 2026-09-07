@@ -20,6 +20,7 @@ import '../../utils/file_pick_io.dart' as filepick;
 
 import '../../utils/download_bytes.dart'; // CHANGE #463
 import '../../utils/render_log.dart';
+import 'customer_pipeline_screen.dart';
 import '../../user_state.dart'; // CMD #633 — the session gate below
 import '../../design_tokens.dart'; // CHANGE #238 — Ds tokens for the new panel chrome
 import '../../models/order_item_panel_view.dart'; // CHANGE #238
@@ -350,6 +351,11 @@ class _AdminEntry {
 
 enum _CustFilter {
   approvedCustomers,
+  // CMD #1886 — the registration funnel: the people who signed in and stopped,
+  // the rows somebody owes a call, and the rows that cannot be approved yet.
+  signedUp,
+  followUps,
+  needsAttention,
   customerOrders,
   cartNotOrdered,
   pendingRegistrations,
@@ -596,6 +602,14 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   List<_AdminEntry> _admins      = [];
   final Set<String> _expandedLeads = {};
   bool _loading = true;
+  /// CMD #1886 — customer_pipeline_home(): the three new tab captions, their
+  /// counts and the office team the follow-up sheet may assign to. Every word
+  /// of it is the backend's.
+  Map<String, dynamic> _pipeHome = const {};
+  /// customers_stage_meta(): {customer id -> {chip, approve, missing_label}}.
+  /// The stage chip on every Customers row, and the reason the Approve button
+  /// is disabled, both come from here.
+  Map<String, dynamic> _stageMeta = const {};
   _CustFilter _filter = _CustFilter.approvedCustomers;
   final Set<String> _expanded = {};
   // CHANGE #213 — per-order payment panel open state
@@ -1090,7 +1104,61 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       _loadInFlight = false;
     }
     _loadLeads();
+    _loadPipeline();
   }
+
+  /// CMD #1886 — the registration funnel's own two reads. Fire-and-forget, like
+  /// the lead load above: neither the tab captions nor the stage chips may hold
+  /// up the list, and a failure leaves the previous payload on screen rather
+  /// than a Dart-invented substitute.
+  Future<void> _loadPipeline() async {
+    try {
+      final client = Supabase.instance.client;
+      final home = await client.rpc('customer_pipeline_home');
+      final meta = await client.rpc('customers_stage_meta');
+      if (!mounted) return;
+      setState(() {
+        _pipeHome = home is Map ? Map<String, dynamic>.from(home) : const {};
+        _stageMeta = (meta is Map && meta['by_id'] is Map)
+            ? Map<String, dynamic>.from(meta['by_id'] as Map)
+            : const {};
+      });
+      RenderLog.write('c1886_pipeline_tabs', _pipeTabs.length);
+    } catch (_) {
+      // the backend owns every sentence here; silence beats a Dart apology
+    }
+  }
+
+  List<Map<String, dynamic>> get _pipeTabs =>
+      ((_pipeHome['tabs'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+
+  List<Map<String, dynamic>> get _pipeAssignees =>
+      ((_pipeHome['assignees'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+
+  /// The caption for one pipeline tab, as the backend wrote it: "Signed up (5)".
+  /// A tab the payload has not described yet renders nothing at all.
+  String _pipeLabel(String key) {
+    for (final t in _pipeTabs) {
+      if ((t['key'] ?? '').toString() == key) {
+        final label = (t['label'] ?? '').toString();
+        final count = (t['count_label'] ?? '').toString();
+        if (label.isEmpty) return '';
+        return count.isEmpty ? label : '$label ($count)';
+      }
+    }
+    return '';
+  }
+
+  /// The stage chip + approve gate the backend computed for one customer row.
+  Map<String, dynamic> _metaFor(String id) => (_stageMeta[id] is Map)
+      ? Map<String, dynamic>.from(_stageMeta[id] as Map)
+      : const {};
 
   // CHANGE #384 — one batched MEDICINE lookup (by distinct product_id) for
   // the Customer Orders + cart item cards. Skips ids already cached so
@@ -1332,6 +1400,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       case _CustFilter.leads:
       case _CustFilter.sLeads:
       case _CustFilter.routes:
+      // CMD #1886 — the three funnel tabs draw their own rows from their own
+      // RPC; this legacy list is not theirs.
+      case _CustFilter.signedUp:
+      case _CustFilter.followUps:
+      case _CustFilter.needsAttention:
         return [];
     }
   }
@@ -2018,6 +2091,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         for (final row in _cusList('rows'))
           CustomerConsoleRow(
             row: row,
+            // CMD #1886 — the funnel's word for this row, from the backend.
+            stageChip: _metaFor((row['id'] as String?) ?? '')['chip'],
             onOpen: () => _openCustomerPage((row['id'] as String?) ?? ''),
           ),
       ],
@@ -2025,6 +2100,21 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   }
 
   Widget _buildScrollContent(bool isDesktop) {
+    // CMD #1886 — the three funnel tabs. One widget, one backend tab key; the
+    // payload decides everything it draws.
+    final pipeKey = const {
+      _CustFilter.signedUp: 'signed_up',
+      _CustFilter.followUps: 'followups',
+      _CustFilter.needsAttention: 'needs',
+    }[_filter];
+    if (pipeKey != null) {
+      return CustomerPipelineTab(
+        key: ValueKey('c1886_$pipeKey'),
+        tabKey: pipeKey,
+        assignees: _pipeAssignees,
+        onCountChanged: (_) => _loadPipeline(),
+      );
+    }
     // S Leads tab (CHANGE #443 — scraped lead-generation UI)
     if (_isSLeadsView) {
       RenderLog.write('c443_tab_present', 1);
@@ -2319,6 +2409,20 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 const SizedBox(width: 4),
                 if (_tabOn('routes'))
                   _tab(_CustFilter.routes, 'Routes ($_routesZones)'),
+                // CMD #1886 — the funnel. Each caption and count is
+                // customer_pipeline_home()'s; an undescribed tab draws nothing.
+                if (_tabOn('signed_up') && _pipeLabel('signed_up').isNotEmpty) ...[
+                  const SizedBox(width: 4),
+                  _tab(_CustFilter.signedUp, _pipeLabel('signed_up')),
+                ],
+                if (_tabOn('followups') && _pipeLabel('followups').isNotEmpty) ...[
+                  const SizedBox(width: 4),
+                  _tab(_CustFilter.followUps, _pipeLabel('followups')),
+                ],
+                if (_tabOn('needs_attention') && _pipeLabel('needs').isNotEmpty) ...[
+                  const SizedBox(width: 4),
+                  _tab(_CustFilter.needsAttention, _pipeLabel('needs')),
+                ],
               ]),
             ),
           ),
@@ -2342,6 +2446,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     _CustFilter.leads: 'leads',
     _CustFilter.sLeads: 's_leads',
     _CustFilter.routes: 'routes',
+    _CustFilter.signedUp: 'signed_up',
+    _CustFilter.followUps: 'followups',
+    _CustFilter.needsAttention: 'needs_attention',
   };
 
   /// CHANGE #653 — a tab this login does not hold must not be left OPEN
@@ -3972,6 +4079,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 child: Text(row.phone.isNotEmpty ? row.phone : '—',
                     style: const TextStyle(
                         fontSize: 12, color: Color(0xFF6B7280)))),
+            // CMD #1886 — the stage chip. Word and tone are the backend's;
+            // a row the payload has not described draws nothing.
+            Padding(
+                padding: EdgeInsets.only(right: Ds.space.x8),
+                child: CustomerStageChip(chip: _metaFor(row.id)['chip'])),
             Expanded(
                 flex: 2,
                 child: Text(
@@ -4002,6 +4114,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 flex: 3,
                 child: _RegApproveActions(
                     id: row.id,
+                    gate: _metaFor(row.id)['approve'],
+                    onFix: () => _openCustomerPage(row.id),
                     onApprove: () => _approveReg(row),
                     onReject:  () => _rejectReg(row))),
             // Rotating chevron
@@ -4053,6 +4167,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                               color: Color(0xFF111827)),
                           overflow: TextOverflow.ellipsis)),
                   const SizedBox(width: 8),
+                  // CMD #1886 — the funnel stage, in the backend's own word.
+                  CustomerStageChip(chip: _metaFor(row.id)['chip']),
+                  SizedBox(width: Ds.space.x8),
                   _pendingBadge(),
                   const SizedBox(width: 4),
                   AnimatedRotation(
@@ -4094,6 +4211,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 // Approve/Reject (inner InkWells — stop propagation to outer InkWell)
                 _RegApproveActions(
                     id: row.id,
+                    gate: _metaFor(row.id)['approve'],
+                    onFix: () => _openCustomerPage(row.id),
                     onApprove: () => _approveReg(row),
                     onReject:  () => _rejectReg(row)),
               ]),
@@ -4926,8 +5045,21 @@ class _RegApproveActions extends StatefulWidget {
   final String id;
   final Future<void> Function() onApprove;
   final Future<void> Function() onReject;
+
+  /// CMD #1886 — customer_approve_gate(). The Approve button is NEVER hidden:
+  /// when `can` is false it is disabled and carries the backend's own sentence
+  /// ("Licence not verified", or the fields that are actually absent) plus a
+  /// Fix link to the page that edits them. An absent gate leaves the button
+  /// exactly as it was before this change.
+  final dynamic gate;
+  final VoidCallback? onFix;
+
   const _RegApproveActions(
-      {required this.id, required this.onApprove, required this.onReject});
+      {required this.id,
+      required this.onApprove,
+      required this.onReject,
+      this.gate,
+      this.onFix});
 
   @override
   State<_RegApproveActions> createState() => _RegApproveActionsState();
@@ -4958,14 +5090,44 @@ class _RegApproveActionsState extends State<_RegApproveActions> {
           child: CircularProgressIndicator(
               strokeWidth: 2, color: Color(0xFF1B7A43)));
     }
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      _btn('Approve', const Color(0xFF1B7A43), () => _act(widget.onApprove)),
+    final gate = widget.gate is Map
+        ? Map<String, dynamic>.from(widget.gate as Map)
+        : const <String, dynamic>{};
+    final blocked = gate.isNotEmpty && gate['can'] != true;
+    final reason = (gate['reason'] ?? '').toString();
+    final fixLabel = (gate['fix_label'] ?? '').toString();
+    final fixField = (gate['fix_field_label'] ?? '').toString();
+
+    final buttons = Row(mainAxisSize: MainAxisSize.min, children: [
+      _btn('Approve', const Color(0xFF1B7A43),
+          blocked ? null : () => _act(widget.onApprove)),
       const SizedBox(width: 4),
       _btn('Reject',  const Color(0xFFDC2626), () => _act(widget.onReject)),
     ]);
+    if (!blocked || reason.isEmpty) return buttons;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        buttons,
+        SizedBox(height: Ds.space.x4),
+        Text(reason, style: Ds.t.caption.copyWith(color: Ds.c.danger)),
+        if (fixLabel.isNotEmpty && widget.onFix != null)
+          InkWell(
+            onTap: widget.onFix,
+            child: Padding(
+              padding: EdgeInsets.only(top: Ds.space.x4),
+              child: Text(
+                  fixField.isEmpty ? fixLabel : '$fixLabel: $fixField',
+                  style: Ds.t.caption.copyWith(color: Ds.c.brand)),
+            ),
+          ),
+      ],
+    );
   }
 
-  Widget _btn(String label, Color color, VoidCallback onTap) => InkWell(
+  Widget _btn(String label, Color color, VoidCallback? onTap) => InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(6),
         child: Container(

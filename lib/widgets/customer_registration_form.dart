@@ -58,20 +58,27 @@ class CustomerFormController extends ChangeNotifier {
 
   String text(String key) => (_schema?[key] ?? '').toString();
 
+  /// Install a schema payload directly (tests, and any caller that already
+  /// holds the RPC's answer). Same code path as [load] minus the network.
+  void seed(Map<String, dynamic> payload) {
+    _schema = Map<String, dynamic>.from(payload);
+    for (final f in fields) {
+      final k = f['key'].toString();
+      final ctl = controllerFor(k);
+      final def = f['default'];
+      if (ctl.text.isEmpty && def != null && def.toString().isNotEmpty) {
+        ctl.text = def.toString();
+      }
+    }
+    notifyListeners();
+  }
+
   Future<void> load() async {
     try {
       final res = await Supabase.instance.client
           .rpc('customer_form_schema', params: {'p_context': formContext});
       if (res is Map) {
-        _schema = Map<String, dynamic>.from(res);
-        for (final f in fields) {
-          final k = f['key'].toString();
-          final ctl = controllerFor(k);
-          final def = f['default'];
-          if (ctl.text.isEmpty && def != null && def.toString().isNotEmpty) {
-            ctl.text = def.toString();
-          }
-        }
+        seed(Map<String, dynamic>.from(res));
         RenderLog.write('c1887_form_schema',
             'ctx=$formContext;fields=${fields.length};req=${requiredKeys.length}');
       }

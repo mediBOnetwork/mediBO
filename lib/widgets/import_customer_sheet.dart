@@ -47,15 +47,21 @@ class ImportCustomerSheet extends StatefulWidget {
   /// lead_customer_prefill().missing[]: fields the lead could not supply.
   final List<String> missing;
 
-  /// Which schema the backend should send — 'admin' or 'lead_convert'.
-  final String formContext;
+  /// Which schema the backend should send. A caller may name it; otherwise a
+  /// sheet opened with a LEAD prefill is the Convert-lead surface and asks for
+  /// that schema, so the S Leads call sites need no change to get their own
+  /// title and field list.
+  final String? formContext;
+
+  String get schemaContext =>
+      formContext ?? (prefill != null ? 'lead_convert' : 'admin');
 
   const ImportCustomerSheet({
     super.key,
     this.extracted,
     this.prefill,
     this.missing = const [],
-    this.formContext = 'admin',
+    this.formContext,
   });
 
   /// Returns true when a customer was imported (caller should refresh).
@@ -64,7 +70,7 @@ class ImportCustomerSheet extends StatefulWidget {
     Map<String, dynamic>? extracted,
     Map<String, dynamic>? prefill,
     List<String> missing = const [],
-    String formContext = 'admin',
+    String? formContext,
   }) =>
       showDialog<bool>(
         context: context,
@@ -82,7 +88,7 @@ class ImportCustomerSheet extends StatefulWidget {
 
 class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
   late final CustomerFormController _form =
-      CustomerFormController(formContext: widget.formContext);
+      CustomerFormController(formContext: widget.schemaContext);
 
   bool _saving = false;
   bool _locating = false;

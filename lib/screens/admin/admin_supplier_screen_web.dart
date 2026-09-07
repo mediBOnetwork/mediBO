@@ -30,6 +30,7 @@ import '../../utils/safe_parse.dart';
 import '../../services/admin_date_scope.dart'; // CHANGE #545
 import '../../services/admin_zone_scope.dart'; // CHANGE #609
 import '../../services/date_labels.dart'; // CHANGE #548
+import '../../fulfill/readiness_header_block.dart';
 import '../../fulfill/supplier_toggle_chips.dart';
 import '../../services/ui_copy.dart';
 import '../../widgets/backend_chip.dart'; // CHANGE #606
@@ -2785,14 +2786,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }
   }
 
-  // ── CHANGE #1890 — the readiness card's header block is a FIXED size. ──────
-  // Two stacked rows, both token-sized: the label owns the first on its own,
-  // the status/date chips scroll sideways in the second. Because neither
-  // height depends on `_readinessExpanded`, the card measures the same open or
-  // closed and expanding only ever adds body BELOW them.
-  double get _readinessLabelH => Ds.space.x16;
-  double get _readinessChipsH => Ds.space.x24 + Ds.space.x4;
-
   Widget _buildReadinessAndSlider(double pad) {
     final readiness = _inquiryReadiness;
     final checks = (readiness?['checks'] as List?)
@@ -2855,7 +2848,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     try {
       RenderLog.write('c1890_readiness_label_row', 'own_row');
       RenderLog.write('c1890_readiness_header_h',
-          (_readinessLabelH + _readinessChipsH).toStringAsFixed(0));
+          ReadinessHeaderBlock.blockHeight.toStringAsFixed(0));
     } catch (_) {}
 
     return Padding(
@@ -2871,69 +2864,17 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           ),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             // CHANGE #503 C: collapsed-by-default header — title, status pill,
-            // date. The whole row is tappable; no chevron icon needed.
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
+            // date. The whole block is tappable; no chevron icon needed.
+            // CHANGE #1890 — the block itself lives in ReadinessHeaderBlock so
+            // its one rule (the label never shares a Row with a flexible
+            // child) is pinned by a protected test instead of by a comment.
+            ReadinessHeaderBlock(
+              title: title,
+              statusLabel: statusLabel,
+              statusBg: statusLabel == null ? null : _readinessToneBg(statusTone),
+              statusFg: statusLabel == null ? null : _readinessToneFg(statusTone),
+              dateLabel: dateLabel,
               onTap: () => setState(() => _readinessExpanded = !_readinessExpanded),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                // ── CHANGE #1890, line 1: the label, alone, full width. ─────
-                // #754 put this Text in an Expanded and then dropped the
-                // AutoFlow / Bundle chips into the same Row. Once the chips
-                // were wide enough the Expanded was squeezed to a single
-                // character column and SEND-ALL READINESS wrapped one letter
-                // per line (Om, 08 Sep 01:31). The label now shares its row
-                // with nothing at all, so there is no flexible sibling left
-                // that can starve it, and it clips rather than wraps.
-                SizedBox(
-                  height: _readinessLabelH,
-                  width: double.infinity,
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(title,
-                        maxLines: 1,
-                        softWrap: false,
-                        overflow: TextOverflow.ellipsis,
-                        style: Ds.t.caption.copyWith(
-                            fontWeight: FontWeight.w700, letterSpacing: 0.6)),
-                  ),
-                ),
-                // ── line 2: the chips, in a strip that scrolls sideways. ────
-                // Fixed height and drawn in BOTH states, so the header block
-                // measures exactly the same open or closed and the card never
-                // jumps under the finger that just tapped it.
-                SizedBox(
-                  height: _readinessChipsH,
-                  child: ListView(
-                    scrollDirection: Axis.horizontal,
-                    physics: const ClampingScrollPhysics(),
-                    children: [
-                      if (statusLabel != null) ...[
-                        Center(
-                          child: Container(
-                            padding: EdgeInsets.symmetric(
-                                horizontal: Ds.space.x12, vertical: Ds.space.x4),
-                            decoration: BoxDecoration(
-                              color: _readinessToneBg(statusTone),
-                              borderRadius: Ds.r.rChip,
-                            ),
-                            child: Text(statusLabel,
-                                style: Ds.t.caption.copyWith(
-                                    fontWeight: FontWeight.w700,
-                                    color: _readinessToneFg(statusTone))),
-                          ),
-                        ),
-                        SizedBox(width: Ds.space.x8),
-                      ],
-                      if (dateLabel != null)
-                        Center(
-                          child: Text(dateLabel,
-                              style: Ds.t.caption
-                                  .copyWith(fontWeight: FontWeight.w600)),
-                        ),
-                    ],
-                  ),
-                ),
-              ]),
             ),
             // Expanding/collapsing is purely visual — no re-fetch — so it can
             // animate instantly on whatever's already cached in `readiness`.

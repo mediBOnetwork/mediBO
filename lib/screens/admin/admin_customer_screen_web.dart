@@ -403,6 +403,26 @@ class AdminCustomerScreen extends StatefulWidget {
   /// plan isn't loaded yet — same early-return the button itself is subject to.
   static bool triggerOptimizeAllRoutes() => _RoutesTab.triggerOptimizeAllRoutes();
 
+  /// CHANGE #1867 — open one of this screen's own sub-tabs on the shell's
+  /// instance, by the SAME key the tab row uses (`sLeads`, `routes`, …).
+  /// Null, empty or unknown is ignored rather than thrown on, matching how
+  /// [initialFilter] treats a stage this build has never heard of.
+  ///
+  /// It retries for a few frames because the caller is the shell reading the
+  /// URL in initState, before this screen's state exists — the deep link must
+  /// survive a cold start, which is the only kind that matters for a link.
+  static void openTab(String? filterName, {int tries = 12}) {
+    if (filterName == null || filterName.isEmpty) return;
+    final st = _screenKey.currentState;
+    if (st != null) {
+      st._openTabByName(filterName);
+      return;
+    }
+    if (tries <= 0) return;
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => openTab(filterName, tries: tries - 1));
+  }
+
   @override
   State<AdminCustomerScreen> createState() => _AdminCustomerScreenState();
 }
@@ -766,6 +786,17 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       setState(() => _sLeadsTotal = total);
       RenderLog.write('c443_summary_total', total);
     }).catchError((_) {});
+  }
+
+  /// CHANGE #1867 — see [AdminCustomerScreen.openTab].
+  void _openTabByName(String filterName) {
+    for (final f in _CustFilter.values) {
+      if (f.name != filterName) continue;
+      if (!mounted) return;
+      setState(() => _filter = f);
+      _autoLoad(key: f.name, force: true);
+      return;
+    }
   }
 
   void _autoLoad({required String key, bool force = false}) {

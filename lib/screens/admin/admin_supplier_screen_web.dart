@@ -2849,6 +2849,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       RenderLog.write('c1890_readiness_label_row', 'own_row');
       RenderLog.write('c1890_readiness_header_h',
           ReadinessHeaderBlock.blockHeight.toStringAsFixed(0));
+      // Open or closed, so the proof of "the header block is the same height
+      // in both states" can be read off a live page rather than inferred.
+      RenderLog.write('c1890_readiness_open', _readinessExpanded.toString());
     } catch (_) {}
 
     return Padding(

@@ -217,9 +217,26 @@ class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel>
       padding:
           EdgeInsets.fromLTRB(Ds.space.x12, 0, Ds.space.x12, Ds.space.x12),
       child: SizedBox(
-        height: v.collapsedBodyHeight,
+        // Tall enough for EVERY filter the backend sent, never shorter than
+        // the thumbnail. The first cut sized this block to the thumbnail alone
+        // and "Optimize route" — the fifth filter, and the only one that is an
+        // action — was clipped below the fold of a 120 px scroller. A filter
+        // you have to discover by scrolling a postage stamp is a filter that
+        // is not there.
+        height: _collapsedBodyHeight(v),
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Expanded(child: _filterGrid(v.badges)),
+          // Capped, and left-aligned: stretched across a 1100 px desktop these
+          // saturated pills read as decorative colour blocks rather than
+          // filters (Om's design rules: no decorative multi-colour fills).
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: Ds.space.x48 * 8),
+                child: _filterGrid(v.badges),
+              ),
+            ),
+          ),
           SizedBox(width: Ds.space.x12),
           _mapThumb(v),
         ]),
@@ -267,6 +284,17 @@ class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel>
     );
   }
 
+  /// One grid row per pair of filters, each a full tap target, plus the gap
+  /// between them — or the thumbnail's height, whichever is larger.
+  double _collapsedBodyHeight(SupplierMapPanelView v) {
+    final rowH = Ds.touch.minTarget + Ds.space.x8;
+    final rows =
+        (v.badges.length + SupplierMapPanelView.collapsedFilterColumns - 1) ~/
+            SupplierMapPanelView.collapsedFilterColumns;
+    final grid = rows == 0 ? 0.0 : rows * rowH - Ds.space.x8;
+    return grid > v.collapsedBodyHeight ? grid : v.collapsedBodyHeight;
+  }
+
   /// The status filters as a strict two-column grid. Two columns, not "as many
   /// as fit": a column count that changes with the width is a layout that
   /// jumps every time the phone rotates.
@@ -307,14 +335,24 @@ class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel>
         width: side,
         height: side,
         child: Stack(children: [
+          // IgnorePointer, and it is the whole reason the tap works.
+          //
+          // Measured on the live build: a GestureDetector laid OVER the
+          // thumbnail never fired, while the card header's InkWell right above
+          // it did. The map draws its own pan/tap recognisers, and in the
+          // gesture arena they were taking the pointer. A postage-stamp map
+          // has nothing to pan anyway, so collapsed it takes no pointers at
+          // all and the tap layer below is the only claimant.
           Positioned.fill(
-            child: _SupplierPointsMap(
-              key: _mapKey,
-              center: _data?['map_center'] as Map?,
-              points: v.mapPoints,
-              touchLock: _mapTouchLock,
-              height: side,
-              emptyLabel: v.emptyLabel,
+            child: IgnorePointer(
+              child: _SupplierPointsMap(
+                key: _mapKey,
+                center: _data?['map_center'] as Map?,
+                points: v.mapPoints,
+                touchLock: _mapTouchLock,
+                height: side,
+                emptyLabel: v.emptyLabel,
+              ),
             ),
           ),
           Positioned.fill(
@@ -348,7 +386,7 @@ class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel>
       onTap: () => setState(() => _open = !_open),
       child: Padding(
         padding: EdgeInsets.symmetric(
-            horizontal: Ds.space.x12, vertical: Ds.space.x12),
+            horizontal: Ds.space.x12, vertical: Ds.space.x8),
         child: Row(children: [
           Icon(Icons.map_outlined, size: Ds.t.bodySize, color: Ds.c.brand),
           SizedBox(width: Ds.space.x8),

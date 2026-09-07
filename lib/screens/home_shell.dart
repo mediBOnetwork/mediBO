@@ -546,6 +546,12 @@ class _HomeShellState extends State<HomeShell> {
       });
       return;
     }
+    // CHANGE #1867 — /admin/customers[?tab=sLeads|routes], read like /orders below.
+    if (path == '/admin/customers') {
+      _index = 6;
+      AdminCustomerScreen.openTab(Uri.base.queryParameters['tab']);
+      return;
+    }
     if (path.startsWith('/c/')) {
       _category = _slugToCat(path.substring(3));
     } else if (path == '/orders') {

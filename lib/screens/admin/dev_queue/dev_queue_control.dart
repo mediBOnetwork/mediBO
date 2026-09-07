@@ -535,9 +535,16 @@ class _DevQueueControlState extends State<DevQueueControl> {
           // fetches. has:false draws nothing at all.
           if (((_snap['build_branch'] as Map?)?['has'] ?? false) == true) ...[
             _divider(),
-            BuildBranchCard(
-              branch: (_snap['build_branch'] as Map?)?.cast<String, dynamic>() ??
-                  const {},
+            // CMD #1863 — the card is now the way IN to `build_branch_log()`,
+            // the ledger of every branch that has existed. The card itself is
+            // unchanged: it still prints the live branch and its recent
+            // attempts; the tap is the only new thing.
+            InkWell(
+              onTap: _showBranchLog,
+              child: BuildBranchCard(
+                branch: (_snap['build_branch'] as Map?)?.cast<String, dynamic>() ??
+                    const {},
+              ),
             ),
           ],
           if (_health.isNotEmpty) ...[
@@ -644,6 +651,96 @@ class _DevQueueControlState extends State<DevQueueControl> {
           ),
         ),
       );
+
+  /// CMD #1863 — `build_branch_log(days)`, printed verbatim.
+  ///
+  /// `build_branch_card()` says what the branch is doing NOW; this says what
+  /// the branch lane has cost — every branch that has existed, how long it
+  /// lived, how many builds actually used it and the reason it was created.
+  /// #1570 shipped the ledger and no way to read it, which is the same failure
+  /// as #1149's silent gate: a branch that is up and carrying zero builds only
+  /// becomes visible once you can see the ones before it.
+  ///
+  /// Nothing here is computed. Each row's headline is ui_copy's own
+  /// "{ref} · {builds} builds" template, its status chip is the backend's word
+  /// printed as it arrived, and the lifetime line is the backend's two
+  /// already-formatted timestamps. An empty ledger renders the backend's empty
+  /// sentence rather than a blank sheet.
+  Future<void> _showBranchLog() async {
+    Map<String, dynamic> log = const {};
+    try {
+      log = await widget.service.buildBranchLog();
+    } catch (_) {
+      // The sheet still opens and says the backend had nothing — a refused
+      // read must not look like a lane that has never run.
+    }
+    if (!mounted) return;
+    final rows = ((log['rows'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sctx) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.all(Ds.space.x16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(c('dev_queue.branch_title'),
+                  style: Ds.t.body.copyWith(fontWeight: FontWeight.w700)),
+              SizedBox(height: Ds.space.x12),
+              if (rows.isEmpty)
+                Text(c('dev_queue.branch_attempts_none'),
+                    style: Ds.t.caption.copyWith(color: Ds.c.textSecondary))
+              else
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: rows.length,
+                    itemBuilder: (_, i) => _branchLogRow(rows[i]),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// One ledger row. Every string is the payload's; the only decision made here
+  /// is which of them sits on which line.
+  Widget _branchLogRow(Map<String, dynamic> r) {
+    final created = (r['created'] ?? '').toString();
+    final deleted = (r['deleted'] ?? '').toString();
+    final reason = (r['reason'] ?? '').toString();
+    final status = (r['status'] ?? '').toString();
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(
+            child: Text(
+                cf('dev_queue.branch_ref', {
+                  'ref': (r['project_ref'] ?? '').toString(),
+                  'builds': (r['builds'] ?? '').toString(),
+                }),
+                style: Ds.t.caption.copyWith(fontWeight: FontWeight.w700)),
+          ),
+          if (status.isNotEmpty)
+            ToneChip(label: status, tone: statusTone(status)),
+        ]),
+        if (created.isNotEmpty || deleted.isNotEmpty)
+          Text([created, deleted].where((e) => e.isNotEmpty).join(' — '),
+              style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+        if (reason.isNotEmpty)
+          Text(reason, style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+      ]),
+    );
+  }
 
   Widget _breakerBadge() => BreakerBanner(
       breaker: (_snap['breaker'] as Map?)?.cast<String, dynamic>() ?? const {});

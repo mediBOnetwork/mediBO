@@ -351,6 +351,17 @@ Current files and what they hold down:
   and `headersWith()` — the ONE place the x-medibo-test-session header is
   attached — adds or removes only that header and never rebuilds
   apikey/Authorization.
+- `session_clock_test.dart` — the SESSION CLOCK (CMD #1850): the unpinned path
+  is the path that shipped (an empty clock map and has:false each draw no
+  control, no time in the caption, and none of #1848's words change), one
+  install's pinned time never reaches another banner built from the same
+  widget in the same tree, and the sheet computes nothing — the rendered time,
+  sub-line, presets (in payload order; the fixture's are deliberately not time
+  ordered), step sizes (whose `minutes` disagrees with its own label) and the
+  message after a tap are all backend strings; the typed text is sent through
+  untouched, no presets means no preset row, Real time appears only on
+  can_release, and a refusal prints the backend's words while the displayed
+  time stays where the backend last put it.
 
 - `synthetic_isolation_test.dart` — a synthetic pharmacy is never visible to a
   real viewer (#668). Invisibility is decided in SQL before a payload exists, so

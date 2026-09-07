@@ -23,6 +23,8 @@ import '../../utils/render_log.dart';
 import 'customer_pipeline_screen.dart';
 import '../../user_state.dart'; // CMD #633 — the session gate below
 import '../../design_tokens.dart'; // CHANGE #238 — Ds tokens for the new panel chrome
+import 'sleads_filter_bar.dart'; // CMD #1868 — the S Leads filter row
+import '../../services/sleads_filter_service.dart'; // CMD #1868
 import '../../models/order_item_panel_view.dart'; // CHANGE #238
 import '../../fulfill/fulfill_lookups.dart'; // C639: backend-owned entry label
 import 'demand_preview_sheet.dart'; // C639 PART D
@@ -655,6 +657,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   // Fetched independently of _load() so it's populated before the tab is
   // ever opened; kept in sync afterwards via _SLeadsTab.onTotalChanged.
   int _sLeadsTotal = 0;
+
+  /// CMD #1868 — sleads_count()'s own caption for the S Leads tab, filtered
+  /// exactly like the list. Null until the tab has loaded once, at which point
+  /// it OUTRANKS the locally composed fallback below.
+  String? _sLeadsCountChip;
   // CHANGE #445 — "Routes" tab badge count (zones.length from
   // lead_routes_screen). Kept in sync via _RoutesTab.onZonesChanged; only
   // populated once the tab has been opened (no independent bootstrap fetch,
@@ -2178,6 +2185,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         onTotalChanged: (n) {
           if (mounted) setState(() => _sLeadsTotal = n);
         },
+        onCountChip: (chip) {
+          if (mounted) setState(() => _sLeadsCountChip = chip);
+        },
       );
     }
     // Routes tab (CHANGE #445 — zones -> ordered visiting route)
@@ -2460,8 +2470,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                       'Leads (${_loggedInLeads.length + _otherLeads.length})'),
                 const SizedBox(width: 4),
                 if (_tabOn('s_leads'))
-                  _tab(_CustFilter.sLeads,
-                      _countedTabLabel('sleads', 'S Leads ($_sLeadsTotal)')),
+                  _tab(
+                      _CustFilter.sLeads,
+                      _sLeadsCountChip ??
+                          _countedTabLabel('sleads', 'S Leads ($_sLeadsTotal)')),
                 const SizedBox(width: 4),
                 if (_tabOn('routes'))
                   _tab(_CustFilter.routes,
@@ -8633,30 +8645,25 @@ Future<List<_LeadCategoryNode>> _fetchCategoryTree(String use) async {
   return _parseCategoryTree(res);
 }
 
-const Map<String, String> _sLeadClassLabels = {
-  'medical_store': 'Medical Store',
-  'wholesaler': 'Wholesaler',
-  'chain': 'Chain',
-  'clinic': 'Clinic',
-  'alt_med': 'Alt Med',
-  'other': 'Other',
-};
-
-const List<String> _sLeadClassOrder = [
-  'medical_store',
-  'chain',
-  'wholesaler',
-  'clinic',
-  'alt_med',
-  'other',
-];
+// CMD #1868 — the class taxonomy that used to live here (_sLeadClassLabels /
+// _sLeadClassOrder) is GONE. Chips, their order, their labels and their counts
+// now arrive from sleads_filters(); adding Hospital / Lab was a deploy, and is
+// now one INSERT. See lib/screens/admin/sleads_filter_bar.dart.
 
 const List<String> _sLeadActiveStatuses = ['planning', 'running', 'paused_budget'];
 
 class _SLeadsTab extends StatefulWidget {
   final bool isDesktop;
   final ValueChanged<int> onTotalChanged;
-  const _SLeadsTab({required this.isDesktop, required this.onTotalChanged});
+
+  /// CMD #1868 — the tab's caption, whole, from sleads_count() for the SAME
+  /// filters the list is showing. "S Leads (12)" is the backend's sentence.
+  final ValueChanged<String> onCountChip;
+  const _SLeadsTab({
+    required this.isDesktop,
+    required this.onTotalChanged,
+    required this.onCountChip,
+  });
 
   @override
   State<_SLeadsTab> createState() => _SLeadsTabState();
@@ -8745,11 +8752,15 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   List<Map<String, dynamic>> get _rows => _leadPage.rows;
   bool _rowsLoading = false;
   String? _cityFilter;
-  String _classFilter = 'all';
-  bool _targetsOnly = true;
-  bool _withPhone = false;
-  bool _openNowOnly = false;
-  bool _withEmailOnly = false;
+
+  // ── CMD #1868 — ONE filter map, the shape _sleads_filters_norm() returns.
+  // It is what sleads_page() / sleads_count() / sleads_filters() are called
+  // with and what a saved view stores, so save -> apply is a round-trip with
+  // nothing translated in Dart.
+  SLeadsFilterState _fs = const SLeadsFilterState();
+  SLeadsFilterModel _filterModel = const SLeadsFilterModel({});
+  static const SLeadsFilterService _filterSvc = SLeadsFilterService();
+  bool _filterBusy = false;
   final TextEditingController _searchCtrl = TextEditingController();
   Timer? _searchDebounce;
   // CHANGE #1867 — 50-row pages, appended by infinite scroll. The old value
@@ -8925,7 +8936,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         if (_activeRunId != null) _subscribeToRun(_activeRunId!);
       }
 
-      await _loadRows(reset: true);
+      await Future.wait([_loadRows(reset: true), _refreshFilterModel()]);
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -9302,14 +9313,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     try {
       final search = _searchCtrl.text.trim();
       final res = await Supabase.instance.client.rpc('sleads_page', params: {
-        'p_city': _cityFilter,
-        'p_class': _classFilter == 'all' ? null : _classFilter,
-        'p_targets_only': _targetsOnly,
-        'p_with_phone': _withPhone,
-        'p_search': search.isEmpty ? null : search,
-        'p_status': null,
-        'p_open_now': _openNowOnly,
-        'p_with_email': _withEmailOnly,
+        'p_filters': _effectiveFilters(search),
         'p_limit': _pageSize,
         'p_offset': offset,
       });
@@ -9346,29 +9350,122 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     _loadRows();
   }
 
-  void _changeFilters({
-    String? city,
-    bool cityIsAll = false,
-    String? classKey,
-    bool? targetsOnly,
-    bool? withPhone,
-    bool? openNow,
-    bool? withEmail,
-  }) {
-    setState(() {
-      if (cityIsAll) _cityFilter = null;
-      if (city != null) _cityFilter = city;
-      if (classKey != null) _classFilter = classKey;
-      if (targetsOnly != null) _targetsOnly = targetsOnly;
-      if (withPhone != null) _withPhone = withPhone;
-      if (openNow != null) _openNowOnly = openNow;
-      if (withEmail != null) _withEmailOnly = withEmail;
-    });
-    // CHANGE #1867 — a filter change resets to page 1 through the SAME 300 ms
-    // debounce as typing, so tapping three chips in a row is one fetch.
+  /// The filter map actually sent: the canonical state plus the two controls
+  /// the screen still owns (the city dropdown and the search box).
+  Map<String, dynamic> _effectiveFilters([String? search]) => _fs
+      .withCity(_cityFilter)
+      .withSearch(search ?? _searchCtrl.text)
+      .value;
+
+  /// CMD #1868 — one filter change: re-read the rows AND the chip model
+  /// (counts, which chip is lit, the score caption, the count chip). Every one
+  /// of those is the backend's answer to the SAME map.
+  ///
+  /// CHANGE #1867's 300 ms debounce is kept: tapping three chips in a row is
+  /// one fetch, not three.
+  void _applyFilters(SLeadsFilterState next) {
+    setState(() => _fs = next);
     _searchDebounce?.cancel();
-    _searchDebounce =
-        Timer(const Duration(milliseconds: 300), () => _loadRows(reset: true));
+    _searchDebounce = Timer(const Duration(milliseconds: 300), () {
+      _loadRows(reset: true);
+      _refreshFilterModel();
+    });
+  }
+
+  Future<void> _refreshFilterModel() async {
+    final sent = _effectiveFilters();
+    try {
+      final results = await Future.wait([
+        _filterSvc.filters(sent),
+        _filterSvc.count(sent),
+      ]);
+      if (!mounted) return;
+      final model = SLeadsFilterModel.fromPayload(results[0]);
+      setState(() {
+        _filterModel = model;
+        // The backend normalised the map (defaults filled in); adopt its
+        // version so the next call round-trips exactly what it sent back.
+        if (model.filters.isNotEmpty) _fs = model.state;
+      });
+      final chip = results[1]['count_chip']?.toString() ?? model.countChip;
+      widget.onCountChip(chip);
+      RenderLog.write('c1868_chips', model.chips.length);
+      RenderLog.write('c1868_toggles', model.toggles.length);
+      RenderLog.write('c1868_views', model.viewItems.length);
+      RenderLog.write('c1868_count_chip', chip);
+    } catch (_) {
+      // A failed filter read leaves the last good model on screen; the list
+      // itself reports its own error.
+    }
+  }
+
+  void _changeFilters({String? city, bool cityIsAll = false}) {
+    if (cityIsAll) _cityFilter = null;
+    if (city != null) _cityFilter = city;
+    _applyFilters(_fs);
+  }
+
+  // ── CMD #1868 — saved views ─────────────────────────────────────────────
+
+  Future<void> _saveView() async {
+    final ctrl = TextEditingController();
+    final views = _filterModel.views;
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(views['save_label']?.toString() ?? ''),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: InputDecoration(hintText: views['name_hint']?.toString()),
+          onSubmitted: (v) => Navigator.pop(ctx, v),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(c('admin_customer.cancel'))),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, ctrl.text),
+              child: Text(views['save_label']?.toString() ?? '')),
+        ],
+      ),
+    );
+    if (name == null || !mounted) return;
+    await _runViewRpc(() => _filterSvc.saveView(name, _effectiveFilters()));
+  }
+
+  Future<void> _applyView(int id) async {
+    final res = await _runViewRpc(() => _filterSvc.applyView(id));
+    if (res == null || res['ok'] != true) return;
+    _applyFilters(SLeadsFilterState.fromPayload(res['filters']));
+  }
+
+  Future<void> _deleteView(int id) async =>
+      _runViewRpc(() => _filterSvc.deleteView(id));
+
+  /// Every saved-view RPC answers with its own message and the fresh list;
+  /// this prints both verbatim and never composes a sentence.
+  Future<Map<String, dynamic>?> _runViewRpc(
+      Future<Map<String, dynamic>> Function() call) async {
+    if (_filterBusy) return null;
+    setState(() => _filterBusy = true);
+    try {
+      final res = await call();
+      if (!mounted) return res;
+      setState(() => _filterBusy = false);
+      final msg = res['message']?.toString();
+      if (msg != null && msg.isNotEmpty) {
+        showToast(context, msg, isError: res['ok'] != true);
+      }
+      await _refreshFilterModel();
+      return res;
+    } catch (e) {
+      if (mounted) {
+        setState(() => _filterBusy = false);
+        showToast(context, '$e', isError: true);
+      }
+      return null;
+    }
   }
 
 
@@ -10553,99 +10650,61 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     );
   }
 
+  /// CMD #1868 — the filter row is sleads_filters(), rendered. The chips,
+  /// their order, their labels, their counts, the four hidden-by-default
+  /// switches, the score range and its caption, the active zone's name and
+  /// the saved views all arrive in that one payload. `byClass` is still the
+  /// summary's, but only the city dropdown reads it now.
   Widget _buildFilterBar(
       List<Map<String, dynamic>> byClass, List<Map<String, dynamic>> cities, int total) {
-    final classCounts = <String, int>{
-      for (final c in byClass) (c['class']?.toString() ?? ''): (c['n'] as num?)?.toInt() ?? 0
-    };
-
-    final classChips = <Widget>[
-      _classChip('all', 'All ($total)', _classFilter == 'all'),
-      ..._sLeadClassOrder.map((k) =>
-          _classChip(k, '${_sLeadClassLabels[k]} (${classCounts[k] ?? 0})', _classFilter == k)),
-    ];
-
     final cityDropdown = DropdownButton<String?>(
       value: _cityFilter,
-      hint: Text(c('admin_customer.all_cities'), style: const TextStyle(fontSize: 12.5)),
+      hint: Text(c('admin_customer.all_cities'), style: Ds.t.body),
       underline: const SizedBox.shrink(),
       items: [
-        DropdownMenuItem<String?>(value: null, child: Text(c('admin_customer.all_cities'), style: const TextStyle(fontSize: 12.5))),
+        DropdownMenuItem<String?>(
+            value: null,
+            child: Text(c('admin_customer.all_cities'), style: Ds.t.body)),
         ...cities.map((c) => DropdownMenuItem<String?>(
               value: c['city']?.toString(),
-              child: Text('${c['city']} (${c['n']})', style: const TextStyle(fontSize: 12.5)),
+              child: Text('${c['city']} (${c['n']})', style: Ds.t.body),
             )),
       ],
       onChanged: (v) => _changeFilters(city: v, cityIsAll: v == null),
     );
 
-    final targetsToggle = _filterToggle('Only B2B targets', _targetsOnly, (v) => _changeFilters(targetsOnly: v));
-    final phoneToggle = _filterToggle('Only with phone', _withPhone, (v) => _changeFilters(withPhone: v));
-    final openNowToggle = _filterToggle('Open now', _openNowOnly, (v) => _changeFilters(openNow: v));
-    final emailToggle = _filterToggle('Has email', _withEmailOnly, (v) => _changeFilters(withEmail: v));
-
     final searchBox = TextField(
       controller: _searchCtrl,
       decoration: InputDecoration(
         hintText: c('admin_customer.search_leads_hint'),
-        hintStyle: const TextStyle(fontSize: 12.5),
-        prefixIcon: const Icon(Icons.search, size: 18),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        hintStyle: Ds.t.caption,
+        prefixIcon: const Icon(Icons.search),
+        border: OutlineInputBorder(borderRadius: Ds.r.rButton),
         isDense: true,
       ),
-      style: const TextStyle(fontSize: 13),
+      style: Ds.t.body,
     );
 
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      // CHANGE #443 (part 2) — always Wrap (never a plain Row) now that there
-      // are 5 items in this group; a fixed Row overflowed near the 900px
-      // desktop/mobile boundary once "Open now" + "Has email" were added.
-      Wrap(spacing: 16, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
-        cityDropdown, targetsToggle, phoneToggle, openNowToggle, emailToggle,
-      ]),
-      const SizedBox(height: 10),
-      widget.isDesktop
-          ? Wrap(spacing: 6, runSpacing: 6, children: classChips)
-          : SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(children: [
-                for (int i = 0; i < classChips.length; i++) ...[
-                  if (i > 0) const SizedBox(width: 6),
-                  classChips[i],
-                ],
-              ]),
-            ),
-      const SizedBox(height: 10),
-      SizedBox(width: widget.isDesktop ? 360 : double.infinity, child: searchBox),
-    ]);
-  }
-
-  Widget _classChip(String key, String label, bool selected) {
-    return ChoiceChip(
-      label: Text(label, style: const TextStyle(fontSize: 11)),
-      selected: selected,
-      onSelected: (_) => _changeFilters(classKey: key),
-      selectedColor: const Color(0xFFDCFCE7),
-      backgroundColor: const Color(0xFFF3F4F6),
-      side: BorderSide(color: selected ? const Color(0xFF1B7A43) : const Color(0xFFD1D5DB)),
-      labelStyle: TextStyle(color: selected ? const Color(0xFF1B7A43) : const Color(0xFF374151)),
-    );
-  }
-
-  Widget _filterToggle(String label, bool value, ValueChanged<bool> onChanged) {
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      Transform.scale(
-        scale: 0.75,
-        child: Switch(
-          value: value,
-          onChanged: onChanged,
-          activeColor: const Color(0xFF1B7A43),
-          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        ),
+    return SLeadsFilterBar(
+      model: _filterModel,
+      onChipTap: (key, kind) => _applyFilters(_fs.tapChip(key, kind)),
+      onToggle: (key, value) => _applyFilters(_fs.setToggle(key, value)),
+      onScore: (score) => _applyFilters(_fs.setScore(score)),
+      onApplyView: _applyView,
+      onDeleteView: _deleteView,
+      onSaveView: _saveView,
+      trailing: Wrap(
+        spacing: Ds.space.x16,
+        runSpacing: Ds.space.x8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          cityDropdown,
+          SizedBox(
+              width: widget.isDesktop ? Ds.space.x48 * 8 : double.infinity,
+              child: searchBox),
+        ],
       ),
-      Text(label, style: const TextStyle(fontSize: 12.5, color: Color(0xFF374151))),
-    ]);
+    );
   }
 
   // ── CHANGE #443 (part 2) — rich lead card ───────────────────────────────

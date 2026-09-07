@@ -47,6 +47,7 @@ import '../../widgets/fullscreen_image.dart';
 import '../../utils/bill_mime.dart'; // CHANGE #465
 import 'admin_customer_360_screen.dart'; // CHANGE #396
 import 'admin_customer_page.dart'; // CHANGE #810
+import 'leads_paging.dart'; // CHANGE #1867 — PagedList / SLeadRow
 import '../../widgets/customer_console_row.dart'; // CHANGE #810
 
 // CHANGE #242: payment-image sharing now goes through the platform-conditional
@@ -639,6 +640,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   // populated once the tab has been opened (no independent bootstrap fetch,
   // unlike S Leads — zones list is heavier and city-scoped).
   int _routesZones = 0;
+  /// CHANGE #1867 — the two chip CAPTIONS, whole, from customers_tab_counts().
+  /// Two cheap count(*)s; neither is a list length, so the chip can no longer
+  /// disagree with a page of 50. Absent (not yet loaded, or the call failed)
+  /// falls back to the old locally-composed caption.
+  Map<String, dynamic> _tabCounts = const {};
 
   final List<LiveFeedHandle> _realtimeChannels = [];
   Timer? _debounce;
@@ -719,6 +725,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     _loadCusConsole(); // CHANGE #810
     _subscribeRealtime();
     _loadSLeadsTotal();
+    _loadTabCounts(); // CHANGE #1867
   }
 
   void _onScreenFocus() {
@@ -728,6 +735,23 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     AdminDateScope.instance.refresh();
     _autoLoad(key: _filter.name, force: true);
     RenderLog.write('screen_autoload_on_focus', 'customers');
+  }
+
+  /// CHANGE #1867 — one cheap RPC for both tab captions.
+  void _loadTabCounts() {
+    Supabase.instance.client.rpc('customers_tab_counts').then((res) {
+      if (!mounted || res is! Map) return;
+      setState(() => _tabCounts = Map<String, dynamic>.from(res));
+      RenderLog.write('c1867_tab_counts',
+          '${_tabCounts['sleads']?['n']}/${_tabCounts['routes']?['n']}');
+    }).catchError((_) {});
+  }
+
+  /// The caption for one of the two counted tabs, verbatim from the backend.
+  String _countedTabLabel(String key, String fallback) {
+    final m = _tabCounts[key];
+    final label = m is Map ? m['label']?.toString() : null;
+    return (label == null || label.isEmpty) ? fallback : label;
   }
 
   // CHANGE #443 — lightweight, independent fetch for the "S Leads" tab badge.
@@ -2405,10 +2429,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                       'Leads (${_loggedInLeads.length + _otherLeads.length})'),
                 const SizedBox(width: 4),
                 if (_tabOn('s_leads'))
-                  _tab(_CustFilter.sLeads, 'S Leads ($_sLeadsTotal)'),
+                  _tab(_CustFilter.sLeads,
+                      _countedTabLabel('sleads', 'S Leads ($_sLeadsTotal)')),
                 const SizedBox(width: 4),
                 if (_tabOn('routes'))
-                  _tab(_CustFilter.routes, 'Routes ($_routesZones)'),
+                  _tab(_CustFilter.routes,
+                      _countedTabLabel('routes', 'Routes ($_routesZones)')),
                 // CMD #1886 — the funnel. Each caption and count is
                 // customer_pipeline_home()'s; an undescribed tab draws nothing.
                 if (_tabOn('signed_up') && _pipeLabel('signed_up').isNotEmpty) ...[
@@ -8685,8 +8711,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
 
   // ── Results / filters ─────────────────────────────────────────────────
   Map<String, dynamic>? _summary;
-  List<Map<String, dynamic>> _rows = [];
-  int _totalCount = 0;
+  List<Map<String, dynamic>> get _rows => _leadPage.rows;
   bool _rowsLoading = false;
   String? _cityFilter;
   String _classFilter = 'all';
@@ -8696,8 +8721,19 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   bool _withEmailOnly = false;
   final TextEditingController _searchCtrl = TextEditingController();
   Timer? _searchDebounce;
-  int _page = 0;
-  static const int _pageSize = 100;
+  // CHANGE #1867 — 50-row pages, appended by infinite scroll. The old value
+  // was 100 rows built EAGERLY, each with a network photo and its own
+  // scrape_lead_card() call; that, not the 107-250 ms RPC, was the jank.
+  static const int _pageSize = 50;
+  /// sleads_page()'s rows + its envelope (count_label / empty_label /
+  /// more_label / end_label / has_more / next_offset). PagedList owns the two
+  /// paging decisions; see lib/screens/admin/leads_paging.dart.
+  PagedList _leadPage = const PagedList();
+  bool _moreLoading = false;
+  /// The results list scrolls in its own viewport so ListView.builder is
+  /// genuinely lazy (a shrinkWrap list inside the page's SingleChildScrollView
+  /// builds every row, which is the bug). This controller drives the append.
+  final ScrollController _resultsCtrl = ScrollController();
 
   // ── CHANGE #443 (part 2) — row expand + get_lead_detail cache ──────────
   final Set<int> _expandedIds = {};
@@ -8744,12 +8780,23 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   void initState() {
     super.initState();
     _searchCtrl.addListener(_onSearchChanged);
+    _resultsCtrl.addListener(_onResultsScroll);
     _bootstrap();
+  }
+
+  /// CHANGE #1867 — infinite scroll: within 400 px of the end, append the
+  /// next 50. Guarded by _moreLoading so a fling fires one fetch, not ten.
+  void _onResultsScroll() {
+    if (!_resultsCtrl.hasClients) return;
+    final pos = _resultsCtrl.position;
+    if (pos.pixels >= pos.maxScrollExtent - 400) _loadMore();
   }
 
   @override
   void dispose() {
     _searchDebounce?.cancel();
+    _resultsCtrl.removeListener(_onResultsScroll);
+    _resultsCtrl.dispose();
     _pollTimer?.cancel();
     _runChannel?.unsubscribe();
     _searchCtrl.removeListener(_onSearchChanged);
@@ -9201,19 +9248,29 @@ class _SLeadsTabState extends State<_SLeadsTab> {
 
   // ── Results ────────────────────────────────────────────────────────────
 
+  // CHANGE #1867 — 300 ms, and it resets to page 1: a keystroke can never
+  // append someone else's page onto the list it is filtering.
   void _onSearchChanged() {
     _searchDebounce?.cancel();
     _searchDebounce =
-        Timer(const Duration(milliseconds: 400), () => _loadRows(reset: true));
+        Timer(const Duration(milliseconds: 300), () => _loadRows(reset: true));
   }
 
+  /// CHANGE #1867 — ONE page of sleads_page(). `reset` starts at offset 0 and
+  /// replaces the list; otherwise the payload's own next_offset is appended.
+  /// Every label on screen is the envelope's; nothing is composed here.
   Future<void> _loadRows({bool reset = false}) async {
-    if (reset) _page = 0;
-    setState(() => _rowsLoading = true);
+    final offset = _leadPage.offsetFor(reset: reset);
+    setState(() {
+      if (reset) {
+        _rowsLoading = true;
+      } else {
+        _moreLoading = true;
+      }
+    });
     try {
-      final offset = _page * _pageSize;
       final search = _searchCtrl.text.trim();
-      final res = await Supabase.instance.client.rpc('get_scraped_leads', params: {
+      final res = await Supabase.instance.client.rpc('sleads_page', params: {
         'p_city': _cityFilter,
         'p_class': _classFilter == 'all' ? null : _classFilter,
         'p_targets_only': _targetsOnly,
@@ -9224,32 +9281,38 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         'p_with_email': _withEmailOnly,
         'p_limit': _pageSize,
         'p_offset': offset,
-      }) as List;
-      final rows = res.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-      final total = rows.isNotEmpty
-          ? ((rows.first['total_count'] as num?)?.toInt() ?? 0)
-          : 0;
-      final withPhoto = rows.where((r) => (r['photo_url'] as String?)?.isNotEmpty == true).length;
-      final withHours = rows.where((r) => (r['hours_text'] as List?)?.isNotEmpty == true).length;
-      final openNowTrue = rows.where((r) => r['open_now'] == true).length;
-      RenderLog.write('c443_rows_rendered', rows.length);
-      RenderLog.write('c443_total_count', total);
-      RenderLog.write('c443_rows', rows.length);
-      RenderLog.write('c443_with_photo', withPhoto);
-      RenderLog.write('c443_with_hours', withHours);
-      RenderLog.write('c443_open_now_true', openNowTrue);
+      });
+      final env = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      final before = reset ? 0 : _leadPage.rows.length;
       if (!mounted) return;
       setState(() {
-        _rows = rows;
-        _totalCount = total;
+        _leadPage = _leadPage.applyPage(env, reset: reset);
         _rowsLoading = false;
+        _moreLoading = false;
       });
+      final page = _leadPage.rows.length - before;
+      RenderLog.write('c1867_page_rows', page);
+      RenderLog.write('c1867_loaded_rows', _leadPage.rows.length);
+      RenderLog.write('c443_rows_rendered', page);
+      RenderLog.write('c443_total_count', _leadPage.total);
+      RenderLog.write('c443_rows', page);
     } catch (e) {
       if (mounted) {
-        setState(() => _rowsLoading = false);
+        setState(() {
+          _rowsLoading = false;
+          _moreLoading = false;
+        });
         showToast(context, cf('admin_customer.load_leads_fail_e', {'e': '$e'}), isError: true);
       }
     }
+  }
+
+  /// Append the next page. The BACKEND decides there is one (has_more +
+  /// next_offset); the client never guesses from a list length.
+  void _loadMore() {
+    if (_moreLoading || _rowsLoading || !_leadPage.canLoadMore) return;
+    if (_resultsRunId != null) return; // a run's own set is not paged
+    _loadRows();
   }
 
   void _changeFilters({
@@ -9270,13 +9333,13 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       if (openNow != null) _openNowOnly = openNow;
       if (withEmail != null) _withEmailOnly = withEmail;
     });
-    _loadRows(reset: true);
+    // CHANGE #1867 — a filter change resets to page 1 through the SAME 300 ms
+    // debounce as typing, so tapping three chips in a row is one fetch.
+    _searchDebounce?.cancel();
+    _searchDebounce =
+        Timer(const Duration(milliseconds: 300), () => _loadRows(reset: true));
   }
 
-  void _goToPage(int page) {
-    setState(() => _page = page);
-    _loadRows();
-  }
 
   // ── Scrape control ────────────────────────────────────────────────────
 
@@ -10311,14 +10374,9 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         else if (rows.isEmpty)
           _ssvEmptyStateLocal(runMode
               ? 'This run has no leads left.'
-              : '0 leads match these filters')
-        else ...[
+              : (_leadPage.emptyLabel ?? ''))
+        else
           _leadCardGrid(rows, selectable: runMode),
-          if (!runMode) ...[
-            const SizedBox(height: 12),
-            _buildPagination(),
-          ],
-        ],
       ],
     );
   }
@@ -10588,26 +10646,170 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   // Nothing is composed, formatted or constructed in Dart.
   // ═══════════════════════════════════════════════════════════════════════
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // CHANGE #1867 — the results list is LAZY.
+  //
+  // It was a Wrap (desktop) / Column (mobile) of 100 full cards, built eagerly
+  // inside the page's SingleChildScrollView: 100 network photos and 100
+  // scrape_lead_card() calls, each completion setState-ing the whole thing.
+  // Now it is a ListView.builder in its own bounded viewport — only the rows
+  // on screen exist — and a row is a COMPACT tile drawn straight from
+  // sleads_page(). The rich card (photo, actions, scrape_lead_card()) is
+  // built for an EXPANDED row only, i.e. on tap.
+  // ═══════════════════════════════════════════════════════════════════════
+
   Widget _leadCardGrid(List<Map<String, dynamic>> rows, {required bool selectable}) {
-    if (!widget.isDesktop) {
-      return Column(
-        children: rows
-            .map((r) => Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: _scrapeLeadCard(r, selectable: selectable),
-                ))
-            .toList(),
-      );
-    }
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      children: rows
-          .map((r) => SizedBox(
-              width: 320, child: _scrapeLeadCard(r, selectable: selectable)))
-          .toList(),
+    final vh = MediaQuery.of(context).size.height;
+    final h = (vh * 0.72).clamp(360.0, 900.0);
+    // rows + one footer slot (loading more / end-of-list, both backend copy).
+    final footer = _resultsRunId == null ? 1 : 0;
+    return SizedBox(
+      height: h,
+      child: Scrollbar(
+        controller: _resultsCtrl,
+        child: ListView.builder(
+          controller: _resultsCtrl,
+          primary: false,
+          padding: EdgeInsets.only(bottom: Ds.space.x8),
+          itemCount: rows.length + footer,
+          itemBuilder: (ctx, i) {
+            if (i >= rows.length) return _leadListFooter();
+            final r = rows[i];
+            final id = (r['id'] as num?)?.toInt();
+            final expanded = id != null && _expandedIds.contains(id);
+            RenderLog.write('c1867_row_built', '$i');
+            return Padding(
+              padding: EdgeInsets.only(bottom: Ds.space.x8),
+              child: expanded
+                  ? _scrapeLeadCard(r, selectable: selectable)
+                  : _leadCompactRow(r, selectable: selectable),
+            );
+          },
+        ),
+      ),
     );
   }
+
+  /// The list footer. Both strings are sleads_page()'s own — "Loading more…"
+  /// while a page is in flight, its end_label once the backend says there is
+  /// nothing left. Neither is composed in Dart.
+  Widget _leadListFooter() {
+    if (_moreLoading) {
+      return Padding(
+        padding: EdgeInsets.symmetric(vertical: Ds.space.x16),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          SizedBox(
+              width: 14, height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Ds.c.brand)),
+          SizedBox(width: Ds.space.x8),
+          Text(_leadPage.moreLabel ?? '', style: Ds.t.caption),
+        ]),
+      );
+    }
+    final end = _leadPage.endLabel;
+    if (end != null) {
+      return Padding(
+        padding: EdgeInsets.symmetric(vertical: Ds.space.x16),
+        child: Center(child: Text(end, style: Ds.t.caption)),
+      );
+    }
+    return SizedBox(height: Ds.space.x24);
+  }
+
+  /// CHANGE #1867 — a list row. Text only: no photo, no map, no per-row RPC.
+  /// Every string is sleads_page()'s (a run's own leads fall back to that
+  /// payload's field of the same meaning); absent means the line is absent.
+  Widget _leadCompactRow(Map<String, dynamic> r, {required bool selectable}) {
+    final row = SLeadRow.from(r);
+    final id = row.id;
+    final title = row.title;
+    final typeLabel = row.typeLabel;
+    final ratingLabel = row.ratingLabel;
+    final openLabel = row.openLabel;
+    final address = row.addressLabel;
+    final phone = row.phoneLabel;
+    final selected = id != null && _selectedLeadIds.contains(id);
+
+    return InkWell(
+      onTap: id == null
+          ? null
+          : () {
+              setState(() => _expandedIds.add(id));
+              if (!_leadDetailCache.containsKey(id) && !_detailLoading.contains(id)) {
+                _fetchLeadDetail(id);
+              }
+            },
+      borderRadius: Ds.r.rCard,
+      child: Container(
+        constraints: BoxConstraints(minHeight: Ds.touch.listRowMinHeight),
+        padding: EdgeInsets.all(Ds.space.x12),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          border: Border.all(
+              color: selected ? Ds.c.brand : Ds.c.divider, width: selected ? 1.5 : 1),
+        ),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (selectable && id != null)
+            Padding(
+              padding: EdgeInsets.only(right: Ds.space.x4),
+              child: Checkbox(
+                value: selected,
+                onChanged: (v) => setState(() {
+                  if (v == true) {
+                    _selectedLeadIds.add(id);
+                  } else {
+                    _selectedLeadIds.remove(id);
+                  }
+                }),
+                activeColor: Ds.c.brand,
+              ),
+            ),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Ds.t.bodyStrong),
+              SizedBox(height: Ds.space.x4),
+              Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x4,
+                  crossAxisAlignment: WrapCrossAlignment.center, children: [
+                if (typeLabel != null && typeLabel.isNotEmpty)
+                  _leadRowChip(typeLabel, Ds.c.bg, Ds.c.text),
+                if (ratingLabel != null && ratingLabel.isNotEmpty)
+                  Text(ratingLabel, style: Ds.t.caption.copyWith(color: Ds.c.warning)),
+                if (openLabel != null && openLabel.isNotEmpty)
+                  _leadRowChip(openLabel, Ds.hex(row.openBg, Ds.c.bg),
+                      Ds.hex(row.openFg, Ds.c.textSecondary)),
+              ]),
+              if (address != null && address.isNotEmpty) ...[
+                SizedBox(height: Ds.space.x4),
+                Text(address,
+                    maxLines: 1, overflow: TextOverflow.ellipsis, style: Ds.t.caption),
+              ],
+              if (phone != null && phone.isNotEmpty) ...[
+                SizedBox(height: Ds.space.x4),
+                Text(phone, style: Ds.t.caption.copyWith(color: Ds.c.text)),
+              ],
+            ]),
+          ),
+          Padding(
+            padding: EdgeInsets.only(left: Ds.space.x8),
+            child: Icon(Icons.expand_more, size: 20, color: Ds.c.textSecondary),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  /// One pill on a compact row. Colours arrive already decided (the open/closed
+  /// pair comes straight from sleads_page()); this only draws them.
+  Widget _leadRowChip(String label, Color bg, Color fg) => Container(
+        padding: EdgeInsets.symmetric(horizontal: Ds.space.x8, vertical: Ds.space.x4),
+        decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rChip),
+        child: Text(label,
+            style: Ds.t.caption.copyWith(color: fg, fontWeight: FontWeight.w600)),
+      );
 
   static const Map<String, IconData> _scrapeActionIcons = {
     'call': Icons.call,
@@ -10619,11 +10821,13 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     'import': Icons.person_add_alt_1_outlined,
   };
 
-  /// scrape_lead_card() fetch + cache. One call per lead, on first render.
+  /// scrape_lead_card() fetch + cache.
   ///
-  /// Capped at [_leadCardConcurrency] in flight: a full page is 100 rows and
-  /// firing 100 RPCs at once is pointless. Each completion setStates, which
-  /// rebuilds and starts the next few — so the queue drains itself. The error
+  /// CHANGE #1867 — this is a TAP-ONLY call now. It runs from _scrapeLeadCard,
+  /// and _scrapeLeadCard is built for an EXPANDED row only; a list row is the
+  /// text-only _leadCompactRow, drawn from sleads_page() with no call of its
+  /// own. The concurrency cap stays for the case where several cards are open
+  /// at once. Each completion setStates, so the queue drains itself; the error
   /// path setStates too, otherwise a failure would stall that pump.
   static const int _leadCardConcurrency = 8;
 
@@ -11120,21 +11324,6 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     );
   }
 
-  Widget _buildPagination() {
-    final totalPages = _totalCount == 0 ? 1 : ((_totalCount + _pageSize - 1) ~/ _pageSize);
-    return Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-      IconButton(
-        onPressed: _page > 0 ? () => _goToPage(_page - 1) : null,
-        icon: const Icon(Icons.chevron_left, size: 20),
-      ),
-      Text(cf('admin_customer.page_of', {'n': '${_page + 1}', 'total': '$totalPages'}), style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
-      IconButton(
-        onPressed: (_page + 1) * _pageSize < _totalCount ? () => _goToPage(_page + 1) : null,
-        icon: const Icon(Icons.chevron_right, size: 20),
-      ),
-    ]);
-  }
-
   // ── B5: Past runs ──────────────────────────────────────────────────────
 
   // ── C: Past runs — real table (web) / stacked cards (mobile) ────────────
@@ -11553,7 +11742,13 @@ class _RoutesTabState extends State<_RoutesTab> {
 
   // ── C5: past plans, collapsible, lazy-loaded ──────────────────────────────
   bool _pastPlansExpanded = false;
-  List<Map<String, dynamic>>? _pastPlans;
+  // CHANGE #1867 — route_plan_list() is paged and its rows are built lazily.
+  // Same envelope, same two paging decisions, same class as S Leads.
+  PagedList? _plans;
+  List<Map<String, dynamic>>? get _pastPlans => _plans?.rows;
+  bool _plansMoreLoading = false;
+  static const int _plansPageSize = 20;
+  final ScrollController _plansCtrl = ScrollController();
   // ── CHANGE #486: realtime status (queued/building/ready) — replaces the
   // old #483 4s poll. Patches the affected card in place, no full reload.
   LiveFeedHandle? _planRealtimeChannel;
@@ -11628,6 +11823,7 @@ class _RoutesTabState extends State<_RoutesTab> {
   @override
   void dispose() {
     _countDebounce?.cancel();
+    _plansCtrl.dispose();
     _planRealtimeChannel?.unsubscribe();
     _planRealtimeChannel = null;
     super.dispose();
@@ -11660,19 +11856,49 @@ class _RoutesTabState extends State<_RoutesTab> {
     });
   }
 
-  /// One refetch, used by every path that needs the plan list to be current.
-  Future<void> _refetchPlans() async {
-    if (_pastPlans == null || !mounted) return;
+  /// CHANGE #1867 — ONE page of route_plan_list(p_limit, p_offset). `reset`
+  /// starts at offset 0 and replaces the list; otherwise the payload's own
+  /// next_offset is appended. Only the rows just fetched get their
+  /// plan_google_status badge, so appending never re-fetches the page above.
+  Future<void> _loadPlans({bool reset = false}) async {
+    if (!mounted) return;
+    final held = _plans ?? const PagedList();
+    final offset = held.offsetFor(reset: reset);
+    if (!reset) setState(() => _plansMoreLoading = true);
     try {
-      final list = await Supabase.instance.client
-          .rpc('route_plan_list', params: {'p_limit': 10});
+      final res = await Supabase.instance.client.rpc('route_plan_list',
+          params: {'p_limit': _plansPageSize, 'p_offset': offset});
+      final env = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      final next = held.applyPage(env, reset: reset);
       if (!mounted) return;
-      final fresh = ((list as List?) ?? [])
-          .map((p) => Map<String, dynamic>.from(p as Map))
-          .toList();
-      setState(() => _pastPlans = fresh);
-      _fetchOptStatusFor(fresh);
-    } catch (_) {}
+      final page = next.rows.sublist(reset ? 0 : held.rows.length);
+      setState(() {
+        _plans = next;
+        _plansMoreLoading = false;
+      });
+      RenderLog.write('c1867_plan_page_rows', page.length);
+      RenderLog.write('c1867_plans_loaded', next.rows.length);
+      _fetchOptStatusFor(page);
+    } catch (_) {
+      if (mounted) setState(() => _plansMoreLoading = false);
+    }
+  }
+
+  /// One refetch, used by every path that needs the plan list to be current.
+  /// It re-reads page 1 only — a realtime tick must not silently drop the
+  /// pages the user already scrolled past, and it must not refetch them all.
+  Future<void> _refetchPlans() async {
+    if (_plans == null || !mounted) return;
+    await _loadPlans(reset: true);
+  }
+
+  /// CHANGE #1867 — infinite scroll inside the past-plans panel.
+  void _onPlansScroll() {
+    if (!_plansCtrl.hasClients) return;
+    final pos = _plansCtrl.position;
+    if (pos.pixels < pos.maxScrollExtent - 240) return;
+    if (_plansMoreLoading || !(_plans?.canLoadMore ?? false)) return;
+    _loadPlans();
   }
 
   // CHANGE #548: backend-formatted (ist_fmt 'dmy2_hm').
@@ -12309,15 +12535,7 @@ class _RoutesTabState extends State<_RoutesTab> {
   Future<void> _togglePastPlans() async {
     final expanding = !_pastPlansExpanded;
     setState(() => _pastPlansExpanded = expanding);
-    if (expanding && _pastPlans == null) {
-      try {
-        final res = await Supabase.instance.client.rpc('route_plan_list', params: {'p_limit': 10});
-        final list = ((res as List?) ?? []).map((p) => Map<String, dynamic>.from(p as Map)).toList();
-        if (!mounted) return;
-        setState(() => _pastPlans = list);
-        _fetchOptStatusFor(list);
-      } catch (_) {}
-    }
+    if (expanding && _plans == null) await _loadPlans(reset: true);
   }
 
   // ── CHANGE #488: per-plan optimization badge — plan_google_status() isn't
@@ -12374,7 +12592,17 @@ class _RoutesTabState extends State<_RoutesTab> {
       // Remove it locally right away for snappy UX — the realtime DELETE
       // handler above will also fire and no-op harmlessly on a second pass.
       setState(() {
-        _pastPlans = (_pastPlans ?? []).where((p) => p['plan_id'].toString() != planId).toList();
+        final held = _plans;
+        if (held != null) {
+          _plans = PagedList(
+            rows: held.rows.where((p) => p['plan_id'].toString() != planId).toList(),
+            meta: held.meta,
+            hasMore: held.hasMore,
+            nextOffset: held.nextOffset,
+            total: held.total,
+            loaded: held.loaded,
+          );
+        }
         if (_planId == planId) {
           _plan = null;
           _planId = null;
@@ -12418,11 +12646,7 @@ class _RoutesTabState extends State<_RoutesTab> {
           SnackBar(content: Text(cf('admin_customer.deleted_old_plans', {'n': '$deleted'}))));
       // Realtime DELETE events land per-row already; refetch too so the
       // count is right even if a realtime event is missed.
-      final list = await Supabase.instance.client.rpc('route_plan_list', params: {'p_limit': 10});
-      if (!mounted) return;
-      final freshList = ((list as List?) ?? []).map((p) => Map<String, dynamic>.from(p as Map)).toList();
-      setState(() => _pastPlans = freshList);
-      _fetchOptStatusFor(freshList);
+      await _loadPlans(reset: true);
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -12887,18 +13111,73 @@ class _RoutesTabState extends State<_RoutesTab> {
         ),
         if (_pastPlansExpanded) ...[
           const Divider(height: 1, color: Color(0xFFE5E7EB)),
-          if (_pastPlans == null)
+          if (_plans == null)
             const Padding(
               padding: EdgeInsets.all(16),
               child: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)),
             )
           else if (_pastPlans!.isEmpty)
             Padding(
-              padding: EdgeInsets.all(14),
-              child: Text(c('admin_customer.no_past_plans'), style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+              padding: EdgeInsets.all(Ds.space.x16),
+              child: Text(
+                  _plans?.emptyLabel ?? c('admin_customer.no_past_plans'),
+                  style: Ds.t.caption),
             )
           else
-            ..._pastPlans!.map((p) {
+            // CHANGE #1867 — lazy rows in their own viewport: a plan row is
+            // built when it scrolls into view, and the next page is appended
+            // when the backend says there is one. Never the whole table.
+            SizedBox(
+              height: (MediaQuery.of(context).size.height * 0.5).clamp(220.0, 560.0),
+              child: NotificationListener<ScrollNotification>(
+                onNotification: (_) {
+                  _onPlansScroll();
+                  return false;
+                },
+                child: Scrollbar(
+                  controller: _plansCtrl,
+                  child: ListView.builder(
+                    controller: _plansCtrl,
+                    primary: false,
+                    itemCount: _pastPlans!.length + 1,
+                    itemBuilder: (ctx, i) {
+                      if (i >= _pastPlans!.length) return _plansListFooter();
+                      return _pastPlanRow(_pastPlans![i]);
+                    },
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ]),
+    );
+  }
+
+  /// The past-plans footer — route_plan_list()'s own more_label / end_label.
+  Widget _plansListFooter() {
+    if (_plansMoreLoading) {
+      return Padding(
+        padding: EdgeInsets.symmetric(vertical: Ds.space.x16),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          SizedBox(
+              width: 12, height: 12,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Ds.c.brand)),
+          SizedBox(width: Ds.space.x8),
+          Text(_plans?.moreLabel ?? '', style: Ds.t.caption),
+        ]),
+      );
+    }
+    final end = _plans?.endLabel;
+    if (end != null) {
+      return Padding(
+        padding: EdgeInsets.symmetric(vertical: Ds.space.x16),
+        child: Center(child: Text(end, style: Ds.t.caption)),
+      );
+    }
+    return SizedBox(height: Ds.space.x12);
+  }
+
+  Widget _pastPlanRow(Map<String, dynamic> p) {
               final planId = p['plan_id'].toString();
               final optStatus = p['opt_status'] as Map?;
               final total = (optStatus?['total_routes'] as num?)?.toInt() ?? 0;
@@ -12934,10 +13213,6 @@ class _RoutesTabState extends State<_RoutesTab> {
                   ]),
                 ),
               );
-            }),
-        ],
-      ]),
-    );
   }
 
   // ── B4: plan summary + C1: route cards ───────────────────────────────────

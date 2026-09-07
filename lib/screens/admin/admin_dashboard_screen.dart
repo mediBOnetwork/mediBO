@@ -16,6 +16,9 @@ import '../../design_tokens.dart';
 import '../../models/c529_admin_gaps.dart';
 import '../../widgets/crashes_card.dart'; // CHANGE #473
 import '../../widgets/dashboard_v2_card.dart'; // CHANGE #812
+import '../../widgets/dashboard_home_sections.dart'; // CMD #1891
+import 'admin_customer_screen.dart'; // CMD #1891 — sub-tab doors
+import 'admin_supplier_screen.dart'; // CMD #1891 — sub-tab doors
 import '../../services/ui_copy.dart';
 import '../../services/staff_nav.dart'; // CHANGE #1016 — the layout flag
 import 'admin_ops_board_screen.dart';
@@ -190,6 +193,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     }
   }
 
+  /// CMD #1891 — dashboard_home(): the six sections that replaced the "Also
+  /// here" strip. Injected into the widget so the protected test can pump it
+  /// without Supabase.
+  static Future<Map<String, dynamic>> loadDashboardHome() async {
+    final raw = await Supabase.instance.client.rpc('dashboard_home');
+    return Map<String, dynamic>.from((raw is List ? raw.first : raw) as Map);
+  }
+
   /// CHANGE #325 — one call for the entire dashboard nav.
   Future<void> _loadNav() async {
     try {
@@ -238,6 +249,26 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         }
       }
       return;
+    }
+    // CMD #1891 — a Dashboard tile whose destination is a SUB-TAB of another
+    // page (Customers → Pending approval, Suppliers → Items to review). The
+    // pairing is the registry's: `tab_host` is the page, `tab_screen` the
+    // sub-tab, so moving a door to another host is an UPDATE. Dart only knows
+    // how to reach a host and how to ask it to open a named sub-tab.
+    {
+      final host = (tile['tab_host'] ?? '').toString();
+      final tab = (tile['tab_key'] ?? '').toString();
+      if (host.isNotEmpty) {
+        QuickLinkNavigator.of(context)?.navigate(host);
+        if (tab.isNotEmpty) {
+          if (host == 'customers') {
+            AdminCustomerScreen.openTab(tab);
+          } else if (host == 'suppliers') {
+            AdminSupplierScreen.openTab(tab);
+          }
+        }
+        return;
+      }
     }
     // CHANGE #395 — a registry row may name a REAL named route instead of a
     // shell route key. `_handleAdminNav`'s switch has no default branch, so a
@@ -528,6 +559,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 ),
                 if (_dash.isNotEmpty) SizedBox(height: Ds.space.x24),
                 if (_ops.isNotEmpty) _OpsBoardCard(payload: _ops),
+                // CMD #1891 — every door that used to hide in the "Also
+                // here" strip above Customers, Suppliers and Fulfill, in the
+                // six sections dashboard_home() names.
+                DashboardHomeSections(
+                  load: loadDashboardHome,
+                  onOpen: _openTile,
+                ),
                 const OrderHoursCard(),
                 const NotificationsCard(),
                 const CrashesCard(),

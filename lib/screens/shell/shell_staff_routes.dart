@@ -163,11 +163,22 @@ void shellOpenStaffTile(BuildContext context, Map<String, dynamic> tile,
   navigate(route, seed.isEmpty ? null : seed);
 }
 
-/// A Customers / Suppliers / Fulfill page with the home's extra doors drawn
-/// above its own tab row. Under the v1 flag the page is returned untouched.
+/// CMD #1891 — the "Also here" strip is GONE from Customers, Suppliers and
+/// Fulfill. Every door it carried is a Dashboard tile now
+/// (`dashboard_home()`, six named sections), so drawing it here as well would
+/// be the second surface this change removes — and a chip strip you have to
+/// scroll sideways was the reason those doors went unfound.
+///
+/// The page is returned untouched. The signature stays so the shell needs no
+/// edit, and [StaffHomeStrip] stays in staff_home_screen.dart with its own
+/// protected test: the strip is still what the LEGACY (staff_layout_v1)
+/// layout draws, and re-mounting it is one line here.
 Widget shellWithStaffStrip(String tab, Widget page,
     void Function(String route, [String? seed]) navigate) {
-  if (StaffNav.value.value.isLegacy) return page;
+  if (!StaffNav.value.value.isLegacy) {
+    RenderLog.write('c1891_strip_retired', tab);
+    return page;
+  }
   return Column(children: [
     Builder(builder: (ctx) => StaffHomeStrip(
           tabKey: tab,

@@ -1,12 +1,44 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 
 import '../../../design_tokens.dart';
+import '../../../utils/render_log.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
+import 'dev_queue_branch.dart';
+import 'dev_queue_claude_login.dart';
 import 'dev_queue_common.dart';
+import 'dev_queue_context.dart';
+import 'dev_queue_health.dart';
+import 'restart_safety.dart';
 import 'dev_queue_service.dart';
+import 'safety_net_screen.dart';
 import 'dev_queue_workers.dart';
+import 'usage_meter.dart';
+import 'vm_toggle_policy.dart';
+
+/// CHANGE #1401 — the two payload moves the Runner card makes for the Claude
+/// login, kept pure so they can be held down without a Supabase client.
+///
+/// Both are moves, not decisions: what red says, whether a re-login may be
+/// offered and whether the banner draws at all are `claude_auth_status()`'s and
+/// [ClaudeAuthBanner]'s. What can go wrong HERE is plumbing — reading the block
+/// out of the wrong key, or letting a re-login reply (which carries the login
+/// block ALONE) overwrite the snapshot that also holds the toggles, the
+/// breaker, the pool and the queue counts.
+class ClaudeAuthSnap {
+  /// `dev_ctl_get().claude_auth`, verbatim — absent is an empty map, never a
+  /// synthesised one.
+  static Map<String, dynamic> read(Map<String, dynamic> snap) =>
+      (snap['claude_auth'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  /// A `claude_auth_relogin_request()` reply, folded into the snapshot the card
+  /// is already rendering. An empty reply changes nothing at all.
+  static Map<String, dynamic> fold(
+          Map<String, dynamic> snap, Map<String, dynamic> reply) =>
+      reply.isEmpty ? snap : {...snap, 'claude_auth': reply};
+}
 
 /// The runner control strip at the top of the Dev Queue tab: three toggles
 /// (VM / Claude / Workflow) with live status chips. Renders `dev_ctl_get`
@@ -14,7 +46,47 @@ import 'dev_queue_workers.dart';
 /// The backend/supervisor is the source of truth — this never infers state.
 class DevQueueControl extends StatefulWidget {
   final DevQueueService service;
-  const DevQueueControl({super.key, required this.service});
+  const DevQueueControl({
+    super.key,
+    required this.service,
+    this.startExpanded = false,
+    this.embedded = false,
+    this.showToggles = true,
+  });
+
+  /// CHANGE #1197 — open the panel on arrival.
+  ///
+  /// Everything inside this card (the Context economy section included) lives
+  /// behind a header tap, and a Flutter canvas cannot be tapped by any headless
+  /// tool — so nothing in here could ever be photographed or write its
+  /// render-log key. `/admin/dev-queue?panel=runner` sets this, which makes the
+  /// panel provable and gives Om a link that lands straight on it.
+  final bool startExpanded;
+
+  /// CHANGE #1570 — draw the CONTENTS only, with no card chrome of its own.
+  ///
+  /// #1367 put the v3 strip ABOVE this card rather than replacing it, and the
+  /// top of Dev Queue has shown two runner cards ever since — overlapping
+  /// headers, two sets of toggles, one of them stale. Neither could simply be
+  /// deleted: v3 knows whether a capability is actually RUNNING, and this card
+  /// owns the breaker, the usage meter, health, the worker grid and context
+  /// economy. So this one moves INSIDE v3 as its footer. Embedded means: no
+  /// Container, no margin, no shadow, and no VM/Claude/Workflow rows — v3
+  /// already draws those three, with `actual` beside `desired`.
+  final bool embedded;
+
+  /// CMD #1862 — whether THIS card draws the VM / Start building / Parallel
+  /// building rows.
+  ///
+  /// #1570 suppressed them whenever [embedded] was true, on the reasoning that
+  /// v3 above already drew the same three keys. That reasoning held only while
+  /// v3 could actually read its payload: after #1761 moved the control plane
+  /// onto its own project, `strip_v3_card` answered PGRST202 on every tick, v3
+  /// drew nothing — and because the suppression was welded to `embedded` and
+  /// not to what v3 had ACTUALLY drawn, Dev Queue shipped with no way to start
+  /// the fleet at all. The strip now says which of the two is drawing them, so
+  /// there is no build in which neither does.
+  final bool showToggles;
 
   @override
   State<DevQueueControl> createState() => _DevQueueControlState();
@@ -22,11 +94,17 @@ class DevQueueControl extends StatefulWidget {
 
 class _DevQueueControlState extends State<DevQueueControl> {
   Timer? _poll;
+  // CHANGE #1401 — the one-shot re-reads a refresh or a re-login schedules.
+  // They are HELD so dispose can cancel them: each callback is mounted-guarded,
+  // so an escaped timer was harmless in the app, but a widget test that taps
+  // Re-login fails on "A Timer is still pending" unless it pumps the full 30s.
+  // Owning them keeps the card's teardown complete rather than merely safe.
+  final List<Timer> _reReads = [];
   Map<String, dynamic> _snap = const {};
   Map<String, dynamic> _usage = const {};
   Map<String, dynamic> _lock = const {}; // deploy_lock_banner()
   final Set<String> _busy = {}; // keys mid-flip
-  bool _expanded = false; // collapsed by default — tap the header to open
+  late bool _expanded = widget.startExpanded; // collapsed unless asked to open
   // Anchors so a lock/confirm popup can float right next to the tapped toggle.
   final Map<String, GlobalKey> _anchors = {
     'vm': GlobalKey(),
@@ -34,17 +112,36 @@ class _DevQueueControlState extends State<DevQueueControl> {
     'workflow': GlobalKey(),
   };
   OverlayEntry? _mini; // the single live mini popup
+  bool _vmChecking = false; // a live EC2 read is already in flight
 
   @override
   void initState() {
     super.initState();
-    _load();
-    _poll = Timer.periodic(const Duration(seconds: 10), (_) => _load());
+    _tick();
+    // Opening via the header pulls a fresh usage reading; arriving already
+    // open has to do the same or the panel paints with an empty usage block.
+    if (_expanded) _refreshUsage();
+    _poll = Timer.periodic(const Duration(seconds: 10), (_) => _tick());
+    // CHANGE #636 — `/admin/dev-queue?panel=safety_net` lands ON the safety
+    // net. A screen that can only be reached by expanding a card and tapping a
+    // row cannot be photographed, and a proof nobody can capture is a proof
+    // nobody checks.
+    if (Uri.base.queryParameters['panel'] == 'safety_net') {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => SafetyNetScreen(service: widget.service)));
+      });
+    }
   }
 
   @override
   void dispose() {
     _poll?.cancel();
+    for (final t in _reReads) {
+      t.cancel();
+    }
+    _reReads.clear();
     _mini?.remove();
     _mini = null;
     super.dispose();
@@ -64,16 +161,50 @@ class _DevQueueControlState extends State<DevQueueControl> {
       final results = await Future.wait([
         widget.service.ctlGet(),
         widget.service.sessionUsage(),
-        widget.service.deployLockBanner(),
+        // CHANGE #1816 — the Claude login line is its own read rather than a
+        // field spliced into dev_ctl_get: that composer is shared by half a
+        // dozen changes, and a card that depends on winning a text patch on it
+        // goes silently blank the day someone re-writes it. Its own RPC cannot
+        // be lost that way. Failing alone leaves the rest of the card intact.
+        _loadClaudeLogin(),
+        _loadDeployLock(),
       ]);
       if (mounted) {
         setState(() {
           _snap = results[0];
           _usage = results[1];
-          _lock = results[2];
+          _claudeLogin = results[2];
+          _lock = results[3];
         });
       }
     } catch (_) {}
+  }
+
+  /// CMD #1911 — the Deploy lock line, read on its own so a lock that cannot
+  /// be read never blanks the rest of the strip.
+  Future<Map<String, dynamic>> _loadDeployLock() async {
+    try {
+      return await widget.service.deployLockBanner();
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  Future<Map<String, dynamic>> _loadClaudeLogin() async {
+    try {
+      final r = await Supabase.instance.client.rpc('claude_login_line');
+      return r is Map ? Map<String, dynamic>.from(r) : const {};
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  /// The 10s refresh, plus the backend's freshness verdict on the VM chip.
+  /// Kept apart from [_load] so the poll chase can re-read without recursing
+  /// back into another live check.
+  Future<void> _tick() async {
+    await _load();
+    await _liveCheckIfStale();
   }
 
   /// Opening the panel signals the VM to fetch a live reading, then re-reads a
@@ -82,10 +213,18 @@ class _DevQueueControlState extends State<DevQueueControl> {
   void _refreshUsage() {
     widget.service.requestUsageRefresh();
     _load();
-    for (final s in const [2, 5, 9]) {
-      Timer(Duration(seconds: s), () {
-        if (mounted && _expanded) _load();
-      });
+    _reReadAfter(const [2, 5, 9], whileExpanded: true);
+  }
+
+  /// Re-read the card a few times over the next seconds, and KEEP the timers so
+  /// dispose can cancel them. A backend that takes a moment to settle (a usage
+  /// refresh on the VM, a login pane opening) is caught by re-asking, never by
+  /// guessing at the states in between.
+  void _reReadAfter(List<int> seconds, {bool whileExpanded = false}) {
+    for (final s in seconds) {
+      _reReads.add(Timer(Duration(seconds: s), () {
+        if (mounted && (!whileExpanded || _expanded)) _load();
+      }));
     }
   }
 
@@ -95,6 +234,21 @@ class _DevQueueControlState extends State<DevQueueControl> {
       (_snap['runner_status'] as Map?)?.cast<String, dynamic>() ?? const {};
   Map<String, dynamic> get _vm =>
       (_snap['vm'] as Map?)?.cast<String, dynamic>() ?? const {};
+  Map<String, dynamic> _claudeLogin = const {};
+
+  /// CHANGE #1366 — the fleet's two silent states, both printed verbatim.
+  /// `blocked` is runner_blocked_badge(): present only while a runner's boot
+  /// doctor is red, which is the state that ran for 21 hours on 4-5 Sep with
+  /// nothing on this strip to say so. `disk` is runner_disk_state().
+  Map<String, dynamic> get _blocked =>
+      (_snap['blocked'] as Map?)?.cast<String, dynamic>() ?? const {};
+  Map<String, dynamic> get _disk =>
+      (_snap['disk'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  /// CHANGE #755 — the self-healing breaker's card, delivered on the same
+  /// dev_ctl_get poll as the toggles so it can never be a beat behind them.
+  Map<String, dynamic> get _health =>
+      (_snap['health'] as Map?)?.cast<String, dynamic>() ?? const {};
 
   bool _isOn(String k) => (_desired[k] ?? 'off') == 'on';
 
@@ -110,7 +264,18 @@ class _DevQueueControlState extends State<DevQueueControl> {
     return v is num ? v.toInt() : null;
   }
 
-  bool get _remoteOn => (_status['remote_control'] ?? 'off') == 'on';
+  // CHANGE #233A — the live-view badge is now honest in BOTH directions. The
+  // backend measures whether the bridge is genuinely reachable (unit active +
+  // tmux session alive + fresh beacon) and hands down the label and the tone;
+  // Dart no longer decides that "off" simply means "show nothing".
+  RemoteBadge get _remote => RemoteBadge(_status);
+
+  // CHANGE #237 — a SECOND, separate badge: the Claude Code app's device list.
+  // _remote above is mediBO's own live-view bridge; this one counts worker
+  // companions that reached Anthropic's session bridge. They read the same
+  // payload but never the same keys — conflating them is exactly how "On phone"
+  // stayed green while Om's app showed no devices at all.
+  PhoneBadge get _phone => PhoneBadge(_status);
 
   /// A toggle tap. Locked toggles (per the backend ordering vm→claude→workflow)
   /// don't flip — they float a mini reason popup next to the switch and keep
@@ -136,20 +301,42 @@ class _DevQueueControlState extends State<DevQueueControl> {
     setState(() => _busy.add(key));
     try {
       final res = await widget.service.ctlSet(key, val);
-      if (res['call_edge'] == true) {
-        final cur = (_vm['status'] ?? 'unknown').toString();
-        if ((on && cur == 'running') || (!on && cur == 'stopped')) {
-          if (mounted) {
-            showToast(context,
-                c(on ? 'dev_queue.ctl_vm_on_toast' : 'dev_queue.ctl_vm_off_toast'));
+      // CMD #1864 — the cloud call is made by the BACKEND now, inside
+      // dev_ctl_set, so a 'vm' verdict arrives with call_edge:false and its own
+      // toast. The legacy branch stays for a backend that still hands the
+      // errand out; nothing here decides whether AWS is touched, or with what.
+      final plan = VmTogglePolicy.plan(res);
+      if (plan.invoke) {
+        // The edge function words its own outcome (start sent / stopping /
+        // already running / the exact IAM action AWS refused) — print it
+        // verbatim. Only a failure with no wording at all falls back to
+        // backend copy.
+        try {
+          final reply = await widget.service.vmControl(plan.action);
+          final out = VmTogglePolicy.outcome(reply);
+          if (mounted && !out.isSilent) {
+            showToast(
+                context,
+                out.needsFallbackCopy
+                    ? c('dev_queue.ctl_edge_failed')
+                    : out.message,
+                isError: out.isError);
           }
-        } else {
-          try {
-            await widget.service.vmControl(res['action']?.toString() ?? 'status');
-          } catch (_) {
-            if (mounted) showToast(context, c('dev_queue.ctl_edge_failed'), isError: true);
-          }
+          // pending / stopping: keep reading EC2 until it rests.
+          _chaseVmState(reply);
+        } catch (_) {
+          if (mounted) showToast(context, c('dev_queue.ctl_edge_failed'), isError: true);
         }
+      } else {
+        // The backend's own sentence for what it just did — printed verbatim,
+        // and absent when it had nothing to say.
+        final toast = (res['toast'] ?? '').toString();
+        if (mounted && toast.isNotEmpty) {
+          showToast(context, toast, isError: res['asked_ok'] == false);
+        }
+        // starting / stopping: keep asking the control plane until IT says the
+        // state has settled.
+        _chaseVmPoll(res);
       }
       await _load();
     } catch (e) {
@@ -162,6 +349,72 @@ class _DevQueueControlState extends State<DevQueueControl> {
       }
     } finally {
       if (mounted) setState(() => _busy.remove(key));
+    }
+  }
+
+  /// Follow a toggle down to a RESTING EC2 state.
+  ///
+  /// `StartInstances` returns `pending`, not `running`; `StopInstances` returns
+  /// `stopping`. Painting either and walking away is the guessed label the chip
+  /// used to show. So while the backend says the reply is not `settled`, ask
+  /// vm-control for `status` again on the interval IT named, up to the cap IT
+  /// named, refreshing the panel each time. Every number here is payload.
+  Future<void> _chaseVmState(Map<String, dynamic> reply) async {
+    var plan = VmTogglePolicy.poll(reply);
+    for (var i = 0; plan.again && i < plan.maxPolls; i++) {
+      await Future<void>.delayed(plan.delay);
+      if (!mounted) return;
+      try {
+        final next = await widget.service.vmControl('status');
+        plan = VmTogglePolicy.poll(next);
+      } catch (_) {
+        return; // transport trouble: stop chasing, the 10s _load still runs
+      }
+      await _load();
+    }
+  }
+
+  /// CMD #1864 — the same chase, run against the control plane.
+  ///
+  /// `dev_vm_poll` collects the pg_net reply from vm-control, writes it into
+  /// the vm_status row the chip actually reads, and answers with the cadence to
+  /// ask again on. The loop ends when the PAYLOAD says settled — never when
+  /// Dart decides the word looks final.
+  Future<void> _chaseVmPoll(Map<String, dynamic> reply) async {
+    var plan = VmTogglePolicy.pollState(reply);
+    for (var i = 0; plan.again && i < plan.maxPolls; i++) {
+      await Future<void>.delayed(plan.delay);
+      if (!mounted) return;
+      try {
+        plan = VmTogglePolicy.pollState(await widget.service.vmPoll());
+      } catch (_) {
+        return; // transport trouble: stop chasing, the 10s _load still runs
+      }
+      await _load();
+    }
+  }
+
+  /// One live EC2 read when the BACKEND says the cached chip reading is too old
+  /// to trust (`vm.needs_live_check`). Without this the chip is only as fresh as
+  /// the last writer — and while the box is off, its own status timer is the
+  /// writer that has stopped. The threshold lives in the `vm_poll` config row,
+  /// and the edge function stamps `last_checked`, so this self-limits to about
+  /// one call per staleness window rather than one per 10-second refresh.
+  Future<void> _liveCheckIfStale() async {
+    if (!VmTogglePolicy.needsLiveCheck(_vm)) return;
+    if (_vmChecking) return;
+    _vmChecking = true;
+    try {
+      // CMD #1864 — through the control plane, which is where vm_status is
+      // read from. Calling the edge function from here wrote the answer into
+      // production's config row instead, so the chip never got fresher.
+      await widget.service.vmPoll();
+      if (mounted) await _load();
+    } catch (_) {
+      // A refusal (no key / IAM) already surfaces on a real flip; a background
+      // freshness read must never toast.
+    } finally {
+      _vmChecking = false;
     }
   }
 
@@ -277,6 +530,95 @@ class _DevQueueControlState extends State<DevQueueControl> {
 
   @override
   Widget build(BuildContext context) {
+    final body = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _blockedBanner(),
+        InkWell(
+          onTap: () {
+            setState(() => _expanded = !_expanded);
+            if (_expanded) _refreshUsage(); // pull a FRESH reading on open
+          },
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: _expanded ? _expandedHeader() : _collapsedHeader(),
+          ),
+        ),
+        // CHANGE #641 — the circuit breaker, always visible. It is rendered
+        // OUTSIDE the expand gate on purpose: the one state Om must never have
+        // to open a panel to discover is "the fleet paused itself".
+        _breakerBadge(),
+        // CMD #1862 — the Claude login banner is NOT drawn on Dev Queue.
+        // #1401 put it here because a lapsed login stops the fleet silently;
+        // in practice Om logs in on the VM by hand, so the banner's stale-check
+        // title, its OAuth link and its "Re-login from here" button were a
+        // permanent strip of noise above the controls he actually came for.
+        // It still lives on Cron health (ClaudeAuthSection), and the small
+        // "Claude app · session / no session" chip below still says whether a
+        // session exists at all.
+        // CHANGE #1365 — outside the expand gate, like the breaker above:
+        // a usage sync that has stopped working is exactly the state Om
+        // must not have to open a panel to discover, because the card
+        // otherwise keeps printing a comfortable "synced Nh ago" over a
+        // figure the supervisor is still obeying.
+        _syncFailureBadge(),
+        // CMD #1862 — when the strip could not draw the three toggles they are
+        // drawn HERE, and OUTSIDE the expand gate: a fallback that is itself
+        // hidden behind a header tap is not a fallback. In the normal case v3
+        // drew them, showToggles is false, and nothing renders in either place.
+        if (widget.embedded && widget.showToggles) ..._toggleRows(),
+        if (_expanded) ...[
+          const SizedBox(height: 4),
+          // The three toggles are v3's when v3 drew them — two sets of
+          // switches for the same three keys is how a card starts disagreeing
+          // with itself. When it did not, they are ours (CMD #1862).
+          if (!widget.embedded && widget.showToggles) ..._toggleRows(),
+          WorkerGridCard(
+            pool: (_snap['pool'] as Map?)?.cast<String, dynamic>() ?? const {},
+            disk: _disk,
+            service: widget.service,
+            onChanged: _load,
+          ),
+          // CHANGE #1470 — the build branch rides the payload this card already
+          // fetches. has:false draws nothing at all.
+          if (((_snap['build_branch'] as Map?)?['has'] ?? false) == true) ...[
+            _divider(),
+            // CMD #1863 — the card is now the way IN to `build_branch_log()`,
+            // the ledger of every branch that has existed. The card itself is
+            // unchanged: it still prints the live branch and its recent
+            // attempts; the tap is the only new thing.
+            InkWell(
+              onTap: _showBranchLog,
+              child: BuildBranchCard(
+                branch: (_snap['build_branch'] as Map?)?.cast<String, dynamic>() ??
+                    const {},
+              ),
+            ),
+          ],
+          if (_health.isNotEmpty) ...[
+            _divider(),
+            RunnerHealthCard(health: _health, onWhy: _showWhy),
+          ],
+          if ((_lock['has'] ?? false) == true) ...[
+            _divider(),
+            _deployLockRow(),
+          ],
+          if ((_usage['has_usage'] ?? false) == true) ...[
+            _divider(),
+            UsageMeter(usage: _usage, onRates: _openRates),
+          ],
+          if ((_context['has'] ?? false) == true) ...[
+            _divider(),
+            ContextEconomyCard(payload: _context),
+          ],
+          // CHANGE #636 — the way in to the machine-generated safety net.
+          // A backend that grades its own RPC surface and nobody can open is
+          // not a safety net, so it gets a real entry point here rather than a
+          // cron job Om has to read the logs to find.
+          _divider(),
+          _safetyNetRow(),
+        ],
+      ]);
+    if (widget.embedded) return body;
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       padding: const EdgeInsets.all(12),
@@ -294,49 +636,242 @@ class _DevQueueControlState extends State<DevQueueControl> {
       // The whole card is a tap-to-expand panel: collapsed by default (a slim
       // summary bar so it never blocks the list), tapped open to reveal the
       // toggles + real usage. No chevron — the header itself is the control.
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        InkWell(
-          onTap: () {
-            setState(() => _expanded = !_expanded);
-            if (_expanded) _refreshUsage(); // pull a FRESH reading on open
-          },
-          borderRadius: BorderRadius.circular(8),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 2),
-            child: _expanded ? _expandedHeader() : _collapsedHeader(),
+      child: body,
+    );
+  }
+
+  /// The DB circuit breaker (CHANGE #641). Every string, the tone and the
+  /// decision to show it at all come from `dev_ctl_get().breaker` — nothing
+  /// here is computed, pluralised or worded in Dart. It clears itself when
+  /// Workflow goes back on, because that is what the backend does to the flag.
+  /// The widget itself lives in dev_queue_common.dart so the protected suite
+  /// can render it against a real payload.
+  /// CHANGE #1365 — "the usage sync is broken" as its own always-visible line.
+  ///
+  /// `fetch_failing`, the sentence and the tone are all
+  /// `dev_cmd_session_usage()`'s: nothing here decides that a fetch has failed,
+  /// and nothing here writes the words. When sync is healthy this draws
+  /// absolutely nothing.
+  Widget _syncFailureBadge() {
+    if ((_usage['fetch_failing'] ?? false) != true) return const SizedBox.shrink();
+    final txt = '${_usage['updated_display'] ?? ''}';
+    if (txt.isEmpty) return const SizedBox.shrink();
+    final tone = statusTone((_usage['updated_tone'] ?? 'failed').toString());
+    return Padding(
+      padding: EdgeInsets.only(top: Ds.space.x8),
+      child: Container(
+        width: double.infinity,
+        padding: EdgeInsets.symmetric(
+            horizontal: Ds.space.x12, vertical: Ds.space.x8),
+        decoration: BoxDecoration(color: tone.bg, borderRadius: Ds.r.rChip),
+        child: Row(children: [
+          Icon(Icons.sync_problem, size: Ds.t.bodySize, color: tone.fg),
+          SizedBox(width: Ds.space.x8),
+          Expanded(
+            child: Text(txt,
+                style: Ds.t.caption
+                    .copyWith(color: tone.fg, fontWeight: FontWeight.w600)),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  /// CHANGE #636 — one tap to the safety net. The label is ui_copy, the screen
+  /// behind it renders `autotest_safety_net_home()` verbatim.
+  Widget _safetyNetRow() => InkWell(
+        borderRadius: Ds.r.rChip,
+        onTap: () => Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => SafetyNetScreen(service: widget.service))),
+        child: Semantics(
+          identifier: 'devq_safety_net',
+          button: true,
+          child: Container(
+            constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+            padding: EdgeInsets.symmetric(vertical: Ds.space.x8),
+            child: Row(children: [
+              Icon(Icons.shield_outlined,
+                  size: Ds.t.bodySize + Ds.space.x4, color: Ds.c.brand),
+              SizedBox(width: Ds.space.x12),
+              Expanded(
+                child: Text(c('safety_net.title'), style: Ds.t.body),
+              ),
+              Icon(Icons.chevron_right, size: Ds.t.bodySize + Ds.space.x4,
+                  color: Ds.c.textSecondary),
+            ]),
           ),
         ),
-        if (_expanded) ...[
-          const SizedBox(height: 4),
-          _row('vm', c('dev_queue.ctl_vm'), Icons.dns_outlined, _vmChip()),
-          _divider(),
-          _row('claude', c('dev_queue.ctl_claude'), Icons.terminal, _claudeChip()),
-          _divider(),
-          _row('workflow', c('dev_queue.ctl_workflow'), Icons.sync, _workflowChip()),
-          _divider(),
-          WorkerGridCard(
-            pool: (_snap['pool'] as Map?)?.cast<String, dynamic>() ?? const {},
-            service: widget.service,
-            onChanged: _load,
+      );
+
+  /// CMD #1863 — `build_branch_log(days)`, printed verbatim.
+  ///
+  /// `build_branch_card()` says what the branch is doing NOW; this says what
+  /// the branch lane has cost — every branch that has existed, how long it
+  /// lived, how many builds actually used it and the reason it was created.
+  /// #1570 shipped the ledger and no way to read it, which is the same failure
+  /// as #1149's silent gate: a branch that is up and carrying zero builds only
+  /// becomes visible once you can see the ones before it.
+  ///
+  /// Nothing here is computed. Each row's headline is ui_copy's own
+  /// "{ref} · {builds} builds" template, its status chip is the backend's word
+  /// printed as it arrived, and the lifetime line is the backend's two
+  /// already-formatted timestamps. An empty ledger renders the backend's empty
+  /// sentence rather than a blank sheet.
+  Future<void> _showBranchLog() async {
+    Map<String, dynamic> log = const {};
+    try {
+      log = await widget.service.buildBranchLog();
+    } catch (_) {
+      // The sheet still opens and says the backend had nothing — a refused
+      // read must not look like a lane that has never run.
+    }
+    if (!mounted) return;
+    final rows = ((log['rows'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sctx) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.all(Ds.space.x16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(c('dev_queue.branch_title'),
+                  style: Ds.t.body.copyWith(fontWeight: FontWeight.w700)),
+              SizedBox(height: Ds.space.x12),
+              if (rows.isEmpty)
+                Text(c('dev_queue.branch_attempts_none'),
+                    style: Ds.t.caption.copyWith(color: Ds.c.textSecondary))
+              else
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: rows.length,
+                    itemBuilder: (_, i) => _branchLogRow(rows[i]),
+                  ),
+                ),
+            ],
           ),
-          if ((_lock['has'] ?? false) == true) ...[
-            _divider(),
-            _deployLockRow(),
-          ],
-          if ((_usage['has_usage'] ?? false) == true) ...[
-            _divider(),
-            _usageMeter(),
-          ],
-        ],
+        ),
+      ),
+    );
+  }
+
+  /// One ledger row. Every string is the payload's; the only decision made here
+  /// is which of them sits on which line.
+  Widget _branchLogRow(Map<String, dynamic> r) {
+    final created = (r['created'] ?? '').toString();
+    final deleted = (r['deleted'] ?? '').toString();
+    final reason = (r['reason'] ?? '').toString();
+    final status = (r['status'] ?? '').toString();
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(
+            child: Text(
+                cf('dev_queue.branch_ref', {
+                  'ref': (r['project_ref'] ?? '').toString(),
+                  'builds': (r['builds'] ?? '').toString(),
+                }),
+                style: Ds.t.caption.copyWith(fontWeight: FontWeight.w700)),
+          ),
+          if (status.isNotEmpty)
+            ToneChip(label: status, tone: statusTone(status)),
+        ]),
+        if (created.isNotEmpty || deleted.isNotEmpty)
+          Text([created, deleted].where((e) => e.isNotEmpty).join(' — '),
+              style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+        if (reason.isNotEmpty)
+          Text(reason, style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
       ]),
     );
   }
+
+  Widget _breakerBadge() => BreakerBanner(
+      breaker: (_snap['breaker'] as Map?)?.cast<String, dynamic>() ?? const {});
+
+  /// CHANGE #1197 — `dev_ctl_get().context` is `dev_context_metrics()`
+  /// verbatim; ContextEconomyCard prints it and computes nothing.
+  Map<String, dynamic> get _context =>
+      (_snap['context'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  /// CHANGE #1593 — "why is it holding there?", answered live.
+  ///
+  /// Every line in this sheet is a string the backend already wrote: the brake
+  /// sentence, the deciding metric's name and its two numbers, and each brake's
+  /// own reason. Nothing here compares, formats or words anything — an unknown
+  /// brake name simply prints itself.
+  Future<void> _showWhy() async {
+    Map<String, dynamic> st = const {};
+    try {
+      st = await widget.service.autoscaleState();
+    } catch (_) {
+      // The sheet still opens: an empty payload renders the backend's absence
+      // honestly rather than a fabricated reassurance.
+    }
+    if (!mounted) return;
+    final rows = <List<String>>[
+      ['${st['brake'] ?? ''}', '${st['label'] ?? ''}'],
+      for (final k in const ['ceiling_detail', 'headroom', 'pace', 'wait'])
+        if ((st[k] as Map?)?['reason'] != null)
+          ['$k', '${(st[k] as Map)['reason']}'],
+    ];
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sctx) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.all(Ds.space.x16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('${st['label'] ?? c('dev_queue.health_title')}',
+                  style: Ds.t.body.copyWith(fontWeight: FontWeight.w700)),
+              SizedBox(height: Ds.space.x12),
+              for (final r in rows.skip(1)) ...[
+                Text(r[1], style: Ds.t.caption),
+                SizedBox(height: Ds.space.x8),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _blockedBanner() => RunnersBlockedBanner(blocked: _blocked);
+
+  /// The three switches, in the backend's own order: VM, then Start building,
+  /// then Parallel building. Every label is `ui_copy`'s and every chip is the
+  /// payload's — this decides only where the group is drawn (CMD #1862).
+  List<Widget> _toggleRows() => [
+        _row('vm', c('dev_queue.ctl_vm'), Icons.dns_outlined, _vmChip()),
+        _divider(),
+        _row('claude', c('dev_queue.ctl_claude'), Icons.terminal, _claudeChip()),
+        // CHANGE #1816 — the login behind that toggle: when it was made, how
+        // long it lasts, and whether it has lapsed. Printed verbatim from
+        // claude_login_line(); absent until the VM has reported one.
+        if ((_claudeLogin['has'] ?? false) == true)
+          ClaudeLoginLine(payload: _claudeLogin),
+        _divider(),
+        _row('workflow', c('dev_queue.ctl_workflow'), Icons.sync, _workflowChip()),
+        _divider(),
+      ];
 
   /// CMD #1911 — WHO HOLDS THE DEPLOY LOCK, and what the reaper has had to
   /// take back. Every string here is `deploy_lock_banner()`'s: the banner used
   /// to be a sentence with "CMD #1859" baked into it, so a command waiting
   /// behind #1895 read someone else's number off its own card.
   Widget _deployLockRow() {
+    RenderLog.write('c1911_deploy_lock',
+        '${_lock['busy'] == true ? 'held' : 'free'}:${_lock['command_id'] ?? '-'}');
     final recent = (_lock['recent'] as List?) ?? const [];
     final detail = (_lock['detail'] ?? '').toString();
     final renewals = (_lock['renewals_label'] ?? '').toString();
@@ -387,16 +922,80 @@ class _DevQueueControlState extends State<DevQueueControl> {
             style: const TextStyle(
                 fontSize: 12, fontWeight: FontWeight.w700, color: kTextLo)),
         const Spacer(),
-        if (_remoteOn)
+        if (_remote.show)
           ToneChip(
-              label: c('dev_queue.ctl_remote_on'),
-              tone: statusTone('completed'),
-              icon: Icons.phone_iphone),
+              label: _remote.display,
+              tone: toneByName(_remote.tone),
+              icon: _remote.isOn
+                  ? Icons.phone_iphone
+                  : Icons.mobile_off_outlined),
+        if (_phone.show) ...[
+          SizedBox(width: Ds.space.x8),
+          // Tap target is the whole chip row in the sheet-opening wrapper; the
+          // chip itself is short, so pad it out to the token touch minimum.
+          InkWell(
+            onTap: _openPhoneSessions,
+            borderRadius: BorderRadius.circular(Ds.r.chip),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+              child: Center(
+                child: ToneChip(
+                    label: _phone.display,
+                    tone: toneByName(_phone.tone),
+                    icon: _phone.isOn
+                        ? Icons.smartphone
+                        : Icons.mobile_off_outlined),
+              ),
+            ),
+          ),
+        ],
       ]);
+
+  /// The device list, verbatim: every string (label, hint, session names) is
+  /// composed on the VM or in ui_copy. Dart adds no wording and no count.
+  void _openPhoneSessions() {
+    final badge = _phone;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(
+          borderRadius:
+              BorderRadius.vertical(top: Radius.circular(Ds.r.sheet))),
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+              Ds.space.x16, Ds.space.x16, Ds.space.x16, Ds.space.x24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(badge.display, style: Ds.t.subtitle),
+              SizedBox(height: Ds.space.x4),
+              Text(badge.hint, style: Ds.t.caption),
+              SizedBox(height: Ds.space.x16),
+              for (final n in badge.names)
+                Padding(
+                  padding: EdgeInsets.only(bottom: Ds.space.x8),
+                  child: Row(children: [
+                    Icon(Icons.smartphone,
+                        size: Ds.t.bodySize, color: Ds.c.textSecondary),
+                    SizedBox(width: Ds.space.x8),
+                    Expanded(child: Text(n, style: Ds.t.body)),
+                  ]),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   /// Slim one-line summary shown when collapsed: workflow state + the top usage
   /// percent, so Om reads the essentials without opening the panel.
   Widget _collapsedHeader() {
+    if ((_lock['has'] ?? false) == true) {
+      RenderLog.write('c1911_deploy_lock_chip', (_lock['label'] ?? '').toString());
+    }
     final wf = _isOn('workflow');
     final limits = (_usage['limits'] as List?) ?? const [];
     Map<String, dynamic>? first =
@@ -423,6 +1022,16 @@ class _DevQueueControlState extends State<DevQueueControl> {
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontSize: 12, color: kTextLo)),
       ),
+      RunnerHealthChip(health: _health),
+      // CMD #1911 — a held deploy lock is the thing Om needs at a glance, so
+      // its label rides the COLLAPSED strip too. Backend string, backend tone.
+      if ((_lock['has'] ?? false) == true &&
+          (_lock['label'] ?? '').toString().isNotEmpty) ...[
+        SizedBox(width: Ds.space.x4),
+        ToneChip(
+            label: (_lock['label'] ?? '').toString(),
+            tone: toneByName((_lock['tone'] ?? 'neutral').toString())),
+      ],
       if (first != null) ...[
         const SizedBox(width: 6),
         ToneChip(
@@ -437,56 +1046,6 @@ class _DevQueueControlState extends State<DevQueueControl> {
     final id = _buildingId;
     if (id != null) return '${c('dev_queue.status_building')} #$id';
     return wf ? c('dev_queue.status_pending') : c('dev_queue.ctl_workflow');
-  }
-
-  /// Real Claude usage — the actual session (5h) + weekly + Fable percentages
-  /// pulled from Anthropic's usage endpoint on the VM. Every string + percent
-  /// comes from the backend; the app only draws the bars.
-  Widget _usageMeter() {
-    final limits = (_usage['limits'] as List?) ?? const [];
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        const Icon(Icons.data_usage, size: 18, color: kTextLo),
-        const SizedBox(width: 8),
-        Text(c('dev_queue.usage_label'),
-            style: const TextStyle(
-                fontSize: 14, fontWeight: FontWeight.w600, color: kTextHi)),
-        const Spacer(),
-        _syncChip(),
-      ]),
-      const SizedBox(height: 10),
-      for (final raw in limits) _limitBar(Map<String, dynamic>.from(raw as Map)),
-      const SizedBox(height: 2),
-      Text('${_usage['spend_display'] ?? ''}',
-          style: const TextStyle(fontSize: 11, color: kTextLo)),
-      Text('${_usage['today_display'] ?? ''}',
-          style: const TextStyle(fontSize: 11, color: kTextLo)),
-      const SizedBox(height: 6),
-      Row(children: [
-        Expanded(
-          child: Text(c('dev_queue.plan_note'),
-              style: const TextStyle(
-                  fontSize: 11, fontWeight: FontWeight.w600, color: kBrand)),
-        ),
-        InkWell(
-          onTap: _openRates,
-          borderRadius: BorderRadius.circular(20),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-                color: const Color(0xFFEFF6FF),
-                borderRadius: BorderRadius.circular(20)),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              const Icon(Icons.info_outline, size: 12, color: Color(0xFF1E40AF)),
-              const SizedBox(width: 4),
-              Text(c('dev_queue.rates_open'),
-                  style: const TextStyle(
-                      fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF1E40AF))),
-            ]),
-          ),
-        ),
-      ]),
-    ]);
   }
 
   /// Read-only "API-equivalent rates" sheet — the official per-model ₹/Mtok
@@ -554,62 +1113,6 @@ class _DevQueueControlState extends State<DevQueueControl> {
     );
   }
 
-  /// Freshness indicator for the usage block. The string AND the tone come from
-  /// the backend (updated_display / updated_tone): green when live, amber/red
-  /// when the reading is stale — so a minutes-old number can never look current.
-  Widget _syncChip() {
-    final txt = '${_usage['updated_display'] ?? ''}';
-    if (txt.isEmpty) return const SizedBox.shrink();
-    final tone = statusTone((_usage['updated_tone'] ?? 'completed').toString());
-    final fresh = (_usage['stale'] ?? false) != true;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-          color: tone.bg, borderRadius: BorderRadius.circular(20)),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(fresh ? Icons.check_circle : Icons.sync_problem,
-            size: 12, color: tone.fg),
-        const SizedBox(width: 4),
-        Text(txt,
-            style: TextStyle(
-                fontSize: 11, fontWeight: FontWeight.w600, color: tone.fg)),
-      ]),
-    );
-  }
-
-  Widget _limitBar(Map<String, dynamic> l) {
-    final pct = (l['percent'] as num?)?.toDouble() ?? 0;
-    final tone = statusTone((l['tone'] ?? 'completed').toString());
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Expanded(
-            child: Text('${l['label'] ?? ''}',
-                style: const TextStyle(
-                    fontSize: 13, fontWeight: FontWeight.w600, color: kTextHi)),
-          ),
-          Text('${l['pct_display'] ?? ''}',
-              style: TextStyle(
-                  fontSize: 13, fontWeight: FontWeight.w700, color: tone.fg)),
-        ]),
-        const SizedBox(height: 6),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(6),
-          child: LinearProgressIndicator(
-            value: (pct / 100).clamp(0.0, 1.0),
-            minHeight: 8,
-            backgroundColor: const Color(0xFFF1F2F4),
-            valueColor: AlwaysStoppedAnimation(tone.fg),
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text('${l['resets_display'] ?? ''}',
-            style: const TextStyle(fontSize: 11, color: kTextLo)),
-      ]),
-    );
-  }
-
   Widget _divider() =>
       const Divider(height: 12, thickness: 1, color: Color(0xFFF1F2F4));
 
@@ -646,16 +1149,57 @@ class _DevQueueControlState extends State<DevQueueControl> {
     ]);
   }
 
+  /// The chip is the live EC2 state, and tapping it is the diagnostic: it asks
+  /// vm-control to DryRun each EC2 call against the saved key and toasts the
+  /// backend's verdict — "all 3 permissions present" or the exact IAM actions
+  /// missing. That is the answer to "why won't it start?" without power-cycling
+  /// anything, and it is reachable in one tap from the Dev Queue.
   Widget _vmChip() {
-    final s = (_vm['status'] ?? 'unknown').toString();
-    const map = {
-      'running': ['dev_queue.ctl_vm_running', 'completed'],
-      'stopped': ['dev_queue.ctl_vm_stopped', 'paused'],
-      'starting': ['dev_queue.ctl_vm_starting', 'awaiting_approval'],
-      'stopping': ['dev_queue.ctl_vm_stopping', 'awaiting_approval'],
-    };
-    final e = map[s] ?? const ['dev_queue.ctl_vm_unknown', 'paused'];
-    return ToneChip(label: c(e[0]), tone: statusTone(e[1]));
+    // CMD #1864 — the word and the tone are the backend's (`chip_label` /
+    // `chip_tone`, composed from vm_status + ui_copy). The status→label map
+    // that used to live here was the last display decision in the VM path, and
+    // it is exactly the kind that keeps a chip alive after its source has died.
+    final chip = VmTogglePolicy.chip(_vm);
+    if (!chip.has) return const SizedBox.shrink();
+    return Semantics(
+      button: true,
+      label: c('dev_queue.ctl_vm_check'),
+      child: InkWell(
+        onTap: _vmPreflight,
+        borderRadius: Ds.r.rChip,
+        // A chip is short; pad the hit box out to the token min target.
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+          child: Center(
+              child: ToneChip(label: chip.label, tone: statusTone(chip.tone))),
+        ),
+      ),
+    );
+  }
+
+  /// Tap the VM chip → refresh the live state, then report the key's EC2
+  /// permissions. Both sentences are the backend's.
+  Future<void> _vmPreflight() async {
+    if (_vmChecking) return;
+    _vmChecking = true;
+    try {
+      await widget.service.vmPoll();
+      if (mounted) await _load();
+      final out =
+          VmTogglePolicy.outcome(await widget.service.vmControl('preflight'));
+      if (mounted && !out.isSilent) {
+        showToast(
+            context,
+            out.needsFallbackCopy ? c('dev_queue.ctl_edge_failed') : out.message,
+            isError: out.isError);
+      }
+    } catch (_) {
+      if (mounted) {
+        showToast(context, c('dev_queue.ctl_edge_failed'), isError: true);
+      }
+    } finally {
+      _vmChecking = false;
+    }
   }
 
   Widget _claudeChip() {
@@ -683,5 +1227,51 @@ class _DevQueueControlState extends State<DevQueueControl> {
       return ToneChip(label: c('dev_queue.ctl_wf_running'), tone: statusTone('completed'));
     }
     return ToneChip(label: c('dev_queue.ctl_applying'), tone: statusTone('awaiting_approval'));
+  }
+}
+
+/// CHANGE #1366 — the "Runners blocked" banner, on its own so it can be tested
+/// without a Supabase client behind it.
+///
+/// It is a PRINTER. `runner_blocked_badge()` decides whether the fleet is
+/// blocked, which runner and check blocked it, and how long it has been that
+/// way; this draws the three strings it is given and resolves one tone name.
+/// Absence is `has:false` — then it draws nothing at all, which is why it is
+/// safe to keep it above the collapsed header where it is always visible.
+class RunnersBlockedBanner extends StatelessWidget {
+  final Map<String, dynamic> blocked;
+  const RunnersBlockedBanner({super.key, required this.blocked});
+
+  @override
+  Widget build(BuildContext context) {
+    if ((blocked['has'] ?? false) != true) return const SizedBox.shrink();
+    final tone = toneByName((blocked['tone'] ?? 'danger').toString());
+    final detail = (blocked['detail'] ?? '').toString();
+    final since = (blocked['since_label'] ?? '').toString();
+    return Container(
+      margin: EdgeInsets.only(bottom: Ds.space.x8),
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x12, vertical: Ds.space.x8),
+      decoration: BoxDecoration(color: tone.bg, borderRadius: Ds.r.rButton),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(Icons.report_gmailerrorred, size: Ds.space.x16, color: tone.fg),
+        SizedBox(width: Ds.space.x8),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text((blocked['label'] ?? '').toString(),
+                style: Ds.t.caption
+                    .copyWith(fontWeight: FontWeight.w700, color: tone.fg)),
+            if (detail.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x4),
+              Text(detail, style: Ds.t.caption.copyWith(color: tone.fg)),
+            ],
+            if (since.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x4),
+              Text(since, style: Ds.t.caption.copyWith(color: tone.fg)),
+            ],
+          ]),
+        ),
+      ]),
+    );
   }
 }

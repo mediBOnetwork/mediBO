@@ -1,0 +1,41 @@
+-- CHANGE #536 — WITHDRAWN. This migration is deliberately a no-op.
+--
+-- What it used to do: replace the body of the rg_behavior_tests row
+-- 'storefront_ptr_entitlement' with a version that built its own fixture —
+--   update "MEDICINE" set buyable = true where id = v_pid;
+-- — so the PTR-entitlement guard would stop depending on whether the catalog
+-- happened to hold a priced row that was also buyable.
+--
+-- Why it is withdrawn (hostile QA round 2, verified in the live database):
+--
+--   1. THE FIXTURE CANNOT WORK. "MEDICINE" carries a BEFORE INSERT OR UPDATE
+--      FOR EACH ROW trigger, medicine_set_buyable_trg, whose function opens
+--          NEW.buyable := EXISTS (SELECT 1 FROM zones z WHERE z.is_active
+--            AND jsonb_array_length(coalesce(j->('z_'||z.code||'_sup'),
+--                                            '[]'::jsonb)) > 0);
+--      It assigns NEW.buyable unconditionally, from the row's zone supplier
+--      arrays, ignoring whatever the UPDATE asked for. The candidate rows have
+--      no such zones, so the update is a guaranteed no-op, _sf_cards() returns
+--      zero cards, and the guard falls through NULL comparison after NULL
+--      comparison until it reaches
+--          RG_FAIL: card_price.ptr_display is empty for a super admin
+--      A migration whose only job was to make a guard green makes it RED.
+--
+--   2. IT IS NOT WHAT FIXED THE GUARD. The live body of
+--      'storefront_ptr_entitlement' does not contain that update at all — a
+--      different command replaced it, and rg_check() is green on that body.
+--      Re-applying this file would overwrite a working guard with a broken one,
+--      which is exactly the "bless the regression" move the regression guard
+--      exists to prevent.
+--
+-- So the file stays in the ledger (a migration that has already run is history,
+-- not a draft) and does nothing. Re-applying it is a silent no-op, which is
+-- what CHANGE #233's idempotency rule asks of every migration here.
+--
+-- If the guard's catalog dependence is worth removing later, the fixture has to
+-- go through the trigger rather than around it — give the chosen row a zone
+-- supplier array inside the rolled-back block — and it needs its own command.
+do $$
+begin
+  raise notice 'c536 rg_ptr_fixture: withdrawn, no-op (see header)';
+end $$;

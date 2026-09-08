@@ -18,7 +18,9 @@ insert into public.ui_copy (key, value) values
   ('sleads.branches_title',     '"Branches on this phone"'::jsonb),
   ('sleads.branch_primary',     '"Shown in list"'::jsonb),
   ('sleads.branches_none',      '"No other branches"'::jsonb),
-  ('admin_customer.leads_show_all_branches', '"Show all branches"'::jsonb)
+  ('admin_customer.leads_show_all_branches', '"Show all branches"'::jsonb),
+  ('sleads.filters.show_all_branches',      '"Show all branches"'::jsonb),
+  ('sleads.filters.show_all_branches_hint', '"One row per phone number unless this is on"'::jsonb)
 on conflict (key) do update set value = excluded.value, updated_at = now();
 
 -- ── get_scraped_leads: one row per phone10 when collapsing is on ──────────
@@ -557,6 +559,184 @@ begin
     'total',      v_total,
     'count_chip', replace(v_tpl, '{n}', to_char(v_total, 'FM999,999,999')),
     'filters',    v_f);
+end;
+$function$
+
+;
+
+-- sleads_filters: the toggle IS data, and the facet counts collapse too.
+create or replace function public.sleads_filters(p_filters jsonb DEFAULT '{}'::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_f        jsonb;
+  v_cfg      jsonb;
+  v_copy     jsonb;
+  v_zone     smallint;
+  v_zone_lbl text;
+  v_stale    numeric;
+  v_counts   jsonb;
+  v_asof     date;
+  v_score    integer;
+  v_chips    jsonb;
+  v_total    bigint;
+  v_collapse boolean;   -- CMD #1871
+begin
+  if get_my_role() not in ('admin','super_admin') then raise exception 'not_authorized'; end if;
+
+  v_f    := public._sleads_filters_norm(p_filters);
+  v_cfg  := coalesce((select value from app_settings where key='sleads_filters'), '{}'::jsonb);
+  v_zone := public.admin_active_zone();
+  v_asof := public.admin_active_date();
+  v_stale:= coalesce((v_cfg->>'stale_years')::numeric, 3);
+  v_score:= coalesce((v_f->>'min_score')::int, 0);
+  -- CMD #1871 — the facet counts collapse exactly like the list does, so a
+  -- chip's number is still what tapping it would give you.
+  v_collapse := not coalesce((v_f->>'show_all_branches')::boolean, false);
+
+  select coalesce(jsonb_object_agg(replace(key,'sleads.filters.',''), value), '{}'::jsonb)
+    into v_copy from ui_copy where key like 'sleads.filters.%';
+
+  v_zone_lbl := coalesce((select z.name from zones z where z.id = v_zone),
+                         v_copy->>'zone_all', 'All zones');
+
+  -- Facet counts: every filter EXCEPT the class/preset dimension itself, so a
+  -- chip's number is what tapping it would give you.
+  with base0 as (
+    select coalesce(nullif(btrim(s.manual_class), ''), s.lead_class, 'other') as eff_class,
+           coalesce(nullif(btrim(s.phone10), ''), public._phone10(s.phone)) as ph,
+           coalesce(s.lead_score, 0) as sc, s.user_ratings as ur, s.id as sid
+      from scraped_leads s
+     where ((v_f->>'city') is null or s.city ilike (v_f->>'city'))
+       and (v_zone is null or public.zone_resolve(s.district, s.city, false) = v_zone)
+       and (s.scraped_at is null
+            or (s.scraped_at at time zone 'Asia/Kolkata')::date <= v_asof)
+       and (v_score = 0 or coalesce(s.lead_score,0) >= v_score)
+       and (not (v_f->>'with_phone')::boolean or s.phone is not null)
+       and (not (v_f->>'open_now')::boolean   or s.open_now is true)
+       and (not (v_f->>'with_email')::boolean or s.emails is not null)
+       -- CMD #1869 — archived leads are only ever counted in the archived view.
+       and (case when (v_f->>'archived')::boolean then s.status = 'archived'
+                 else s.status is distinct from 'archived' end)
+       and ((v_f->>'status') is null or s.status = (v_f->>'status'))
+       and ((v_f->>'show_non_targets')::boolean or coalesce(s.is_target,false))
+       and ((v_f->>'show_closed')::boolean
+            or coalesce(s.business_status,'OPERATIONAL') = 'OPERATIONAL')
+       and ((v_f->>'show_matched')::boolean
+            or (s.matched_customer_id is null and s.matched_supplier_id is null))
+       and ((v_f->>'show_stale')::boolean
+            or not (s.phone is null
+                    and coalesce(public._review_age_years(s.last_review_age), 99) >= v_stale))
+  ), base as (
+    select b.eff_class from (
+      select base0.*,
+             case when not v_collapse or base0.ph is null then 1
+                  else row_number() over (partition by base0.ph
+                         order by base0.sc desc, base0.ur desc nulls last, base0.sid) end as rn
+        from base0) b
+     where b.rn = 1
+  )
+  select coalesce(jsonb_object_agg(eff_class, n), '{}'::jsonb), coalesce(sum(n), 0)
+    into v_counts, v_total
+    from (select eff_class, count(*) as n from base group by eff_class) t;
+
+  -- Chip list: order and labels are DATA, never a Dart list.
+  select jsonb_agg(chip order by ord) into v_chips from (
+    select 1 as ord, jsonb_build_object(
+      'key', 'all', 'kind', 'all',
+      'label', coalesce(v_copy->>'all_classes','All'),
+      'count', v_total,
+      'count_label', to_char(v_total,'FM999,999,999'),
+      'selected', (jsonb_array_length(v_f->'classes') = 0 and (v_f->>'preset') is null)) as chip
+    union all
+    select 2, jsonb_build_object(
+      'key', 'non_pharmacy', 'kind', 'preset',
+      'label', coalesce(v_copy->>'preset_non_pharmacy','Non-pharmacy'),
+      'count', c.n, 'count_label', to_char(c.n,'FM999,999,999'),
+      'selected', ((v_f->>'preset') is not distinct from 'non_pharmacy'))
+      from (select coalesce(sum((v_counts->>k)::bigint),0) as n
+              from (select jsonb_object_keys(v_counts) as k) kk
+             where k not in ('medical_store','chain','wholesaler')) c
+    union all
+    select 2 + t.ord, jsonb_build_object(
+      'key', t.key, 'kind', 'class',
+      'label', coalesce(v_copy->>('class_'||t.key), initcap(replace(t.key,'_',' '))),
+      'count', coalesce((v_counts->>t.key)::bigint, 0),
+      'count_label', to_char(coalesce((v_counts->>t.key)::bigint,0),'FM999,999,999'),
+      'selected', (v_f->'classes') ? t.key)
+      from (values ('medical_store',1),('chain',2),('wholesaler',3),('hospital',4),
+                   ('clinic',5),('lab',6),('alt_med',7),('other',8)) t(key, ord)
+  ) chips;
+
+  return jsonb_build_object(
+    'ok', true,
+    'filters', v_f,
+    'classes', jsonb_build_object(
+      'label', coalesce(v_copy->>'classes_label','Class'),
+      'chips', coalesce(v_chips,'[]'::jsonb)),
+    'hidden', jsonb_build_object(
+      'label', coalesce(v_copy->>'hidden_label','Hidden by default'),
+      'toggles', jsonb_build_array(
+        jsonb_build_object('key','show_non_targets',
+          'label', coalesce(v_copy->>'show_non_targets','Show non-targets'),
+          'hint',  coalesce(v_copy->>'show_non_targets_hint',''),
+          'value', (v_f->>'show_non_targets')::boolean),
+        jsonb_build_object('key','show_closed',
+          'label', coalesce(v_copy->>'show_closed','Show closed'),
+          'hint',  coalesce(v_copy->>'show_closed_hint',''),
+          'value', (v_f->>'show_closed')::boolean),
+        jsonb_build_object('key','show_matched',
+          'label', coalesce(v_copy->>'show_matched','Show matched'),
+          'hint',  coalesce(v_copy->>'show_matched_hint',''),
+          'value', (v_f->>'show_matched')::boolean),
+        jsonb_build_object('key','show_stale',
+          'label', coalesce(v_copy->>'show_stale','Show stale'),
+          'hint',  coalesce(v_copy->>'show_stale_hint',''),
+          'value', (v_f->>'show_stale')::boolean),
+        -- CMD #1869 — Archived is a toggle like the rest, so the existing
+        -- filter row draws it and a saved view can carry it.
+        jsonb_build_object('key','archived',
+          'label', coalesce(v_copy->>'archived','Archived'),
+          'hint',  replace(coalesce(v_copy->>'archived_hint',''), '{d}',
+                     greatest(1, coalesce((select value::text::int from app_settings
+                                            where key='lead_archive_days'), 30))::text),
+          'value', (v_f->>'archived')::boolean),
+        -- CMD #1871 — off means one row per phone (the default); on means
+        -- every branch of a chain is listed separately.
+        jsonb_build_object('key','show_all_branches',
+          'label', coalesce(v_copy->>'show_all_branches','Show all branches'),
+          'hint',  coalesce(v_copy->>'show_all_branches_hint',''),
+          'value', (v_f->>'show_all_branches')::boolean))),
+    'score', jsonb_build_object(
+      'label', coalesce(v_copy->>'score_label','Minimum score'),
+      'min',   coalesce((v_cfg->'min_score'->>'min')::int, 0),
+      'max',   coalesce((v_cfg->'min_score'->>'max')::int, 100),
+      'step',  coalesce((v_cfg->'min_score'->>'step')::int, 5),
+      'default', coalesce((v_cfg->'min_score'->>'default')::int, 0),
+      'value', v_score,
+      'value_label', case when v_score = 0
+                       then coalesce(v_copy->>'score_any','Any score')
+                       else replace(coalesce(v_copy->>'score_value','Score {n}+'),
+                                    '{n}', v_score::text) end),
+    'zone', jsonb_build_object(
+      'label', coalesce(v_copy->>'zone_label','Zone'),
+      'zone_id', v_zone,
+      'value_label', v_zone_lbl,
+      'hint', coalesce(v_copy->>'zone_hint','')),
+    'views', jsonb_build_object(
+      'label',       coalesce(v_copy->>'views_label','Saved views'),
+      'empty',       coalesce(v_copy->>'views_empty',''),
+      'save_label',  coalesce(v_copy->>'view_save','Save view'),
+      'name_hint',   coalesce(v_copy->>'view_name_hint','Name this view'),
+      'delete_label',coalesce(v_copy->>'view_delete','Delete'),
+      'items',       public._lead_views_json()),
+    'reset_label', coalesce(v_copy->>'reset','Reset filters'),
+    'count_chip',  replace(coalesce(v_copy->>'count_chip','S Leads ({n})'),
+                           '{n}', to_char(v_total,'FM999,999,999')),
+    'total', v_total);
 end;
 $function$
 

@@ -36,8 +36,8 @@ android {
         applicationId = "in.medibo.app"
         minSdk = flutter.minSdkVersion
         targetSdk = 36
-        versionCode = 20
-        versionName = "1.3.7"
+        versionCode = 38
+        versionName = "1.3.24"
     }
 
     signingConfigs {
@@ -45,7 +45,11 @@ android {
             create("release") {
                 keyAlias = keystoreProperties["keyAlias"] as String
                 keyPassword = keystoreProperties["keyPassword"] as String
-                storeFile = keystoreProperties["storeFile"]?.let { file(it) }
+                // rootProject = android/, so a bare basename in key.properties
+                // resolves to android/<file>.jks. Plain file() here resolved against
+                // android/app/ and broke a restored keystore (CHANGE #276). An
+                // absolute path still works — rootProject.file() returns it as-is.
+                storeFile = keystoreProperties["storeFile"]?.let { rootProject.file(it) }
                 storePassword = keystoreProperties["storePassword"] as String
             }
         }
@@ -100,6 +104,36 @@ kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
     }
+}
+
+dependencies {
+    // CHANGE #225 — DocScanReadiness needs these symbols in the app module.
+    // play-services-base carries GoogleApiAvailability + the ModuleInstall API;
+    // the document-scanner artifact is already on the classpath transitively via
+    // google_mlkit_document_scanner, and is declared here only so the app module
+    // compiles against GmsDocumentScanning directly.
+    implementation("com.google.android.gms:play-services-base:18.5.0")
+    implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0")
+    // CHANGE #306 — MediboMessagingService extends FirebaseMessagingService in
+    // THIS module, so the symbol has to be on the app's own compile classpath.
+    // The firebase_messaging plugin already puts the artifact in the APK, but a
+    // plugin's `implementation` dependency is not visible to the app module —
+    // the release build failed with "Unresolved reference
+    // 'FirebaseMessagingService'" until this line existed. The BoM version is
+    // the one firebase_core pins (FirebaseSDKVersion=33.16.0 in its
+    // gradle.properties), so this resolves to the SAME firebase-messaging the
+    // plugin resolves and adds no second copy. Bump it with the plugin, never
+    // on its own.
+    implementation(platform("com.google.firebase:firebase-bom:33.16.0"))
+    implementation("com.google.firebase:firebase-messaging")
+    // CHANGE #700 — RunLocationService. play-services-location is a pure
+    // JVM/AAR artifact with no native libraries, so it neither pulls an NDK
+    // toolchain (this host cannot download one) nor changes the 16 KB
+    // page-size alignment of the shipped APK. androidx.core supplies
+    // ContextCompat.startForegroundService and ActivityCompat.requestPermissions,
+    // both used by MainActivity's run_location channel.
+    implementation("com.google.android.gms:play-services-location:21.3.0")
+    implementation("androidx.core:core-ktx:1.13.1")
 }
 
 flutter {

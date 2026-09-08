@@ -2,27 +2,56 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'boot_env.dart' as boot;
-import 'services/android_update_check.dart';
+import 'widgets/app_update_prompt.dart';
+import 'widgets/update_bar.dart';
+import 'widgets/test_mode_banner.dart';
+import 'services/test_session.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:http/http.dart' as http; // CHANGE #1149
+import 'services/resilient_http.dart'; // CHANGE #1149 — cache instead of spin
+import 'widgets/reconnecting_banner.dart'; // CHANGE #1149
 
 import 'app_state.dart';
 import 'order_hours_state.dart';
 import 'inquiry_lock_state.dart';
 import 'url_sync.dart' show captureInitialPath;
+import 'services/crash_reporting.dart'; // CHANGE #473
 import 'services/version_watcher.dart';
 import 'utils/render_log.dart';
 import 'view_as_state.dart';
 import 'models/cart_model.dart';
 import 'models/order_hours_model.dart';
 import 'models/inquiry_lock_model.dart';
+import 'screens/auth/complete_registration_screen.dart';
 import 'screens/auth/login_screen.dart';
+
+import 'screens/customer/customer_staff_screen.dart'; // CMD #438: /customer/staff
+import 'screens/wishlist_screen.dart'; // CHANGE #745: /wishlist
+import 'screens/customer/my_account_screen.dart'; // CHANGE #840: /my-account
+import 'screens/customer/address_book_screen.dart'; // CHANGE #745: /customer/addresses
+import 'screens/rewards_screen.dart'; // CHANGE #745: /rewards
+import 'screens/admin/admin_partner_console_screen.dart';
+import 'screens/admin/admin_partner_scorecards_screen.dart';
+import 'screens/partner/partner_scorecard_card.dart';
+import 'screens/admin/partner_audit_log_screen.dart';
+import 'screens/admin/settlement_screen.dart'; // /admin/settlement
 import 'screens/home_shell.dart';
 import 'screens/public/inquiry_form_screen.dart';
+import 'screens/delivery/agency_dispatch_screen.dart'; // C704: /agency/dispatch
 import 'screens/public/stock_update_form_screen.dart'; // C639: /stock-update/<token>
+import 'screens/public/supplier_return_ack_screen.dart'; // C710: /return-ack/<token>
+import 'screens/public/kyc_upload_form_screen.dart'; // C705: /kyc-upload/<token>
+import 'screens/public/order_feedback_form_screen.dart'; // C697: /feedback/<token>
+import 'screens/public/substitute_ask_screen.dart'; // C698: /substitute-ask/<token>
+import 'screens/public/supplier_signup_screen.dart'; // C465 row 63: /supplier-signup
+import 'screens/public/storefront_screen.dart'; // CMD #417: /shop/<token>
+import 'screens/public/substitute_token_screen.dart'; // #366: /substitute/<token>
+import 'screens/admin/returns_refunds_screen.dart'; // C395: /admin/returns
 import 'pages/dispute_token_page.dart';
 import 'screens/public/dispute_form_screen.dart';
 import 'screens/public/public_order_page.dart';
@@ -31,15 +60,43 @@ import 'screens/delivery/delivery_register_screen.dart'; // C631: PART A
 import 'screens/code_resolver_page.dart';
 import 'screens/public/wa_link_redirect_page.dart'; // /r/:code — campaign links
 import 'screens/admin/wa_campaigns_screen.dart'; // /admin/wa-campaigns
+import 'screens/admin/admin_scope_audit_screen.dart'; // /admin/scope-audit
+import 'screens/admin/dev_queue/cron_health_screen.dart';
+import 'screens/supplier/supplier_account_page.dart';
+import 'screens/admin/dev_queue/dev_queue_screen.dart'; // /admin/dev-queue
+import 'screens/admin/test_mode_screen.dart';  // /admin/test-mode (#573)
+import 'screens/admin/admin_delivery_extras_screen.dart'; // /admin/delivery-programme
+import 'screens/pharmacy/pharmacy_owner_screen.dart';
+import 'screens/pharmacy/pharmacy_expiry_screen.dart';   // CMD #413 — /pharmacy/expiry
+import 'screens/pharmacy/pharmacy_radar_screen.dart';    // CMD #425 — /pharmacy/radar
+import 'screens/pharmacy/pharmacy_parcel_count_screen.dart'; // CMD #431 — /pharmacy/parcel-count
+import 'screens/pharmacy/pharmacy_variance_screen.dart'; // CMD #413 — /pharmacy/stock-check
+import 'screens/pharmacy/pharmacy_audit_screen.dart';   // CMD #447 — /pharmacy/audit
+import 'screens/pharmacy/rx_scan_screen.dart';           // CMD #418 — /pharmacy/prescription
+import 'screens/admin/nav_registry_view.dart'; // CHANGE #325 — deep links
 import 'screens/product_detail_screen.dart'; // C636: /product/:id
+import 'screens/reorder_screen.dart'; // #173: /reorder
+import 'screens/admin/reorder_admin_screen.dart'; // #173: /admin/reorder
 import 'screens/company_screen.dart'; // C638: /company/:key
 import 'screens/inquiry_link_page.dart';
 import 'screens/dispute_link_page.dart';
 import 'features/whatsapp/ui/wa_templates_screen.dart'; // admin WhatsApp templates
+import 'screens/admin/wa_diagnosis_screen.dart';
+import 'screens/admin/notify_center_screen.dart'; // CHANGE #297 — the notify() dispatcher's admin surface
+import 'screens/admin/admin_push_screen.dart'; // CHANGE #298 — Firebase config + per-event push toggle
+import 'screens/notifications_inbox_screen.dart'; // CHANGE #298 — the in-app inbox behind the bell
+import 'screens/admin/wa_ops_screen.dart'; // admin WhatsApp ops + template pipeline
+import 'screens/admin/admin_order_closure_screen.dart'; // CHANGE #229 — /admin/order-closure
 import 'screens/about_screen.dart';
 import 'screens/contact_screen.dart';
 import 'screens/legal_pages.dart';
+import 'screens/admin/admin_delivery_ops_screen.dart';
+import 'screens/admin/admin_delivery_waves_screen.dart';
+import 'screens/public/near_screen.dart'; // CMD #426 — /near, /near/p/<token>
+import 'services/feature_gaps_service.dart'; // CHANGE #312
 import 'services/ui_copy.dart';
+import 'services/session_recorder.dart';
+import 'services/recording_tap.dart'; // CMD #1851
 import 'supabase_config.dart';
 import 'theme.dart';
 import 'design_tokens.dart';
@@ -47,6 +104,176 @@ import 'user_state.dart';
 import 'widgets/animations.dart';
 
 // Boot entry point: crash-isolated so no single subsystem can white-screen the app.
+/// CHANGE #1365 — the named-route table, hoisted out of `build` so
+/// `onGenerateRoute` can consult it too.
+///
+/// MaterialApp matches `routes:` against the WHOLE `settings.name`, query
+/// string included, so `/admin/dev-queue?panel=runner` matched nothing, fell
+/// through to `onUnknownRoute` and opened the storefront. Every deep link that
+/// carried a parameter did — which is why the Dev Queue runner strip could be
+/// reached by tapping but never opened already-expanded from a URL, and so was
+/// never photographed open. One table, two readers: this map, and the
+/// bare-path fallback at the end of onGenerateRoute.
+final Map<String, WidgetBuilder> kAppRoutes = <String, WidgetBuilder>{
+  '/login':        (_) => const LoginScreen(),
+  // CHANGE #309 — delivery operations (payouts, doorstep claims,
+  // pincode serviceability, rider document expiry, ratings) at a
+  // real URL, for the same reason /partner has one: a headless
+  // session can open it and PROVE it painted, and Om can bookmark
+  // it. It guards nothing — admin_delivery_ops() answers
+  // `allowed:false` for anyone who is not an admin, so the
+  // authorisation lives in the backend where it belongs. The
+  // tappable way in is still the Delivery tab's own entry row.
+  '/admin/delivery-ops': (_) => const AdminDeliveryOpsScreen(),
+  // CHANGE #405 — the wave planner. Registered in feature_registry
+  // with this exact deep_link, so the admin dashboard tile pushes it
+  // straight onto the navigator (CHANGE #395) with no shell edit.
+  '/admin/delivery-waves': (_) => const AdminDeliveryWavesScreen(),
+  // CHANGE #312 — the feature_gaps register, at a real URL for the
+  // same reason /admin/delivery-ops has one: a headless admin
+  // session can open it and PROVE it painted. It guards nothing —
+  // feature_gaps_list() answers not_authorized with its own copy
+  // for anyone who is not an admin. The tappable way in is still
+  // Admin ▸ More ▸ Feature gaps.
+  '/admin/feature-gaps': (_) => buildFeatureGapsScreen(),
+  // CHANGE #1197 — the Dev Queue gets a real URL.
+  //
+  // It was reachable ONLY by tapping a tile in the admin shell, so
+  // no headless verifier could ever open it: every Dev Queue change
+  // shipped without a screenshot of the screen it changed, and the
+  // browser journeys that need it stayed PENDING. The screen keeps
+  // its own super-admin gate (and every RPC it calls is gated
+  // server-side by _dev_guard), so this adds a way in, not a way
+  // around.
+  '/admin/dev-queue': (_) => const _SuperOnly(child: DevQueueScreen()),
+  // CHANGE #657 — '/partner' is GONE from this map on purpose.
+  // MaterialApp checks `routes:` BEFORE `onGenerateRoute:`, so the
+  // #653 redirect below could never fire while this entry existed:
+  // the old Partner page won every time the URL was opened.
+  // CHANGE #438 — the pharmacy's own staff logins (CHANGE #408) at
+  // a real URL, for the same reason /partner has one: a headless
+  // session can open it and PROVE the screen painted, and the
+  // owner can bookmark it. It guards nothing —
+  // customer_staff_list() answers not_authorized with its own copy
+  // for anyone who is not on that pharmacy, so authorisation stays
+  // in the backend. The tappable way in is still Profile ▸ Staff
+  // logins.
+  '/customer/staff': (_) => const CustomerStaffScreen(),
+  // CHANGE #745 — the two features that left the profile dropdown
+  // get real addresses, so a registry deep_link is a URL and not a
+  // promise. Both screens ask the backend who the viewer is
+  // (wishlist_get / loyalty_my_rewards key on my_customer_id), so
+  // neither route guards anything of its own.
+  '/wishlist':     (_) => const WishlistScreen(),
+  '/rewards':      (_) => const RewardsScreen(),
+  // CMD #1834 — the second profile editor is gone for good. This address used
+  // to open it; it opens My Account -> Profile & KYC, and asks for no section
+  // because the editor is not embedded in that tab either.
+  '/customer/profile':   (_) => const MyAccountScreen(initialTab: 'profile'),
+  '/customer/addresses': (_) => const AddressBookScreen(),
+  '/register':     (_) => const LoginScreen(),
+  // CMD #1904 — the address my_session().signup_route names. A WhatsApp signup
+  // now creates an auth user with no pharmacy row behind it, which is the same
+  // state a Google signup comes back in, so both are sent to one URL and one
+  // form. It guards nothing: the screen asks my_session() who the viewer is and
+  // renders the backend's own sentence for a signed-out or already-registered
+  // one. A real route (not a push from inside the login panel) is what lets the
+  // form survive the page reload the OAuth round trip performs.
+  '/complete-registration': (_) => const CompleteRegistrationScreen(),
+  // CHANGE #631 (PART A) — the delivery-partner registration form.
+  // delivery_partner_register() stamps auth.uid() itself, so the
+  // screen asks for a sign-in rather than inventing an anonymous
+  // path.
+  '/delivery-register': (_) => const DeliveryRegisterScreen(),
+  // Admin > WhatsApp > Templates. wa_templates_screen() refuses
+  // non-admin callers itself, so the screen renders its own
+  // not-authorized state rather than the route guessing a role.
+  '/admin/wa-templates': (_) => const WaTemplatesScreen(),
+  // CHANGE #228 — Admin > WhatsApp > Ops, at a real URL for the
+  // same reason /admin/wa-templates has one: the Template pipeline
+  // section is the page you send someone to when they ask "is that
+  // message live yet?". wa_event_routes_screen / wa_waba_status /
+  // wa_contact_ledger / wa_template_pipeline each refuse non-admin
+  // callers themselves and the screen renders that refusal, so the
+  // route guards nothing.
+  '/admin/wa-ops': (_) => const WaOpsScreen(),
+  // CHANGE #295 — the WhatsApp delivery diagnosis, at a real URL
+  // for the same reason /admin/wa-ops has one: it is the page you
+  // send someone to when they ask "did that message actually
+  // reach anyone?". wa_event_diagnosis() refuses a non-admin
+  // caller itself and the screen renders that refusal, so the
+  // route guards nothing — and a headless admin session can reach
+  // it directly, which is what proves the screen renders.
+  '/admin/wa-diagnosis': (_) => const WaDiagnosisScreen(),
+  // CHANGE #297 — the Notification Centre at a real URL, for the
+  // same reason /admin/wa-diagnosis has one: notify_center()
+  // refuses a non-admin caller itself and the screen renders that
+  // refusal, so the route guards nothing — and a headless admin
+  // session can reach it directly, which is what proves the screen
+  // actually renders.
+  '/admin/notify-center': (_) => const NotifyCenterScreen(),
+  // CHANGE #298 — Push notifications at a real URL, for the same
+  // reason /admin/notify-center has one: push_admin_screen()
+  // refuses a non-admin caller itself, so the route guards
+  // nothing, and a headless admin session can reach the screen
+  // directly — which is what proves it renders.
+  '/admin/push': (_) => const AdminPushScreen(),
+  // CHANGE #298 — the in-app inbox. Every event is readable here
+  // later regardless of which channel delivered it, so it needs
+  // an address of its own, not only the bell.
+  '/notifications': (_) => const NotificationsInboxScreen(),
+  // CHANGE #229 — Order closure at a real URL, same reason
+  // /admin/wa-ops has one: this is the page you send someone to
+  // when they ask "why is that order still open?". The screen's
+  // own RPCs (admin_order_closure_list / _detail) refuse a
+  // non-admin caller and it renders that refusal verbatim, so the
+  // route guards nothing — and a headless admin session can reach
+  // it directly, which is what proves the screen actually renders.
+  '/admin/order-closure': (_) => const AdminOrderClosureScreen(),
+  // CHANGE #173 — the reorder screen as a real URL. The WhatsApp
+  // reorder nudge can link straight here, and it gives the screen
+  // a shareable address like /product/:id has. The screen asks the
+  // backend who the viewer is (reorder_suggestions uses
+  // my_customer_id), so the route needs no role guard of its own.
+  '/reorder':      (_) => const ReorderScreen(),
+  // CHANGE #173 — the admin side of the same suite. Like
+  // /admin/wa-templates above, the RPC refuses non-admin callers
+  // itself and the screen renders that refusal, so the route
+  // guards nothing. It is also reachable without a URL, from the
+  // dashboard's quick-navigation tile.
+  '/admin/reorder': (_) => const ReorderAdminScreen(),
+  // CHANGE #395 — Returns, refunds & cancellation. Same shape as
+  // the templates route above: returns_orders_list() /
+  // order_returns_panel() enforce _returns_guard() themselves, so
+  // the screen renders the backend's own not-authorized copy
+  // rather than the route guessing a role.
+  '/admin/returns': (_) => const ReturnsRefundsScreen(),
+  // CMD #431 — count an arrived parcel against its bill. Same
+  // shape as the routes above: pharmacy_parcel_home() resolves the
+  // caller's own pharmacy and renders its own refusal, so the route
+  // guards nothing. It is also reachable without a URL, from the
+  // "Count parcel" tile on the pharmacy's own account screen.
+  '/pharmacy/parcel-count': (_) => const ParcelCountHomeScreen(),
+  // CHANGE #441 — the owner's night screens (CHANGE #419) at a real
+  // URL, for the same reason /partner and /admin/delivery-ops
+  // have one: a headless session can open it and PROVE the screen
+  // painted, and the owner can bookmark it. It guards nothing:
+  // pharmacy_owner_dashboard()
+  // answers not_a_pharmacy with its own copy for anyone off that
+  // pharmacy, so authorisation stays in the backend. The tappable
+  // way in is still the counter's Owner dashboard tile (#906).
+  '/pharmacy/owner': (_) => const PharmacyOwnerScreen(),
+  '/about-app':    (_) => const AboutScreen(),
+  '/contact':      (_) => const ContactScreen(),
+  '/terms':        (_) => const TermsScreen(),
+  '/privacy':      (_) => const PrivacyScreen(),
+  // Google Play "Delete data" URL — renders legal_get_page('data-deletion').
+  '/data-deletion': (_) => const DataDeletionScreen(),
+  '/refund':       (_) => const RefundScreen(),
+  '/shipping':     (_) => const ShippingScreen(),
+  '/cancellation': (_) => const CancellationScreen(),
+};
+
 void main() {
   runZonedGuarded(() async {
     WidgetsFlutterBinding.ensureInitialized();
@@ -57,16 +284,46 @@ void main() {
         final msg = details.exceptionAsString();
         RenderLog.write('flutter_error', msg.length > 120 ? msg.substring(0, 120) : msg);
       } catch (_) {}
+      // CHANGE #473 — the same error, off the device: to Sentry when a DSN
+      // exists, to the backend crash queue when it does not. Swallowed as
+      // before, so reporting can never be the thing that white-screens a boot.
+      try {
+        CrashReporting.captureFlutterError(details);
+      } catch (_) {}
     };
 
     captureInitialPath(); // must be called BEFORE usePathUrlStrategy() resets pathname
     usePathUrlStrategy();
 
     // Supabase init is crash-isolated: failure renders app in signed-out state.
+    // CMD #1851 — the client BELOW the tap is kept: the recording flush posts
+    // through it, so a flush can never observe itself.
+    final medibotHttp = ResilientClient(
+      http.Client(),
+      probeUri: Uri.parse('${SupabaseConfig.url}/rest/v1/'),
+      probeHeaders: const {'apikey': SupabaseConfig.anonKey},
+    );
+    RecordingCapture.instance.useFlushClient(medibotHttp);
     try {
       await Supabase.initialize(
         url: SupabaseConfig.url,
         anonKey: SupabaseConfig.anonKey,
+        // CHANGE #473 — RPC breadcrumbs. Wrapping the one client every RPC
+        // already uses records the function name, status and duration of each
+        // call with no change at a single call site. It reads the URL and the
+        // status code only: never a request body, never a response body.
+        // CHANGE #1149 — under the breadcrumbs sits the caching client: the
+        // last good body of each read/RPC is served in place of a 502/503/504
+        // or a timeout, and the Reconnecting strip is raised. The breadcrumb
+        // therefore records what the SCREEN got (200 + x-medibo-cached), which
+        // is the truth an outage report needs.
+        // CMD #1851 — outermost sits the recording tap. It is a single
+        // boolean test until a live TEST SESSION says a walkthrough is
+        // recording; only then does it keep the function name, the arguments
+        // and the answer of each call so the walk can be replayed later. With
+        // no session it adds nothing at all — see RecordingTap.
+        httpClient: RecordingTap.wrap(
+            CrashReporting.breadcrumbHttpClient(medibotHttp)),
         authOptions: const FlutterAuthClientOptions(
           authFlowType: AuthFlowType.pkce,
           autoRefreshToken: true,
@@ -76,6 +333,16 @@ void main() {
     } catch (e) {
       try { RenderLog.write('boot_error', 'supabase_init_failed'); } catch (_) {}
     }
+
+    // CMD #1848 — an install in test mode carries its session token on every
+    // request (x-medibo-test-session). Read from shared_preferences and
+    // attached here, before the first RPC, so nothing this install writes
+    // can escape the session. Crash-isolated: a failure means NOT in test
+    // mode, never the reverse.
+    try { await TestSessionState.instance.loadToken(); } catch (_) {}
+    // CMD #1851 — the tap follows the banner every screen already polls:
+    // `recording_state()` rides on it, and nothing else turns recording on.
+    try { RecordingCapture.instance.bind(); } catch (_) {}
 
     // One-shot URL cleanup: strip ?code= / #access_token= immediately after SDK processes them.
     // Prevents browser session-restore from re-presenting the OAuth callback URL on reopen,
@@ -108,6 +375,19 @@ void main() {
       if (changeNum != null) RenderLog.write('change', changeNum);
     } catch (_) {
       RenderLog.setBuildHash('unknown');
+    }
+
+    // CHANGE #473 — client crash reporting. Started here, after version.json,
+    // so the build commit can ride along as a tag; the RELEASE itself is the
+    // CHANGE number baked in at build time by deploy.sh. Crash-isolated: with
+    // no DSN this is the local-queue path, and a failure leaves the app running.
+    try {
+      await CrashReporting.init(
+        platform: kIsWeb ? 'web' : defaultTargetPlatform.name,
+        buildCommit: RenderLog.buildHash,
+      );
+    } catch (_) {
+      try { RenderLog.write('boot_error', 'crash_reporting_failed'); } catch (_) {}
     }
     // CHANGE #559: pick up anything the pre-Flutter JS instrumentation recorded
     // before/while the page left for Google, in case its keepalive write was
@@ -233,6 +513,12 @@ void main() {
       final msg = error.toString();
       RenderLog.write('boot_zone_error', msg.length > 120 ? msg.substring(0, 120) : msg);
     } catch (_) {}
+    // CHANGE #473 — and reported. This is the handler that sees the crashes
+    // nobody could see before: an uncaught async failure on a pharmacist's
+    // phone, which used to end at a swallowed log line.
+    try {
+      CrashReporting.captureError(error, stack);
+    } catch (_) {}
   });
 }
 
@@ -276,6 +562,11 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _auth.checkForcedLogout();
+      // CHANGE #326 — resume is also the moment a role CHANGE must land. A
+      // login promoted to (or demoted from) a zone partner while the app was
+      // open otherwise kept the surface it booted with. Debounced to 20 s
+      // inside the notifier and never awaited.
+      _auth.refreshSessionIfStale();
     }
   }
 
@@ -296,6 +587,12 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
 
   void _onAuthChanged() {
     _maybeShowForcedLogout();
+    // CHANGE #473 — the crash identity is role + uid and nothing else. The role
+    // is pushed here because it is the one place it changes; the uid is read
+    // from the live session at capture time.
+    try {
+      CrashReporting.setRole(_auth.session.role);
+    } catch (_) {}
     // Run once when auth fully resolves (loading=false means role is set too).
     if (_viewAsRestored) return;
     if (_auth.loading) return;
@@ -419,12 +716,40 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
             title: 'mediBO',
             debugShowCheckedModeBanner: false,
             scaffoldMessengerKey: VersionWatcher.instance.messengerKey,
+            // CHANGE #473 — navigation breadcrumbs. Route NAMES only; a route's
+            // arguments can carry an order id or a customer name.
+            // CHANGE #638 — the session recorder rides the same list. It is
+            // inert until a walkthrough is started from the Chaos lab, and it
+            // records route NAMES only, for the same reason #473 does.
+            navigatorObservers: [
+              CrashReporting.navigatorObserver,
+              SessionRecorder.instance.observer,
+            ],
             theme: buildTheme(),
             scrollBehavior: const SmoothScrollBehavior(),
             // Belt-and-suspenders: clear any stray text decoration on Flutter web.
             builder: (context, child) => DefaultTextStyle.merge(
               style: const TextStyle(decoration: TextDecoration.none, decorationColor: Color(0x00000000)),
-              child: child!,
+              // CHANGE #286 — the slim update bar lives here, above every
+              // route, so it can sit over the bottom nav and the floating cart
+              // pill without any screen knowing about it. It overlays: it
+              // reflows nothing and it only takes taps inside its own bar.
+              // CHANGE #573 — the TEST MODE strip sits above every route of
+              // every role, for the same reason the update bar does: Om walks
+              // the flow from five different logins and none of those screens
+              // should have to know test mode exists.
+              child: TestModeBannerHost(
+                child: UpdateBarHost(
+                  controller: VersionWatcher.instance.updateBar,
+                  // CHANGE #1149 — the reconnecting strip sits above every
+                  // route of every role and never blocks the page under it:
+                  // the cached payload stays visible while the backend is out.
+                  child: Column(children: [
+                    const ReconnectingBanner(),
+                    Expanded(child: child!),
+                  ]),
+                ),
+              ),
             ),
             home: _AppRoot(auth: _auth),
             // Public inquiry form — no auth required, handles /inquiry/<token>
@@ -432,6 +757,22 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
             // Public order view    — no auth required, handles /order/<token>
             onGenerateRoute: (settings) {
               final name = settings.name ?? '';
+              // CHANGE #653 — /partner is GONE. Super admin, admin and
+              // partner are ONE interface: one shell, one nav, one set of
+              // routes. A partner login lands on the SHARED home and the
+              // per-feature View/Write matrix decides what is on it, so this
+              // path redirects there instead of opening a partner layout.
+              {
+                final path = name.split('?').first;
+                if (path == '/partner' || path.startsWith('/partner/')) {
+                  try {
+                    RenderLog.write('c653_partner_redirect', 1);
+                  } catch (_) {}
+                  return MaterialPageRoute(
+                    builder: (_) => _AppRoot(auth: _auth),
+                  );
+                }
+              }
               // CHANGE #636 — the product detail page is a real route, so it
               // gets a shareable URL and a real back stack (a similar-product
               // tile pushes its own page rather than replacing this one).
@@ -516,9 +857,155 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                   );
                 }
               }
+              // CHANGE #465 · supplier register row 63 — the door a distributor
+              // walks in through. 28 of 35 supplier_profiles rows had no login
+              // and supplier_leads had zero rows, because the ONLY ways to
+              // create a supplier were the three admin RPCs. Public and
+              // anonymous by design: this is a shop asking to sell, not a
+              // session, and nothing behind it is granted until an admin
+              // approves the application.
+              if (name == '/supplier-signup' ||
+                  name.startsWith('/supplier-signup?')) {
+                return MaterialPageRoute(
+                  builder: (_) => const SupplierSignupScreen(),
+                );
+              }
               // CHANGE #639 — the stock-update link the 5pm sweep sends over
               // WhatsApp. Public, exactly like /inquiry/<token>: the token IS
               // the authorisation. Declared above the trailing /:code guard.
+              // CMD #366 row 176 — the substitute link a no-app customer
+              // gets over WhatsApp. Same shape as the stock-update link: the
+              // token in the URL is the authorisation.
+              // CHANGE #698 — /substitute-ask/<token>: the offer a customer
+              // gets over WhatsApp when a line could not be sourced. PUBLIC and
+              // anonymous, exactly like /stock-update/<token>: the token in the
+              // URL is the authorisation, and the page it opens carries
+              // availability only — product, company, strength, pack, and never
+              // a price. Declared ABOVE /substitute/ so the longer prefix wins.
+              if (name.startsWith('/substitute-ask/')) {
+                final token =
+                    name.substring('/substitute-ask/'.length).split('?').first;
+                if (token.isNotEmpty) {
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => SubstituteAskScreen(token: token),
+                  );
+                }
+              }
+              if (name.startsWith('/substitute/')) {
+                final token =
+                    name.substring('/substitute/'.length).split('?').first;
+                return MaterialPageRoute(
+                  builder: (_) => SubstituteTokenScreen(token: token),
+                );
+              }
+              // CMD #417 — /shop/<token>: the pharmacy's own WhatsApp
+              // storefront, shared as a link or a QR. PUBLIC and anonymous by
+              // design — the token in the URL is the authorisation, exactly
+              // the way /stock-update/<token> works, and the page it opens
+              // shows MRP and availability only.
+              if (name.startsWith('/shop/')) {
+                final token = name.substring('/shop/'.length).split('?').first;
+                if (token.isNotEmpty) {
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => StorefrontScreen(token: token),
+                  );
+                }
+              }
+              // CMD #426 — /near and /near/p/<token>: the CONSUMER surface.
+              // PUBLIC and anonymous, and that is the whole product: a person
+              // with a prescription opens a URL, with no login, no account and
+              // no app store, and asks which pharmacy nearby is likely to have
+              // it. near_boot/near_search/near_pharmacy are the anon-granted,
+              // rate-limited RPCs behind it, and they expose availability only
+              // — never a price, a quantity or a supplier.
+              // Declared above the trailing /:code guard for the same reason
+              // /stock-update/ is: a bare token must not be mistaken for one.
+              if (name == '/near' || name.startsWith('/near?')) {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const NearScreen(),
+                );
+              }
+              if (name.startsWith('/near/p/')) {
+                final token =
+                    name.substring('/near/p/'.length).split('?').first;
+                if (token.isNotEmpty) {
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => NearPharmacyScreen(token: token),
+                  );
+                }
+              }
+              // CHANGE #697 — /feedback/<token>: the whole-order feedback
+              // card a pharmacy gets over WhatsApp when its order closes.
+              // PUBLIC and anonymous, exactly like /stock-update/<token>: the
+              // token in the URL is the authorisation, and order_feedback_form
+              // / order_feedback_submit_token are anon-granted for it.
+              // Declared above the trailing /:code guard so a bare token is
+              // never mistaken for a product code.
+              if (name.startsWith('/feedback/')) {
+                final token =
+                    name.substring('/feedback/'.length).split('?').first;
+                if (token.isNotEmpty) {
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => OrderFeedbackFormScreen(token: token),
+                  );
+                }
+              }
+              // CHANGE #705 — /kyc-upload/<token>: the licence-upload link a
+              // pharmacy or supplier gets over WhatsApp in the backfill drive.
+              // PUBLIC and anonymous, exactly like /stock-update/<token>: the
+              // token in the URL is the authorisation, kyc_token_form and
+              // kyc_token_submit are anon-granted for it, and the anon storage
+              // policy admits a write only into that token's own folder.
+              // Declared above the trailing /:code guard so a bare token is
+              // never mistaken for a product code.
+              // CHANGE #840 — /my-account[/<tab>]: the customer's own account
+              // page. It is reached from Profile in the app; the URL exists so
+              // a notification, a WhatsApp link or a support reply can land on
+              // the exact tab. The tab_key is the backend registry's, passed
+              // through untouched — one this build has never heard of is
+              // ignored by the page and the payload's own default wins.
+              if (name == '/my-account' || name.startsWith('/my-account/') ||
+                  name.startsWith('/my-account?')) {
+                final tab = name.startsWith('/my-account/')
+                    ? name.substring('/my-account/'.length).split('?').first
+                    : '';
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => MyAccountScreen(initialTab: tab),
+                );
+              }
+              if (name.startsWith('/kyc-upload/')) {
+                final token =
+                    name.substring('/kyc-upload/'.length).split('?').first;
+                if (token.isNotEmpty) {
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => KycUploadFormScreen(token: token),
+                  );
+                }
+              }
+              // CHANGE #710 — /return-ack/<token>: the debit note a supplier
+              // gets over WhatsApp when stock goes back to them. PUBLIC and
+              // anonymous, exactly like /stock-update/<token>: the token in the
+              // URL is the authorisation, and supplier_return_ack_form /
+              // supplier_return_ack_submit are anon-granted for it and nothing
+              // else. Declared above the trailing /:code guard so a bare token
+              // is never mistaken for a product code.
+              if (name.startsWith('/return-ack/')) {
+                final token =
+                    name.substring('/return-ack/'.length).split('?').first;
+                if (token.isNotEmpty) {
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => SupplierReturnAckScreen(token: token),
+                  );
+                }
+              }
               if (name.startsWith('/stock-update/')) {
                 final token =
                     name.substring('/stock-update/'.length).split('?').first;
@@ -551,6 +1038,305 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                 return MaterialPageRoute(
                   settings: settings,
                   builder: (_) => const WaCampaignsScreen(),
+                );
+              }
+              // CHANGE #240 — the Scope Audit screen (which now also carries
+              // the inquiry->PO date integrity block) gets a real URL, exactly
+              // like /admin/wa-campaigns above: gated by admin_scope_audit()
+              // returning not_authorized, never by a role check in this file.
+              // It stays reachable from Admin -> Scope audit as well; the URL
+              // is what lets the post-deploy verifier open the screen and prove
+              // it actually painted, instead of trusting a string in the bundle.
+              if (name == '/admin/scope-audit') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const AdminScopeAuditScreen(),
+                );
+              }
+              // CHANGE #273 — Cron health gets a real URL for the same reason
+              // #240 gave one to Scope Audit: Flutter canvas cannot be clicked
+              // headlessly, so without a URL the post-deploy verifier can never
+              // prove c273_cron_health painted and "it rendered" would rest on a
+              // string in the bundle. Authorisation stays in the backend —
+              // cron_health() calls _dev_guard() and answers service_role or
+              // super_admin only, never a role check in this file. The screen is
+              // still reachable from Dev Queue -> the clock icon.
+              // CHANGE #325 — DEEP LINKS. Every registered screen is
+              // addressable, because the registry gives each row a deep_link
+              // of /admin/go/<route_key>: a push notification, a WhatsApp
+              // button or a command-palette result can jump straight to it.
+              // The shell owns the route table, so the key is parked here and
+              // consumed on the first frame after the shell mounts — the same
+              // shape the storefront already uses to read a category out of
+              // the URL. Authorisation is untouched: every destination screen
+              // still gates on its own RPCs.
+              if (name.startsWith('/admin/go/')) {
+                // CMD #421 — the path may carry a SUBJECT after the route key:
+                // `/admin/go/customer_360/<pharmacy id>`. This used to
+                // `replaceAll('/', '')` the whole tail, which welded the id
+                // onto the key and produced a route nothing recognises. Split
+                // on the separator instead: the first segment is the key, the
+                // rest is the subject (rejoined, so an id that contains a
+                // slash survives), and dropping empty segments keeps a
+                // trailing slash harmless exactly as the old replaceAll did.
+                final link = AdminGoLink.parse(name);
+                final key = link?.route ?? '';
+                final seed = link?.seed;
+                if (key.isNotEmpty) {
+                  PendingAdminNav.park(key, seed);
+                  try {
+                    RenderLog.write(
+                        'c325_deep_link', seed == null ? key : '$key/$seed');
+                  } catch (_) {}
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => _AppRoot(auth: _auth),
+                  );
+                }
+              }
+              // CHANGE #1016 — the registry's older deep-link shape for a
+              // Fulfill stage, /admin/fulfill/<stage>, had no handler at all:
+              // the fulfill_tab rows had carried it since #537 and every such
+              // link opened the storefront. It parks exactly like
+              // /admin/go/<stage> — the stage key IS the route key, and the
+              // shell's backend stage pairing (#754) opens Fulfill on it.
+              if (name.startsWith('/admin/fulfill/')) {
+                final link = AdminGoLink.parse(
+                    '/admin/go/${name.substring('/admin/fulfill/'.length)}');
+                final key = link?.route ?? '';
+                if (key.isNotEmpty) {
+                  PendingAdminNav.park(key, link?.seed);
+                  try {
+                    RenderLog.write('c1016_fulfill_link', key);
+                  } catch (_) {}
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => _AppRoot(auth: _auth),
+                  );
+                }
+              }
+              // CMD #407 — the delivery programme gets a real URL of its own,
+              // the same shape as /admin/cron-health: a direct route, so the
+              // screen is reachable from a link without waiting on the shell's
+              // first frame. The dashboard tile reaches it through the shell's
+              // route table as well.
+              if (name.split('?').first == '/admin/delivery-programme') {
+                // ?tab=<tab_key> deep-links one tab. The key is passed
+                // through untouched — admin_delivery_extras() decides whether
+                // it means anything, and an unknown one renders empty.
+                final q = Uri.tryParse(name)?.queryParameters['tab'];
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => AdminDeliveryExtrasScreen(initialTab: q),
+                );
+              }
+              // CMD #413 — the pharmacy shop-management pair gets real URLs
+              // for the same reason /admin/cron-health has one: Flutter canvas
+              // cannot be clicked headlessly, so without a URL the post-deploy
+              // verifier can never prove either screen painted. It is also the
+              // pharmacy OWNER's own way in while the profile sheet that will
+              // carry the tiles is being written elsewhere.
+              //
+              // Authorisation stays entirely in the backend: pharmacy_expiry_home()
+              // answers "Expiry watch is available on a pharmacy account." and
+              // pharmacy_variance_report() answers "This is an owner-only report."
+              // in their own words, and each screen renders that refusal. Opening
+              // the URL as the wrong role therefore shows the backend's sentence,
+              // never a blank page and never a Dart role test.
+              // CHANGE #441 — /pharmacy/owner?tab=2. The bare path is a
+              // named route above; the query form lands here because a routes
+              // map only matches an exact name. A TabBarView paints only the
+              // page in the viewport, so this is how a headless proof reaches
+              // the benchmark and the radar without tapping a canvas.
+              if (name.split('?').first == '/pharmacy/owner') {
+                final tab = int.tryParse(
+                        Uri.tryParse(name)?.queryParameters['tab'] ?? '') ??
+                    0;
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => PharmacyOwnerScreen(initialTab: tab),
+                );
+              }
+              if (name.split('?').first == '/pharmacy/expiry') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const PharmacyExpiryScreen(),
+                );
+              }
+              // CMD #425 — the expiry radar, ranked by expected loss. Same
+              // reason for a real URL as its sibling above, and the same
+              // authorisation story: pharmacy_radar_home() answers "This screen
+              // is for a pharmacy account." in its own words and the screen
+              // prints that, so opening this URL as the wrong role shows the
+              // backend's sentence rather than a blank page.
+              if (name.split('?').first == '/pharmacy/radar') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const PharmacyRadarScreen(),
+                );
+              }
+              // CMD #418 — the prescription scanner, at a real URL for the
+              // same reason as the pair above. Authorisation is the backend's:
+              // rx_scan_recent() answers "The prescription scanner is available
+              // on a pharmacy account." itself and the screen prints it.
+              if (name.split('?').first == '/pharmacy/prescription') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const RxScanScreen(),
+                );
+              }
+              if (name.split('?').first == '/pharmacy/stock-check') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const PharmacyVarianceScreen(),
+                );
+              }
+              // CMD #447 — the stock audit (#430). It shipped reachable only
+              // from the shelf app bar, which left it the one #430 surface the
+              // post-deploy verifier could not paint: that verifier drives the
+              // app by URL. Same authorisation story as the four routes above
+              // and no role test here — pharmacy_audit_home() resolves the
+              // caller's OWN shop and answers _c430_denied() for anyone else,
+              // so this URL grants nothing it did not already have.
+              if (name.split('?').first == '/pharmacy/audit') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const PharmacyAuditScreen(),
+                );
+              }
+              if (name == '/admin/cron-health') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const CronHealthScreen(),
+                );
+              }
+              // CHANGE #850 — the supplier's own account page, at a real URL for
+              // the same reason /admin/cron-health has one: Flutter renders to
+              // canvas, so without a URL no headless verifier can ever prove
+              // this screen painted. It is still reached by tapping the
+              // supplier menu -> My Account; the URL adds no privilege of its
+              // own — supplier_account_page() answers for the CALLER's own
+              // supplier and nobody else's, and the screen renders that reply.
+              // ?tab=<tab_key> opens one tab; an unknown key is ignored and the
+              // payload's own default_tab wins.
+              if (name.split('?').first == '/supplier/account') {
+                final tab =
+                    Uri.parse(name).queryParameters['tab']?.trim() ?? '';
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => SupplierAccountPage(initialTab: tab),
+                );
+              }
+              // CHANGE #573 — the synthetic lane's console, at a real URL for
+              // the same reason /admin/cron-health has one: Flutter renders to
+              // canvas, so without a URL no headless verifier can ever prove
+              // this screen painted. It is still reached by tapping
+              // Admin & System -> Test mode; the URL adds no privilege of its
+              // own — test_mode_screen() answers {ok:false, not_authorized} for
+              // anyone who is not an admin and the screen renders that reply.
+              if (name.split('?').first == '/admin/test-mode') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const TestModeScreen(),
+                );
+              }
+              // CHANGE #323 — partner settlement, at a real URL for the same
+              // reason /admin/cron-health has one: Flutter canvas cannot be
+              // clicked headlessly, so without a URL the post-deploy verifier
+              // can never prove the screen painted. Authorisation stays in the
+              // backend — settlement_dashboard() answers "Admins only." itself
+              // and the screen renders that refusal. Still reachable by tapping
+              // through Payment and Partner -> a partner card -> the people
+              // icon -> the settlement action.
+              if (name == '/admin/settlement') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const SettlementScreen(),
+                );
+              }
+              // CHANGE #307 — one partner's logins + access matrix, at a real
+              // URL for the same reason /admin/cron-health has one: Flutter
+              // canvas cannot be clicked headlessly, so without a URL the
+              // post-deploy verifier can never prove the screen painted.
+              // Authorisation stays in the backend — admin_partner_console()
+              // answers not_authorized itself and the screen renders that
+              // refusal. Still reachable from Payment and Partner -> the
+              // people icon on a partner card.
+              // CMD #467 row 155 — the partner audit trail. Its own route so
+              // the screen is provable on the live site (and linkable from a
+              // report) without a tap path; the RPC behind it refuses anyone
+              // who is not a mediBO admin, exactly as the console does.
+              // CHANGE #704 — the agency dispatcher's board. Its own route for
+              // the same reason /admin/partner-audit has one: Flutter canvas
+              // cannot be clicked headlessly, so without a URL the post-deploy
+              // verifier can never prove the screen painted. Authorisation is
+              // the backend's — agency_dispatch_board() answers not_an_agency
+              // itself and the screen renders that refusal. Still reachable by
+              // tapping: Deliveries -> My riders -> Open dispatch board.
+              if (name.split('?').first == '/agency/dispatch') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const AgencyDispatchScreen(),
+                );
+              }
+              // CHANGE #693 — the partner scorecards console, at a real URL
+              // for the same reason /admin/partner-access has one: Flutter
+              // canvas cannot be clicked headlessly, so without a URL the
+              // post-deploy verifier can never prove the screen painted.
+              // Authorisation stays in the backend — admin_partner_scorecards()
+              // answers not_authorized itself and the screen renders that
+              // refusal. Still reachable by tapping: Dashboard -> Money ->
+              // Partner scorecards.
+              if (name.split('?').first == '/admin/partner-scorecards') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const AdminPartnerScorecardsScreen(),
+                );
+              }
+              // The partner's own card, at its own URL. It lives under /admin
+              // deliberately: CHANGE #653 sends EVERY '/partner/...' path back
+              // to the app root (the routed partner surface is gone), so a URL
+              // there would be swallowed 500 lines above this and never fire.
+              //
+              // ?partner=<id> is honoured only for an operator —
+              // partner_scorecard() clamps every other caller back to
+              // my_partner_id(), so this can never show one partner another
+              // partner's month. It exists so the post-deploy verifier can
+              // photograph the card at all: Flutter canvas cannot be clicked
+              // headlessly, and the partner's own copy of this card is drawn
+              // inside their statement, which has no URL of its own.
+              if (name.split('?').first == '/admin/partner-scorecard') {
+                final q = Uri.tryParse(name)?.queryParameters['partner'];
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) =>
+                      PartnerScorecardScreen(partnerId: int.tryParse(q ?? '')),
+                );
+              }
+              if (name.startsWith('/admin/partner-audit')) {
+                final tail = name
+                    .substring('/admin/partner-audit'.length)
+                    .split('?')
+                    .first
+                    .replaceAll('/', '');
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => PartnerAuditLogScreen(
+                    partnerId: int.tryParse(tail) ?? 1,
+                  ),
+                );
+              }
+              if (name.startsWith('/admin/partner-access')) {
+                final tail = name
+                    .substring('/admin/partner-access'.length)
+                    .split('?')
+                    .first
+                    .replaceAll('/', '');
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => AdminPartnerConsoleScreen(
+                    partnerId: int.tryParse(tail) ?? 1,
+                  ),
                 );
               }
               if (name.startsWith('/inquiry/')) {
@@ -612,6 +1398,21 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                   );
                 }
               }
+              // CHANGE #1365 — a query string must never throw a route away.
+              // `routes:` is matched on the FULL name, so '/admin/dev-queue'
+              // resolved and '/admin/dev-queue?panel=runner' did not: it fell to
+              // onUnknownRoute and opened the storefront. Re-dispatch on the
+              // bare path and keep the ORIGINAL settings, so `Uri.base` and any
+              // screen that reads its own query parameters still see them.
+              {
+                final q = name.indexOf('?');
+                if (q > 0) {
+                  final builder = kAppRoutes[name.substring(0, q)];
+                  if (builder != null) {
+                    return MaterialPageRoute(settings: settings, builder: builder);
+                  }
+                }
+              }
               return null;
             },
             // Unknown paths (e.g. /c/cardiac) fall through to home shell,
@@ -619,28 +1420,7 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
             onUnknownRoute: (_) => MaterialPageRoute(
               builder: (_) => _AppRoot(auth: _auth),
             ),
-            routes: {
-              '/login':        (_) => const LoginScreen(),
-              '/register':     (_) => const LoginScreen(),
-              // CHANGE #631 (PART A) — the delivery-partner registration form.
-              // delivery_partner_register() stamps auth.uid() itself, so the
-              // screen asks for a sign-in rather than inventing an anonymous
-              // path.
-              '/delivery-register': (_) => const DeliveryRegisterScreen(),
-              // Admin > WhatsApp > Templates. wa_templates_screen() refuses
-              // non-admin callers itself, so the screen renders its own
-              // not-authorized state rather than the route guessing a role.
-              '/admin/wa-templates': (_) => const WaTemplatesScreen(),
-              '/about-app':    (_) => const AboutScreen(),
-              '/contact':      (_) => const ContactScreen(),
-              '/terms':        (_) => const TermsScreen(),
-              '/privacy':      (_) => const PrivacyScreen(),
-              // Google Play "Delete data" URL — renders legal_get_page('data-deletion').
-              '/data-deletion': (_) => const DataDeletionScreen(),
-              '/refund':       (_) => const RefundScreen(),
-              '/shipping':     (_) => const ShippingScreen(),
-              '/cancellation': (_) => const CancellationScreen(),
-            },
+            routes: kAppRoutes,
           ),
           ),
           ),
@@ -721,9 +1501,17 @@ class _AppRootState extends State<_AppRoot> {
               await VersionWatcher.instance.init();
               VersionWatcher.instance.start();
             } catch (_) {}
-            // Android APK update check (no-op on web/iOS; own try/catch inside).
+            // CHANGE #573 — poll the test-session banner. Its own interval
+            // comes from the payload (poll_ms), so the cadence is tunable
+            // without a deploy, and a failed read keeps the last state: losing
+            // the network must never make a live test session look real.
+            try { TestSessionState.instance.start(); } catch (_) {}
+            // CHANGE #282 — Android update prompt (no-op on web/iOS; own
+            // try/catch inside). The BACKEND decides the destination from the
+            // install source, so a Play install is sent to the Play listing and
+            // never offered the APK that its signature check would block.
             if (context.mounted) {
-              try { checkAndroidUpdate(context); } catch (_) {}
+              try { showAppUpdatePromptIfAny(context); } catch (_) {}
             }
           });
         }
@@ -733,6 +1521,10 @@ class _AppRootState extends State<_AppRoot> {
         if (widget.auth.isAuthenticated) {
           widget.auth.checkForcedLogout();
         }
+        // CHANGE #657 — the root renders the surface my_session() named, and
+        // there is no longer a partner branch to take. #653 made super admin,
+        // admin and partner ONE interface; the per-feature View/Write matrix
+        // and the zone lock are what differ, and both live in the backend.
         return HomeShell();
       },
     );
@@ -753,5 +1545,26 @@ class _SplashScreen extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// CHANGE #1197 — the super-admin gate for URL-reachable admin routes.
+///
+/// The Dev Queue's gate used to live only in the admin shell's tile handler,
+/// so giving the screen a URL would have been a way around it rather than a
+/// way in. This re-applies the SAME check the tile does, from the same
+/// UserState, and renders the shell instead of the screen for everyone else —
+/// no toast, no flash of a screen they may not see. Every RPC behind the
+/// screen is independently gated server-side by _dev_guard(); this is the UI
+/// half of that contract.
+class _SuperOnly extends StatelessWidget {
+  const _SuperOnly({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!UserState.of(context).isSuperAdmin) return HomeShell();
+    return child;
   }
 }

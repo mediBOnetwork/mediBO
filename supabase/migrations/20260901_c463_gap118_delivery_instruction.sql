@@ -1,0 +1,51 @@
+-- CHANGE #463 · register row 118 — "There is nowhere to record a delivery
+-- instruction".
+--
+-- REPRODUCED: customer_addresses.delivery_instruction EXISTED as a column and
+-- was referenced by absolutely nothing — not my_address_save (which silently
+-- dropped the key), not my_addresses (which never returned it), not
+-- my_delivery_run (so no rider ever saw one). A column nobody writes and
+-- nobody reads is not a feature.
+--
+-- THE FIX, in three places:
+--   1. my_address_save now persists it, capped at 200 chars. The UPDATE arm
+--      uses `p ? 'delivery_instruction'` so a PRESENT-but-empty key clears the
+--      note while an ABSENT key leaves it alone — an older caller that knows
+--      nothing about this field cannot wipe what the customer wrote.
+--   2. my_addresses returns it, both top level and inside `raw` (the block the
+--      edit form prefills from).
+--   3. my_delivery_run puts it on the STOP, so it reaches the rider at the
+--      door. The stop's address comes from pharmacy_profiles (pp), and
+--      customer_addresses.customer_id IS pharmacy_profiles.id, so the row the
+--      customer edits for this shop is its default address.
+--
+-- These three were applied with a surgical patch of pg_get_functiondef rather
+-- than a hand-retyped body, so nothing outside the added lines changed. This
+-- file is the record of that change.
+--
+-- STILL OUTSTANDING (filed, not hidden): my_address_save/my_addresses have no
+-- Dart caller at all — the customer address book is itself an orphan backend,
+-- so the customer-facing input for this note needs that screen to exist first.
+-- The storage and the rider half are live; the customer entry point is a
+-- follow-up row.
+
+-- 1 + 2 are CREATE OR REPLACE of existing functions; see the command's build
+-- log for the exact bodies applied. The additive fragments were:
+--
+--   my_address_save INSERT column list:  ..., map_link, delivery_instruction, is_default, ...
+--   my_address_save INSERT values:       nullif(left(btrim(coalesce(p->>'delivery_instruction','')),200),'')
+--   my_address_save UPDATE:              delivery_instruction = case
+--                                          when p ? 'delivery_instruction'
+--                                            then nullif(left(btrim(coalesce(p->>'delivery_instruction','')),200),'')
+--                                          else delivery_instruction end
+--   my_addresses:                        'delivery_instruction', coalesce(a.delivery_instruction,'')
+--                                        (top level AND inside `raw`)
+--   my_delivery_run stop payload:        'delivery_instruction', coalesce((select ca.delivery_instruction
+--                                            from customer_addresses ca
+--                                           where ca.customer_id = pp.id and not ca.is_deleted
+--                                           order by ca.is_default desc, ca.created_at limit 1), '')
+
+-- 3. The rider-facing label. Copy lives in the backend, never in Dart.
+insert into fw_ui_label (key, value)
+values ('dlv_instruction_label', 'Customer note')
+on conflict (key) do update set value = excluded.value;

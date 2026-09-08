@@ -5,9 +5,12 @@ import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart'; // CHANGE #464
 import 'package:flutter/material.dart';
+import '../../widgets/substitute_choice.dart'; // #366 row 176
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../../services/live_feed.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 import 'package:pharma_b2b/services/ui_copy.dart';
@@ -17,9 +20,20 @@ import '../../utils/file_pick_io.dart' as filepick;
 
 import '../../utils/download_bytes.dart'; // CHANGE #463
 import '../../utils/render_log.dart';
-import '../../design_tokens.dart'; // CMD #1871 — branch chip uses Ds tokens
+import 'customer_pipeline_screen.dart';
+import '../../user_state.dart'; // CMD #633 — the session gate below
+import '../../design_tokens.dart'; // CHANGE #238 — Ds tokens for the new panel chrome
+import 'sleads_filter_bar.dart'; // CMD #1868 — the S Leads filter row
+import 'route_stop_checkin_sheet.dart'; // CMD #1873 — the route stop check-in sheet
+import 'sleads_bulk.dart'; // CMD #1869 — the bulk lane's pure decisions
+import 'scrape_run.dart'; // CMD #1870 — the scrape run's pure decisions
+import 'route_notify.dart'; // CMD #1876 — assign/message-stops payload readers
+import '../../services/sleads_filter_service.dart'; // CMD #1868
+import '../../models/order_item_panel_view.dart'; // CHANGE #238
 import '../../fulfill/fulfill_lookups.dart'; // C639: backend-owned entry label
 import 'demand_preview_sheet.dart'; // C639 PART D
+import '../../services/access.dart';
+import '../../widgets/access_readonly_chip.dart';
 import '../../services/admin_date_scope.dart'; // CHANGE #545
 import '../../services/admin_zone_scope.dart'; // CHANGE #609
 import '../../services/date_labels.dart'; // CHANGE #548
@@ -37,6 +51,18 @@ import '../../widgets/native_signed_image.dart'; // CHANGE #550
 import '../../widgets/cash_payment_sheet.dart';
 import '../../widgets/fullscreen_image.dart';
 import '../../utils/bill_mime.dart'; // CHANGE #465
+import 'admin_customer_360_screen.dart'; // CHANGE #396
+import 'admin_customer_page.dart'; // CHANGE #810
+import 'leads_paging.dart'; // CHANGE #1867 — PagedList / SLeadRow
+import '../../widgets/customer_console_row.dart'; // CHANGE #810
+import '../../widgets/customer_payment_term_sheet.dart'; // CHANGE #1888
+import '../../widgets/customer_autofill_strip.dart'; // CHANGE #1888
+import '../../url_sync.dart' show initialSearch; // CHANGE #1888
+import '../../models/route_cost_chips.dart'; // CMD #1875 — ₹ chip decisions
+import '../../models/route_day_summary.dart'; // CMD #1877 — day summary parse
+import '../../widgets/route_live_workers_map.dart'; // CMD #1878 — live worker dots
+import '../../services/route_offline_queue.dart'; // CMD #1878 — offline cache + queue
+import '../../services/worker_live_ping.dart'; // CMD #1878 — the worker's own dot
 
 // CHANGE #242: payment-image sharing now goes through the platform-conditional
 // download_bytes wrapper (Web Share API on web / share_plus on Android), so no
@@ -340,6 +366,11 @@ class _AdminEntry {
 
 enum _CustFilter {
   approvedCustomers,
+  // CMD #1886 — the registration funnel: the people who signed in and stopped,
+  // the rows somebody owes a call, and the rows that cannot be approved yet.
+  signedUp,
+  followUps,
+  needsAttention,
   customerOrders,
   cartNotOrdered,
   pendingRegistrations,
@@ -353,7 +384,27 @@ enum _CustFilter {
 class AdminCustomerScreen extends StatefulWidget {
   static final _screenKey = GlobalKey<_AdminCustomerScreenState>();
 
-  AdminCustomerScreen() : super(key: _screenKey);
+  /// CHANGE #537 — the Fulfill pipeline mounts this SAME screen as its stage-1
+  /// tab ("Customer order"). Two things had to be optional for that to be
+  /// navigation rather than a rewrite:
+  ///
+  ///  * [initialFilter] — which of this screen's own sub-tabs it opens on. Null
+  ///    keeps the historical default (Customers).
+  ///  * [embedded] — when true the screen does not draw its OWN tab row,
+  ///    because the Fulfill pipeline bar is already the tab row above it. A
+  ///    tab bar inside a tab bar is the thing this change exists to remove.
+  ///
+  /// Nothing else differs. The embedded instance loads, refetches, renders and
+  /// acts exactly as the standalone one does.
+  ///
+  /// The shell's instance still takes the static [_screenKey], so
+  /// [triggerFocus] keeps reaching it and only it; an embedded instance is
+  /// given its own key by its host, which is what lets both exist at once.
+  final String? initialFilter;
+  final bool embedded;
+
+  AdminCustomerScreen({Key? key, this.initialFilter, this.embedded = false})
+      : super(key: key ?? _screenKey);
 
   /// Called by the shell when this screen becomes the active page.
   static void triggerFocus() =>
@@ -365,6 +416,57 @@ class AdminCustomerScreen extends StatefulWidget {
   /// currently built (it's only mounted while that sub-tab is active) or its
   /// plan isn't loaded yet — same early-return the button itself is subject to.
   static bool triggerOptimizeAllRoutes() => _RoutesTab.triggerOptimizeAllRoutes();
+
+  /// CHANGE #1867 — open one of this screen's own sub-tabs on the shell's
+  /// instance, by the SAME key the tab row uses (`sLeads`, `routes`, …).
+  /// Null, empty or unknown is ignored rather than thrown on, matching how
+  /// [initialFilter] treats a stage this build has never heard of.
+  ///
+  /// It retries for a few frames because the caller is the shell reading the
+  /// URL in initState, before this screen's state exists — the deep link must
+  /// survive a cold start, which is the only kind that matters for a link.
+  /// CMD #1876 — the whole of `/admin/customers?…`, decided in ONE place.
+  ///
+  /// The shell hands over its query string and nothing else: which of the two
+  /// link shapes this is (a sub-tab, or the single route the assignment
+  /// WhatsApp points at) is [RouteDeepLink]'s judgement, not the shell's, so
+  /// the shell keeps its one job — boot and routing.
+  static void openFromLink(String search) {
+    final link = RouteDeepLink.parse(search);
+    if (link.opensRoute) {
+      openRoute(link.routeId);
+    } else {
+      openTab(link.tab);
+    }
+  }
+
+  /// CMD #1876 — open ONE route from a link (`?tab=routes&route=<uuid>`), the
+  /// link the assignment WhatsApp carries. Same retry story as [openTab]: the
+  /// shell reads the URL before this screen's state exists.
+  static void openRoute(String? routeId) {
+    if (routeId == null || routeId.isEmpty) return;
+    // Park FIRST: openTab may mount the Routes sub-tab synchronously, and its
+    // initState is what collects the parked id.
+    _RoutesTab.openRoute(routeId);
+    openTab('routes');
+  }
+
+  static void openTab(String? filterName, {int tries = 60}) {
+    if (filterName == null || filterName.isEmpty) return;
+    final st = _screenKey.currentState;
+    if (st != null) {
+      st._openTabByName(filterName);
+      return;
+    }
+    if (tries <= 0) return;
+    // CMD #1876 — a TIMER, not a post-frame chain. #1867's twelve frames elapse
+    // in about a fifth of a second, and a cold start is several SECONDS of auth
+    // and fetching before this screen's state exists: the link expired before
+    // its destination was built, and did so intermittently, which is worse than
+    // never. 60 × 250 ms covers a slow boot and still gives up.
+    Timer(const Duration(milliseconds: 250),
+        () => openTab(filterName, tries: tries - 1));
+  }
 
   @override
   State<AdminCustomerScreen> createState() => _AdminCustomerScreenState();
@@ -566,6 +668,14 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   List<_AdminEntry> _admins      = [];
   final Set<String> _expandedLeads = {};
   bool _loading = true;
+  /// CMD #1886 — customer_pipeline_home(): the three new tab captions, their
+  /// counts and the office team the follow-up sheet may assign to. Every word
+  /// of it is the backend's.
+  Map<String, dynamic> _pipeHome = const {};
+  /// customers_stage_meta(): {customer id -> {chip, approve, missing_label}}.
+  /// The stage chip on every Customers row, and the reason the Approve button
+  /// is disabled, both come from here.
+  Map<String, dynamic> _stageMeta = const {};
   _CustFilter _filter = _CustFilter.approvedCustomers;
   final Set<String> _expanded = {};
   // CHANGE #213 — per-order payment panel open state
@@ -576,8 +686,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   // above orders in the Customer Orders tab. Sourced solely from
   // get_leads_grouped_today(), one Lead per sender phone with N LeadImages.
   List<Lead> _leads = [];
-  // orderId → per-product inquiry status from get_order_item_inquiry_status
-  final Map<String, List<Map<String, dynamic>>> _orderItemStatuses = {};
+  // CHANGE #238 — orderId → the render-ready item lines from
+  // order_item_status_panel(), and that order's reconciliation block. Both are
+  // stored verbatim: nothing in this file re-counts, re-orders or re-words them.
+  final Map<String, OrderItemPanelView> _orderPanels = {};
   // CHANGE #384 — MEDICINE.id → brief catalog row (image_url_1, marketer,
   // pack_qty/pack_type/pack_size, salt_composition), keyed by product_id, for
   // the Customer Orders item cards. Merged-into across loads so re-expanding
@@ -588,13 +700,23 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   // Fetched independently of _load() so it's populated before the tab is
   // ever opened; kept in sync afterwards via _SLeadsTab.onTotalChanged.
   int _sLeadsTotal = 0;
+
+  /// CMD #1868 — sleads_count()'s own caption for the S Leads tab, filtered
+  /// exactly like the list. Null until the tab has loaded once, at which point
+  /// it OUTRANKS the locally composed fallback below.
+  String? _sLeadsCountChip;
   // CHANGE #445 — "Routes" tab badge count (zones.length from
   // lead_routes_screen). Kept in sync via _RoutesTab.onZonesChanged; only
   // populated once the tab has been opened (no independent bootstrap fetch,
   // unlike S Leads — zones list is heavier and city-scoped).
   int _routesZones = 0;
+  /// CHANGE #1867 — the two chip CAPTIONS, whole, from customers_tab_counts().
+  /// Two cheap count(*)s; neither is a list length, so the chip can no longer
+  /// disagree with a page of 50. Absent (not yet loaded, or the call failed)
+  /// falls back to the old locally-composed caption.
+  Map<String, dynamic> _tabCounts = const {};
 
-  final List<RealtimeChannel> _realtimeChannels = [];
+  final List<LiveFeedHandle> _realtimeChannels = [];
   Timer? _debounce;
 
   // ── Auto-load guard (prevents concurrent/storm fetches) ──────────────────
@@ -605,6 +727,15 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   @override
   void initState() {
     super.initState();
+    // CHANGE #537 — open on the sub-tab the host asked for. An unknown key is
+    // ignored rather than thrown on, so the backend can name a stage this
+    // build has never heard of without white-screening the pipeline.
+    final want = widget.initialFilter;
+    if (want != null && want.isNotEmpty) {
+      for (final f in _CustFilter.values) {
+        if (f.name == want) { _filter = f; break; }
+      }
+    }
     // CHANGE #545 — follow the central admin date.
     AdminDateScope.instance.addListener(_onDateScopeChanged);
     AdminDateScope.instance.ensureLoaded();
@@ -619,9 +750,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     FulfillLookups.instance.ensureLoaded().then((_) {
       if (mounted) setState(() {});
     });
-    _load();
-    _subscribeRealtime();
-    _loadSLeadsTotal();
+    // CMD #633 — the first fetch moved to didChangeDependencies, where the
+    // session is actually readable. See _bootForAdminOnce below.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         RenderLog.write('c322_build', 322);
@@ -633,6 +763,81 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     });
   }
 
+  /// CMD #633 — an admin tab must not fetch admin data for a visitor who is
+  /// not an admin.
+  ///
+  /// HomeShell builds this screen as one of an IndexedStack's children, and an
+  /// IndexedStack builds EVERY child, so initState here ran for anonymous
+  /// visitors too: admin_customer_screen_data was called on a signed-out boot,
+  /// refused, and the catch showed a red error toast on the public storefront —
+  /// which is exactly what a shopper saw on medibo.in/<anything-unknown>.
+  ///
+  /// The gate lives in didChangeDependencies rather than initState because the
+  /// session is an inherited dependency: this runs again the moment auth
+  /// resolves to an admin, so a real admin still loads on open (and loads once,
+  /// not on every rebuild).
+  bool _bootedForAdmin = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_bootedForAdmin) return;
+    if (!UserState.of(context).isAdmin) {
+      RenderLog.write('c633_anon_boot', 'admin_fetch=0');
+      return;
+    }
+    _bootedForAdmin = true;
+    // CHANGE #810 — Customer 360 is a route this screen owns, so the customer
+    // page is handed the opener rather than importing the route itself.
+    AdminCustomerPage.open360 = (ctx, id) => Navigator.of(ctx).push(
+        MaterialPageRoute(builder: (_) => AdminCustomer360Screen(customerId: id)));
+    _load();
+    _loadCusConsole(); // CHANGE #810
+    _subscribeRealtime();
+    _loadSLeadsTotal();
+    _loadTabCounts(); // CHANGE #1867
+    _openDeepLinkPanel(); // CHANGE #1888
+  }
+
+  /// CHANGE #1888 — /admin/customers?panel=import opens the Import Customer
+  /// sheet on a cold start.
+  ///
+  /// The registration form is where the mandatory GPS pin, the "I don't have
+  /// GST" answer and the Cash-on-Delivery default actually live, and until now
+  /// the only way in was a tap. A Flutter web app paints to canvas, so a tap is
+  /// exactly what no verifier can perform: the sheet was deployed, correct and
+  /// unphotographable. A URL the admin session can be driven to makes it
+  /// provable — and gives an admin a link to hand somebody.
+  ///
+  /// Only an admin reaches this (it runs behind the isAdmin gate above), an
+  /// unknown panel name is ignored the way [openTab] ignores an unknown tab,
+  /// and it fires once because [_bootedForAdmin] has already been set.
+  void _openDeepLinkPanel() {
+    // initialSearch(), never Uri.base: usePathUrlStrategy() rewrites the
+    // browser URL to '/' about a second into boot, and this screen mounts
+    // after that — Uri.base was ALWAYS empty here, so the link opened the
+    // customer list and nothing else. CHANGE #747 captured the query at the
+    // top of main() for exactly this class of deep link; the catalogue and
+    // orders screens already read it the same way.
+    String? panel;
+    try {
+      panel = Uri.splitQueryString(
+          initialSearch().replaceFirst('?', ''))['panel'];
+    } catch (_) {
+      // A malformed percent-escape in someone's URL is not worth losing
+      // the admin customer screen over.
+      return;
+    }
+    if (panel == null || panel.isEmpty) return;
+    RenderLog.write('c1888_panel_link', panel);
+    if (panel != 'import') return;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final saved = await ImportCustomerSheet.open(context);
+      if (saved == true && mounted) _load(showSpinner: false);
+    });
+  }
+
   void _onScreenFocus() {
     if (!mounted) return;
     // CHANGE #545 — re-read the central date on focus so a backgrounded tab is
@@ -640,6 +845,23 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     AdminDateScope.instance.refresh();
     _autoLoad(key: _filter.name, force: true);
     RenderLog.write('screen_autoload_on_focus', 'customers');
+  }
+
+  /// CHANGE #1867 — one cheap RPC for both tab captions.
+  void _loadTabCounts() {
+    Supabase.instance.client.rpc('customers_tab_counts').then((res) {
+      if (!mounted || res is! Map) return;
+      setState(() => _tabCounts = Map<String, dynamic>.from(res));
+      RenderLog.write('c1867_tab_counts',
+          '${_tabCounts['sleads']?['n']}/${_tabCounts['routes']?['n']}');
+    }).catchError((_) {});
+  }
+
+  /// The caption for one of the two counted tabs, verbatim from the backend.
+  String _countedTabLabel(String key, String fallback) {
+    final m = _tabCounts[key];
+    final label = m is Map ? m['label']?.toString() : null;
+    return (label == null || label.isEmpty) ? fallback : label;
   }
 
   // CHANGE #443 — lightweight, independent fetch for the "S Leads" tab badge.
@@ -654,6 +876,17 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       setState(() => _sLeadsTotal = total);
       RenderLog.write('c443_summary_total', total);
     }).catchError((_) {});
+  }
+
+  /// CHANGE #1867 — see [AdminCustomerScreen.openTab].
+  void _openTabByName(String filterName) {
+    for (final f in _CustFilter.values) {
+      if (f.name != filterName) continue;
+      if (!mounted) return;
+      setState(() => _filter = f);
+      _autoLoad(key: f.name, force: true);
+      return;
+    }
   }
 
   void _autoLoad({required String key, bool force = false}) {
@@ -684,6 +917,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     }
     _realtimeChannels.clear();
     _scrollCtrl.dispose();
+    _cusSearchDebounce?.cancel();   // CHANGE #810
+    _cusSearchCtl.dispose();
     super.dispose();
   }
 
@@ -696,18 +931,23 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     // periodic/2s poll timer anywhere in this file — debounced-load only).
     const tables = ['cart_items', 'orders', 'order_items', 'pharmacy_profiles', 'payment_claims', 'pending_orders'];
     RenderLog.write('co_realtime_369', 'tables:${tables.join(",")}');
-    for (final table in tables) {
-      final ch = client
-          .channel('admin_${table}_$ts')
-          .onPostgresChanges(
-            event: PostgresChangeEvent.all,
-            schema: 'public',
-            table: table,
-            callback: (_) => _debouncedLoad(),
-          )
-          .subscribe();
-      _realtimeChannels.add(ch);
-    }
+    // CHANGE #643: six UNFILTERED bindings, one per table, held open by every
+    // admin session — on the two busiest tables in the product. LiveFeed asks
+    // realtime_plan() which of these still publish and polls the rest on the
+    // registry's interval. The refetch is the same debounced reload.
+    LiveFeed.instance
+        .watch(
+          channelPrefix: 'admin_customer_feeds',
+          tables: tables,
+          onChange: (_) => _debouncedLoad(),
+        )
+        .then((h) {
+      if (!mounted) {
+        h.dispose();
+        return;
+      }
+      _realtimeChannels.add(h);
+    });
   }
 
   void _debouncedLoad() {
@@ -1003,13 +1243,67 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        showToast(context, cf('admin_customer.failed_to_load', {'a': '$e'}), isError: true);
+        showToast(context, cf('admin_customer.failed_to_load', {'e': '$e'}), isError: true);
       }
     } finally {
       _loadInFlight = false;
     }
     _loadLeads();
+    _loadPipeline();
   }
+
+  /// CMD #1886 — the registration funnel's own two reads. Fire-and-forget, like
+  /// the lead load above: neither the tab captions nor the stage chips may hold
+  /// up the list, and a failure leaves the previous payload on screen rather
+  /// than a Dart-invented substitute.
+  Future<void> _loadPipeline() async {
+    try {
+      final client = Supabase.instance.client;
+      final home = await client.rpc('customer_pipeline_home');
+      final meta = await client.rpc('customers_stage_meta');
+      if (!mounted) return;
+      setState(() {
+        _pipeHome = home is Map ? Map<String, dynamic>.from(home) : const {};
+        _stageMeta = (meta is Map && meta['by_id'] is Map)
+            ? Map<String, dynamic>.from(meta['by_id'] as Map)
+            : const {};
+      });
+      RenderLog.write('c1886_pipeline_tabs', _pipeTabs.length);
+    } catch (_) {
+      // the backend owns every sentence here; silence beats a Dart apology
+    }
+  }
+
+  List<Map<String, dynamic>> get _pipeTabs =>
+      ((_pipeHome['tabs'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+
+  List<Map<String, dynamic>> get _pipeAssignees =>
+      ((_pipeHome['assignees'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+
+  /// The caption for one pipeline tab, as the backend wrote it: "Signed up (5)".
+  /// A tab the payload has not described yet renders nothing at all.
+  String _pipeLabel(String key) {
+    for (final t in _pipeTabs) {
+      if ((t['key'] ?? '').toString() == key) {
+        final label = (t['label'] ?? '').toString();
+        final count = (t['count_label'] ?? '').toString();
+        if (label.isEmpty) return '';
+        return count.isEmpty ? label : '$label ($count)';
+      }
+    }
+    return '';
+  }
+
+  /// The stage chip + approve gate the backend computed for one customer row.
+  Map<String, dynamic> _metaFor(String id) => (_stageMeta[id] is Map)
+      ? Map<String, dynamic>.from(_stageMeta[id] as Map)
+      : const {};
 
   // CHANGE #384 — one batched MEDICINE lookup (by distinct product_id) for
   // the Customer Orders + cart item cards. Skips ids already cached so
@@ -1251,6 +1545,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       case _CustFilter.leads:
       case _CustFilter.sLeads:
       case _CustFilter.routes:
+      // CMD #1886 — the three funnel tabs draw their own rows from their own
+      // RPC; this legacy list is not theirs.
+      case _CustFilter.signedUp:
+      case _CustFilter.followUps:
+      case _CustFilter.needsAttention:
         return [];
     }
   }
@@ -1303,125 +1602,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         .catchError((_) {});
   }
 
-  // ── Suspend / Reactivate approved customers ────────────────────────────────
-
-  Future<void> _suspendCustomer(_ApprovedRow row) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: Text(c('admin_customer.suspend_customer'),
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-        content: Text(
-          cf('admin_customer.suspend_confirm_prompt', {'a': row.pharmacyName.isNotEmpty ? row.pharmacyName : row.customerName}),
-          style: const TextStyle(fontSize: 13),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text(c('admin_customer.cancel')),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
-            child: Text(c('admin_customer.suspend')),
-          ),
-        ],
-      ),
-    );
-    if (confirm != true) return;
-    try {
-      // #578 — 'suspended' was a status word spelled in Dart; it now comes
-      // from app_settings.customer_status_values, and the admin check lives
-      // in the database rather than in RLS alone.
-      await Supabase.instance.client.rpc('admin_customer_action',
-          params: {'p_customer_id': row.id, 'p_action': 'suspend'});
-      _load(showSpinner: false);
-    } catch (e) {
-      if (mounted) {
-        showToast(context, cf('admin_customer.suspend_failed', {'a': '$e'}), isError: true);
-      }
-    }
-  }
-
-  Future<void> _reactivateCustomer(_ApprovedRow row) async {
-    try {
-      await Supabase.instance.client
-          .rpc('admin_customer_action',
-              params: {'p_customer_id': row.id, 'p_action': 'reactivate'});
-      _load(showSpinner: false);
-    } catch (e) {
-      if (mounted) {
-        showToast(context, cf('admin_customer.reactivate_failed', {'a': '$e'}), isError: true);
-      }
-    }
-  }
-
-  Future<void> _editCustomer(_ApprovedRow row) async {
-    final saved = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => _CustomerEditDialog(row: row),
-    );
-    if (saved == true) _load(showSpinner: false);
-  }
-
-  // Part A-3 / Part C-1: delete customer
-  Future<void> _deleteCustomer(_ApprovedRow row) async {
-    final displayName = row.pharmacyName.isNotEmpty ? row.pharmacyName : row.customerName;
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: Text(cf('admin_customer.delete_confirm_title', {'a': displayName}),
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700,
-                color: Color(0xFF111827))),
-        content: Text(
-          c('admin_customer.delete_login_access_warning'),
-          style: const TextStyle(fontSize: 13, color: Color(0xFF374151)),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text(c('admin_customer.cancel')),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
-            child: Text(c('admin_customer.delete')),
-          ),
-        ],
-      ),
-    );
-    if (confirm != true) return;
-    try {
-      final client    = Supabase.instance.client;
-      // #578 — deleted_by came from auth.currentUser.email (a CREDENTIAL, not
-      // an account) with a Dart fallback of 'admin', deleted_at from the
-      // device clock, and the snapshot was whatever the client held. The
-      // server stamps all three from the row itself.
-      await client.rpc('admin_customer_action',
-          params: {'p_customer_id': row.id, 'p_action': 'delete'});
-      // Supabase Admin API: DELETE /auth/v1/admin/users/{user_id}
-      final uid = row.rawData['user_id'] as String?;
-      if (uid != null) {
-        try {
-          await client.functions.invoke(
-            'admin-user-actions',
-            body: {'action': 'delete_user', 'user_id': uid},
-          );
-        } catch (_) {} // non-fatal — profile already marked deleted in DB
-      }
-      _load(showSpinner: false);
-      if (mounted) {
-        showToast(context, c('admin_customer.customer_deleted'), duration: const Duration(seconds: 3));
-      }
-    } catch (e) {
-      if (mounted) {
-        showToast(context, cf('admin_customer.delete_failed', {'a': '$e'}), isError: true);
-      }
-    }
-  }
+  // ── Suspend / Reactivate / Edit / Delete an approved customer ────────────
+  //
+  // CHANGE #810 — these four moved to the customer page, where each one now
+  // collects a reason and records it: Block and Delete go through
+  // admin_customer_action_reason(), and Edit is a backend-described form
+  // (admin_customer_edit_form / _save) rather than a hardcoded field list.
 
   // Part A-4 / Part C-2: restore deleted customer
   Future<void> _restoreCustomer(Map<String, dynamic> deletedRow) async {
@@ -1582,36 +1768,54 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     });
   }
 
+  /// CHANGE #238 — one RPC feeds the whole expanded panel.
+  ///
+  /// It replaces get_order_item_inquiry_status, which returned rows keyed only
+  /// by product name (the caller had to name-match them against the orders
+  /// JSONB) and hid `current_supplier` behind `asked_at is not null` — NULL for
+  /// the entire manual lane, which blanked the supplier badge on every item.
+  /// order_item_status_panel returns one line per order_items row, in backend
+  /// order, plus the reconciliation block for the order as a whole.
   Future<void> _fetchOrderItemStatus(String orderId) async {
     try {
-      final rows = await Supabase.instance.client.rpc(
-        'get_order_item_inquiry_status',
+      final raw = await Supabase.instance.client.rpc(
+        'order_item_status_panel',
         params: {'p_order_id': orderId},
-      ) as List;
+      );
+      final view = OrderItemPanelView.fromPayload(raw,
+          errorFallback: c('admin_customer.items_load_failed'));
+      final lines = view.lines;
+      final recon = view.reconcile.raw;
       if (mounted) {
-        setState(() {
-          _orderItemStatuses[orderId] =
-              rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
-        });
-        RenderLog.write('order_item_status', 'orderId:$orderId count:${rows.length}');
-        // CHANGE #625 — proof the three new columns arrived and that the chip
-        // is painting from them rather than from a colour map in Dart.
-        final unf = rows
-            .where((r) => (r as Map)['unfulfillable'] == true)
-            .length;
-        final withColors = rows
-            .where((r) => (r as Map)['status_colors'] is Map)
-            .length;
-        RenderLog.write('c625_unfulfilled_items',
-            'admin;order:$orderId;rows:${rows.length};unfulfillable:$unf;colors:$withColors');
-        for (final r in rows) {
-          final m = r as Map;
-          RenderLog.write('order_item_rpc_row',
-              '${m['product_name']}:pid=${m['product_id']}:status=${m['current_status']}:sup=${m['current_supplier']}');
+        setState(() => _orderPanels[orderId] = view);
+        RenderLog.write('order_item_status', 'orderId:$orderId count:${lines.length}');
+        // CHANGE #238 — proof the panel painted from the RPC: how many lines
+        // arrived, and whether the backend says this order reconciles.
+        RenderLog.write(
+            'c238_reconcile',
+            'admin;order:$orderId;lines:${lines.length}'
+            ';balanced:${recon['balanced']}'
+            ';assigned:${recon['assigned']}'
+            ';unfulfillable:${recon['unfulfillable']}'
+            ';in_inquiry:${recon['in_inquiry']}'
+            ';unaccounted:${recon['unaccounted']}'
+            ';missing_po:${recon['missing_po']}');
+        final withSupplier = lines.where((l) => l.hasSupplier).length;
+        RenderLog.write('c238_supplier_labels',
+            'order:$orderId;lines:${lines.length};with_supplier:$withSupplier');
+        for (final l in lines) {
+          RenderLog.write(
+              'order_item_rpc_row',
+              '${l.productName}:state=${l.state}'
+              ':status=${l.statusLabel}:sup=${l.supplierLabel}');
         }
       }
     } catch (e) {
       RenderLog.write('order_item_status_error', 'orderId:$orderId err:$e');
+      if (mounted) {
+        setState(() => _orderPanels[orderId] =
+            OrderItemPanelView.failed(c('admin_customer.items_load_failed')));
+      }
     }
   }
 
@@ -1700,6 +1904,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    _redirectIfTabHidden();
     return LayoutBuilder(builder: (ctx, box) {
       final isDesktop = box.maxWidth >= 900;
 
@@ -1729,7 +1934,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _buildHeader(isDesktop),
+              // CHANGE #537 — embedded in the Fulfill pipeline the bar above is
+              // already the tab row; drawing this screen's own would be two.
+              if (!widget.embedded) _buildHeader(isDesktop),
               _buildScrollContent(isDesktop),
             ],
           ),
@@ -1738,7 +1945,325 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     });
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CHANGE #810 — the Customers CONSOLE.
+  //
+  // The tall per-customer card is gone. Rows, chips and their counts, the sort
+  // options and every label all arrive from admin_customers_console(); this
+  // screen holds the chosen filters and prints what came back. Numbers and
+  // actions live on the customer page you reach by tapping a row.
+  // ═══════════════════════════════════════════════════════════════════════════
+  Map<String, dynamic> _cusConsole = const {};
+  final Set<String> _cusFilters = <String>{};
+  final TextEditingController _cusSearchCtl = TextEditingController();
+  String _cusQuery = '';
+  String _cusSort = '';
+  bool _cusLoading = false;
+  Timer? _cusSearchDebounce;
+
+  List<Map<String, dynamic>> _cusList(String key) {
+    final v = _cusConsole[key];
+    return v is List
+        ? v.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList()
+        : const <Map<String, dynamic>>[];
+  }
+
+  String _cusStr(String key) => (_cusConsole[key] as String?) ?? '';
+
+  Future<void> _loadCusConsole() async {
+    if (!mounted) return;
+    setState(() => _cusLoading = true);
+    try {
+      final res = await Supabase.instance.client.rpc(
+        'admin_customers_console',
+        params: {
+          'p_filters': _cusFilters.toList(),
+          if (_cusSort.isNotEmpty) 'p_sort': _cusSort,
+          if (_cusQuery.isNotEmpty) 'p_search': _cusQuery,
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _cusConsole = res is Map ? res.cast<String, dynamic>() : const {};
+        _cusLoading = false;
+      });
+      RenderLog.write('c810_customer_rows', '${_cusList('rows').length}');
+      RenderLog.write('c810_customer_chips', '${_cusList('chips').length}');
+    } catch (_) {
+      if (mounted) setState(() => _cusLoading = false);
+    }
+  }
+
+  void _onCusSearchChanged(String v) {
+    _cusQuery = v.trim();
+    _cusSearchDebounce?.cancel();
+    _cusSearchDebounce =
+        Timer(const Duration(milliseconds: 300), _loadCusConsole);
+  }
+
+  void _toggleCusFilter(String key) {
+    if (key.isEmpty) return;
+    setState(() {
+      if (!_cusFilters.remove(key)) _cusFilters.add(key);
+    });
+    _loadCusConsole();
+  }
+
+  void _setCusSort(String key) {
+    if (key.isEmpty || key == _cusSort) return;
+    setState(() => _cusSort = key);
+    _loadCusConsole();
+  }
+
+  /// ONE horizontally scrollable row of small chips, with the sort sheet
+  /// behind the filter icon. No zone chip: the header's zone picker already
+  /// said which zone this is.
+  Widget _buildCusChips(double pad) {
+    final chips = _cusList('chips');
+    if (chips.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.fromLTRB(0, 0, 0, Ds.space.x12),
+      child: Row(children: [
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: EdgeInsets.symmetric(horizontal: pad),
+            child: Row(children: [
+              for (final ch in chips) ...[
+                _CusChip(
+                  label: (ch['label'] as String?) ?? '',
+                  count:
+                      ch['count'] is num ? (ch['count'] as num).toInt() : null,
+                  active: ch['active'] == true,
+                  onTap: () => _toggleCusFilter((ch['key'] as String?) ?? ''),
+                ),
+                SizedBox(width: Ds.space.x8),
+              ],
+            ]),
+          ),
+        ),
+        Padding(
+          padding: EdgeInsets.only(right: pad),
+          child: IconButton(
+            tooltip: _cusStr('filters_label'),
+            icon: Icon(Icons.tune,
+                size: Ds.space.x16 + Ds.space.x4, color: Ds.c.textSecondary),
+            onPressed: _openCusSortSheet,
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Future<void> _openCusSortSheet() async {
+    final sorts = _cusList('sorts');
+    if (sorts.isEmpty) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet))),
+      builder: (sctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Padding(
+            padding: EdgeInsets.all(Ds.space.x16),
+            child: Text(_cusStr('sort_sheet_title'), style: Ds.t.subtitle),
+          ),
+          for (final so in sorts)
+            ListTile(
+              title: Text((so['label'] as String?) ?? '', style: Ds.t.body),
+              trailing: so['active'] == true
+                  ? Icon(Icons.check,
+                      color: Ds.c.brand, size: Ds.space.x16 + Ds.space.x4)
+                  : null,
+              onTap: () {
+                Navigator.pop(sctx);
+                _setCusSort((so['key'] as String?) ?? '');
+              },
+            ),
+          SizedBox(height: Ds.space.x8),
+        ]),
+      ),
+    );
+  }
+
+  /// The follow-ups inbox strip. It appears only when the backend says a
+  /// follow-up is due, and its wording and count are the payload's.
+  Widget _buildCusFollowups(double pad) {
+    final fu = _cusConsole['followups'];
+    final m = fu is Map ? fu.cast<String, dynamic>() : const {};
+    if (m['has'] != true) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.fromLTRB(pad, 0, pad, Ds.space.x12),
+      child: InkWell(
+        onTap: () => _openCusFollowups((m['rpc'] as String?) ?? ''),
+        borderRadius: Ds.r.rButton,
+        child: Container(
+          width: double.infinity,
+          constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+          padding: EdgeInsets.all(Ds.space.x12),
+          decoration: BoxDecoration(
+            color: Ds.c.warningSoft,
+            borderRadius: Ds.r.rButton,
+          ),
+          child: Row(children: [
+            Icon(Icons.notifications_active_outlined,
+                size: Ds.space.x16 + Ds.space.x4, color: Ds.c.warning),
+            SizedBox(width: Ds.space.x8),
+            Expanded(
+              child: Text((m['label'] as String?) ?? '',
+                  style: Ds.t.body.copyWith(color: Ds.c.warning)),
+            ),
+            Icon(Icons.chevron_right, color: Ds.c.warning),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openCusFollowups(String rpc) async {
+    if (rpc.isEmpty) return;
+    Map<String, dynamic> res;
+    try {
+      final raw = await Supabase.instance.client.rpc(rpc);
+      res = raw is Map ? raw.cast<String, dynamic>() : const {};
+    } catch (e) {
+      if (mounted) showToast(context, '$e', isError: true);
+      return;
+    }
+    if (!mounted) return;
+    final items = (res['items'] is List)
+        ? (res['items'] as List)
+            .whereType<Map>()
+            .map((e) => e.cast<String, dynamic>())
+            .toList()
+        : const <Map<String, dynamic>>[];
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet))),
+      builder: (sctx) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.all(Ds.space.x16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text((res['title'] as String?) ?? '', style: Ds.t.subtitle),
+              SizedBox(height: Ds.space.x12),
+              if (items.isEmpty)
+                Text((res['empty'] as String?) ?? '',
+                    style: Ds.t.bodySecondary)
+              else
+                for (final it in items)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text((it['title'] as String?) ?? '',
+                        style: Ds.t.bodyStrong),
+                    subtitle: Text(
+                        '${(it['subtitle'] as String?) ?? ''}\n${(it['meta'] as String?) ?? ''}',
+                        style: Ds.t.caption),
+                    isThreeLine: true,
+                    onTap: () {
+                      Navigator.pop(sctx);
+                      _openCustomerPage((it['customer_id'] as String?) ?? '');
+                    },
+                  ),
+              SizedBox(height: Ds.space.x8),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The page owns every customer action now — approval, edit, zone, notes,
+  /// merge, block and delete-with-reason all run there. The list only reloads
+  /// afterwards, because a rename, a merge or a delete changes what it shows.
+  Future<void> _openCustomerPage(String id, {String initialTab = ''}) async {
+    if (id.isEmpty) return;
+    await openAdminCustomerPage(context, id, initialTab: initialTab);
+    if (!mounted) return;
+    await _load(showSpinner: false);
+    await _loadCusConsole();
+  }
+
+  Widget _buildCustomersConsole(bool isDesktop) {
+    final pad = isDesktop ? Ds.space.x24 : Ds.space.x16;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Padding(
+        padding: EdgeInsets.fromLTRB(pad, 0, pad, Ds.space.x8),
+        child: TextField(
+          controller: _cusSearchCtl,
+          onChanged: _onCusSearchChanged,
+          textInputAction: TextInputAction.search,
+          style: Ds.t.caption,
+          decoration: InputDecoration(
+            hintText: _cusStr('search_hint'),
+            prefixIcon: Icon(Icons.search, size: Ds.space.x16 + Ds.space.x4),
+            suffixIcon: _cusQuery.isEmpty
+                ? null
+                : IconButton(
+                    icon: Icon(Icons.clear, size: Ds.space.x16 + Ds.space.x4),
+                    onPressed: () {
+                      _cusSearchCtl.clear();
+                      _onCusSearchChanged('');
+                    },
+                  ),
+            isDense: true,
+            contentPadding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x12, vertical: Ds.space.x8),
+            border: OutlineInputBorder(borderRadius: Ds.r.rButton),
+          ),
+        ),
+      ),
+      _buildCusChips(pad),
+      // CHANGE #1888 — the book's own completeness, above the list that has
+      // the holes in it.
+      CustomerAutofillStrip(
+          padding: EdgeInsets.fromLTRB(pad, 0, pad, Ds.space.x8)),
+      _buildCusFollowups(pad),
+      if (_cusLoading && _cusList('rows').isEmpty)
+        Padding(
+          padding: EdgeInsets.all(Ds.space.x32),
+          child: const Center(child: CircularProgressIndicator()),
+        )
+      else if (_cusList('rows').isEmpty)
+        _ssvEmptyState(_cusStr('empty_label'))
+      else ...[
+        Padding(
+          padding: EdgeInsets.fromLTRB(pad, 0, pad, Ds.space.x8),
+          child: Text(_cusStr('count_label'), style: Ds.t.caption),
+        ),
+        for (final row in _cusList('rows'))
+          CustomerConsoleRow(
+            row: row,
+            // CMD #1886 — the funnel's word for this row, from the backend.
+            stageChip: _metaFor((row['id'] as String?) ?? '')['chip'],
+            onOpen: () => _openCustomerPage((row['id'] as String?) ?? ''),
+          ),
+      ],
+    ]);
+  }
+
   Widget _buildScrollContent(bool isDesktop) {
+    // CMD #1886 — the three funnel tabs. One widget, one backend tab key; the
+    // payload decides everything it draws.
+    final pipeKey = const {
+      _CustFilter.signedUp: 'signed_up',
+      _CustFilter.followUps: 'followups',
+      _CustFilter.needsAttention: 'needs',
+    }[_filter];
+    if (pipeKey != null) {
+      return CustomerPipelineTab(
+        key: ValueKey('c1886_$pipeKey'),
+        tabKey: pipeKey,
+        assignees: _pipeAssignees,
+        onCountChanged: (_) => _loadPipeline(),
+      );
+    }
     // S Leads tab (CHANGE #443 — scraped lead-generation UI)
     if (_isSLeadsView) {
       RenderLog.write('c443_tab_present', 1);
@@ -1746,6 +2271,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         isDesktop: isDesktop,
         onTotalChanged: (n) {
           if (mounted) setState(() => _sLeadsTotal = n);
+        },
+        onCountChip: (chip) {
+          if (mounted) setState(() => _sLeadsCountChip = chip);
         },
       );
     }
@@ -1771,13 +2299,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         children: [
           // CHANGE #547 — Import Customer, mirroring Import Supplier's styling.
           _buildImportCustomerButton(),
-          if (_approvedRows.isEmpty)
-            _ssvEmptyState('0 approved customers')
-          else ...[
-            if (isDesktop) _buildApprovedTableHeader(),
-            ..._approvedRows.map((r) =>
-                isDesktop ? _buildDesktopApprovedRow(r) : _buildMobileApprovedCard(r)),
-          ],
+          // CHANGE #810 — the console replaces the tall per-customer card.
+          _buildCustomersConsole(isDesktop),
           const SizedBox(height: 32),
           // Part C-2: collapsible Recently Deleted section
           _buildDeletedSection(isDesktop),
@@ -2004,27 +2527,58 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(mainAxisSize: MainAxisSize.min, children: [
-                _tab(_CustFilter.approvedCustomers,
-                    'Customers (${_approvedRows.length})'),
+                // CHANGE #653 — ONE interface. Each tab is its own row in the
+                // permission matrix (partner_screen_tab -> feature_registry),
+                // so a super admin, an admin and a partner see the SAME screen
+                // with the tabs their matrix turned on. `tabCanView` answers
+                // true for a tab the backend has not catalogued, so a new tab
+                // is never hidden by a stale registry.
+                if (_tabOn('customers'))
+                  _tab(_CustFilter.approvedCustomers,
+                      'Customers (${_approvedRows.length})'),
                 const SizedBox(width: 4),
                 // CHANGE #606 — the count is the backend's `count`, not
                 // _orderRows.length. The list and the number can no longer
                 // disagree because only one of them is computed.
-                _tab(_CustFilter.customerOrders,
-                    'Customer Orders ($_ordersCount)'),
+                if (_tabOn('orders'))
+                  _tab(_CustFilter.customerOrders,
+                      'Customer Orders ($_ordersCount)'),
                 const SizedBox(width: 4),
-                _tab(_CustFilter.cartNotOrdered,
-                    'Cart (${_cartRows.length})'),
+                if (_tabOn('cart'))
+                  _tab(_CustFilter.cartNotOrdered,
+                      'Cart (${_cartRows.length})'),
                 const SizedBox(width: 4),
-                _tab(_CustFilter.pendingRegistrations,
-                    'Pending Approval (${_regRows.length})'),
+                if (_tabOn('pending'))
+                  _tab(_CustFilter.pendingRegistrations,
+                      'Pending Approval (${_regRows.length})'),
                 const SizedBox(width: 4),
-                _tab(_CustFilter.leads,
-                    'Leads (${_loggedInLeads.length + _otherLeads.length})'),
+                if (_tabOn('leads'))
+                  _tab(_CustFilter.leads,
+                      'Leads (${_loggedInLeads.length + _otherLeads.length})'),
                 const SizedBox(width: 4),
-                _tab(_CustFilter.sLeads, 'S Leads ($_sLeadsTotal)'),
+                if (_tabOn('s_leads'))
+                  _tab(
+                      _CustFilter.sLeads,
+                      _sLeadsCountChip ??
+                          _countedTabLabel('sleads', 'S Leads ($_sLeadsTotal)')),
                 const SizedBox(width: 4),
-                _tab(_CustFilter.routes, 'Routes ($_routesZones)'),
+                if (_tabOn('routes'))
+                  _tab(_CustFilter.routes,
+                      _countedTabLabel('routes', 'Routes ($_routesZones)')),
+                // CMD #1886 — the funnel. Each caption and count is
+                // customer_pipeline_home()'s; an undescribed tab draws nothing.
+                if (_tabOn('signed_up') && _pipeLabel('signed_up').isNotEmpty) ...[
+                  const SizedBox(width: 4),
+                  _tab(_CustFilter.signedUp, _pipeLabel('signed_up')),
+                ],
+                if (_tabOn('followups') && _pipeLabel('followups').isNotEmpty) ...[
+                  const SizedBox(width: 4),
+                  _tab(_CustFilter.followUps, _pipeLabel('followups')),
+                ],
+                if (_tabOn('needs_attention') && _pipeLabel('needs').isNotEmpty) ...[
+                  const SizedBox(width: 4),
+                  _tab(_CustFilter.needsAttention, _pipeLabel('needs')),
+                ],
               ]),
             ),
           ),
@@ -2035,10 +2589,53 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     );
   }
 
+  /// CHANGE #653 — is this tab turned on for the signed-in login? The screen
+  /// asks the matrix; it never decides by role.
+  bool _tabOn(String tabKey) => Access.instance.tabCanView('customer', tabKey);
+
+  /// The backend's tab key for each filter, in the tab row's own order.
+  static const Map<_CustFilter, String> _tabKeys = {
+    _CustFilter.approvedCustomers: 'customers',
+    _CustFilter.customerOrders: 'orders',
+    _CustFilter.cartNotOrdered: 'cart',
+    _CustFilter.pendingRegistrations: 'pending',
+    _CustFilter.leads: 'leads',
+    _CustFilter.sLeads: 's_leads',
+    _CustFilter.routes: 'routes',
+    _CustFilter.signedUp: 'signed_up',
+    _CustFilter.followUps: 'followups',
+    _CustFilter.needsAttention: 'needs_attention',
+  };
+
+  /// CHANGE #653 — a tab this login does not hold must not be left OPEN
+  /// either: the button is gone, so there would be no way back. Land on the
+  /// first tab the matrix does allow.
+  void _redirectIfTabHidden() {
+    // CHANGE #754 — an EMBEDDED instance is a Fulfill stage, not this screen's
+    // tab bar. Its permission is `fulfill_tabs()`, and the customer/orders row
+    // is now retired precisely BECAUSE the stage owns it, so honouring that
+    // row here would bounce the Fulfill Customer-order tab off its own body.
+    if (widget.embedded) return;
+    if (_tabOn(_tabKeys[_filter] ?? '')) return;
+    for (final e in _tabKeys.entries) {
+      if (_tabOn(e.value)) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && !_tabOn(_tabKeys[_filter] ?? '')) {
+            setState(() => _filter = e.key);
+          }
+        });
+        return;
+      }
+    }
+  }
+
   // Part D: MouseRegion for pointer cursor on all tabs
   // Part E: pill/chip style tabs — active = green fill, inactive = grey outline
   Widget _tab(_CustFilter f, String label) {
     final active = _filter == f;
+    // CHANGE #653 — View on + Write off is a real state, and the tab says so
+    // in the backend's own word. The refusal itself is server-side.
+    final readOnly = !Access.instance.tabCanWrite('customer', _tabKeys[f] ?? '');
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
@@ -2061,14 +2658,18 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               color: active ? const Color(0xFF1B7A43) : const Color(0xFFD1D5DB),
             ),
           ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-              color: active ? Colors.white : const Color(0xFF6B7280),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                color: active ? Colors.white : const Color(0xFF6B7280),
+              ),
             ),
-          ),
+            if (readOnly)
+              AccessReadOnlyChip(label: Access.instance.readonlyBadge),
+          ]),
         ),
       ),
     );
@@ -2444,7 +3045,14 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               ),
               Expanded(
                 flex: 1,
-                child: Text('${row.items.length}',
+                // CHANGE #238 — the backend's own order_items count. This read
+                // `row.items.length` (the orders.items JSONB), so the collapsed
+                // row could say 9 while expanding it listed 18. Cart rows have
+                // no render payload and keep their own list length.
+                child: Text(
+                    row.isOrder
+                        ? '${(row.render['items_count'] as num?)?.toInt() ?? row.items.length}'
+                        : '${row.items.length}',
                     style: const TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
@@ -2749,7 +3357,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   /// when an item could not be sourced, so C2's reason text needs no branch
   /// here — the same field carries it.
   Widget _itemInquiryBadge(Map<String, dynamic>? s) {
-    final text = (s?['current_status'] ?? '').toString().trim();
+    // CHANGE #238 — `status_label` from order_item_status_panel; it already
+    // resolves to the unfulfillable reason, the live inquiry status, or the
+    // backend's own "not accounted for" wording.
+    final text = (s?['status_label'] ?? '').toString().trim();
     if (text.isEmpty) return const SizedBox.shrink();
     final colors = s?['status_colors'] is Map
         ? (s!['status_colors'] as Map).cast<String, dynamic>()
@@ -2770,9 +3381,14 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   /// #625 — the assigned supplier, when there is one. It used to be glued into
   /// the status chip's sentence in Dart; it is a value, so it renders as a
   /// value beside the chip instead of being written into a phrase.
+  ///
+  /// CHANGE #238 — it prints `supplier_label`, the backend's finished phrase:
+  /// "Accepted by X" once a supplier has taken the line, "Asking X" while the
+  /// waterfall is still on X. The app no longer reads the bare name and no
+  /// longer decides which of those two things is happening.
   Widget _itemSupplierBadge(Map<String, dynamic>? s) {
-    final name = (s?['current_supplier'] ?? '').toString().trim();
-    if (name.isEmpty) return const SizedBox.shrink();
+    final name = (s?['supplier_label'] ?? '').toString().trim();
+    if (s?['has_supplier'] != true || name.isEmpty) return const SizedBox.shrink();
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
@@ -2838,67 +3454,80 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     final lpad = isDesktop ? 28.0 : 16.0;
     final rpad = isDesktop ? 28.0 : 16.0;
 
-    if (row.source == 'whatsapp' && row.items.isEmpty) {
-      return Container(
-        color: const Color(0xFFF9FAFB),
-        padding: EdgeInsets.fromLTRB(lpad, 10, rpad, 14),
-        child: Text(
-          c('admin_customer.whatsapp_order_items_unavailable'),
-          style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-        ),
-      );
-    }
-
     if (row.isCartOnly) {
       return _buildCartExpandedItems(row, lpad: lpad, rpad: rpad);
     }
 
-    if (row.items.isEmpty) {
+    // ── CHANGE #238 — the item list is the BACKEND's list ────────────────────
+    //
+    // What was here: `row.items` (parsed out of the orders.items JSONB) joined
+    // in Dart against get_order_item_inquiry_status rows by lower-cased,
+    // whitespace-collapsed product NAME. Any item whose JSONB name differed
+    // from order_items.product_name lost its status, its supplier and its
+    // unfulfillable flag — silently, with a dash where the answer should be.
+    // That name-match is also the app deciding what the list is.
+    //
+    // order_item_status_panel() returns one line per order_items row, in the
+    // backend's order, with state, status_label, supplier_label, qty_label,
+    // price_label and the reconciliation block already decided. Nothing on
+    // this panel is computed here anymore.
+    final panel = row.orderId != null
+        ? (_orderPanels[row.orderId!] ?? OrderItemPanelView.loading)
+        : OrderItemPanelView.loading;
+    final panelLines = panel.lines;
+    final loaded = panel.loaded;
+    final reconcile = panel.reconcile;
+
+    // CHANGE #238 — the error state. The catch used to only write a render-log
+    // line, so a failed RPC left the panel skeleton-ing forever with no words
+    // and no way out; and a `{"error": ...}` reply parsed as "this order has no
+    // items" for an order that has eighteen.
+    if (panel.hasError) {
       return Container(
         color: const Color(0xFFF9FAFB),
         padding: EdgeInsets.fromLTRB(lpad, 10, rpad, 14),
-        child: Text(c('admin_customer.no_items_recorded'),
+        child: Row(children: [
+          Expanded(
+            child: Text(panel.errorMessage,
+                style: Ds.t.caption.copyWith(color: Ds.c.danger)),
+          ),
+          TextButton(
+            onPressed: row.orderId == null
+                ? null
+                : () => _fetchOrderItemStatus(row.orderId!),
+            child: Text(c('admin_customer.retry')),
+          ),
+        ]),
+      );
+    }
+
+    // The WhatsApp case is decided AFTER the panel has answered. It used to be
+    // an early return keyed on the orders.items JSONB being empty, which meant
+    // a WhatsApp order with real order_items rows printed "items unavailable"
+    // and never rendered a single line, a state, or the reconciliation banner.
+    if (panel.isEmpty) {
+      return Container(
+        color: const Color(0xFFF9FAFB),
+        padding: EdgeInsets.fromLTRB(lpad, 10, rpad, 14),
+        child: Text(
+            row.source == 'whatsapp'
+                ? c('admin_customer.whatsapp_order_items_unavailable')
+                : c('admin_customer.no_items_recorded'),
             style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
       );
     }
+
     // CHANGE #606 — items_label and amount_label, verbatim. This line used to
     // be `'Order Items (${row.items.length})' + ' · ₹' + total.toStringAsFixed(2)`
     // — a Dart count, a Dart rupee prefix and a Dart decimal format, all three
     // of which the backend already returns as finished strings.
     final itemsLabel  = row.rs('items_label');
     final amountLabel = row.rs('amount_label');
-    final rawStatuses = row.orderId != null
-        ? (_orderItemStatuses[row.orderId!] ?? <Map<String, dynamic>>[])
-        : <Map<String, dynamic>>[];
 
-    // orders.items JSONB has product_name but no product_id — match by normalized name
-    String _norm(String s) => s.toLowerCase().trim().replaceAll(RegExp(r'\s+'), ' ');
-    final statusByName = <String, Map<String, dynamic>>{};
-    for (final s in rawStatuses) {
-      final pname = s['product_name'] as String?;
-      if (pname != null) statusByName[_norm(pname)] = s;
-    }
-
-    RenderLog.write('order_items_expanded',
-        'orderId:${row.orderId ?? "?"}:items:${row.items.length}:statuses:${rawStatuses.length}');
-
-    // Per-item resolved status instrumentation
-    var anyDash = false;
-    for (final item in row.items) {
-      final s = statusByName[_norm(item.name)];
-      final resolved = s?['current_status'] as String? ?? '—';
-      if (resolved == '—') anyDash = true;
-      RenderLog.write('order_item_resolved',
-          '${item.name}:status=$resolved:supplier=${s?['current_supplier'] ?? "none"}');
-    }
-    if (anyDash && rawStatuses.isNotEmpty) {
-      RenderLog.write('order_item_FAIL', 'accepted order has dash items — name mismatch?');
-    }
-
-    // CHANGE #442 — instrumentation counters for image/company/pack/qty_label
-    // coverage across this order's item cards, written once per card below.
-    var c442Total = 0, c442Image = 0, c442Company = 0, c442Pack = 0, c442Qty = 0;
-    String? c442Sample;
+    RenderLog.write('c238_panel_lines',
+        'orderId:${row.orderId ?? "?"}:lines:${panelLines.length}'
+        ':balanced:${reconcile.balanced}'
+        ':unaccounted:${reconcile.raw['unaccounted']}');
 
     final content = Container(
       color: const Color(0xFFF9FAFB),
@@ -2910,10 +3539,19 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           const SizedBox(width: 4),
           Expanded(
             child: Text(
-              cf('admin_customer.ordered_by', {
-                'a': row.name,
-                'b': row.pharmacy.isNotEmpty ? ' · ${row.pharmacy}' : '',
-              }),
+              // CHANGE #686 — the header Om photographed. It passed {a} and
+              // {b} at a template that takes {name}, so cf() stripped the
+              // unresolved placeholder and the dangling colon and the customer's
+              // name never appeared at all. It also built " · <pharmacy>" here,
+              // separator included — copy composed in Dart.
+              // Both live in the backend now: two keys, and this file only
+              // answers "is there a pharmacy", which is why both keys exist.
+              row.pharmacy.isEmpty
+                  ? cf('admin_customer.ordered_by', {'name': row.name})
+                  : cf('admin_customer.ordered_by_with_pharmacy', {
+                      'name': row.name,
+                      'pharmacy': row.pharmacy,
+                    }),
               style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
               overflow: TextOverflow.ellipsis,
             ),
@@ -2946,62 +3584,32 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                     color: Color(0xFF111827))),
           ],
         ]),
+        // CHANGE #238 — the reconciliation banner. It says, in the backend's
+        // own words, whether every customer item is accounted for: on a
+        // purchase order, explicitly unfulfillable, or explicitly still under
+        // inquiry. An order that does not add up says so here instead of
+        // looking complete while items are missing downstream.
+        _reconcileBanner(reconcile),
         const SizedBox(height: 8),
-        // CHANGE #382 — replaced the fixed 4-column Product/Qty/Price/Status
-        // table (its fixed-width header cells wrapped "Product" to vertical
-        // letters on narrow admin viewports) with a responsive per-item row:
-        // thumbnail + name/pack/company/qty+price+status. Status pill logic
-        // (_itemInquiryBadge above, untouched) and every other field on this
-        // card — total, "Order Items (N)" count, Accept/Reject, View
-        // Payment, delete — are unchanged; only this item-row layout changed.
-        ...row.items.map((item) {
-          final s = statusByName[_norm(item.name)];
-          // CHANGE #625 C2 — the backend says whether we could source this
-          // item; the card is flagged on that boolean alone. The items are NOT
-          // regrouped in Dart: splitting or reordering server rows is the app
-          // deciding what the list is. The flag rides on the row in place.
-          final unfulfillable = s?['unfulfillable'] == true;
-          try {
-            RenderLog.write('cust_order_items_redesign_382',
-                'orderId:${row.orderId ?? "?"}:item:${item.name}');
-          } catch (_) {}
-
-          // Null-guarded derived text — a missing value hides its line/token,
-          // never renders "null"/"undefined"/"NaN"/"₹null".
-          // CHANGE #442 — image/company/pack/qty_label now come straight off
-          // `s`, the get_order_item_inquiry_status row already matched by
-          // normalized product name above. That RPC now returns these fields
-          // pre-formatted server-side (image_url, company, pack_label,
-          // qty_label) — no client-side MEDICINE lookup, no string logic here.
-          // The old CHANGE #384 MEDICINE-table lookup (_medDisplayFields) is
-          // left in place for cart_items (_buildCartExpandedItems) where a
-          // real product_id column exists; real orders never populated it
-          // reliably (orders.items JSONB product_id is unreliable), which was
-          // the actual root cause of this bug.
-          String? nz(String? s) => (s != null && s.trim().isNotEmpty) ? s.trim() : null;
-          final imageUrl = nz(s?['image_url'] as String?);
-          final company = nz(s?['company'] as String?);
-          final packLine = nz(s?['pack_label'] as String?) ??
-              (item.packSize?.trim().isNotEmpty == true ? item.packSize!.trim() : null);
-          final qtyLabel = nz(s?['qty_label'] as String?) ?? '${item.qty}';
-          c442Total++;
-          if (imageUrl != null) c442Image++;
-          if (company != null) c442Company++;
-          if (packLine != null) c442Pack++;
-          if (nz(s?['qty_label'] as String?) != null) c442Qty++;
-          c442Sample ??= '${item.name}|$qtyLabel|${packLine ?? ''}|${company ?? ''}';
-          final priceVal = (item.price != null && item.price! > 0)
-              ? item.price
-              : ((item.mrp != null && item.mrp! > 0) ? item.mrp : null);
-          final priceText =
-              priceVal != null ? '₹${priceVal.toStringAsFixed(2)}' : null;
+        if (!loaded) ..._itemSkeletons(),
+        // CHANGE #382 — responsive per-item row: thumbnail + name/pack/company
+        // /qty+price+status. CHANGE #238 drives every field off the backend
+        // line; there is no orders.items JSONB and no name match left.
+        ...panelLines.map((line) {
+          final unfulfillable = line.isFlagged;
+          final imageUrl   = line.imageUrl;
+          final company    = line.company;
+          final packLine   = line.packLabel;
+          final qtyLabel   = line.qtyLabel;
+          final priceText  = line.priceLabel;
+          final name       = line.productName;
+          final poWarning  = line.poWarning;
+          final nextLabel  = line.nextSupplierLabel;
 
           // #625 — an unfulfilled item is tinted with the SAME status_colors
           // its chip uses, so the card and the chip cannot disagree about
           // which items we could not source.
-          final rowColors = s?['status_colors'] is Map
-              ? (s!['status_colors'] as Map).cast<String, dynamic>()
-              : const <String, dynamic>{};
+          final rowColors = line.statusColors;
           return Container(
             margin: const EdgeInsets.only(top: 10),
             padding: const EdgeInsets.all(10),
@@ -3017,20 +3625,21 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                   width: unfulfillable ? 1 : 0.5),
             ),
             child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              _custOrderItemThumb(imageUrl, isDesktop: isDesktop),
+              _custOrderItemThumb(imageUrl.isEmpty ? null : imageUrl,
+                  isDesktop: isDesktop),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(item.name,
+                    Text(name,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.w600,
                             color: Color(0xFF111827))),
-                    if (company != null) ...[
+                    if (company.isNotEmpty) ...[
                       const SizedBox(height: 2),
                       Text(company,
                           maxLines: 1,
@@ -3041,7 +3650,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                               color: Color(0xFF9CA3AF),
                               letterSpacing: 0.8)),
                     ],
-                    if (packLine != null) ...[
+                    if (packLine.isNotEmpty) ...[
                       const SizedBox(height: 2),
                       Text(packLine,
                           maxLines: 1,
@@ -3055,17 +3664,31 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                       runSpacing: 8,
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
-                        _custOrderItemQtyPill(qtyLabel),
-                        if (priceText != null)
+                        if (qtyLabel.isNotEmpty) _custOrderItemQtyPill(qtyLabel),
+                        if (priceText.isNotEmpty)
                           Text(priceText,
                               style: const TextStyle(
                                   fontSize: 15,
                                   fontWeight: FontWeight.w700,
                                   color: Color(0xFF111827))),
-                        _itemInquiryBadge(s),
-                        _itemSupplierBadge(s),
+                        _itemInquiryBadge(line.raw),
+                        _itemSupplierBadge(line.raw),
                       ],
                     ),
+                    // CHANGE #238 — who is next in the waterfall, and the loud
+                    // case: an item assigned to a supplier that never reached
+                    // that supplier's purchase order. Both are backend strings.
+                    if (nextLabel.isNotEmpty) ...[
+                      SizedBox(height: Ds.space.x4),
+                      Text(nextLabel, style: Ds.t.caption),
+                    ],
+                    if (poWarning.isNotEmpty) ...[
+                      SizedBox(height: Ds.space.x4),
+                      Text(poWarning,
+                          style: Ds.t.caption.copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: Ds.c.danger)),
+                    ],
                   ],
                 ),
               ),
@@ -3078,16 +3701,55 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         // delete_lead_group in the grouped Leads section above.)
       ]),
     );
-    // CHANGE #442 — render-log proof that image/company/pack/qty_label
-    // resolved from the RPC row, not just compiled into the bundle.
-    RenderLog.write('c442_items_total', c442Total);
-    RenderLog.write('c442_with_image', c442Image);
-    RenderLog.write('c442_with_company', c442Company);
-    RenderLog.write('c442_with_pack', c442Pack);
-    RenderLog.write('c442_with_qtylabel', c442Qty);
-    if (c442Sample != null) RenderLog.write('c442_sample', c442Sample!);
     return content;
   }
+
+  /// CHANGE #238 — the reconciliation banner, printed exactly as
+  /// order_reconcile() returned it. The app never counts the items itself and
+  /// never decides whether an order balances: `label`, `detail` and the three
+  /// tone colours all arrive in the payload.
+  Widget _reconcileBanner(OrderItemPanelReconcile v) {
+    if (!v.show) return const SizedBox.shrink();
+    final r = v.raw;
+    final label = v.label;
+    final detail = v.detail;
+    return Container(
+      margin: EdgeInsets.only(top: Ds.space.x8),
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x12, vertical: Ds.space.x8),
+      decoration: BoxDecoration(
+        color: _hex(r['bg'], Ds.c.brandSoft),
+        borderRadius: Ds.r.rButton,
+        border: Border.all(color: _hex(r['border'], Ds.c.divider), width: 0.5),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label,
+            style: Ds.t.caption.copyWith(
+                fontWeight: FontWeight.w600,
+                color: _hex(r['fg'], Ds.c.text))),
+        if (detail.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x4),
+          Text(detail,
+              style: Ds.t.caption
+                  .copyWith(color: _hex(r['fg'], Ds.c.textSecondary))),
+        ],
+      ]),
+    );
+  }
+
+  /// CHANGE #238 — a skeleton while order_item_status_panel is in flight, so
+  /// an expanding row never flashes an "no items" state it is about to
+  /// contradict.
+  List<Widget> _itemSkeletons() => List<Widget>.generate(
+      3,
+      (_) => Container(
+            margin: EdgeInsets.only(top: Ds.space.x8),
+            height: Ds.space.x48 + Ds.space.x24,
+            decoration: BoxDecoration(
+              color: Ds.c.bg,
+              borderRadius: Ds.r.rButton,
+            ),
+          ));
 
   Widget _buildCartExpandedItems(_CustRow row,
       {required double lpad, required double rpad}) {
@@ -3325,6 +3987,13 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               }),
             ],
           ],
+          // CMD #366 row 176 — the substitution panel. Om's rule is the whole
+          // design: never auto-substitute. This asks the customer and shows
+          // their answer; Apply is enabled only once the BACKEND says the
+          // customer approved, and the backend refuses it otherwise even if
+          // this button were somehow tapped.
+          if (row.isOrder && row.orderId != null)
+            _SubstitutePanel(orderId: row.orderId!),
           if (row.removedItems.isNotEmpty) ...[
             const SizedBox(height: 12),
             const Divider(height: 1, color: Color(0xFFE5E7EB)),
@@ -3566,6 +4235,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 child: Text(row.phone.isNotEmpty ? row.phone : '—',
                     style: const TextStyle(
                         fontSize: 12, color: Color(0xFF6B7280)))),
+            // CMD #1886 — the stage chip. Word and tone are the backend's;
+            // a row the payload has not described draws nothing.
+            Padding(
+                padding: EdgeInsets.only(right: Ds.space.x8),
+                child: CustomerStageChip(chip: _metaFor(row.id)['chip'])),
             Expanded(
                 flex: 2,
                 child: Text(
@@ -3596,6 +4270,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 flex: 3,
                 child: _RegApproveActions(
                     id: row.id,
+                    gate: _metaFor(row.id)['approve'],
+                    onFix: () => _openCustomerPage(row.id),
                     onApprove: () => _approveReg(row),
                     onReject:  () => _rejectReg(row))),
             // Rotating chevron
@@ -3647,6 +4323,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                               color: Color(0xFF111827)),
                           overflow: TextOverflow.ellipsis)),
                   const SizedBox(width: 8),
+                  // CMD #1886 — the funnel stage, in the backend's own word.
+                  CustomerStageChip(chip: _metaFor(row.id)['chip']),
+                  SizedBox(width: Ds.space.x8),
                   _pendingBadge(),
                   const SizedBox(width: 4),
                   AnimatedRotation(
@@ -3688,6 +4367,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 // Approve/Reject (inner InkWells — stop propagation to outer InkWell)
                 _RegApproveActions(
                     id: row.id,
+                    gate: _metaFor(row.id)['approve'],
+                    onFix: () => _openCustomerPage(row.id),
                     onApprove: () => _approveReg(row),
                     onReject:  () => _rejectReg(row)),
               ]),
@@ -3704,222 +4385,14 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // APPROVED CUSTOMERS view  (Tasks 3 + 4)
+  // APPROVED CUSTOMERS view — replaced by the CHANGE #810 console.
+  //
+  // The tall card (desktop table row + mobile card, each with its own Edit /
+  // Suspend / Delete buttons and an expanding detail panel) is gone. Its every
+  // capability moved to the customer page: Edit is the backend-described edit
+  // form, Suspend is Block-with-reason, Delete is Delete-with-reason, and the
+  // expanded detail panel is the Info tab. See _buildCustomersConsole above.
   // ═══════════════════════════════════════════════════════════════════════════
-
-  Widget _buildApprovedTableHeader() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 10),
-      decoration: const BoxDecoration(
-        color: Color(0xFFF9FAFB),
-        border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
-      ),
-      child: Row(children: [
-        _th('PHARMACY', flex: 4),
-        _th('CONTACT', flex: 3),
-        _th('PHONE', flex: 2),
-        _th('CODE', flex: 2),
-        _th('CITY', flex: 2),
-        _th('STATUS', flex: 2),
-        const SizedBox(width: 230), // actions column (Edit + Suspend + Delete)
-        const SizedBox(width: 32),  // chevron
-      ]),
-    );
-  }
-
-  Widget _buildDesktopApprovedRow(_ApprovedRow row) {
-    final isExpanded = row.id.let((id) => _expanded.contains(id));
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      InkWell(
-        onTap: () => _toggleExpand(row.id),
-        mouseCursor: SystemMouseCursors.click,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 13),
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
-          ),
-          child: Row(children: [
-            Expanded(
-                flex: 4,
-                child: Text(
-                    row.pharmacyName.isNotEmpty ? row.pharmacyName : '—',
-                    style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF111827)),
-                    overflow: TextOverflow.ellipsis)),
-            Expanded(
-                flex: 3,
-                child: Text(
-                    row.customerName.isNotEmpty ? row.customerName : '—',
-                    style: const TextStyle(
-                        fontSize: 13, color: Color(0xFF374151)),
-                    overflow: TextOverflow.ellipsis)),
-            Expanded(
-                flex: 2,
-                child: Text(row.phone.isNotEmpty ? row.phone : '—',
-                    style: const TextStyle(
-                        fontSize: 12, color: Color(0xFF6B7280)))),
-            Expanded(
-                flex: 2,
-                child: Text(
-                    row.customerCode.isNotEmpty ? row.customerCode : '—',
-                    style: const TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF374151),
-                        fontFamily: 'monospace'))),
-            Expanded(
-                flex: 2,
-                child: Text(
-                    [row.city, row.state]
-                        .where((s) => s.isNotEmpty)
-                        .join(', ')
-                        .let((s) => s.isNotEmpty ? s : '—'),
-                    style: const TextStyle(
-                        fontSize: 12, color: Color(0xFF6B7280)),
-                    overflow: TextOverflow.ellipsis)),
-            Expanded(
-              flex: 2,
-              child: _CustomerStatusBadge(status: row.status),
-            ),
-            // Edit + Suspend/Reactivate + Delete actions (inner InkWells — absorb tap)
-            SizedBox(
-              width: 230,
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                _actionBtn('Edit', const Color(0xFF1B7A43),
-                    () => _editCustomer(row)),
-                const SizedBox(width: 6),
-                _actionBtn(
-                  row.isSuspended ? 'Reactivate' : 'Suspend',
-                  row.isSuspended
-                      ? const Color(0xFF1B7A43)
-                      : const Color(0xFFD97706),
-                  () => row.isSuspended
-                      ? _reactivateCustomer(row)
-                      : _suspendCustomer(row),
-                ),
-                const SizedBox(width: 6),
-                _actionBtn('Delete', const Color(0xFFDC2626),
-                    () => _deleteCustomer(row)),
-              ]),
-            ),
-            // Rotating chevron
-            SizedBox(
-              width: 32,
-              child: AnimatedRotation(
-                turns: isExpanded ? 0.5 : 0.0,
-                duration: const Duration(milliseconds: 200),
-                child: const Icon(Icons.expand_more,
-                    size: 18, color: Color(0xFF6B7280)),
-              ),
-            ),
-          ]),
-        ),
-      ),
-      if (isExpanded) _buildDynamicDetails(row.rawData, lpad: 44, rpad: 28),
-    ]);
-  }
-
-  Widget _buildMobileApprovedCard(_ApprovedRow row) {
-    final isExpanded = _expanded.contains(row.id);
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: row.isSuspended
-              ? const Color(0xFFFECACA)
-              : const Color(0xFFE5E7EB),
-        ),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: InkWell(
-          onTap: () => _toggleExpand(row.id),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                // Name line: [Full customer/pharmacy name] [Active status badge]
-                Builder(builder: (_) {
-                  RenderLog.write('customer_card_restructured', 'true');
-                  return const SizedBox.shrink();
-                }),
-                Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                  Expanded(
-                      child: Text(
-                          row.pharmacyName.isNotEmpty
-                              ? row.pharmacyName
-                              : row.customerName.isNotEmpty
-                                  ? row.customerName
-                                  : 'Unknown',
-                          style: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                              color: Color(0xFF111827)),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis)),
-                  const SizedBox(width: 8),
-                  _CustomerStatusBadge(status: row.status),
-                ]),
-                if (row.customerName.isNotEmpty) ...[
-                  const SizedBox(height: 3),
-                  Text(row.customerName,
-                      style: const TextStyle(
-                          fontSize: 12, color: Color(0xFF6B7280)),
-                      overflow: TextOverflow.ellipsis),
-                ],
-                if (row.phone.isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(row.phone,
-                      style: const TextStyle(
-                          fontSize: 12, color: Color(0xFF6B7280))),
-                ],
-                const SizedBox(height: 8),
-                Wrap(spacing: 12, runSpacing: 4, children: [
-                  if (row.customerCode.isNotEmpty)
-                    _mobileField('Code', row.customerCode),
-                  if (row.paymentTerm.isNotEmpty)
-                    _mobileField('Payment', row.paymentTerm),
-                  if (row.city.isNotEmpty)
-                    _mobileField(
-                        'City',
-                        [row.city, row.state]
-                            .where((s) => s.isNotEmpty)
-                            .join(', ')),
-                ]),
-                const SizedBox(height: 12),
-                // Action buttons (inner InkWells — absorb tap)
-                Wrap(spacing: 8, runSpacing: 6, children: [
-                  _actionBtn('Edit', const Color(0xFF1B7A43),
-                      () => _editCustomer(row)),
-                  _actionBtn(
-                    row.isSuspended ? 'Reactivate' : 'Suspend',
-                    row.isSuspended
-                        ? const Color(0xFF1B7A43)
-                        : const Color(0xFFD97706),
-                    () => row.isSuspended
-                        ? _reactivateCustomer(row)
-                        : _suspendCustomer(row),
-                  ),
-                  _actionBtn('Delete', const Color(0xFFDC2626),
-                      () => _deleteCustomer(row)),
-                ]),
-              ]),
-            ),
-            if (isExpanded) ...[
-              const Divider(height: 1, color: Color(0xFFE5E7EB)),
-              _buildDynamicDetails(row.rawData, lpad: 16, rpad: 16),
-            ],
-          ]),
-        ),
-      ),
-    );
-  }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // CUSTOMER DETAIL CARD  (deduplicated, explicit field list)
@@ -4062,6 +4535,34 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 children: sections[si].$2
                     .map((f) => fieldCell(f.$1, f.$2))
                     .toList(),
+              ),
+            ],
+            // CHANGE #1888 — the payment term is the one field on this panel a
+            // human still decides, so it is the one that gets a control. Its
+            // options, its copy and its refusal all come from
+            // customer_payment_term_panel(); this button only opens it.
+            if (_str(rawData['id']).isNotEmpty) ...[
+              SizedBox(height: Ds.space.x16),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: SizedBox(
+                  height: 44,
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: Ds.c.brand),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: Ds.r.rButton),
+                    ),
+                    icon: Icon(Icons.account_balance_wallet_outlined,
+                        size: Ds.space.x16, color: Ds.c.brand),
+                    label: Text(
+                      c('customer_form.term_title'),
+                      style: Ds.t.body.copyWith(color: Ds.c.brand),
+                    ),
+                    onPressed: () => CustomerPaymentTermSheet.open(
+                        ctx, _str(rawData['id'])),
+                  ),
+                ),
               ),
             ],
           ],
@@ -4711,49 +5212,6 @@ class _PaymentBadge extends StatelessWidget {
 
 // ── Customer status badge ─────────────────────────────────────────────────────
 
-class _CustomerStatusBadge extends StatelessWidget {
-  final String status;
-  const _CustomerStatusBadge({required this.status});
-
-  @override
-  Widget build(BuildContext context) {
-    final Color color;
-    final String label;
-    final IconData icon;
-    switch (status) {
-      case 'suspended':
-        color = const Color(0xFFDC2626);
-        label = 'Suspended';
-        icon  = Icons.block_outlined;
-        break;
-      case 'approved':
-        color = const Color(0xFF1B7A43);
-        label = 'Active';
-        icon  = Icons.verified_outlined;
-        break;
-      default:
-        color = const Color(0xFFD97706);
-        label = status.isNotEmpty ? status : 'Active';
-        icon  = Icons.info_outline;
-    }
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withValues(alpha: 0.3)),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, size: 11, color: color),
-        const SizedBox(width: 3),
-        Text(label,
-            style: TextStyle(
-                fontSize: 11, fontWeight: FontWeight.w600, color: color)),
-      ]),
-    );
-  }
-}
-
 // ── Order confirmation ────────────────────────────────────────────────────────
 //
 // CHANGE #608 — _ConfirmActions is DELETED.
@@ -4771,8 +5229,21 @@ class _RegApproveActions extends StatefulWidget {
   final String id;
   final Future<void> Function() onApprove;
   final Future<void> Function() onReject;
+
+  /// CMD #1886 — customer_approve_gate(). The Approve button is NEVER hidden:
+  /// when `can` is false it is disabled and carries the backend's own sentence
+  /// ("Licence not verified", or the fields that are actually absent) plus a
+  /// Fix link to the page that edits them. An absent gate leaves the button
+  /// exactly as it was before this change.
+  final dynamic gate;
+  final VoidCallback? onFix;
+
   const _RegApproveActions(
-      {required this.id, required this.onApprove, required this.onReject});
+      {required this.id,
+      required this.onApprove,
+      required this.onReject,
+      this.gate,
+      this.onFix});
 
   @override
   State<_RegApproveActions> createState() => _RegApproveActionsState();
@@ -4803,14 +5274,44 @@ class _RegApproveActionsState extends State<_RegApproveActions> {
           child: CircularProgressIndicator(
               strokeWidth: 2, color: Color(0xFF1B7A43)));
     }
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      _btn('Approve', const Color(0xFF1B7A43), () => _act(widget.onApprove)),
+    final gate = widget.gate is Map
+        ? Map<String, dynamic>.from(widget.gate as Map)
+        : const <String, dynamic>{};
+    final blocked = gate.isNotEmpty && gate['can'] != true;
+    final reason = (gate['reason'] ?? '').toString();
+    final fixLabel = (gate['fix_label'] ?? '').toString();
+    final fixField = (gate['fix_field_label'] ?? '').toString();
+
+    final buttons = Row(mainAxisSize: MainAxisSize.min, children: [
+      _btn('Approve', const Color(0xFF1B7A43),
+          blocked ? null : () => _act(widget.onApprove)),
       const SizedBox(width: 4),
       _btn('Reject',  const Color(0xFFDC2626), () => _act(widget.onReject)),
     ]);
+    if (!blocked || reason.isEmpty) return buttons;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        buttons,
+        SizedBox(height: Ds.space.x4),
+        Text(reason, style: Ds.t.caption.copyWith(color: Ds.c.danger)),
+        if (fixLabel.isNotEmpty && widget.onFix != null)
+          InkWell(
+            onTap: widget.onFix,
+            child: Padding(
+              padding: EdgeInsets.only(top: Ds.space.x4),
+              child: Text(
+                  fixField.isEmpty ? fixLabel : '$fixLabel: $fixField',
+                  style: Ds.t.caption.copyWith(color: Ds.c.brand)),
+            ),
+          ),
+      ],
+    );
   }
 
-  Widget _btn(String label, Color color, VoidCallback onTap) => InkWell(
+  Widget _btn(String label, Color color, VoidCallback? onTap) => InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(6),
         child: Container(
@@ -5254,216 +5755,12 @@ class _StepperButton extends StatelessWidget {
   }
 }
 
-// ── Customer Edit Dialog  (Task 4) ────────────────────────────────────────────
-
-// All editable fields in pharmacy_profiles (non-system columns).
-const _kEditFields = [
-  ('pharmacy_name',     'Pharmacy / Clinic Name', true),
-  ('customer_name',     'Customer Name',          false),
-  ('owner_name',        'Owner Name',             false),
-  ('whatsapp_no',       'WhatsApp No.',           false),
-  ('phone',             'Phone',                  false),
-  ('email',             'Email',                  false),
-  ('other_contact_no',  'Other Contact',          false),
-  ('store_type',        'Store Type',             false),
-  ('range_zone',        'Range / Zone',           false),
-  ('address_local',     'Local Address',          false),
-  ('address',           'Address',                false),
-  ('city',              'City',                   false),
-  ('state',             'State',                  false),
-  ('pincode',           'Pincode',                false),
-  ('store_location_link','Store Location Link',   false),
-  ('dl_20b',            'Drug Licence 20B',       false),
-  ('dl_21b',            'Drug Licence 21B',       false),
-  ('gst_no',            'GST No.',                false),
-  ('gstin',             'GSTIN',                  false),
-  ('drug_license',      'Drug License',           false),
-  ('payment_term',      'Payment Term',           false),
-  ('customer_code',     'Customer Code',          false),
-];
-
-class _CustomerEditDialog extends StatefulWidget {
-  final _ApprovedRow row;
-  const _CustomerEditDialog({required this.row});
-
-  @override
-  State<_CustomerEditDialog> createState() => _CustomerEditDialogState();
-}
-
-class _CustomerEditDialogState extends State<_CustomerEditDialog> {
-  late final Map<String, TextEditingController> _ctrl;
-  final _formKey = GlobalKey<FormState>();
-  bool _saving = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = {
-      for (final (key, _, _) in _kEditFields)
-        key: TextEditingController(
-          text: widget.row.rawData[key]?.toString() ?? '',
-        ),
-    };
-  }
-
-  @override
-  void dispose() {
-    for (final c in _ctrl.values) c.dispose();
-    super.dispose();
-  }
-
-  Future<void> _save() async {
-    if (!(_formKey.currentState?.validate() ?? false)) return;
-    setState(() => _saving = true);
-    try {
-      final client = Supabase.instance.client;
-      final updates = <String, dynamic>{
-        for (final (key, _, _) in _kEditFields)
-          key: _ctrl[key]!.text.trim().isEmpty ? null : _ctrl[key]!.text.trim(),
-      };
-
-      // CHANGE #578 — admin_customer_update() applies the patch.
-      //
-      // The old code UPDATEd pharmacy_profiles with whatever keys the form
-      // held: nothing stopped `approved`, `status` or `user_id` riding along —
-      // the very columns my_session().can_place_order reads. The RPC has an
-      // explicit allow-list and reports anything it refused rather than
-      // dropping it quietly.
-      //
-      // The customer_code uniqueness pre-check is gone too. It was a SELECT
-      // followed by a throw in Dart: racy, and redundant because
-      // pharmacy_profiles_customer_code_unique already enforces it. The index
-      // is the guard; the RPC surfaces its violation as customer_code_taken.
-      await client.rpc('admin_customer_update', params: {
-        'p_customer_id': widget.row.id,
-        'p_patch': updates,
-      });
-      if (mounted) Navigator.pop(context, true);
-    } catch (e) {
-      if (mounted) {
-        setState(() => _saving = false);
-        showToast(context, cf('admin_customer.save_failed_e', {'e': '$e'}), isError: true);
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: 580, maxHeight: MediaQuery.of(context).size.height * 0.88),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          // Header
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 18, 12, 0),
-            child: Row(children: [
-              Expanded(
-                child: Text(c('admin_customer.edit_customer'),
-                    style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF111827))),
-              ),
-              IconButton(
-                icon: const Icon(Icons.close, size: 18),
-                onPressed: _saving ? null : () => Navigator.pop(context),
-                visualDensity: VisualDensity.compact,
-              ),
-            ]),
-          ),
-          const Divider(height: 16, indent: 20, endIndent: 20),
-          // Scrollable form
-          Expanded(
-            child: Form(
-              key: _formKey,
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-                child: LayoutBuilder(builder: (ctx, constraints) {
-                  final wide = constraints.maxWidth > 460;
-                  return Wrap(
-                    spacing: 12,
-                    runSpacing: 14,
-                    children: _kEditFields.map((rec) {
-                      final (key, label, required) = rec;
-                      return SizedBox(
-                        width: wide
-                            ? (constraints.maxWidth - 12) / 2
-                            : constraints.maxWidth,
-                        child: TextFormField(
-                          controller: _ctrl[key],
-                          decoration: InputDecoration(
-                            labelText: label,
-                            labelStyle: const TextStyle(
-                                fontSize: 12, color: Color(0xFF6B7280)),
-                            border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(8)),
-                            contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 10),
-                            isDense: true,
-                          ),
-                          style: const TextStyle(fontSize: 13),
-                          validator: required
-                              ? (v) => (v == null || v.trim().isEmpty)
-                                  ? '$label is required'
-                                  : null
-                              : null,
-                        ),
-                      );
-                    }).toList(),
-                  );
-                }),
-              ),
-            ),
-          ),
-          const Divider(height: 1, indent: 20, endIndent: 20),
-          // Footer buttons
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 10, 20, 16),
-            child: Row(children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: _saving ? null : () => Navigator.pop(context),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF374151),
-                    side: const BorderSide(color: Color(0xFFD1D5DB)),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8)),
-                    padding: const EdgeInsets.symmetric(vertical: 11),
-                  ),
-                  child: Text(c('admin_customer.cancel'),
-                      style: TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w600)),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: FilledButton(
-                  onPressed: _saving ? null : _save,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF1B7A43),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8)),
-                    padding: const EdgeInsets.symmetric(vertical: 11),
-                  ),
-                  child: _saving
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white))
-                      : Text(c('admin_customer.save_changes'),
-                          style: TextStyle(
-                              fontSize: 13, fontWeight: FontWeight.w600)),
-                ),
-              ),
-            ]),
-          ),
-        ]),
-      ),
-    );
-  }
-}
+// ── Customer Edit Dialog — replaced by the CHANGE #810 backend-described form.
+//
+// The dialog held a const list of 23 (column, label, required) records: the
+// field list, the labels and which one was mandatory were all Dart. They now
+// live in admin_customer_edit_field and arrive from admin_customer_edit_form(),
+// so adding a field to the customer form is an INSERT, not a deploy.
 
 // ─── CSV Import Dialog ────────────────────────────────────────────────────────
 
@@ -6386,7 +6683,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
   final Map<String, String> _imgViewTypes = {};   // claimId → HtmlElementView viewType
   final Set<String> _signedUrlErrors = {};        // claimId → sign or image-load failed (CHANGE #474)
   final Map<String, int> _imgAttempt = {};        // claimId → retry attempt counter (CHANGE #474)
-  RealtimeChannel? _paymentChannel;
+  LiveFeedHandle? _paymentChannel;
 
   @override
   void initState() {
@@ -6406,17 +6703,25 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
     // No order_id filter: online claims may arrive with order_id=null initially
     // (linked later by admin). Subscribe to ALL payment_claims changes and let
     // the RPC handle filtering. Belt-and-suspenders with the top-level list sub.
-    _paymentChannel = Supabase.instance.client
-        .channel('payclaims_${widget.orderId}')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'payment_claims',
-          callback: (_) {
+    // CHANGE #643: payment_claims is an admin list feed on the registry's
+    // interval. No order_id filter, as before — an online claim can arrive with
+    // order_id null and be linked later, so the RPC is what filters.
+    LiveFeed.instance
+        .watch(
+          channelPrefix: 'payclaims_${widget.orderId}',
+          tables: const ['payment_claims'],
+          onChange: (_) {
             if (mounted) _load();
           },
         )
-        .subscribe();
+        .then((h) {
+      if (!mounted) {
+        h.dispose();
+        return;
+      }
+      _paymentChannel?.unsubscribe();
+      _paymentChannel = h;
+    });
     RenderLog.write('c227_payclaims_rt',
         'change:227,subscribed:true,table:payment_claims,covers:cash+online');
   }
@@ -6644,6 +6949,36 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
     openFullscreenImage(ctx, url);
   }
 
+  /// CHANGE #396 — "reachable from any order". The order does not know which
+  /// pharmacy it belongs to; `customer_360_for_order` answers that (and its own
+  /// button label), and the 360 view opens on that pharmacy.
+  Future<void> _openCustomer360() async {
+    try {
+      final raw = await Supabase.instance.client
+          .rpc('customer_360_for_order', params: {'p_order_id': widget.orderId});
+      final m = raw is Map
+          ? Map<String, dynamic>.from(raw)
+          : const <String, dynamic>{};
+      final id = (m['customer_id'] ?? '').toString();
+      if (!mounted) return;
+      if (m['ok'] != true || id.isEmpty) {
+        final msg = (m['message'] ?? '').toString();
+        if (msg.isNotEmpty) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(msg)));
+        }
+        return;
+      }
+      RenderLog.write('c396_c360_from_order', 1);
+      await Navigator.push(
+          context,
+          MaterialPageRoute(
+              builder: (_) => AdminCustomer360Screen(customerId: id)));
+    } catch (_) {
+      // a failed lookup leaves the order panel exactly as it was
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     RenderLog.write('c217_paydash_built', 1);
@@ -6701,6 +7036,12 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
               style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
                   color: Color(0xFF6B7280), letterSpacing: 0.3)),
           const Spacer(),
+          // CHANGE #396 — every order is a door into the pharmacy behind it.
+          TextButton.icon(
+            onPressed: _openCustomer360,
+            icon: Icon(Icons.person_search, size: Ds.space.x16),
+            label: Text(c('c360.open_from_order'), style: Ds.t.caption),
+          ),
           if (_loading)
             const SizedBox(width: 13, height: 13,
                 child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF9CA3AF))),
@@ -8348,37 +8689,6 @@ class _LeadImageTileState extends State<_LeadImageTile> {
 // it never touches the shared _AdminCustomerScreenState._load() pipeline.
 // ═══════════════════════════════════════════════════════════════════════════
 
-class _LeadTypeOption {
-  final String uiType;
-  final String label;
-  final int sortOrder;
-
-  /// CHANGE #552 — needed to resolve a category-tree selection back to the
-  /// ui_types lead_scrape_start() still speaks. See _resolveUiTypes().
-  final List<String> googleTypes;
-
-  const _LeadTypeOption(
-      {required this.uiType,
-      required this.label,
-      required this.sortOrder,
-      this.googleTypes = const []});
-
-  factory _LeadTypeOption.fromMap(Map<String, dynamic> m) => _LeadTypeOption(
-        uiType: m['ui_type'] as String? ?? '',
-        label: m['label'] as String? ?? '',
-        sortOrder: (m['sort_order'] as num?)?.toInt() ?? 0,
-        googleTypes:
-            ((m['google_types'] as List?) ?? const []).map((e) => e.toString()).toList(),
-      );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// CHANGE #552 — ONE lead taxonomy, owned by lead_categories and served by
-// lead_category_tree(p_use). Both the scrape form ('scrape') and the route
-// builder ('route') render their chips from this — no Dart-side chip list,
-// label, order or key survives anywhere.
-// ═══════════════════════════════════════════════════════════════════════════
-
 class _LeadCategoryNode {
   final String key;
   final String label;
@@ -8404,8 +8714,6 @@ class _LeadCategoryNode {
       );
 
   /// Every google type this branch can contribute — its own plus its subs'.
-  Set<String> get allGoogleTypes =>
-      {...googleTypes, for (final s in sub) ...s.googleTypes};
 }
 
 List<_LeadCategoryNode> _parseCategoryTree(dynamic raw) => (raw as List? ?? const [])
@@ -8419,30 +8727,25 @@ Future<List<_LeadCategoryNode>> _fetchCategoryTree(String use) async {
   return _parseCategoryTree(res);
 }
 
-const Map<String, String> _sLeadClassLabels = {
-  'medical_store': 'Medical Store',
-  'wholesaler': 'Wholesaler',
-  'chain': 'Chain',
-  'clinic': 'Clinic',
-  'alt_med': 'Alt Med',
-  'other': 'Other',
-};
-
-const List<String> _sLeadClassOrder = [
-  'medical_store',
-  'chain',
-  'wholesaler',
-  'clinic',
-  'alt_med',
-  'other',
-];
+// CMD #1868 — the class taxonomy that used to live here (_sLeadClassLabels /
+// _sLeadClassOrder) is GONE. Chips, their order, their labels and their counts
+// now arrive from sleads_filters(); adding Hospital / Lab was a deploy, and is
+// now one INSERT. See lib/screens/admin/sleads_filter_bar.dart.
 
 const List<String> _sLeadActiveStatuses = ['planning', 'running', 'paused_budget'];
 
 class _SLeadsTab extends StatefulWidget {
   final bool isDesktop;
   final ValueChanged<int> onTotalChanged;
-  const _SLeadsTab({required this.isDesktop, required this.onTotalChanged});
+
+  /// CMD #1868 — the tab's caption, whole, from sleads_count() for the SAME
+  /// filters the list is showing. "S Leads (12)" is the backend's sentence.
+  final ValueChanged<String> onCountChip;
+  const _SLeadsTab({
+    required this.isDesktop,
+    required this.onTotalChanged,
+    required this.onCountChip,
+  });
 
   @override
   State<_SLeadsTab> createState() => _SLeadsTabState();
@@ -8460,7 +8763,6 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   final Set<String> _exclude = {};
   final Set<String> _expandedCats = {};
   final TextEditingController _nameCtrl = TextEditingController();
-  List<_LeadTypeOption> _typeOptions = [];
   final TextEditingController _budgetCtrl = TextEditingController();
   bool _starting = false;
   String? _formError;
@@ -8509,8 +8811,37 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   String? _resultsRunId;
   List<Map<String, dynamic>> _runLeads = [];
   bool _runLeadsLoading = false;
-  final Set<int> _selectedLeadIds = {};
+  /// CMD #1869 — the tested model (SLeadsSelection) IS the selection: the
+  /// screen holds no second copy of these rules.
+  final SLeadsSelection _leadSelection = SLeadsSelection();
+  Set<int> get _selectedLeadIds => _leadSelection.ids;
+  bool get _selectMode => _leadSelection.mode;
   bool _bulkBusy = false;
+
+  // ── CMD #1869 — S Leads bulk lane ─────────────────────────────────────
+  /// Multi-select is entered by long-pressing a card (or Select all) and left
+  /// by Clear. Every label below comes from lead_leads_summary().bulk.
+  /// The "Archived" view is a FILTER (CMD #1868's canonical map), so the
+  /// existing filter row draws its toggle and a saved view can carry it.
+  bool get _archivedFilter => SLeadsBulk.isArchivedView(_fs.value);
+
+  /// The toolbar's copy rides the page envelope (sleads_page().bulk), falling
+  /// back to the summary's copy of the SAME block before the first page lands.
+  SLeadsBulk get _bulkUi {
+    final fromPage = _leadPage.meta['bulk'];
+    if (fromPage is Map) return SLeadsBulk(Map<String, dynamic>.from(fromPage));
+    final fromSummary = _summary?['bulk'];
+    if (fromSummary is Map) {
+      return SLeadsBulk(Map<String, dynamic>.from(fromSummary));
+    }
+    return const SLeadsBulk(<String, dynamic>{});
+  }
+
+  Map<String, dynamic> get _bulk => _bulkUi.payload;
+
+  List<Map<String, String>> get _bulkClasses => _bulkUi.classes;
+
+  String _bulkLabel(String key, {int? n}) => _bulkUi.label(key, n: n);
 
   // ── CHANGE #552 — scrape_lead_card() cache, one call per lead ──────────
   final Map<int, Map<String, dynamic>> _leadCards = {};
@@ -8522,31 +8853,43 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   String? _activeRunLevel;
   List<String> _activeRunTypeLabels = [];
   Map<String, dynamic>? _runStatus;
-  RealtimeChannel? _runChannel;
+  LiveFeedHandle? _runChannel;
   Timer? _pollTimer;
   bool _resuming = false;
 
   // ── Results / filters ─────────────────────────────────────────────────
   Map<String, dynamic>? _summary;
-  List<Map<String, dynamic>> _rows = [];
-  int _totalCount = 0;
+  List<Map<String, dynamic>> get _rows => _leadPage.rows;
   bool _rowsLoading = false;
   String? _cityFilter;
-  String _classFilter = 'all';
-  bool _targetsOnly = true;
-  bool _withPhone = false;
-  bool _openNowOnly = false;
-  bool _withEmailOnly = false;
-  // ── CMD #1871 — branches sharing one phone ────────────────────────────
-  /// OFF (the default) = the backend returns ONE row per phone10. ON = every
-  /// branch is its own row. The flag is the ONLY thing Dart owns here: the
-  /// count, the chip label and the branch list all arrive from the payload.
-  bool _showAllBranches = false;
-  final Set<int> _expandedBranchIds = {};
+
+  // ── CMD #1868 — ONE filter map, the shape _sleads_filters_norm() returns.
+  // It is what sleads_page() / sleads_count() / sleads_filters() are called
+  // with and what a saved view stores, so save -> apply is a round-trip with
+  // nothing translated in Dart.
+  SLeadsFilterState _fs = const SLeadsFilterState();
+  SLeadsFilterModel _filterModel = const SLeadsFilterModel({});
+  static const SLeadsFilterService _filterSvc = SLeadsFilterService();
+  bool _filterBusy = false;
   final TextEditingController _searchCtrl = TextEditingController();
   Timer? _searchDebounce;
-  int _page = 0;
-  static const int _pageSize = 100;
+  // CHANGE #1867 — 50-row pages, appended by infinite scroll. The old value
+  // was 100 rows built EAGERLY, each with a network photo and its own
+  // scrape_lead_card() call; that, not the 107-250 ms RPC, was the jank.
+  static const int _pageSize = 50;
+  /// sleads_page()'s rows + its envelope (count_label / empty_label /
+  /// more_label / end_label / has_more / next_offset). PagedList owns the two
+  /// paging decisions; see lib/screens/admin/leads_paging.dart.
+  PagedList _leadPage = const PagedList();
+
+  /// CMD #1871 — which collapsed rows have their branch list open. The rows
+  /// themselves come from scrape_lead_card(); this only remembers the taps.
+  final Set<int> _expandedBranchIds = {};
+  bool _moreLoading = false;
+  /// The results list scrolls in its own viewport so ListView.builder is
+  /// genuinely lazy (a shrinkWrap list inside the page's SingleChildScrollView
+  /// builds every row, which is the bug). This controller drives the append.
+  final ScrollController _resultsCtrl = ScrollController();
 
   // ── CHANGE #443 (part 2) — row expand + get_lead_detail cache ──────────
   final Set<int> _expandedIds = {};
@@ -8593,12 +8936,23 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   void initState() {
     super.initState();
     _searchCtrl.addListener(_onSearchChanged);
+    _resultsCtrl.addListener(_onResultsScroll);
     _bootstrap();
+  }
+
+  /// CHANGE #1867 — infinite scroll: within 400 px of the end, append the
+  /// next 50. Guarded by _moreLoading so a fling fires one fetch, not ten.
+  void _onResultsScroll() {
+    if (!_resultsCtrl.hasClients) return;
+    final pos = _resultsCtrl.position;
+    if (pos.pixels >= pos.maxScrollExtent - 400) _loadMore();
   }
 
   @override
   void dispose() {
     _searchDebounce?.cancel();
+    _resultsCtrl.removeListener(_onResultsScroll);
+    _resultsCtrl.dispose();
     _pollTimer?.cancel();
     _runChannel?.unsubscribe();
     _searchCtrl.removeListener(_onSearchChanged);
@@ -8616,6 +8970,12 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   }
 
   // ── Bootstrap ──────────────────────────────────────────────────────────
+
+  /// CMD #1877 — the `strip` block of route_day_summary(): the SAME payload
+  /// the Routes tab's day-summary card draws, rendered here as one line. Leads
+  /// are what the field team works, so the tab that lists them says what today
+  /// did to them. Nothing is recomputed — the strip is printed verbatim.
+  RouteDayStrip? _fieldStrip;
 
   Future<void> _bootstrap() async {
     setState(() {
@@ -8635,14 +8995,17 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         client.rpc('lead_enrich_status', params: {'p_run_id': null}),
         // CHANGE #447 — warehouse (hub) card
         client.rpc('lead_get_hub'),
+        // CMD #1877 — the field day, same RPC as the Routes tab. Caught on its
+        // own: a caller it does not serve loses the strip, never the tab.
+        client.rpc('route_day_summary').catchError((_) => null),
       ]);
 
       // #593 — admin_lead_type_map() returns {rows, count}; rows are already
-      // active-filtered and sort_order-ordered by the backend.
+      // active-filtered and sort_order-ordered by the backend. CMD #1870 — the
+      // screen no longer keeps them: mapping chips to Google types moved into
+      // lead_scrape_start(). The count still proves the map loaded.
       final types = (((results[0] is List ? results[0].first : results[0]) as Map)['rows']
-              as List<dynamic>? ?? const [])
-          .map((e) => _LeadTypeOption.fromMap(Map<String, dynamic>.from(e as Map)))
-          .toList();
+              as List<dynamic>? ?? const []);
       final summary = Map<String, dynamic>.from(results[1] as Map);
       final form = Map<String, dynamic>.from(results[2] as Map);
       final runs = (results[3] as List)
@@ -8650,6 +9013,11 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           .toList();
       final enrichStatus = Map<String, dynamic>.from(results[4] as Map);
       final hub = Map<String, dynamic>.from(results[5] as Map);
+      final field = results[6] is Map
+          ? RouteDaySummary.from(Map<String, dynamic>.from(results[6] as Map)).strip
+          : null;
+      _fieldStrip = field;
+      RenderLog.write('c1877_leads_strip', field?.has == true ? 1 : 0);
 
       RenderLog.write('c443_types_loaded', types.length);
       RenderLog.write('c443_summary_total', (summary['total'] as num?)?.toInt() ?? 0);
@@ -8662,7 +9030,6 @@ class _SLeadsTabState extends State<_SLeadsTab> {
 
       if (!mounted) return;
       setState(() {
-        _typeOptions = types;
         _summary = summary;
         _applyFormOptions(form);
         _runs = runs;
@@ -8696,7 +9063,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         if (_activeRunId != null) _subscribeToRun(_activeRunId!);
       }
 
-      await _loadRows(reset: true);
+      await Future.wait([_loadRows(reset: true), _refreshFilterModel()]);
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -9050,94 +9417,192 @@ class _SLeadsTabState extends State<_SLeadsTab> {
 
   // ── Results ────────────────────────────────────────────────────────────
 
+  // CHANGE #1867 — 300 ms, and it resets to page 1: a keystroke can never
+  // append someone else's page onto the list it is filtering.
   void _onSearchChanged() {
     _searchDebounce?.cancel();
     _searchDebounce =
-        Timer(const Duration(milliseconds: 400), () => _loadRows(reset: true));
+        Timer(const Duration(milliseconds: 300), () => _loadRows(reset: true));
   }
 
+  /// CHANGE #1867 — ONE page of sleads_page(). `reset` starts at offset 0 and
+  /// replaces the list; otherwise the payload's own next_offset is appended.
+  /// Every label on screen is the envelope's; nothing is composed here.
   Future<void> _loadRows({bool reset = false}) async {
-    if (reset) _page = 0;
-    setState(() => _rowsLoading = true);
+    final offset = _leadPage.offsetFor(reset: reset);
+    setState(() {
+      if (reset) {
+        _rowsLoading = true;
+      } else {
+        _moreLoading = true;
+      }
+    });
     try {
-      final offset = _page * _pageSize;
       final search = _searchCtrl.text.trim();
-      final res = await Supabase.instance.client.rpc('get_scraped_leads', params: {
-        'p_city': _cityFilter,
-        'p_class': _classFilter == 'all' ? null : _classFilter,
-        'p_targets_only': _targetsOnly,
-        'p_with_phone': _withPhone,
-        'p_search': search.isEmpty ? null : search,
-        'p_status': null,
-        'p_open_now': _openNowOnly,
-        'p_with_email': _withEmailOnly,
+      final res = await Supabase.instance.client.rpc('sleads_page', params: {
+        'p_filters': _effectiveFilters(search),
         'p_limit': _pageSize,
         'p_offset': offset,
-        // CMD #1871 — collapsing is the backend's job; the toggle inverts it.
-        'p_collapse_branches': !_showAllBranches,
-      }) as List;
-      final rows = res.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-      final total = rows.isNotEmpty
-          ? ((rows.first['total_count'] as num?)?.toInt() ?? 0)
-          : 0;
-      final withPhoto = rows.where((r) => (r['photo_url'] as String?)?.isNotEmpty == true).length;
-      final withHours = rows.where((r) => (r['hours_text'] as List?)?.isNotEmpty == true).length;
-      final openNowTrue = rows.where((r) => r['open_now'] == true).length;
-      RenderLog.write('c443_rows_rendered', rows.length);
-      RenderLog.write('c443_total_count', total);
-      RenderLog.write('c443_rows', rows.length);
-      RenderLog.write('c443_with_photo', withPhoto);
-      RenderLog.write('c443_with_hours', withHours);
-      RenderLog.write('c443_open_now_true', openNowTrue);
-      // CMD #1871 — proof the collapse actually reached the screen.
-      RenderLog.write('c1871_rows', rows.length);
-      RenderLog.write('c1871_branch_chips',
-          rows.where((r) => (r['branches_label'] as String?)?.isNotEmpty == true).length);
-      RenderLog.write('c1871_show_all', _showAllBranches ? 1 : 0);
+      });
+      final env = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      final before = reset ? 0 : _leadPage.rows.length;
       if (!mounted) return;
       setState(() {
-        _rows = rows;
-        _totalCount = total;
+        _leadPage = _leadPage.applyPage(env, reset: reset);
         _rowsLoading = false;
+        _moreLoading = false;
       });
+      final page = _leadPage.rows.length - before;
+      RenderLog.write('c1867_page_rows', page);
+      RenderLog.write('c1867_loaded_rows', _leadPage.rows.length);
+      RenderLog.write('c443_rows_rendered', page);
+      RenderLog.write('c443_total_count', _leadPage.total);
+      RenderLog.write('c443_rows', page);
+      // CMD #1871 — proof the collapse reached the screen, not just the RPC.
+      RenderLog.write('c1871_rows', _leadPage.rows.length);
+      RenderLog.write(
+          'c1871_branch_chips',
+          _leadPage.rows
+              .where((r) => (r['branches_label'] as String?)?.isNotEmpty == true)
+              .length);
+      RenderLog.write('c1871_show_all', _fs.toggle('show_all_branches') ? 1 : 0);
     } catch (e) {
       if (mounted) {
-        setState(() => _rowsLoading = false);
+        setState(() {
+          _rowsLoading = false;
+          _moreLoading = false;
+        });
         showToast(context, cf('admin_customer.load_leads_fail_e', {'e': '$e'}), isError: true);
       }
     }
   }
 
-  void _changeFilters({
-    String? city,
-    bool cityIsAll = false,
-    String? classKey,
-    bool? targetsOnly,
-    bool? withPhone,
-    bool? openNow,
-    bool? withEmail,
-    bool? showAllBranches,
-  }) {
-    setState(() {
-      if (cityIsAll) _cityFilter = null;
-      if (city != null) _cityFilter = city;
-      if (classKey != null) _classFilter = classKey;
-      if (targetsOnly != null) _targetsOnly = targetsOnly;
-      if (withPhone != null) _withPhone = withPhone;
-      if (openNow != null) _openNowOnly = openNow;
-      if (withEmail != null) _withEmailOnly = withEmail;
-      if (showAllBranches != null) {
-        _showAllBranches = showAllBranches;
-        _expandedBranchIds.clear();
-      }
-    });
-    _loadRows(reset: true);
-  }
-
-  void _goToPage(int page) {
-    setState(() => _page = page);
+  /// Append the next page. The BACKEND decides there is one (has_more +
+  /// next_offset); the client never guesses from a list length.
+  void _loadMore() {
+    if (_moreLoading || _rowsLoading || !_leadPage.canLoadMore) return;
+    if (_resultsRunId != null) return; // a run's own set is not paged
     _loadRows();
   }
+
+  /// The filter map actually sent: the canonical state plus the two controls
+  /// the screen still owns (the city dropdown and the search box).
+  Map<String, dynamic> _effectiveFilters([String? search]) => _fs
+      .withCity(_cityFilter)
+      .withSearch(search ?? _searchCtrl.text)
+      .value;
+
+  /// CMD #1868 — one filter change: re-read the rows AND the chip model
+  /// (counts, which chip is lit, the score caption, the count chip). Every one
+  /// of those is the backend's answer to the SAME map.
+  ///
+  /// CHANGE #1867's 300 ms debounce is kept: tapping three chips in a row is
+  /// one fetch, not three.
+  void _applyFilters(SLeadsFilterState next) {
+    setState(() => _fs = next);
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 300), () {
+      _loadRows(reset: true);
+      _refreshFilterModel();
+    });
+  }
+
+  Future<void> _refreshFilterModel() async {
+    final sent = _effectiveFilters();
+    try {
+      final results = await Future.wait([
+        _filterSvc.filters(sent),
+        _filterSvc.count(sent),
+      ]);
+      if (!mounted) return;
+      final model = SLeadsFilterModel.fromPayload(results[0]);
+      setState(() {
+        _filterModel = model;
+        // The backend normalised the map (defaults filled in); adopt its
+        // version so the next call round-trips exactly what it sent back.
+        if (model.filters.isNotEmpty) _fs = model.state;
+      });
+      final chip = results[1]['count_chip']?.toString() ?? model.countChip;
+      widget.onCountChip(chip);
+      RenderLog.write('c1868_chips', model.chips.length);
+      RenderLog.write('c1868_toggles', model.toggles.length);
+      RenderLog.write('c1868_views', model.viewItems.length);
+      RenderLog.write('c1868_count_chip', chip);
+    } catch (_) {
+      // A failed filter read leaves the last good model on screen; the list
+      // itself reports its own error.
+    }
+  }
+
+  void _changeFilters({String? city, bool cityIsAll = false}) {
+    if (cityIsAll) _cityFilter = null;
+    if (city != null) _cityFilter = city;
+    _applyFilters(_fs);
+  }
+
+  // ── CMD #1868 — saved views ─────────────────────────────────────────────
+
+  Future<void> _saveView() async {
+    final ctrl = TextEditingController();
+    final views = _filterModel.views;
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(views['save_label']?.toString() ?? ''),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: InputDecoration(hintText: views['name_hint']?.toString()),
+          onSubmitted: (v) => Navigator.pop(ctx, v),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(c('admin_customer.cancel'))),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, ctrl.text),
+              child: Text(views['save_label']?.toString() ?? '')),
+        ],
+      ),
+    );
+    if (name == null || !mounted) return;
+    await _runViewRpc(() => _filterSvc.saveView(name, _effectiveFilters()));
+  }
+
+  Future<void> _applyView(int id) async {
+    final res = await _runViewRpc(() => _filterSvc.applyView(id));
+    if (res == null || res['ok'] != true) return;
+    _applyFilters(SLeadsFilterState.fromPayload(res['filters']));
+  }
+
+  Future<void> _deleteView(int id) async =>
+      _runViewRpc(() => _filterSvc.deleteView(id));
+
+  /// Every saved-view RPC answers with its own message and the fresh list;
+  /// this prints both verbatim and never composes a sentence.
+  Future<Map<String, dynamic>?> _runViewRpc(
+      Future<Map<String, dynamic>> Function() call) async {
+    if (_filterBusy) return null;
+    setState(() => _filterBusy = true);
+    try {
+      final res = await call();
+      if (!mounted) return res;
+      setState(() => _filterBusy = false);
+      final msg = res['message']?.toString();
+      if (msg != null && msg.isNotEmpty) {
+        showToast(context, msg, isError: res['ok'] != true);
+      }
+      await _refreshFilterModel();
+      return res;
+    } catch (e) {
+      if (mounted) {
+        setState(() => _filterBusy = false);
+        showToast(context, '$e', isError: true);
+      }
+      return null;
+    }
+  }
+
 
   // ── Scrape control ────────────────────────────────────────────────────
 
@@ -9153,38 +9618,12 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     return null;
   }
 
-  /// Effective include set: picking a top category implies all of its subs
-  /// UNLESS specific subs of that category were chosen.
-  Set<String> _effectiveGoogleTypes(Set<String> keys) {
-    final out = <String>{};
-    for (final c in _cats) {
-      final chosenSubs = c.sub.where((s) => keys.contains(s.key)).toList();
-      if (chosenSubs.isNotEmpty) {
-        for (final s in chosenSubs) {
-          out.addAll(s.googleTypes.isEmpty ? c.googleTypes : s.googleTypes);
-        }
-      } else if (keys.contains(c.key)) {
-        out.addAll(c.allGoogleTypes);
-      }
-    }
-    return out;
-  }
-
-  /// CHANGE #552 — the deployed lead_scrape_start() still takes p_ui_types
-  /// only; it has no include/exclude parameters. So the tray selection is
-  /// resolved here, through the backend's own google_types, into the ui_types
-  /// that RPC understands: include contributes types, exclude takes them away.
-  /// Nothing is keyed off a hardcoded category name.
-  List<String> _resolveUiTypes() {
-    final include = _effectiveGoogleTypes(_include);
-    final exclude = _effectiveGoogleTypes(_exclude);
-    final wanted = include.difference(exclude);
-    if (wanted.isEmpty) return const [];
-    return _typeOptions
-        .where((o) => o.googleTypes.any(wanted.contains))
-        .map((o) => o.uiType)
-        .toList();
-  }
+  // CMD #1870 — _effectiveGoogleTypes() and _resolveUiTypes() are GONE.
+  // They turned the tray selection into ui_types in Dart, which meant the
+  // screen had to know what a Google place type is and which parent implies
+  // which child. lead_scrape_start() now takes the chip keys themselves and
+  // resolves them against lead_categories, so the same rule also decides
+  // which places are allowed back in (lead_scrape_finish_cell).
 
   int? get _budgetValue {
     final n = int.tryParse(_budgetCtrl.text.trim());
@@ -9215,40 +9654,61 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     return msg;
   }
 
+  /// CMD #1870 — the labels of the Include chips the admin actually tapped,
+  /// read straight out of lead_category_tree(). Picking a label off the
+  /// payload is not a decision; deciding which Google types it stands for is,
+  /// and that now happens in lead_scrape_start().
+  List<String> _includeChipLabels() {
+    final out = <String>[];
+    for (final c in _cats) {
+      if (_include.contains(c.key)) out.add(c.label);
+      for (final sub in c.sub) {
+        if (_include.contains(sub.key)) out.add(sub.label);
+      }
+    }
+    return out;
+  }
+
   Future<void> _startScrape() async {
     final src = _isRescrape ? _sourceRun : null;
 
     // Re-scrape replays the saved run's own area; a fresh scrape uses the
     // typed City/District. Categories chosen in the trays always win — a
-    // re-scrape with no tray selection falls back to that run's own types.
+    // re-scrape with no tray selection falls back to that run's own chips
+    // (and, for a run started before CMD #1870, to its stored ui_types, which
+    // lead_scrape_start() still understands).
     final name = src != null ? (src['city']?.toString() ?? '') : _nameCtrl.text.trim();
     final level = src != null ? (src['level']?.toString() ?? _level) : _level;
-    var types = _resolveUiTypes();
-    if (types.isEmpty && src != null) {
-      types = ((src['types'] as List?) ?? const []).map((e) => e.toString()).toList();
+    var include = _include;
+    if (include.isEmpty && src != null) {
+      final saved = ((src['include_keys'] as List?) ?? const []).map((e) => e.toString());
+      final legacy = ((src['types'] as List?) ?? const []).map((e) => e.toString());
+      include = {...(saved.isEmpty ? legacy : saved)};
     }
     final budget = _budgetValue;
     if (budget == null) return;
+
+    final args = ScrapeStartArgs.fromTrays(
+      name: name,
+      level: level,
+      include: include,
+      exclude: _exclude,
+      maxCalls: budget,
+    );
 
     setState(() {
       _starting = true;
       _formError = null;
     });
     try {
-      final runId = await Supabase.instance.client.rpc('lead_scrape_start', params: {
-        'p_name': name,
-        'p_level': level,
-        'p_ui_types': types,
-        'p_cell_km': null,
-        'p_max_calls': budget,
-      });
+      final runId = await Supabase.instance.client
+          .rpc('lead_scrape_start', params: args.toParams());
       if (!mounted) return;
       final id = runId?.toString();
       setState(() {
         _activeRunId = id;
         _activeRunLevel = level;
-        _activeRunTypeLabels =
-            _typeOptions.where((o) => types.contains(o.uiType)).map((o) => o.label).toList();
+        _activeRunTypeLabels = _includeChipLabels();
         _starting = false;
       });
       if (id != null) {
@@ -9289,21 +9749,30 @@ class _SLeadsTabState extends State<_SLeadsTab> {
 
   void _subscribeToRun(String runId) {
     _runChannel?.unsubscribe();
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    _runChannel = Supabase.instance.client
-        .channel('s_leads_run_${runId}_$ts')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.update,
-          schema: 'public',
-          table: 'lead_scrape_runs',
-          filter: PostgresChangeFilter(
-            type: PostgresChangeFilterType.eq,
-            column: 'id',
-            value: runId,
-          ),
-          callback: (_) => _refreshStatus(),
+    // CHANGE #643: the filter is kept and handed to LiveFeed, so if the
+    // registry ever puts lead_scrape_runs back on a live channel this stays
+    // narrowed to one run rather than every run in the system.
+    LiveFeed.instance
+        .watch(
+          channelPrefix: 's_leads_run_$runId',
+          tables: const ['lead_scrape_runs'],
+          filters: {
+            'lead_scrape_runs': PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'id',
+              value: runId,
+            ),
+          },
+          onChange: (_) => _refreshStatus(),
         )
-        .subscribe();
+        .then((h) {
+      if (!mounted) {
+        h.dispose();
+        return;
+      }
+      _runChannel?.unsubscribe();
+      _runChannel = h;
+    });
   }
 
   void _startPolling() {
@@ -9367,6 +9836,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
                 style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13)),
             const SizedBox(height: 12),
           ],
+          _buildFieldStrip(),
           _buildWarehouseCard(),
           const SizedBox(height: 20),
           _buildScrapeForm(),
@@ -9380,6 +9850,91 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           _buildPastRunsSection(),
         ],
       ),
+    );
+  }
+
+  // ── CMD #1877: the "Field" strip — the day summary, one line ────────────
+
+  /// The Routes tab's card and this strip are the same three numbers from the
+  /// same call. `has` is the backend's flag: on a day with no field work the
+  /// strip is absent, never a row of zeroes.
+  Widget _buildFieldStrip() {
+    final strip = _fieldStrip;
+    if (strip == null || !strip.has) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x16),
+      child: Container(
+        width: double.infinity,
+        padding: EdgeInsets.all(Ds.space.x16),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          boxShadow: Ds.elevation.e1,
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(
+                child: Text(strip.title,
+                    style: Ds.t.subtitle, overflow: TextOverflow.ellipsis)),
+            if (strip.headerLabel != null)
+              Text(strip.headerLabel!, style: Ds.t.caption),
+          ]),
+          if (strip.summaryLabel != null) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(strip.summaryLabel!, style: Ds.t.body),
+          ],
+          if (strip.conversionLabel != null || strip.costLabel != null) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(
+                [strip.conversionLabel, strip.costLabel]
+                    .whereType<String>()
+                    .join(' · '),
+                style: Ds.t.caption),
+          ],
+          if (strip.chips.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x12),
+            Wrap(
+              spacing: Ds.space.x8,
+              runSpacing: Ds.space.x8,
+              children: strip.chips.map(_fieldChip).toList(),
+            ),
+          ],
+        ]),
+      ),
+    );
+  }
+
+  /// The one place a tone NAME becomes a colour on this tab. Same vocabulary
+  /// as the Routes tab's chips, same tokens.
+  Widget _fieldChip(RouteCostChip chip) {
+    late final Color bg;
+    late final Color fg;
+    switch (chip.tone) {
+      case RouteChipTone.brand:
+        bg = Ds.c.brandSoft;
+        fg = Ds.c.brand;
+      case RouteChipTone.success:
+        bg = Ds.c.successSoft;
+        fg = Ds.c.success;
+      case RouteChipTone.warning:
+        bg = Ds.c.warningSoft;
+        fg = Ds.c.warning;
+      case RouteChipTone.danger:
+        bg = Ds.c.dangerSoft;
+        fg = Ds.c.danger;
+      case RouteChipTone.info:
+        bg = Ds.c.infoSoft;
+        fg = Ds.c.info;
+      case RouteChipTone.muted:
+        bg = Ds.c.bg;
+        fg = Ds.c.textSecondary;
+    }
+    return Container(
+      padding:
+          EdgeInsets.symmetric(horizontal: Ds.space.x8, vertical: Ds.space.x4),
+      decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rChip),
+      child: Text(chip.label,
+          style: Ds.t.caption.copyWith(color: fg, fontWeight: FontWeight.w600)),
     );
   }
 
@@ -9724,7 +10279,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           const SizedBox(height: 14),
 
           // Re-scrape replaces City/District + Name with the saved-run picker.
-          if (_isRescrape)
+          if (_isRescrape) ...[
             widget.isDesktop
                 ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Expanded(child: _sourceDropdown()),
@@ -9735,8 +10290,9 @@ class _SLeadsTabState extends State<_SLeadsTab> {
                     _sourceDropdown(),
                     const SizedBox(height: 10),
                     _budgetField(),
-                  ])
-          else
+                  ]),
+            _sourceDeleteAction(),
+          ] else
             widget.isDesktop
                 ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     SizedBox(width: 220, child: _levelToggle()),
@@ -9802,6 +10358,35 @@ class _SLeadsTabState extends State<_SLeadsTab> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// CMD #1870 — the saved run picked here is also the one you can get rid
+  /// of. A run scraped for the wrong city is the reason this exists: choose
+  /// it, delete it, and its leads go to Archived where Restore can undo it.
+  /// The caption is the backend's; the action is the same _deleteRun().
+  Widget _sourceDeleteAction() {
+    final src = _sourceRun;
+    if (src == null) {
+      RenderLog.write('c1870_rescrape_delete', 'no_source_picked');
+      return const SizedBox.shrink();
+    }
+    final view = ScrapeRunView.from(src);
+    final d = view.delete;
+    if (d == null) {
+      RenderLog.write('c1870_rescrape_delete', 'backend_withheld');
+      return const SizedBox.shrink();
+    }
+    RenderLog.write('c1870_rescrape_delete', d.label);
+    final busy = _runBusy.contains(view.runId);
+    return Padding(
+      padding: EdgeInsets.only(top: Ds.space.x12),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: _runActionButton(d.label, Icons.delete_outline,
+            busy ? null : () => _deleteRun(src),
+            danger: true),
       ),
     );
   }
@@ -10150,7 +10735,11 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         // whatever that run produced, so they are hidden in run mode.
         if (!runMode) ...[
           _buildFilterBar(byClass, cities, total),
-          const SizedBox(height: 14),
+          // CMD #1869 — the bulk toolbar, drawn entirely from the payload's
+          // own bulk block. The Archived toggle itself lives in the filter
+          // row above, because it is a filter like any other.
+          _bulkToolbar(rows),
+          SizedBox(height: Ds.space.x12),
         ] else ...[
           _selectionBar(rows),
           const SizedBox(height: 14),
@@ -10163,14 +10752,10 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         else if (rows.isEmpty)
           _ssvEmptyStateLocal(runMode
               ? 'This run has no leads left.'
-              : '0 leads match these filters')
-        else ...[
-          _leadCardGrid(rows, selectable: runMode),
-          if (!runMode) ...[
-            const SizedBox(height: 12),
-            _buildPagination(),
-          ],
-        ],
+              : (_leadPage.emptyLabel ?? ''))
+        else
+          _leadCardGrid(rows,
+              selectable: runMode || _selectMode || _selectedLeadIds.isNotEmpty),
       ],
     );
   }
@@ -10211,9 +10796,9 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           tristate: false,
           onChanged: (v) => setState(() {
             if (v == true) {
-              _selectedLeadIds.addAll(ids);
+              _leadSelection.selectAll(ids);
             } else {
-              _selectedLeadIds.removeAll(ids);
+              _leadSelection.removeAll(ids);
             }
           }),
           activeColor: const Color(0xFF1B7A43),
@@ -10245,10 +10830,275 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     ]);
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // CMD #1869 — S Leads bulk lane: Archived filter, multi-select toolbar,
+  // Archive / Restore / Reclassify.
+  //
+  // Nothing below decides anything. Every label, every count and every message
+  // arrives in lead_leads_summary().bulk or in the reply of the two mutation
+  // RPCs (leads_bulk_set_status, leads_bulk_set_class); this code renders them
+  // and sends the ids back.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /// Idle it is the backend's one-line hint; with a selection it is the
+  /// toolbar. Archive is replaced by Restore while the Archived filter is on —
+  /// the UI can never hard-delete a lead.
+  Widget _bulkToolbar(List<Map<String, dynamic>> rows) {
+    final n = _selectedLeadIds.length;
+    final ids = rows.map((r) => (r['id'] as num?)?.toInt()).whereType<int>().toSet();
+    if (!_selectMode && n == 0) {
+      final hint = _bulk['select_hint']?.toString() ?? '';
+      if (hint.isEmpty) return const SizedBox.shrink();
+      return Padding(
+        padding: EdgeInsets.only(top: Ds.space.x8),
+        child: Text(hint, style: Ds.t.caption),
+      );
+    }
+    RenderLog.write('c1869_bulk_bar', 1);
+    RenderLog.write('c1869_selected', n);
+    final selectedLabel = _bulkUi.selectedLabel(n);
+    return Container(
+      margin: EdgeInsets.only(top: Ds.space.x12),
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x12, vertical: Ds.space.x8),
+      decoration: BoxDecoration(color: Ds.c.brandSoft, borderRadius: Ds.r.rCard),
+      child: Wrap(
+        spacing: Ds.space.x12,
+        runSpacing: Ds.space.x8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text(selectedLabel, style: Ds.t.body),
+          _bulkTextButton(_bulk['select_all_label']?.toString() ?? '', () {
+            setState(() => _leadSelection.selectAll(ids));
+          }),
+          _bulkTextButton(_bulk['clear_label']?.toString() ?? '', () {
+            setState(() => _leadSelection.clear());
+          }),
+          _bulkAction(_bulkUi.primaryActionLabel(_archivedFilter, n),
+              primary: true,
+              onTap: n == 0
+                  ? null
+                  : () => _archivedFilter
+                      ? _setLeadStatus(_selectedLeadIds.toList(),
+                          _bulkUi.primaryActionKey(true))
+                      : _confirmArchive(_selectedLeadIds.toList())),
+          _bulkAction(_bulkUi.reclassifyLabel(n), primary: false,
+              onTap:
+                  n == 0 ? null : () => _pickLeadClass(_selectedLeadIds.toList())),
+          if (_bulkBusy)
+            SizedBox(
+                width: Ds.space.x16,
+                height: Ds.space.x16,
+                child: const CircularProgressIndicator(strokeWidth: 2)),
+        ],
+      ),
+    );
+  }
+
+  Widget _bulkTextButton(String label, VoidCallback onTap) {
+    if (label.isEmpty) return const SizedBox.shrink();
+    return TextButton(
+      onPressed: _bulkBusy ? null : onTap,
+      style: TextButton.styleFrom(
+        foregroundColor: Ds.c.brand,
+        minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget),
+      ),
+      child: Text(label, style: Ds.t.caption.copyWith(color: Ds.c.brand)),
+    );
+  }
+
+  /// One brand-filled action per bar; everything else is outlined.
+  Widget _bulkAction(String label,
+      {required bool primary, required VoidCallback? onTap}) {
+    if (label.isEmpty) return const SizedBox.shrink();
+    final child = Text(label,
+        style: Ds.t.body.copyWith(color: primary ? Ds.c.surface : Ds.c.brand));
+    if (primary) {
+      return ElevatedButton(
+        onPressed: _bulkBusy ? null : onTap,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Ds.c.brand,
+          foregroundColor: Ds.c.surface,
+          minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget),
+          shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+        ),
+        child: child,
+      );
+    }
+    return OutlinedButton(
+      onPressed: _bulkBusy ? null : onTap,
+      style: OutlinedButton.styleFrom(
+        foregroundColor: Ds.c.brand,
+        side: BorderSide(color: Ds.c.brand),
+        minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget),
+        shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+      ),
+      child: child,
+    );
+  }
+
+  void _toggleLeadSelected(int id) {
+    setState(() => _leadSelection.toggle(id));
+  }
+
+  /// Long-press is the entry into multi-select.
+  void _enterLeadSelect(int id) {
+    setState(() => _leadSelection.enter(id));
+  }
+
+  Future<void> _confirmArchive(List<int> ids) async {
+    if (ids.isEmpty) return;
+    final title = _bulkUi.confirmTitle(ids.length);
+    final body = _bulk['confirm_body']?.toString() ?? '';
+    final okLabel = _bulk['confirm_ok']?.toString() ?? '';
+    final cancelLabel = _bulk['confirm_cancel']?.toString() ?? '';
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+              Ds.space.x16, Ds.space.x8, Ds.space.x16, Ds.space.x16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: Ds.t.title),
+              SizedBox(height: Ds.space.x8),
+              Text(body, style: Ds.t.bodySecondary),
+              SizedBox(height: Ds.space.x24),
+              Row(children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.of(ctx).pop(false),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Ds.c.brand,
+                      side: BorderSide(color: Ds.c.divider),
+                      minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget),
+                      shape:
+                          RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+                    ),
+                    child: Text(cancelLabel, style: Ds.t.body),
+                  ),
+                ),
+                SizedBox(width: Ds.space.x12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.of(ctx).pop(true),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Ds.c.brand,
+                      foregroundColor: Ds.c.surface,
+                      minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget),
+                      shape:
+                          RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+                    ),
+                    child: Text(okLabel,
+                        style: Ds.t.body.copyWith(color: Ds.c.surface)),
+                  ),
+                ),
+              ]),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (ok == true) await _setLeadStatus(ids, 'archive');
+  }
+
+  /// The class list, its order and its labels are all app_settings + ui_copy.
+  Future<void> _pickLeadClass(List<int> ids) async {
+    if (ids.isEmpty) return;
+    final classes = _bulkClasses;
+    if (classes.isEmpty) return;
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+                Ds.space.x16, Ds.space.x8, Ds.space.x16, Ds.space.x8),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(_bulk['class_title']?.toString() ?? '',
+                  style: Ds.t.title),
+            ),
+          ),
+          Flexible(
+            child: ListView(
+              shrinkWrap: true,
+              children: [
+                for (final k in classes)
+                  ListTile(
+                    minVerticalPadding: Ds.space.x12,
+                    title: Text(k['label']?.toString() ?? '', style: Ds.t.body),
+                    onTap: () => Navigator.of(ctx).pop(k['key']?.toString()),
+                  ),
+              ],
+            ),
+          ),
+          SizedBox(height: Ds.space.x8),
+        ]),
+      ),
+    );
+    if (picked != null && picked.isNotEmpty) await _setLeadClass(ids, picked);
+  }
+
+  Future<void> _setLeadStatus(List<int> ids, String action) async {
+    if (ids.isEmpty || _bulkBusy) return;
+    setState(() => _bulkBusy = true);
+    try {
+      final res = await Supabase.instance.client.rpc('leads_bulk_set_status',
+          params: {'p_ids': ids, 'p_status': action});
+      await _afterBulk(res, ids, 'c1869_${action}_n');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _bulkBusy = false);
+      showToast(context, '$e', isError: true);
+    }
+  }
+
+  Future<void> _setLeadClass(List<int> ids, String classKey) async {
+    if (ids.isEmpty || _bulkBusy) return;
+    setState(() => _bulkBusy = true);
+    try {
+      final res = await Supabase.instance.client.rpc('leads_bulk_set_class',
+          params: {'p_ids': ids, 'p_class': classKey});
+      await _afterBulk(res, ids, 'c1869_reclassify_n');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _bulkBusy = false);
+      showToast(context, '$e', isError: true);
+    }
+  }
+
+  /// One reply shape for both RPCs: ok + n + the message to show, verbatim.
+  Future<void> _afterBulk(
+      dynamic res, List<int> ids, String renderKey) async {
+    final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+    final ok = m['ok'] == true;
+    final msg = m['message']?.toString();
+    RenderLog.write(renderKey, (m['n'] as num?)?.toInt() ?? 0);
+    if (!mounted) return;
+    setState(() {
+      _bulkBusy = false;
+      if (ok) _leadSelection.removeAll(ids);
+    });
+    if (msg != null && msg.isNotEmpty) showToast(context, msg, isError: !ok);
+    if (!ok) return;
+    _leadCards.clear();
+    _leadCardsFailed.clear();
+    // The archived count, the chip counts and the "S Leads (N)" tab chip are
+    // all the backend's answer to the SAME filter map — re-ask for all three.
+    await _refreshSummaryAndUsage();
+    await _loadRows(reset: true);
+    await _refreshFilterModel();
+  }
+
   Future<void> _selectResultsRun(String? runId) async {
     setState(() {
       _resultsRunId = runId;
-      _selectedLeadIds.clear();
+      _leadSelection.clear();
       _runLeads = [];
       _runLeadsLoading = runId != null;
     });
@@ -10291,7 +11141,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         showToast(context, msg, isError: m['error'] != null);
       }
       if (m['error'] == null) {
-        _selectedLeadIds.clear();
+        _leadSelection.clear();
         _leadCards.clear();
         _leadCardsFailed.clear();
         await _selectResultsRun(runId);
@@ -10316,105 +11166,61 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     );
   }
 
+  /// CMD #1868 — the filter row is sleads_filters(), rendered. The chips,
+  /// their order, their labels, their counts, the four hidden-by-default
+  /// switches, the score range and its caption, the active zone's name and
+  /// the saved views all arrive in that one payload. `byClass` is still the
+  /// summary's, but only the city dropdown reads it now.
   Widget _buildFilterBar(
       List<Map<String, dynamic>> byClass, List<Map<String, dynamic>> cities, int total) {
-    final classCounts = <String, int>{
-      for (final c in byClass) (c['class']?.toString() ?? ''): (c['n'] as num?)?.toInt() ?? 0
-    };
-
-    final classChips = <Widget>[
-      _classChip('all', 'All ($total)', _classFilter == 'all'),
-      ..._sLeadClassOrder.map((k) =>
-          _classChip(k, '${_sLeadClassLabels[k]} (${classCounts[k] ?? 0})', _classFilter == k)),
-    ];
-
     final cityDropdown = DropdownButton<String?>(
       value: _cityFilter,
-      hint: Text(c('admin_customer.all_cities'), style: const TextStyle(fontSize: 12.5)),
+      hint: Text(c('admin_customer.all_cities'), style: Ds.t.body),
       underline: const SizedBox.shrink(),
       items: [
-        DropdownMenuItem<String?>(value: null, child: Text(c('admin_customer.all_cities'), style: const TextStyle(fontSize: 12.5))),
+        DropdownMenuItem<String?>(
+            value: null,
+            child: Text(c('admin_customer.all_cities'), style: Ds.t.body)),
         ...cities.map((c) => DropdownMenuItem<String?>(
               value: c['city']?.toString(),
-              child: Text('${c['city']} (${c['n']})', style: const TextStyle(fontSize: 12.5)),
+              child: Text('${c['city']} (${c['n']})', style: Ds.t.body),
             )),
       ],
       onChanged: (v) => _changeFilters(city: v, cityIsAll: v == null),
     );
 
-    final targetsToggle = _filterToggle('Only B2B targets', _targetsOnly, (v) => _changeFilters(targetsOnly: v));
-    final phoneToggle = _filterToggle('Only with phone', _withPhone, (v) => _changeFilters(withPhone: v));
-    final openNowToggle = _filterToggle('Open now', _openNowOnly, (v) => _changeFilters(openNow: v));
-    final emailToggle = _filterToggle('Has email', _withEmailOnly, (v) => _changeFilters(withEmail: v));
-    // CMD #1871 — wording lives in ui_copy, never in Dart.
-    final branchesToggle = _filterToggle(
-        c('admin_customer.leads_show_all_branches'),
-        _showAllBranches,
-        (v) => _changeFilters(showAllBranches: v));
-
     final searchBox = TextField(
       controller: _searchCtrl,
       decoration: InputDecoration(
         hintText: c('admin_customer.search_leads_hint'),
-        hintStyle: const TextStyle(fontSize: 12.5),
-        prefixIcon: const Icon(Icons.search, size: 18),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        hintStyle: Ds.t.caption,
+        prefixIcon: const Icon(Icons.search),
+        border: OutlineInputBorder(borderRadius: Ds.r.rButton),
         isDense: true,
       ),
-      style: const TextStyle(fontSize: 13),
+      style: Ds.t.body,
     );
 
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      // CHANGE #443 (part 2) — always Wrap (never a plain Row) now that there
-      // are 5 items in this group; a fixed Row overflowed near the 900px
-      // desktop/mobile boundary once "Open now" + "Has email" were added.
-      Wrap(spacing: 16, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
-        cityDropdown, targetsToggle, phoneToggle, openNowToggle, emailToggle,
-        branchesToggle,
-      ]),
-      const SizedBox(height: 10),
-      widget.isDesktop
-          ? Wrap(spacing: 6, runSpacing: 6, children: classChips)
-          : SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(children: [
-                for (int i = 0; i < classChips.length; i++) ...[
-                  if (i > 0) const SizedBox(width: 6),
-                  classChips[i],
-                ],
-              ]),
-            ),
-      const SizedBox(height: 10),
-      SizedBox(width: widget.isDesktop ? 360 : double.infinity, child: searchBox),
-    ]);
-  }
-
-  Widget _classChip(String key, String label, bool selected) {
-    return ChoiceChip(
-      label: Text(label, style: const TextStyle(fontSize: 11)),
-      selected: selected,
-      onSelected: (_) => _changeFilters(classKey: key),
-      selectedColor: const Color(0xFFDCFCE7),
-      backgroundColor: const Color(0xFFF3F4F6),
-      side: BorderSide(color: selected ? const Color(0xFF1B7A43) : const Color(0xFFD1D5DB)),
-      labelStyle: TextStyle(color: selected ? const Color(0xFF1B7A43) : const Color(0xFF374151)),
-    );
-  }
-
-  Widget _filterToggle(String label, bool value, ValueChanged<bool> onChanged) {
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      Transform.scale(
-        scale: 0.75,
-        child: Switch(
-          value: value,
-          onChanged: onChanged,
-          activeColor: const Color(0xFF1B7A43),
-          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        ),
+    return SLeadsFilterBar(
+      model: _filterModel,
+      onChipTap: (key, kind) => _applyFilters(_fs.tapChip(key, kind)),
+      onToggle: (key, value) => _applyFilters(_fs.setToggle(key, value)),
+      onScore: (score) => _applyFilters(_fs.setScore(score)),
+      onApplyView: _applyView,
+      onDeleteView: _deleteView,
+      onSaveView: _saveView,
+      trailing: Wrap(
+        spacing: Ds.space.x16,
+        runSpacing: Ds.space.x8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          cityDropdown,
+          SizedBox(
+              width: widget.isDesktop ? Ds.space.x48 * 8 : double.infinity,
+              child: searchBox),
+        ],
       ),
-      Text(label, style: const TextStyle(fontSize: 12.5, color: Color(0xFF374151))),
-    ]);
+    );
   }
 
   // ── CHANGE #443 (part 2) — rich lead card ───────────────────────────────
@@ -10446,24 +11252,299 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   // Nothing is composed, formatted or constructed in Dart.
   // ═══════════════════════════════════════════════════════════════════════
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // CHANGE #1867 — the results list is LAZY.
+  //
+  // It was a Wrap (desktop) / Column (mobile) of 100 full cards, built eagerly
+  // inside the page's SingleChildScrollView: 100 network photos and 100
+  // scrape_lead_card() calls, each completion setState-ing the whole thing.
+  // Now it is a ListView.builder in its own bounded viewport — only the rows
+  // on screen exist — and a row is a COMPACT tile drawn straight from
+  // sleads_page(). The rich card (photo, actions, scrape_lead_card()) is
+  // built for an EXPANDED row only, i.e. on tap.
+  // ═══════════════════════════════════════════════════════════════════════
+
   Widget _leadCardGrid(List<Map<String, dynamic>> rows, {required bool selectable}) {
-    if (!widget.isDesktop) {
-      return Column(
-        children: rows
-            .map((r) => Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: _scrapeLeadCard(r, selectable: selectable),
-                ))
-            .toList(),
+    final vh = MediaQuery.of(context).size.height;
+    final h = (vh * 0.72).clamp(360.0, 900.0);
+    // rows + one footer slot (loading more / end-of-list, both backend copy).
+    final footer = _resultsRunId == null ? 1 : 0;
+    return SizedBox(
+      height: h,
+      child: Scrollbar(
+        controller: _resultsCtrl,
+        child: ListView.builder(
+          controller: _resultsCtrl,
+          primary: false,
+          padding: EdgeInsets.only(bottom: Ds.space.x8),
+          itemCount: rows.length + footer,
+          itemBuilder: (ctx, i) {
+            if (i >= rows.length) return _leadListFooter();
+            final r = rows[i];
+            final id = (r['id'] as num?)?.toInt();
+            final expanded = id != null && _expandedIds.contains(id);
+            RenderLog.write('c1867_row_built', '$i');
+            return Padding(
+              padding: EdgeInsets.only(bottom: Ds.space.x8),
+              child: expanded
+                  ? _scrapeLeadCard(r, selectable: selectable)
+                  : _leadCompactRow(r, selectable: selectable),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  /// The list footer. Both strings are sleads_page()'s own — "Loading more…"
+  /// while a page is in flight, its end_label once the backend says there is
+  /// nothing left. Neither is composed in Dart.
+  Widget _leadListFooter() {
+    if (_moreLoading) {
+      return Padding(
+        padding: EdgeInsets.symmetric(vertical: Ds.space.x16),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          SizedBox(
+              width: 14, height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Ds.c.brand)),
+          SizedBox(width: Ds.space.x8),
+          Text(_leadPage.moreLabel ?? '', style: Ds.t.caption),
+        ]),
       );
     }
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      children: rows
-          .map((r) => SizedBox(
-              width: 320, child: _scrapeLeadCard(r, selectable: selectable)))
-          .toList(),
+    final end = _leadPage.endLabel;
+    if (end != null) {
+      return Padding(
+        padding: EdgeInsets.symmetric(vertical: Ds.space.x16),
+        child: Center(child: Text(end, style: Ds.t.caption)),
+      );
+    }
+    return SizedBox(height: Ds.space.x24);
+  }
+
+  /// CHANGE #1867 — a list row. Text only: no photo, no map, no per-row RPC.
+  /// Every string is sleads_page()'s (a run's own leads fall back to that
+  /// payload's field of the same meaning); absent means the line is absent.
+  Widget _leadCompactRow(Map<String, dynamic> r, {required bool selectable}) {
+    final row = SLeadRow.from(r);
+    final id = row.id;
+    final title = row.title;
+    final typeLabel = row.typeLabel;
+    final ratingLabel = row.ratingLabel;
+    final openLabel = row.openLabel;
+    final address = row.addressLabel;
+    final phone = row.phoneLabel;
+    final selected = id != null && _selectedLeadIds.contains(id);
+
+    return InkWell(
+      onTap: id == null
+          ? null
+          : () {
+              setState(() => _expandedIds.add(id));
+              if (!_leadDetailCache.containsKey(id) && !_detailLoading.contains(id)) {
+                _fetchLeadDetail(id);
+              }
+            },
+      borderRadius: Ds.r.rCard,
+      child: Container(
+        constraints: BoxConstraints(minHeight: Ds.touch.listRowMinHeight),
+        padding: EdgeInsets.all(Ds.space.x12),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          border: Border.all(
+              color: selected ? Ds.c.brand : Ds.c.divider, width: selected ? 1.5 : 1),
+        ),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (selectable && id != null)
+            Padding(
+              padding: EdgeInsets.only(right: Ds.space.x4),
+              child: Checkbox(
+                value: selected,
+                onChanged: (v) => setState(() {
+                  if (v == true) {
+                    _selectedLeadIds.add(id);
+                  } else {
+                    _selectedLeadIds.remove(id);
+                  }
+                }),
+                activeColor: Ds.c.brand,
+              ),
+            ),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Ds.t.bodyStrong),
+              SizedBox(height: Ds.space.x4),
+              Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x4,
+                  crossAxisAlignment: WrapCrossAlignment.center, children: [
+                if (typeLabel != null && typeLabel.isNotEmpty)
+                  _leadRowChip(typeLabel, Ds.c.bg, Ds.c.text),
+                if (ratingLabel != null && ratingLabel.isNotEmpty)
+                  Text(ratingLabel, style: Ds.t.caption.copyWith(color: Ds.c.warning)),
+                if (openLabel != null && openLabel.isNotEmpty)
+                  _leadRowChip(openLabel, Ds.hex(row.openBg, Ds.c.bg),
+                      Ds.hex(row.openFg, Ds.c.textSecondary)),
+                // CMD #1871 — "3 branches". Tapping opens the row WITH its
+                // branch list; when the toggle is on the backend sends
+                // branches_expandable:false and the chip is a plain label.
+                // CMD #1874 — "Revisit": this lead's parked date has come
+                // due, so the next plan build is allowed to pick it up again.
+                if (row.revisitLabel != null && row.revisitLabel!.isNotEmpty)
+                  _leadRowChip(row.revisitLabel!, Ds.c.warningSoft, Ds.c.warning),
+                if (row.branchesLabel != null && row.branchesLabel!.isNotEmpty)
+                  _branchChip(row.branchesLabel!,
+                      open: false,
+                      onTap: (row.branchesExpandable && id != null)
+                          ? () {
+                              setState(() {
+                                _expandedIds.add(id);
+                                _expandedBranchIds.add(id);
+                              });
+                              if (!_leadDetailCache.containsKey(id) &&
+                                  !_detailLoading.contains(id)) {
+                                _fetchLeadDetail(id);
+                              }
+                            }
+                          : null),
+              ]),
+              if (address != null && address.isNotEmpty) ...[
+                SizedBox(height: Ds.space.x4),
+                Text(address,
+                    maxLines: 1, overflow: TextOverflow.ellipsis, style: Ds.t.caption),
+              ],
+              if (phone != null && phone.isNotEmpty) ...[
+                SizedBox(height: Ds.space.x4),
+                Text(phone, style: Ds.t.caption.copyWith(color: Ds.c.text)),
+              ],
+            ]),
+          ),
+          Padding(
+            padding: EdgeInsets.only(left: Ds.space.x8),
+            child: Icon(Icons.expand_more, size: 20, color: Ds.c.textSecondary),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  /// One pill on a compact row. Colours arrive already decided (the open/closed
+  /// pair comes straight from sleads_page()); this only draws them.
+  Widget _leadRowChip(String label, Color bg, Color fg) => Container(
+        padding: EdgeInsets.symmetric(horizontal: Ds.space.x8, vertical: Ds.space.x4),
+        decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rChip),
+        child: Text(label,
+            style: Ds.t.caption.copyWith(color: fg, fontWeight: FontWeight.w600)),
+      );
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // CMD #1871 — one row per phone, with the branch count on it.
+  //
+  // A chain publishes ONE phone and Maps lists every branch, so the same shop
+  // was in the list N times. The backend now returns the best-scored member of
+  // each phone group and puts the group size on the row. Everything printed
+  // here is a backend string: the chip's own label says whether this is a
+  // collapsed group ("3 branches") or one member of an expanded one
+  // ("1 of 3 branches"), and each branch line is rendered exactly as
+  // scrape_lead_card() composed it.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  Widget _branchChip(String label, {required bool open, VoidCallback? onTap}) {
+    final padH = Ds.space.x8;
+    final padV = Ds.space.x4;
+
+    final chip = Container(
+      constraints: BoxConstraints(
+          minHeight: onTap == null ? 0 : Ds.touch.minTarget),
+      padding: EdgeInsets.symmetric(horizontal: padH, vertical: padV),
+      decoration: BoxDecoration(
+        color: Ds.c.infoSoft,
+        borderRadius: Ds.r.rChip,
+        border: Border.all(color: Ds.c.info),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.store_mall_directory_outlined,
+            size: Ds.t.bodySize, color: Ds.c.info),
+        SizedBox(width: padV),
+        Text(label,
+            style: Ds.t.caption
+                .copyWith(color: Ds.c.info, fontWeight: FontWeight.w700)),
+        if (onTap != null) ...[
+          SizedBox(width: padV),
+          Icon(open ? Icons.expand_less : Icons.expand_more,
+              size: Ds.t.bodySize, color: Ds.c.info),
+        ],
+      ]),
+    );
+
+    if (onTap == null) return chip;
+    return InkWell(borderRadius: Ds.r.rChip, onTap: onTap, child: chip);
+  }
+
+  /// The branch list behind the chip. `loaded` is false only for the instant
+  /// before scrape_lead_card() lands, and it draws a skeleton, not a spinner.
+  Widget _branchPanel(String? title, List<Map<String, dynamic>> rows,
+      {required bool loaded}) {
+    String str(Map<String, dynamic> b, String k) => b[k]?.toString() ?? '';
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+          Ds.space.x12, Ds.space.x8, Ds.space.x12, 0),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (title != null && title.isNotEmpty)
+          Text(title,
+              style: Ds.t.caption.copyWith(fontWeight: FontWeight.w700)),
+        SizedBox(height: Ds.space.x4),
+        if (!loaded)
+          Container(
+            height: Ds.touch.minTarget,
+            decoration:
+                BoxDecoration(color: Ds.c.bg, borderRadius: Ds.r.rButton),
+          )
+        else
+          for (final b in rows)
+            Container(
+              width: double.infinity,
+              margin: EdgeInsets.only(bottom: Ds.space.x4),
+              padding: EdgeInsets.all(Ds.space.x8),
+              decoration: BoxDecoration(
+                color: b['is_primary'] == true ? Ds.c.infoSoft : Ds.c.bg,
+                borderRadius: Ds.r.rButton,
+              ),
+              child:
+                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Expanded(
+                    child: Text(str(b, 'name'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Ds.t.caption.copyWith(
+                            color: Ds.c.text, fontWeight: FontWeight.w700)),
+                  ),
+                  if (str(b, 'score_label').isNotEmpty)
+                    Text(str(b, 'score_label'), style: Ds.t.caption),
+                ]),
+                if (str(b, 'address').isNotEmpty)
+                  Text(str(b, 'address'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Ds.t.caption),
+                Row(children: [
+                  if (str(b, 'rating_label').isNotEmpty)
+                    Text(str(b, 'rating_label'), style: Ds.t.caption),
+                  if (str(b, 'badge_label').isNotEmpty) ...[
+                    if (str(b, 'rating_label').isNotEmpty)
+                      SizedBox(width: Ds.space.x8),
+                    Text(str(b, 'badge_label'),
+                        style: Ds.t.caption.copyWith(
+                            color: Ds.c.info, fontWeight: FontWeight.w700)),
+                  ],
+                ]),
+              ]),
+            ),
+      ]),
     );
   }
 
@@ -10477,11 +11558,13 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     'import': Icons.person_add_alt_1_outlined,
   };
 
-  /// scrape_lead_card() fetch + cache. One call per lead, on first render.
+  /// scrape_lead_card() fetch + cache.
   ///
-  /// Capped at [_leadCardConcurrency] in flight: a full page is 100 rows and
-  /// firing 100 RPCs at once is pointless. Each completion setStates, which
-  /// rebuilds and starts the next few — so the queue drains itself. The error
+  /// CHANGE #1867 — this is a TAP-ONLY call now. It runs from _scrapeLeadCard,
+  /// and _scrapeLeadCard is built for an EXPANDED row only; a list row is the
+  /// text-only _leadCompactRow, drawn from sleads_page() with no call of its
+  /// own. The concurrency cap stays for the case where several cards are open
+  /// at once. Each completion setStates, so the queue drains itself; the error
   /// path setStates too, otherwise a failure would stall that pump.
   static const int _leadCardConcurrency = 8;
 
@@ -10552,11 +11635,12 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         ? Map<String, dynamic>.from(card!['disabled_reason'] as Map)
         : const <String, dynamic>{};
     final actions = _mapList(card?['actions']);
-    // ── CMD #1871 — branches sharing this lead's phone ──────────────────
-    // The chip's wording is the LIST row's (it says "3 branches" while
-    // collapsed and "1 of 3 branches" once the toggle is on); the branch
-    // rows themselves come from scrape_lead_card(). Dart counts nothing.
-    final branchesLabel = (r['branches_label'] ?? card?['branches_label'])?.toString();
+    // ── CMD #1871 — the branches sharing this lead's phone ───────────────
+    // The chip's wording is the LIST row's, so it still says "3 branches"
+    // while collapsed and "1 of 3 branches" once the toggle is on; the branch
+    // rows are scrape_lead_card()'s. Dart counts and formats nothing.
+    final branchesLabel =
+        (r['branches_label'] ?? card?['branches_label'])?.toString();
     final branchesExpandable = r['branches_expandable'] == true;
     final branchesTitle = card?['branches_title']?.toString();
     final branchRows = _mapList(card?['branches']);
@@ -10575,7 +11659,10 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       return () => launchUrl(Uri.parse(uri), mode: LaunchMode.externalApplication);
     }
 
-    return Container(
+    // CMD #1869 — long-press is how multi-select starts.
+    return GestureDetector(
+      onLongPress: id == null ? null : () => _enterLeadSelect(id),
+      child: Container(
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
@@ -10613,9 +11700,9 @@ class _SLeadsTabState extends State<_SLeadsTab> {
                     value: selected,
                     onChanged: (v) => setState(() {
                       if (v == true) {
-                        _selectedLeadIds.add(id);
-                      } else {
-                        _selectedLeadIds.remove(id);
+                        _leadSelection.enter(id);
+                      } else if (_leadSelection.contains(id)) {
+                        _leadSelection.toggle(id);
                       }
                     }),
                     activeColor: const Color(0xFF1B7A43),
@@ -10662,6 +11749,12 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           onTap: id == null
               ? null
               : () {
+                  // CMD #1869 — while a selection is live, a tap picks the
+                  // card instead of expanding it.
+                  if (_selectMode || _selectedLeadIds.isNotEmpty) {
+                    _toggleLeadSelected(id);
+                    return;
+                  }
                   setState(() {
                     if (expanded) {
                       _expandedIds.remove(id);
@@ -10683,6 +11776,8 @@ class _SLeadsTabState extends State<_SLeadsTab> {
                       fontSize: 14.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
               const SizedBox(height: 6),
               Wrap(spacing: 6, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                // CMD #1869 — tap the class to reclassify just this lead.
+                if (id != null) _leadClassChip(id, r),
                 if (typeLabel != null && typeLabel.isNotEmpty)
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
@@ -10710,6 +11805,18 @@ class _SLeadsTabState extends State<_SLeadsTab> {
                             fontWeight: FontWeight.w700,
                             color: _colorFromHex(
                                 openColors['fg']?.toString(), const Color(0xFF6B7280)))),
+                  ),
+                // CMD #1874 — the revisit engine's chip, on the same row as
+                // every other state. Present only when the backend sent a
+                // label, which is its answer to "is this lead due again?".
+                if ((r['revisit_label']?.toString() ?? '').isNotEmpty)
+                  Container(
+                    padding: EdgeInsets.symmetric(
+                        horizontal: Ds.space.x8, vertical: Ds.space.x4),
+                    decoration: BoxDecoration(
+                        color: Ds.c.warningSoft, borderRadius: Ds.r.rChip),
+                    child: Text(r['revisit_label'].toString(),
+                        style: Ds.t.caption.copyWith(color: Ds.c.warning)),
                   ),
               ]),
               if (hoursLabel != null && hoursLabel.isNotEmpty) ...[
@@ -10744,21 +11851,48 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           ),
         ),
 
-        // ── CMD #1871 — the branch chip and the branches behind it ────────
+        // ── CMD #1869 — Restore, the only way back out of Archived ───────
+        if (SLeadsBulk.rowArchived(r) && id != null)
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+                Ds.space.x12, Ds.space.x8, Ds.space.x12, 0),
+            child: SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: _bulkBusy
+                    ? null
+                    : () => _setLeadStatus([id], 'restore'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Ds.c.brand,
+                  side: BorderSide(color: Ds.c.brand),
+                  minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget),
+                  shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+                ),
+                child: Text(_bulk['row_restore']?.toString() ?? '',
+                    style: Ds.t.body.copyWith(color: Ds.c.brand)),
+              ),
+            ),
+          ),
+
+        // ── CMD #1871 — the branch chip, and the branches behind it ───────
         if (branchesLabel != null && branchesLabel.isNotEmpty)
-          _branchChipRow(
-            branchesLabel,
-            open: branchesOpen,
-            onTap: (branchesExpandable && id != null)
-                ? () => setState(() {
-                      if (branchesOpen) {
-                        _expandedBranchIds.remove(id);
-                      } else {
-                        _expandedBranchIds.add(id);
-                        _loadLeadCard(id);
-                      }
-                    })
-                : null,
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+                Ds.space.x12, Ds.space.x8, Ds.space.x12, 0),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: _branchChip(branchesLabel,
+                  open: branchesOpen,
+                  onTap: (branchesExpandable && id != null)
+                      ? () => setState(() {
+                            if (branchesOpen) {
+                              _expandedBranchIds.remove(id);
+                            } else {
+                              _expandedBranchIds.add(id);
+                            }
+                          })
+                      : null),
+            ),
           ),
         if (branchesOpen)
           _branchPanel(branchesTitle, branchRows, loaded: card != null),
@@ -10785,120 +11919,39 @@ class _SLeadsTabState extends State<_SLeadsTab> {
             child: _buildLeadExpandPanel(r, id),
           ),
       ]),
+      ),
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // CMD #1871 — one row per phone, with the branch count on it.
-  //
-  // Everything printed here is a backend string: the chip's own label decides
-  // whether this is a collapsed group ("3 branches") or one member of an
-  // expanded one ("1 of 3 branches"), the panel heading comes from the card
-  // payload, and each branch row is rendered exactly as the RPC composed it.
-  // ═══════════════════════════════════════════════════════════════════════
-
-  Widget _branchChipRow(String label, {required bool open, VoidCallback? onTap}) {
-    final padH = Ds.space.x12;
-    final padV = Ds.space.x8;
-    final gap = Ds.space.x8;
-    final chipH = Ds.space.x8;
-    final chipV = Ds.space.x4;
-    final iconSize = Ds.t.captionSize;
-
-    final chip = Container(
-      padding: EdgeInsets.symmetric(horizontal: chipH, vertical: chipV),
-      decoration: BoxDecoration(
-        color: Ds.c.infoSoft,
+  /// The lead's own class, tappable. The key comes from get_scraped_leads
+  /// (effective_class) and the label from lead_leads_summary().bulk.classes —
+  /// nothing here names a class in Dart.
+  Widget _leadClassChip(int id, Map<String, dynamic> r) {
+    final key = (r['class_key'] ?? r['effective_class'] ?? r['lead_class'])
+            ?.toString() ??
+        '';
+    if (key.isEmpty) return const SizedBox.shrink();
+    // The row carries its own rendered label; the bulk block is the fallback.
+    final rowLabel = r['class_label']?.toString() ?? '';
+    final label = rowLabel.isNotEmpty ? rowLabel : _bulkUi.classLabel(key);
+    final title = _bulk['row_reclassify']?.toString() ?? '';
+    return Tooltip(
+      message: title,
+      child: InkWell(
+        onTap: _bulkBusy ? null : () => _pickLeadClass([id]),
         borderRadius: Ds.r.rChip,
-        border: Border.all(color: Ds.c.info),
+        child: Container(
+          padding: EdgeInsets.symmetric(
+              horizontal: Ds.space.x8, vertical: Ds.space.x4),
+          decoration: BoxDecoration(
+            color: Ds.c.brandSoft,
+            borderRadius: Ds.r.rChip,
+            border: Border.all(color: Ds.c.brand),
+          ),
+          child: Text(label,
+              style: Ds.t.caption.copyWith(color: Ds.c.brand)),
+        ),
       ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(Icons.store_mall_directory_outlined, size: iconSize, color: Ds.c.info),
-        SizedBox(width: chipV),
-        Text(label,
-            style: Ds.t.caption.copyWith(color: Ds.c.info, fontWeight: FontWeight.w700)),
-      ]),
-    );
-
-    final body = Padding(
-      padding: EdgeInsets.fromLTRB(padH, padV, padH, chipV),
-      child: Row(children: [
-        chip,
-        SizedBox(width: gap),
-        if (onTap != null)
-          Icon(open ? Icons.expand_less : Icons.expand_more,
-              size: Ds.t.bodySize, color: Ds.c.textSecondary),
-      ]),
-    );
-
-    if (onTap == null) return body;
-    return InkWell(
-      onTap: onTap,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
-        child: Align(alignment: Alignment.centerLeft, child: body),
-      ),
-    );
-  }
-
-  Widget _branchPanel(String? title, List<Map<String, dynamic>> rows,
-      {required bool loaded}) {
-    final padH = Ds.space.x12;
-    final gap = Ds.space.x8;
-    final tight = Ds.space.x4;
-
-    return Padding(
-      padding: EdgeInsets.fromLTRB(padH, tight, padH, tight),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        if (title != null && title.isNotEmpty)
-          Text(title, style: Ds.t.caption.copyWith(fontWeight: FontWeight.w700)),
-        SizedBox(height: tight),
-        if (!loaded)
-          // Skeleton, not a spinner: the card RPC is already in flight.
-          Container(
-            height: Ds.touch.minTarget,
-            decoration: BoxDecoration(color: Ds.c.bg, borderRadius: Ds.r.rButton),
-          )
-        else
-          for (final b in rows) ...[
-            Container(
-              width: double.infinity,
-              margin: EdgeInsets.only(bottom: tight),
-              padding: EdgeInsets.symmetric(horizontal: gap, vertical: gap),
-              decoration: BoxDecoration(
-                color: b['is_primary'] == true ? Ds.c.infoSoft : Ds.c.bg,
-                borderRadius: Ds.r.rButton,
-              ),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
-                  Expanded(
-                    child: Text(b['name']?.toString() ?? '',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Ds.t.caption
-                            .copyWith(color: Ds.c.text, fontWeight: FontWeight.w700)),
-                  ),
-                  if ((b['score_label']?.toString() ?? '').isNotEmpty)
-                    Text(b['score_label'].toString(), style: Ds.t.caption),
-                ]),
-                if ((b['address']?.toString() ?? '').isNotEmpty)
-                  Text(b['address'].toString(),
-                      maxLines: 1, overflow: TextOverflow.ellipsis, style: Ds.t.caption),
-                Row(children: [
-                  if ((b['rating_label']?.toString() ?? '').isNotEmpty)
-                    Text(b['rating_label'].toString(), style: Ds.t.caption),
-                  if ((b['badge_label']?.toString() ?? '').isNotEmpty) ...[
-                    if ((b['rating_label']?.toString() ?? '').isNotEmpty)
-                      SizedBox(width: gap),
-                    Text(b['badge_label'].toString(),
-                        style: Ds.t.caption
-                            .copyWith(color: Ds.c.info, fontWeight: FontWeight.w700)),
-                  ],
-                ]),
-              ]),
-            ),
-          ],
-      ]),
     );
   }
 
@@ -11120,21 +12173,6 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     );
   }
 
-  Widget _buildPagination() {
-    final totalPages = _totalCount == 0 ? 1 : ((_totalCount + _pageSize - 1) ~/ _pageSize);
-    return Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-      IconButton(
-        onPressed: _page > 0 ? () => _goToPage(_page - 1) : null,
-        icon: const Icon(Icons.chevron_left, size: 20),
-      ),
-      Text(cf('admin_customer.page_of', {'n': '${_page + 1}', 'total': '$totalPages'}), style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
-      IconButton(
-        onPressed: (_page + 1) * _pageSize < _totalCount ? () => _goToPage(_page + 1) : null,
-        icon: const Icon(Icons.chevron_right, size: 20),
-      ),
-    ]);
-  }
-
   // ── B5: Past runs ──────────────────────────────────────────────────────
 
   // ── C: Past runs — real table (web) / stacked cards (mobile) ────────────
@@ -11166,8 +12204,17 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(color: const Color(0xFFF9FAFB), borderRadius: BorderRadius.circular(8)),
           child: Text(
-            cf('admin_customer.enrich_summary', {'enriched': '$enriched', 'errors': '$errors', 'photos': '$withPhoto', 'hours': '$withHours'}) +
-            '$withWebsite websites · $withEmail emails',
+            // CHANGE #686 — the template ended on a dangling ' · ' because
+            // the last two counts were concatenated here, separator and
+            // wording included. All six counts are slots now.
+            cf('admin_customer.enrich_summary', {
+              'enriched': '$enriched',
+              'errors': '$errors',
+              'photos': '$withPhoto',
+              'hours': '$withHours',
+              'websites': '$withWebsite',
+              'emails': '$withEmail',
+            }),
             style: const TextStyle(fontSize: 12, color: Color(0xFF4B5563)),
           ),
         ),
@@ -11187,13 +12234,22 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   /// city, date, the status chip (colours included), types_label and
   /// summary_label. Expanding shows breakdown[] as a small table.
   Widget _buildRunCard(Map<String, dynamic> r) {
-    final runId = r['run_id']?.toString() ?? '';
+    final view = ScrapeRunView.from(r);
+    final runId = view.runId;
     final expanded = _expandedRuns.contains(runId);
     final busy = _runBusy.contains(runId);
     final breakdown = _mapList(r['breakdown']);
-    final typesLabel = r['types_label']?.toString() ?? '';
-    final summaryLabel = r['summary_label']?.toString() ?? '';
-    final error = r['error']?.toString();
+    final typesLabel = view.typesLabel;
+    final summaryLabel = view.summaryLabel;
+    // CMD #1870 — one more backend sentence: what the Include chips kept and
+    // what they threw away before anything was stored.
+    final keptDropped = view.keptDroppedLabel;
+    final error = view.error;
+    RenderLog.write('c1870_run_cards', _runs.length);
+    RenderLog.write('c1870_kept_dropped',
+        _runs.where((x) => ScrapeRunView.from(x).keptDroppedLabel != null).length);
+    RenderLog.write('c1870_delete_actions',
+        _runs.where((x) => ScrapeRunView.from(x).canDelete).length);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -11231,6 +12287,11 @@ class _SLeadsTabState extends State<_SLeadsTab> {
               Text(summaryLabel,
                   style: const TextStyle(fontSize: 12, color: Color(0xFF4B5563))),
             ],
+            if (keptDropped != null) ...[
+              const SizedBox(height: 2),
+              Text(keptDropped,
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF4B5563))),
+            ],
             if (error != null && error.isNotEmpty) ...[
               const SizedBox(height: 4),
               Text(error, style: const TextStyle(fontSize: 11.5, color: Color(0xFFB42318))),
@@ -11246,9 +12307,9 @@ class _SLeadsTabState extends State<_SLeadsTab> {
                 busy ? null : () => _exportRun(r, share: false)),
             _runActionButton('Share', Icons.ios_share,
                 busy ? null : () => _exportRun(r, share: true)),
-            _runActionButton('Delete', Icons.delete_outline,
-                busy || r['can_delete'] == false ? null : () => _deleteRun(r),
-                danger: true),
+            if (view.delete != null)
+              _runActionButton(view.delete!.label, Icons.delete_outline,
+                  busy ? null : () => _deleteRun(r), danger: true),
             if (busy)
               const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
           ]),
@@ -11341,66 +12402,65 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     }
   }
 
-  /// Confirm first, then show scrape_run_delete()'s own message — it is the
-  /// only thing that knows how many leads were protected.
+  /// CMD #1870 — deleting a run ARCHIVES its leads (the CMD #1869 lane:
+  /// Restore from the Archived filter, auto-purged after the backend's own
+  /// number of days) and soft-deletes the run. There is no checkbox any more:
+  /// the choice used to be the client's, and a hard DELETE made a mis-typed
+  /// city unrecoverable. Every word of the confirmation — title, body with
+  /// the count in it, both buttons — is scrape_runs_list().delete, printed.
   Future<void> _deleteRun(Map<String, dynamic> r) async {
-    final runId = r['run_id']?.toString();
-    if (runId == null) return;
-    var withLeads = false;
+    final view = ScrapeRunView.from(r);
+    final d = view.delete;
+    final runId = view.runId;
+    if (d == null || runId.isEmpty) return;
+
     final ok = await showDialog<bool>(
       context: context,
-      builder: (dCtx) => StatefulBuilder(
-        builder: (dCtx, setDlg) => AlertDialog(
-          title: Text(c('admin_customer.delete_scrape_q')),
-          content: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text('${r['city'] ?? ''} · ${_fmtRunDate(r['created_at']?.toString())}',
-                style: const TextStyle(fontSize: 13)),
-            const SizedBox(height: 8),
-            CheckboxListTile(
-              value: withLeads,
-              onChanged: (v) => setDlg(() => withLeads = v == true),
-              controlAffinity: ListTileControlAffinity.leading,
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-              activeColor: const Color(0xFF1B7A43),
-              title: Text(cf('admin_customer.also_delete_leads', {'n': '${(r['lead_count'] as num?)?.toInt() ?? 0}'}),
-                  style: const TextStyle(fontSize: 13)),
-            ),
-          ]),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(dCtx, false), child: Text(c('admin_customer.cancel'))),
-            FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: const Color(0xFFB42318)),
-              onPressed: () => Navigator.pop(dCtx, true),
-              child: const Text('Delete'),
-            ),
-          ],
-        ),
+      builder: (dCtx) => AlertDialog(
+        title: Text(d.title),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text('${view.city} · ${_fmtRunDate(r['created_at']?.toString())}',
+              style: Ds.t.body),
+          SizedBox(height: Ds.space.x8),
+          Text(d.body, style: Ds.t.caption),
+        ]),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dCtx, false), child: Text(d.cancel)),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Ds.c.danger),
+            onPressed: () => Navigator.pop(dCtx, true),
+            child: Text(d.ok),
+          ),
+        ],
       ),
     );
     if (ok != true) return;
 
     setState(() => _runBusy.add(runId));
     try {
-      final res = await Supabase.instance.client.rpc('scrape_run_delete',
-          params: {'p_run_id': runId, 'p_with_leads': withLeads});
+      final res = await Supabase.instance.client
+          .rpc('scrape_run_delete', params: {'p_run_id': runId});
       final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
       if (!mounted) return;
       setState(() {
         _runBusy.remove(runId);
         _expandedRuns.remove(runId);
+        if (_sourceRunId == runId) _sourceRunId = null;
         if (_resultsRunId == runId) {
           _resultsRunId = null;
           _runLeads = [];
-          _selectedLeadIds.clear();
+          _leadSelection.clear();
         }
       });
+      RenderLog.write('c1870_run_deleted', '${m['archived'] ?? 0}');
       final msg = (m['message'] ?? m['error'])?.toString();
       if (msg != null && msg.isNotEmpty) {
-        showToast(context, msg, isError: m['error'] != null);
+        showToast(context, msg, isError: m['ok'] != true);
       }
       await _loadPastRuns();
       await _refreshSummaryAndUsage();
+      await _refreshFilterModel();
       await _loadRows(reset: true);
     } catch (e) {
       if (!mounted) return;
@@ -11460,6 +12520,32 @@ class _RoutesTab extends StatefulWidget {
     return true;
   }
 
+  /// CMD #1876 — the deep link's route.
+  ///
+  /// This sub-tab is built only while Routes is the active filter, and on a
+  /// cold start that is several seconds of auth and fetching away — far longer
+  /// than a post-frame retry survives. So the id is PARKED and the tab's own
+  /// initState collects it: whenever this widget next mounts, it opens that
+  /// route. Already mounted → open it now.
+  static String? _pendingRouteId;
+
+  static bool openRoute(String routeId) {
+    final state = _routesKey.currentState;
+    if (state == null) {
+      _pendingRouteId = routeId;
+      return false;
+    }
+    state.openRouteById(routeId);
+    return true;
+  }
+
+  /// Consumed once, by the state that mounts next.
+  static String? takePendingRoute() {
+    final id = _pendingRouteId;
+    _pendingRouteId = null;
+    return id;
+  }
+
   final bool isDesktop;
   final ValueChanged<int> onZonesChanged;
   final VoidCallback onOpenWarehouseCard;
@@ -11477,10 +12563,31 @@ class _RoutesTabState extends State<_RoutesTab> {
   bool _loading = true;
   String? _loadError;
 
-  // ── D: top-level view — 'builder' (admin) or 'myRoute' (rep) ────────────
-  String _topMode = 'builder';
+  // ── D: top-level view — 'today' (CMD #1872 landing), 'builder' (admin
+  // plan builder) or 'myRoute' (rep check-in). The tab OPENS on 'today'.
+  String _topMode = 'today';
   Map<String, dynamic>? _myRoute; // my_route() response, refetched after check-in
   bool _myRouteLoading = false;
+
+  /// CMD #1872 — routes_today(): the route assigned to the logged-in worker
+  /// for admin_active_date() in admin_active_zone(), or every route for that
+  /// date (with worker names) for an admin. Title, header, count, progress
+  /// line, Navigate caption, empty state and the mode-row captions all arrive
+  /// in this payload and are printed verbatim.
+  Map<String, dynamic>? _today;
+  bool _todayLoading = false;
+
+  /// CMD #1877 — route_day_summary(): what the field team actually did for
+  /// admin_active_date() in admin_active_zone(). Drawn as the card at the top
+  /// of this tab and, from the same payload's `strip`, on the Leads tab. Every
+  /// count, km figure, ₹ string and percentage is the backend's own wording.
+  RouteDaySummary? _daySummary;
+
+  /// CMD #1873 — route_stops_today(route_id) per today-route card: the stop
+  /// rows, their outcome chips, the "Closed at ETA" warning and the actions
+  /// (Check in / Skip). Cached by route id; refetched after every check-in.
+  final Map<String, Map<String, dynamic>> _routeStops = {};
+  final Set<String> _routeStopsInFlight = {};
 
   // ── B1: filter bar — the ONLY inputs that drive the count + build ────────
   String _city = 'Raipur';
@@ -11542,12 +12649,23 @@ class _RoutesTabState extends State<_RoutesTab> {
   // that re-anchors to the hub, same keying pattern as the location one.
   final Map<String, bool> _routeOptimizingByWarehouse = {};
 
+  // ── CMD #1875: "Rebuild from current leads" is in flight. The rebuilt plan
+  // is QUEUED, so the card keeps showing the backend's own build_stage until
+  // route_plans realtime says it is ready.
+  bool _rebuilding = false;
+
   // ── C5: past plans, collapsible, lazy-loaded ──────────────────────────────
   bool _pastPlansExpanded = false;
-  List<Map<String, dynamic>>? _pastPlans;
+  // CHANGE #1867 — route_plan_list() is paged and its rows are built lazily.
+  // Same envelope, same two paging decisions, same class as S Leads.
+  PagedList? _plans;
+  List<Map<String, dynamic>>? get _pastPlans => _plans?.rows;
+  bool _plansMoreLoading = false;
+  static const int _plansPageSize = 20;
+  final ScrollController _plansCtrl = ScrollController();
   // ── CHANGE #486: realtime status (queued/building/ready) — replaces the
   // old #483 4s poll. Patches the affected card in place, no full reload.
-  RealtimeChannel? _planRealtimeChannel;
+  LiveFeedHandle? _planRealtimeChannel;
 
   // ── D3: Today's Visits (admin, collapsible, lazy-loaded) — unchanged from #446
   bool _visitsExpanded = false;
@@ -11609,18 +12727,70 @@ class _RoutesTabState extends State<_RoutesTab> {
     return leads > 0 ? max(1, (leads / 25).ceil()) : 1;
   }
 
+  /// CMD #1876 — set while a deep-linked route is being opened, so the
+  /// screen-load default below cannot drop the view back onto 'today'.
+  String? _openingRouteId;
+
+  // ── CMD #1878: the live dot, the offline cache and the sync queue ───────
+  //
+  // route_offline_bundle() is ONE call made on open. Its payload is cached on
+  // the device verbatim; when the next load cannot reach the server the SAME
+  // payload is re-rendered with the backend's own offline banner, and any
+  // check-in made meanwhile is held in RouteOfflineQueue and replayed in
+  // order through route_stop_checkin(p_client_ts).
+
+  /// route_worker_dots() verbatim — who is on the road, where, how stale.
+  Map<String, dynamic>? _live;
+
+  /// The bundle's `sync` block: the pre-worded pending ladder, the offline
+  /// banner and the "saved on this device" line. Cached, because the screen
+  /// needs these strings precisely when it cannot ask for them.
+  Map<String, dynamic>? _sync;
+
+  /// route_stop_sheet() per stop, as cached by the bundle.
+  Map<String, dynamic> _cachedSheets = const {};
+
+  /// True while this screen is drawing the cached bundle instead of a live one.
+  bool _offline = false;
+
+  Timer? _liveTimer;
+  LiveFeedHandle? _liveChannel;
+
   @override
   void initState() {
     super.initState();
+    _openingRouteId = _RoutesTab.takePendingRoute();
     _loadScreen();
     _subscribePlanRealtime();
+    // CMD #1878 — anything held from a previous offline session is replayed
+    // the moment the tab opens, before the rep touches anything.
+    RouteOfflineQueue.instance.addListener(_onQueueChanged);
+    RouteOfflineQueue.instance.load().then((_) => _flushQueue());
+    WorkerLivePing.instance.sharing.addListener(_onQueueChanged);
+    WorkerLivePing.instance.denied.addListener(_onQueueChanged);
+    final pending = _openingRouteId;
+    if (pending != null) {
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => openRouteById(pending));
+    }
   }
 
   @override
   void dispose() {
     _countDebounce?.cancel();
+    _plansCtrl.dispose();
     _planRealtimeChannel?.unsubscribe();
     _planRealtimeChannel = null;
+    // CMD #1878 — the dot stops sharing with the screen; a background tab must
+    // never keep a rep's GPS on.
+    _liveTimer?.cancel();
+    _liveTimer = null;
+    _liveChannel?.unsubscribe();
+    _liveChannel = null;
+    WorkerLivePing.instance.stop();
+    WorkerLivePing.instance.sharing.removeListener(_onQueueChanged);
+    WorkerLivePing.instance.denied.removeListener(_onQueueChanged);
+    RouteOfflineQueue.instance.removeListener(_onQueueChanged);
     super.dispose();
   }
 
@@ -11629,72 +12799,92 @@ class _RoutesTabState extends State<_RoutesTab> {
   // flicker). Ignored while _pastPlans hasn't been loaded yet — the next
   // expand fetches it fresh via route_plan_list() anyway.
   void _subscribePlanRealtime() {
-    try {
-      _planRealtimeChannel = Supabase.instance.client
-          .channel('route_plans_changes')
-          .onPostgresChanges(
-            event: PostgresChangeEvent.update,
-            schema: 'public',
-            table: 'route_plans',
-            callback: _onPlanRealtimeChange,
-          )
-          .onPostgresChanges(
-            event: PostgresChangeEvent.insert,
-            schema: 'public',
-            table: 'route_plans',
-            callback: _onPlanRealtimeChange,
-          )
-          .onPostgresChanges(
-            // CHANGE #488: a plan deleted on one device disappears live here too.
-            event: PostgresChangeEvent.delete,
-            schema: 'public',
-            table: 'route_plans',
-            callback: _onPlanRealtimeChange,
-          )
-          .subscribe();
+    // CHANGE #643: route_plans is an admin list feed and no longer publishes,
+    // so there is no per-row payload to patch from. The list is refetched with
+    // route_plan_list() — the same call the expand and the clear-old path
+    // already used, and the one that was always the fallback "so the count is
+    // right even if a realtime event is missed".
+    LiveFeed.instance
+        .watch(
+          channelPrefix: 'route_plans_changes',
+          tables: const ['route_plans'],
+          onChange: (_) {
+            _refetchPlans();
+            // CMD #1875 — a rebuilt plan is queued, then built by the drain.
+            // The open card must follow it to 'ready' on its own.
+            final id = _planId;
+            if (id != null && _planIsBuilding) _loadPlan(id);
+          },
+        )
+        .then((h) {
+      if (!mounted) {
+        h.dispose();
+        return;
+      }
+      _planRealtimeChannel?.unsubscribe();
+      _planRealtimeChannel = h;
       RenderLog.write('c486_autocluster_realtime', 1);
-    } catch (_) {}
+    });
+  }
+
+  /// CHANGE #1867 — ONE page of route_plan_list(p_limit, p_offset). `reset`
+  /// starts at offset 0 and replaces the list; otherwise the payload's own
+  /// next_offset is appended. Only the rows just fetched get their
+  /// plan_google_status badge, so appending never re-fetches the page above.
+  Future<void> _loadPlans({bool reset = false}) async {
+    if (!mounted) return;
+    final held = _plans ?? const PagedList();
+    final offset = held.offsetFor(reset: reset);
+    if (!reset) setState(() => _plansMoreLoading = true);
+    try {
+      final res = await Supabase.instance.client.rpc('route_plan_list',
+          params: {'p_limit': _plansPageSize, 'p_offset': offset});
+      final env = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      final next = held.applyPage(env, reset: reset);
+      if (!mounted) return;
+      final page = next.rows.sublist(reset ? 0 : held.rows.length);
+      setState(() {
+        _plans = next;
+        _plansMoreLoading = false;
+      });
+      RenderLog.write('c1867_plan_page_rows', page.length);
+      RenderLog.write('c1867_plans_loaded', next.rows.length);
+      // CMD #1875 — the ₹ chip on a saved-plan row is the ONLY part of this
+      // change that paints without a tap, so it is the one the render-log can
+      // prove. Count the rows the backend priced; 0 here means route_plan_list
+      // stopped sending cost_label and the chip is gone.
+      RenderLog.write(
+          'c1875_list_cost_chips',
+          next.rows
+              .where((r) => (r['cost_label']?.toString() ?? '').isNotEmpty)
+              .length);
+      _fetchOptStatusFor(page);
+    } catch (_) {
+      if (mounted) setState(() => _plansMoreLoading = false);
+    }
+  }
+
+  /// One refetch, used by every path that needs the plan list to be current.
+  /// It re-reads page 1 only — a realtime tick must not silently drop the
+  /// pages the user already scrolled past, and it must not refetch them all.
+  Future<void> _refetchPlans() async {
+    if (_plans == null || !mounted) return;
+    await _loadPlans(reset: true);
+  }
+
+  /// CHANGE #1867 — infinite scroll inside the past-plans panel.
+  void _onPlansScroll() {
+    if (!_plansCtrl.hasClients) return;
+    final pos = _plansCtrl.position;
+    if (pos.pixels < pos.maxScrollExtent - 240) return;
+    if (_plansMoreLoading || !(_plans?.canLoadMore ?? false)) return;
+    _loadPlans();
   }
 
   // CHANGE #548: backend-formatted (ist_fmt 'dmy2_hm').
   String _planWhenLabel(String? createdAt) =>
       DateLabels.instance.label(createdAt, DateStyle.dmy2Hm) ?? '';
 
-  void _onPlanRealtimeChange(PostgresChangePayload payload) {
-    if (_pastPlans == null || !mounted) return;
-    // CHANGE #488: DELETE payloads carry the row in oldRecord, not newRecord.
-    if (payload.eventType == PostgresChangeEvent.delete) {
-      final deletedId = payload.oldRecord['id']?.toString();
-      if (deletedId == null) return;
-      setState(() => _pastPlans =
-          _pastPlans!.where((p) => p['plan_id'].toString() != deletedId).toList());
-      return;
-    }
-    final row = payload.newRecord;
-    final planId = row['id']?.toString();
-    if (planId == null) return;
-    if (payload.eventType == PostgresChangeEvent.update) {
-      final idx = _pastPlans!.indexWhere((p) => p['plan_id'].toString() == planId);
-      if (idx == -1) return;
-      setState(() => _pastPlans![idx] = {..._pastPlans![idx], 'status': row['status']});
-    } else if (payload.eventType == PostgresChangeEvent.insert) {
-      if (_pastPlans!.any((p) => p['plan_id'].toString() == planId)) return;
-      final city = row['city']?.toString() ?? '';
-      final k = (row['k'] as num?)?.toInt() ?? 0;
-      final totalLeads = (row['total_leads'] as num?)?.toInt() ?? 0;
-      final classes = ((row['classes'] as List?) ?? []).join(', ');
-      final createdAt = row['created_at']?.toString();
-      final item = <String, dynamic>{
-        'plan_id': planId,
-        'city': city,
-        'title': '$city · ${k}R · $totalLeads leads',
-        'types': classes,
-        'when_label': _planWhenLabel(createdAt),
-        'status': row['status']?.toString() ?? 'queued',
-      };
-      setState(() => _pastPlans = [item, ..._pastPlans!]);
-    }
-  }
 
   /// CHANGE #552 — chips + their lead_class mapping, both backend-sourced.
   /// Best-effort: a failure here leaves the chip row empty rather than
@@ -11724,21 +12914,183 @@ class _RoutesTabState extends State<_RoutesTab> {
     } catch (_) {}
   }
 
+  // ── CMD #1878 — the live/offline lane ───────────────────────────────────
+
+  void _onQueueChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// Replay everything the device is holding, oldest first. Called on open,
+  /// after every successful load, and from the payload's own Sync button.
+  Future<void> _flushQueue() async {
+    final landed = await RouteOfflineQueue.instance.flush((params) =>
+        Supabase.instance.client.rpc('route_stop_checkin', params: params));
+    if (landed > 0 && mounted) {
+      RenderLog.write('c1878_queue_synced', landed);
+      // The server has changed: the stop rows, the progress line and the day
+      // summary are all re-asked rather than patched here.
+      _routeStops.clear();
+      await _refreshToday();
+    }
+  }
+
+  /// ONE call, cached verbatim. A failure falls back to the last good bundle
+  /// and raises the backend's own offline banner — never an error page.
+  Future<void> _loadOfflineBundle() async {
+    try {
+      final res =
+          await Supabase.instance.client.rpc('route_offline_bundle');
+      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      if (m['ok'] == true) {
+        await RouteOfflineQueue.instance.cacheBundle(m);
+        if (!mounted) return;
+        _applyBundle(m, offline: false);
+        RenderLog.write('c1878_bundle_live', 1);
+        _startLiveWatch();
+        return;
+      }
+    } catch (_) {
+      // fall through to the cache
+    }
+    final cached = await RouteOfflineQueue.instance.cachedBundle();
+    if (!mounted || cached == null) return;
+    _applyBundle(cached, offline: true);
+    RenderLog.write('c1878_bundle_cached', 1);
+  }
+
+  void _applyBundle(Map<String, dynamic> m, {required bool offline}) {
+    final today = m['today'];
+    final stops = m['stops'];
+    final sheets = m['sheets'];
+    setState(() {
+      _offline = offline;
+      _sync = m['sync'] is Map ? Map<String, dynamic>.from(m['sync'] as Map) : null;
+      _live = m['live'] is Map ? Map<String, dynamic>.from(m['live'] as Map) : null;
+      _cachedSheets =
+          sheets is Map ? Map<String, dynamic>.from(sheets) : const {};
+      if (offline) {
+        // Offline the cached payload IS the screen. Online it is only the
+        // cache — routes_today() has already answered for itself.
+        if (today is Map) _today = Map<String, dynamic>.from(today);
+        if (stops is Map) {
+          for (final e in stops.entries) {
+            if (e.value is Map) {
+              _routeStops[e.key.toString()] =
+                  Map<String, dynamic>.from(e.value as Map);
+            }
+          }
+        }
+        _topMode = 'today';
+        _loading = false;
+      }
+    });
+  }
+
+  /// The dot moves on its own: a realtime subscription where the socket is up,
+  /// and the backend's own poll interval as the floor.
+  void _startLiveWatch() {
+    final ms = RouteLivePlan.pollMs(_live);
+    _liveTimer?.cancel();
+    _liveTimer = Timer.periodic(Duration(milliseconds: ms), (_) => _refreshLive());
+    if (_liveChannel != null) return;
+    final table = RouteLivePlan.channel(_live);
+    if (table.isEmpty) return;
+    LiveFeed.instance
+        .watch(
+          channelPrefix: 'c1878_worker_dots',
+          tables: [table],
+          onChange: (_) => _refreshLive(),
+        )
+        .then((h) {
+      if (!mounted) {
+        h.dispose();
+        return;
+      }
+      _liveChannel = h;
+      RenderLog.write('c1878_live_realtime', 1);
+    });
+  }
+
+  Future<void> _refreshLive() async {
+    if (!mounted) return;
+    try {
+      final res = await Supabase.instance.client.rpc('route_worker_dots');
+      if (!mounted) return;
+      if (res is Map) {
+        setState(() {
+          _live = Map<String, dynamic>.from(res);
+          _offline = false;
+        });
+      }
+    } catch (_) {
+      // The dot simply ages; the backend words that age on the next answer.
+    }
+  }
+
+  /// The rep turns his own dot on or off. WHETHER he may is can_share, and
+  /// how often he pings is ping_ms — both the payload's.
+  void _toggleShare() {
+    if (WorkerLivePing.instance.sharing.value) {
+      WorkerLivePing.instance.stop();
+      return;
+    }
+    WorkerLivePing.instance.start(
+      everyMs: RouteLivePlan.pingMs(_live),
+      deniedLabel: _live?['denied_label']?.toString() ?? '',
+      send: (lat, lng, acc, heading) async {
+        final out = await Supabase.instance.client.rpc('route_worker_ping',
+            params: {
+              'p_lat': lat,
+              'p_lng': lng,
+              if (acc != null) 'p_accuracy': acc,
+              if (heading != null) 'p_heading': heading,
+            });
+        RenderLog.write('c1878_ping', 1);
+        await _refreshLive();
+        return out;
+      },
+    );
+  }
+
   Future<void> _loadScreen() async {
     setState(() { _loading = true; _loadError = null; });
     try {
       await _loadRouteTaxonomy();
-      final myRoute = Map<String, dynamic>.from(
-          await Supabase.instance.client.rpc('my_route') as Map);
+      // routes_today() raises not_authorized for anyone who is neither an
+      // admin nor a lead worker. That must NOT take the whole tab down with
+      // it — the builder still loads, so the new call is caught on its own.
+      final res = await Future.wait<dynamic>([
+        Supabase.instance.client.rpc('my_route'),
+        Supabase.instance.client.rpc('routes_today').catchError((_) => null),
+        // CMD #1877 — the day summary is answered for the same date and zone.
+        // Caught on its own for the same reason as routes_today(): a caller it
+        // does not serve must lose the card, never the tab.
+        Supabase.instance.client.rpc('route_day_summary').catchError((_) => null),
+      ]);
+      final myRoute = Map<String, dynamic>.from(res[0] as Map);
+      final today = res[1] is Map
+          ? Map<String, dynamic>.from(res[1] as Map)
+          : <String, dynamic>{};
+      final day = res[2] is Map
+          ? RouteDaySummary.from(Map<String, dynamic>.from(res[2] as Map))
+          : null;
       if (!mounted) return;
       setState(() {
         _myRoute = myRoute;
-        // B2 (#446) — a worker with an assignment today lands on the rep
-        // view; an admin with none (or not a worker at all) lands on the
-        // route builder.
-        _topMode = myRoute['status'] == 'assigned' ? 'myRoute' : 'builder';
+        _today = today;
+        _daySummary = day;
+        // CMD #1872 — the tab opens on today's assigned route for EVERY role.
+        // 'All plans' (the builder) and 'Check in' are secondary links, and
+        // the payload names them.
+        // CMD #1876 — a deep-linked route owns the mode; routes_today() must
+        // not pull the view back to 'today' underneath it.
+        _topMode = _openingRouteId != null
+            ? 'builder'
+            : (today['ok'] == true ? 'today' : 'builder');
         _loading = false;
       });
+      _logToday(today);
+      _logDaySummary(day);
       final myStops = (myRoute['route'] as List?) ?? [];
       if (_topMode == 'myRoute') {
         RenderLog.write('c445_route_stops', myRoute['stops']);
@@ -11747,10 +13099,74 @@ class _RoutesTabState extends State<_RoutesTab> {
             : '');
       }
       _fetchLeadCount(); // populates c452_count / c452_suggested_k on first load
+      // CMD #1878 — the offline bundle is cached AFTER the live load, so a
+      // good session always leaves a good cache behind for the next one.
+      unawaited(_loadOfflineBundle());
+      unawaited(_flushQueue());
     } catch (e) {
       if (!mounted) return;
+      // CMD #1878 — a failed load is not necessarily a broken screen: the
+      // device may simply be offline, and the cached bundle is a real answer.
+      await _loadOfflineBundle();
+      if (!mounted) return;
+      if (_today != null && _offline) {
+        setState(() { _loading = false; _loadError = null; });
+        return;
+      }
       setState(() { _loadError = e.toString(); _loading = false; });
     }
+  }
+
+  /// CMD #1872 — one refetch of routes_today(). Used by the mode row, by
+  /// pull-to-retry and after a check-in, so the progress line and the next
+  /// stop the Navigate button opens are always the backend's current answer.
+  Future<void> _refreshToday() async {
+    if (!mounted) return;
+    setState(() => _todayLoading = true);
+    try {
+      // CMD #1877 — a check-in changes BOTH the route progress line and the
+      // day summary, so the two are refetched together and never disagree on
+      // screen.
+      final res = await Future.wait<dynamic>([
+        Supabase.instance.client.rpc('routes_today'),
+        Supabase.instance.client.rpc('route_day_summary').catchError((_) => null),
+      ]);
+      if (!mounted) return;
+      final today =
+          res[0] is Map ? Map<String, dynamic>.from(res[0] as Map) : <String, dynamic>{};
+      final day = res[1] is Map
+          ? RouteDaySummary.from(Map<String, dynamic>.from(res[1] as Map))
+          : null;
+      setState(() {
+        _today = today;
+        if (day != null) _daySummary = day;
+        _todayLoading = false;
+      });
+      _logToday(today);
+      _logDaySummary(day);
+    } catch (_) {
+      if (mounted) setState(() => _todayLoading = false);
+    }
+  }
+
+  void _logToday(Map<String, dynamic> today) {
+    final rows = (today['routes'] as List?) ?? const [];
+    RenderLog.write('c1872_today_routes', rows.length);
+    RenderLog.write(
+        'c1872_nav_ready',
+        rows
+            .whereType<Map>()
+            .where((e) => e['can_navigate'] == true)
+            .length);
+  }
+
+  /// CMD #1877 — the card PAINTED. worker rows and converted are reported
+  /// separately: a day with no field work is a legitimate render of the
+  /// backend's own empty copy, so a count of 0 must not read as "never drew".
+  void _logDaySummary(RouteDaySummary? day) {
+    if (day == null) return;
+    RenderLog.write('c1877_day_card', day.showCard ? 1 : 0);
+    RenderLog.write('c1877_day_workers', day.workers.length);
   }
 
   Future<void> _refreshMyRoute() async {
@@ -11857,6 +13273,213 @@ class _RoutesTabState extends State<_RoutesTab> {
     } catch (e) {
       if (!mounted) return;
       setState(() { _buildingPlan = false; _planError = e.toString(); });
+    }
+  }
+
+  /// CMD #1875 — true while the OPEN plan has not finished building. The
+  /// status and the stage caption are the backend's; nothing is inferred.
+  bool get _planIsBuilding {
+    final st = (_plan?['header'] as Map?)?['status']?.toString();
+    return st == 'queued' || st == 'building';
+  }
+
+  /// CMD #1875 — the ₹ chips. Every string is the backend's own
+  /// (cost_label / cost_per_converted_label / converted_label): Dart never
+  /// does money arithmetic and never formats a rupee.
+  Widget _costChips(Map<String, dynamic> m) {
+    final model = RouteCostChips.from(m);
+    if (model.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.only(top: Ds.space.x8),
+      child: Wrap(
+        spacing: Ds.space.x8,
+        runSpacing: Ds.space.x4,
+        children: model.chips.map(_toneChip).toList(),
+      ),
+    );
+  }
+
+  /// The ONLY place a tone name becomes a colour. RouteCostChips decides which
+  /// chips exist; Ds decides what they look like.
+  Widget _toneChip(RouteCostChip chip) {
+    switch (chip.tone) {
+      case RouteChipTone.brand:
+        return _tokenChip(chip.label, Ds.c.brandSoft, Ds.c.brand);
+      case RouteChipTone.success:
+        return _tokenChip(chip.label, Ds.c.successSoft, Ds.c.success);
+      case RouteChipTone.info:
+        return _tokenChip(chip.label, Ds.c.infoSoft, Ds.c.info);
+      case RouteChipTone.warning:
+        return _tokenChip(chip.label, Ds.c.warningSoft, Ds.c.warning);
+      case RouteChipTone.danger:
+        return _tokenChip(chip.label, Ds.c.dangerSoft, Ds.c.danger);
+      case RouteChipTone.muted:
+        return _tokenChip(chip.label, Ds.c.bg, Ds.c.textSecondary);
+    }
+  }
+
+  Widget _tokenChip(String label, Color bg, Color fg) => Container(
+        padding: EdgeInsets.symmetric(
+            horizontal: Ds.space.x8, vertical: Ds.space.x4),
+        decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rChip),
+        child: Text(label,
+            style: Ds.t.caption.copyWith(color: fg, fontWeight: FontWeight.w600)),
+      );
+
+  void _toast(String? msg) {
+    if (msg == null || msg.isEmpty || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  /// CMD #1875 — "Rebuild from current leads". The preview counts the leads
+  /// that pass the S Leads DEFAULT filters right now (archived, non-target and
+  /// matched are out; the header zone and date apply), and every word of the
+  /// confirmation is that payload printed verbatim.
+  Future<void> _openRebuildSheet() async {
+    final planId = _planId;
+    if (planId == null) return;
+    Map<String, dynamic> pv;
+    try {
+      final res = await Supabase.instance.client
+          .rpc('route_plan_rebuild_preview', params: {'p_plan_id': planId});
+      pv = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+    } catch (e) {
+      _toast(e.toString());
+      return;
+    }
+    if (!mounted) return;
+    RenderLog.write('c1875_rebuild_preview', (pv['leads'] as num?)?.toInt() ?? 0);
+    final canRebuild = pv['can_rebuild'] == true;
+    final go = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.all(Ds.space.x24),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(pv['title']?.toString() ?? '', style: Ds.t.subtitle),
+            SizedBox(height: Ds.space.x12),
+            Text(pv['body']?.toString() ?? '', style: Ds.t.body),
+            if ((pv['hint']?.toString() ?? '').isNotEmpty) ...[
+              SizedBox(height: Ds.space.x8),
+              Text(pv['hint'].toString(), style: Ds.t.caption),
+            ],
+            SizedBox(height: Ds.space.x24),
+            Row(children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: Text(pv['cancel_label']?.toString() ?? ''),
+                ),
+              ),
+              SizedBox(width: Ds.space.x12),
+              Expanded(
+                child: FilledButton(
+                  onPressed: canRebuild ? () => Navigator.pop(ctx, true) : null,
+                  child: Text(pv['confirm_label']?.toString() ?? ''),
+                ),
+              ),
+            ]),
+          ]),
+        ),
+      ),
+    );
+    if (go != true) return;
+    setState(() => _rebuilding = true);
+    try {
+      final res = await Supabase.instance.client
+          .rpc('route_plan_rebuild', params: {'p_plan_id': planId});
+      final out = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      if (!mounted) return;
+      setState(() => _rebuilding = false);
+      _toast((out['toast'] ?? out['message'])?.toString());
+      if (out['ok'] == true) {
+        RenderLog.write('c1875_rebuilt_version', (out['version'] as num?)?.toInt() ?? 0);
+        await _loadPlan(out['plan_id'].toString(), isNewBuild: true);
+        await _refetchPlans();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _rebuilding = false);
+      _toast(e.toString());
+    }
+  }
+
+  /// CMD #1875 — the ₹/km and ₹/hour rates behind every cost chip. They live
+  /// in app_settings, so changing them re-prices every plan with no deploy.
+  Future<void> _openRatesSheet() async {
+    Map<String, dynamic> r;
+    try {
+      final res = await Supabase.instance.client.rpc('route_rates_get');
+      r = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+    } catch (e) {
+      _toast(e.toString());
+      return;
+    }
+    if (!mounted) return;
+    final kmCtrl = TextEditingController(text: '${r['km_rate'] ?? ''}');
+    final hrCtrl = TextEditingController(text: '${r['hour_rate'] ?? ''}');
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+        child: SafeArea(
+          child: Padding(
+            padding: EdgeInsets.all(Ds.space.x24),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(r['title']?.toString() ?? '', style: Ds.t.subtitle),
+              SizedBox(height: Ds.space.x8),
+              Text(r['hint']?.toString() ?? '', style: Ds.t.caption),
+              SizedBox(height: Ds.space.x16),
+              TextField(
+                controller: kmCtrl,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: InputDecoration(labelText: r['km_label']?.toString() ?? ''),
+              ),
+              SizedBox(height: Ds.space.x12),
+              TextField(
+                controller: hrCtrl,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: InputDecoration(labelText: r['hour_label']?.toString() ?? ''),
+              ),
+              SizedBox(height: Ds.space.x24),
+              Row(children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: Text(r['cancel_label']?.toString() ?? ''),
+                  ),
+                ),
+                SizedBox(width: Ds.space.x12),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: Text(r['save_label']?.toString() ?? ''),
+                  ),
+                ),
+              ]),
+            ]),
+          ),
+        ),
+      ),
+    );
+    if (saved != true) return;
+    try {
+      final res = await Supabase.instance.client.rpc('route_rates_set', params: {
+        'p_km_rate': num.tryParse(kmCtrl.text.trim()) ?? r['km_rate'],
+        'p_hour_rate': num.tryParse(hrCtrl.text.trim()) ?? r['hour_rate'],
+      });
+      final out = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      _toast(out['toast']?.toString());
+      RenderLog.write('c1875_rates_saved', 1);
+      if (_planId != null) await _loadPlan(_planId!);
+      await _refetchPlans();
+    } catch (e) {
+      _toast(e.toString());
     }
   }
 
@@ -12321,19 +13944,202 @@ class _RoutesTabState extends State<_RoutesTab> {
     if (assigned == true && _planId != null) await _loadPlan(_planId!);
   }
 
+  // ── CMD #1876: bulk "visiting today" to every stop on a route ─────────────
+  //
+  // Two RPCs, nothing decided here. route_message_stops_sheet() says what the
+  // confirm sheet reads and whether there is anyone to reach; route_message_stops()
+  // does the sending through the SAME switchboard every other WhatsApp uses
+  // (wa_send_event_or_fallback), so the opt-out, notification and dedupe rails
+  // are the ones already in place. Every count and every skip reason below is
+  // a string the backend wrote — this widget only prints them.
+  final Set<String> _msgStopsBusy = <String>{};
+
+  Future<void> _openMessageStopsSheet(Map<String, dynamic> route) async {
+    final routeId = route['route_id']?.toString() ?? '';
+    if (routeId.isEmpty || _msgStopsBusy.contains(routeId)) return;
+    Map<String, dynamic> sheet;
+    try {
+      final res = await Supabase.instance.client
+          .rpc('route_message_stops_sheet', params: {'p_route_id': routeId});
+      sheet = Map<String, dynamic>.from(res as Map);
+    } catch (e) {
+      if (!mounted) return;
+      showToast(context, e.toString(), isError: true);
+      return;
+    }
+    if (!mounted) return;
+    if (sheet['ok'] != true) {
+      showToast(context, sheet['message']?.toString() ?? '', isError: true);
+      return;
+    }
+    RenderLog.write('c1876_msg_sheet', sheet['reachable'] ?? 0);
+    final canSend = sheet['can_send'] == true;
+    final go = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.fromLTRB(
+            Ds.space.x24, Ds.space.x24, Ds.space.x24, Ds.space.x24),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(sheet['title']?.toString() ?? '', style: Ds.t.title),
+          SizedBox(height: Ds.space.x8),
+          Text(sheet['body']?.toString() ?? '', style: Ds.t.bodySecondary),
+          SizedBox(height: Ds.space.x12),
+          Text(
+              (canSend
+                      ? sheet['count_label']?.toString()
+                      : sheet['blocked_label']?.toString()) ??
+                  '',
+              style: Ds.t.caption),
+          SizedBox(height: Ds.space.x24),
+          Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text(sheet['cancel_label']?.toString() ?? '')),
+            SizedBox(width: Ds.space.x12),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                  backgroundColor: Ds.c.brand,
+                  minimumSize: Size(Ds.space.x48 * 2, Ds.touch.minTarget)),
+              onPressed: canSend ? () => Navigator.pop(ctx, true) : null,
+              child: Text(sheet['send_label']?.toString() ?? ''),
+            ),
+          ]),
+        ]),
+      ),
+    );
+    if (go != true || !mounted) return;
+
+    setState(() => _msgStopsBusy.add(routeId));
+    Map<String, dynamic> result;
+    try {
+      final res = await Supabase.instance.client
+          .rpc('route_message_stops', params: {'p_route_id': routeId});
+      result = Map<String, dynamic>.from(res as Map);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _msgStopsBusy.remove(routeId));
+      showToast(context, e.toString(), isError: true);
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _msgStopsBusy.remove(routeId));
+    if (result['ok'] != true) {
+      showToast(context, result['message']?.toString() ?? '', isError: true);
+      return;
+    }
+    final parsed = RouteMessageResult.fromPayload(result);
+    RenderLog.write('c1876_msg_sent', parsed.sent);
+    RenderLog.write('c1876_msg_skipped', parsed.skipped);
+    _showMessageStopsResult(parsed);
+  }
+
+  void _showMessageStopsResult(RouteMessageResult result) {
+    final rows = result.orderedRows;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.fromLTRB(
+            Ds.space.x24, Ds.space.x24, Ds.space.x24, Ds.space.x24),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(result.title, style: Ds.t.title),
+          SizedBox(height: Ds.space.x8),
+          Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x8, children: [
+            _c1876Chip(result.sentLabel, 'success'),
+            _c1876Chip(result.skippedLabel, 'warning'),
+          ]),
+          SizedBox(height: Ds.space.x12),
+          Text(result.summaryLabel, style: Ds.t.bodySecondary),
+          SizedBox(height: Ds.space.x16),
+          ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: Ds.space.x48 * 6),
+            child: ListView.separated(
+              shrinkWrap: true,
+              itemCount: rows.length,
+              separatorBuilder: (_, __) => Divider(height: Ds.space.x16, color: Ds.c.divider),
+              itemBuilder: (_, i) {
+                final r = rows[i];
+                return Row(children: [
+                  Expanded(
+                      child: Text(r.name,
+                          style: Ds.t.body, overflow: TextOverflow.ellipsis)),
+                  SizedBox(width: Ds.space.x8),
+                  _c1876Chip(r.label, r.tone),
+                ]);
+              },
+            ),
+          ),
+          SizedBox(height: Ds.space.x16),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text(UiCopy.t('routes.msg_stops_cancel'))),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  /// Tone name → the token pair for it. The NAME is the backend's; the colours
+  /// are always the design system's, never a hex written here.
+  Widget _c1876Chip(String text, String tone) {
+    final bg = tone == 'success' ? Ds.c.successSoft : Ds.c.warningSoft;
+    final fg = tone == 'success' ? Ds.c.success : Ds.c.warning;
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: Ds.space.x8, vertical: Ds.space.x4),
+      decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rChip),
+      child: Text(text, style: Ds.t.caption.copyWith(color: fg)),
+    );
+  }
+
+  /// CMD #1876 — a WhatsApp link carries a ROUTE id. route_open() resolves the
+  /// plan that holds it, so the deep link is one backend answer rather than a
+  /// client-side hunt through every plan.
+  Future<void> openRouteById(String routeId) async {
+    if (routeId.isEmpty) return;
+    try {
+      final res = await Supabase.instance.client
+          .rpc('route_open', params: {'p_route_id': routeId});
+      final data = Map<String, dynamic>.from(res as Map);
+      if (!mounted) return;
+      if (data['ok'] != true) {
+        showToast(context, data['message']?.toString() ?? '', isError: true);
+        return;
+      }
+      setState(() {
+        _openingRouteId = routeId;
+        _topMode = 'builder';
+        _expandedRouteIds = {routeId};
+      });
+      await _loadPlan(data['plan_id'].toString());
+      if (!mounted) return;
+      setState(() {
+        _topMode = 'builder';
+        _expandedRouteIds = {routeId};
+      });
+      // _openingRouteId is deliberately NOT cleared here: _loadScreen()'s own
+      // setState can still land after this one, and it reads the flag to decide
+      // the mode. The mode row clears it — the first time a person picks a mode
+      // themselves, the link has been honoured and is no longer in charge.
+      RenderLog.write('c1876_route_opened', routeId);
+      _loadRouteMap(routeId);
+    } catch (e) {
+      if (!mounted) return;
+      showToast(context, e.toString(), isError: true);
+    }
+  }
+
   // ── C5: Past plans ─────────────────────────────────────────────────────────
   Future<void> _togglePastPlans() async {
     final expanding = !_pastPlansExpanded;
     setState(() => _pastPlansExpanded = expanding);
-    if (expanding && _pastPlans == null) {
-      try {
-        final res = await Supabase.instance.client.rpc('route_plan_list', params: {'p_limit': 10});
-        final list = ((res as List?) ?? []).map((p) => Map<String, dynamic>.from(p as Map)).toList();
-        if (!mounted) return;
-        setState(() => _pastPlans = list);
-        _fetchOptStatusFor(list);
-      } catch (_) {}
-    }
+    if (expanding && _plans == null) await _loadPlans(reset: true);
   }
 
   // ── CHANGE #488: per-plan optimization badge — plan_google_status() isn't
@@ -12390,7 +14196,17 @@ class _RoutesTabState extends State<_RoutesTab> {
       // Remove it locally right away for snappy UX — the realtime DELETE
       // handler above will also fire and no-op harmlessly on a second pass.
       setState(() {
-        _pastPlans = (_pastPlans ?? []).where((p) => p['plan_id'].toString() != planId).toList();
+        final held = _plans;
+        if (held != null) {
+          _plans = PagedList(
+            rows: held.rows.where((p) => p['plan_id'].toString() != planId).toList(),
+            meta: held.meta,
+            hasMore: held.hasMore,
+            nextOffset: held.nextOffset,
+            total: held.total,
+            loaded: held.loaded,
+          );
+        }
         if (_planId == planId) {
           _plan = null;
           _planId = null;
@@ -12434,11 +14250,7 @@ class _RoutesTabState extends State<_RoutesTab> {
           SnackBar(content: Text(cf('admin_customer.deleted_old_plans', {'n': '$deleted'}))));
       // Realtime DELETE events land per-row already; refetch too so the
       // count is right even if a realtime event is missed.
-      final list = await Supabase.instance.client.rpc('route_plan_list', params: {'p_limit': 10});
-      if (!mounted) return;
-      final freshList = ((list as List?) ?? []).map((p) => Map<String, dynamic>.from(p as Map)).toList();
-      setState(() => _pastPlans = freshList);
-      _fetchOptStatusFor(freshList);
+      await _loadPlans(reset: true);
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -12568,24 +14380,671 @@ class _RoutesTabState extends State<_RoutesTab> {
     return Padding(
       padding: EdgeInsets.fromLTRB(pad, 20, pad, 32),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // CMD #1877 — the day summary sits above the mode row, so it reads the
+        // same in every mode: it answers "what did the field team do today",
+        // not "what is on this screen".
+        _buildDaySummaryCard(),
         _buildTopModeToggle(),
-        const SizedBox(height: 14),
-        if (_topMode == 'myRoute') _buildMyRouteView() else _buildBuilder(),
+        SizedBox(height: Ds.space.x16),
+        if (_topMode == 'today')
+          _buildTodayView()
+        else if (_topMode == 'myRoute')
+          _buildMyRouteView()
+        else
+          _buildBuilder(),
       ]),
     );
   }
 
-  Widget _buildTopModeToggle() {
-    return Row(children: [
-      Expanded(
-        child: _segBtn('My route', _topMode == 'myRoute', () {
-          setState(() => _topMode = 'myRoute');
-          if (_myRoute == null) _refreshMyRoute();
-        }),
+  // ── CMD #1877: the day summary card ─────────────────────────────────────
+
+  /// One card, one RPC, zero arithmetic. Each worker's line, the team totals
+  /// and every chip are printed exactly as `route_day_summary()` worded them.
+  /// A payload this caller is not served (`ok:false` — partner staff) draws
+  /// nothing: the tab below it is unaffected.
+  Widget _buildDaySummaryCard() {
+    final day = _daySummary;
+    if (day == null || !day.showCard) return const SizedBox.shrink();
+    final children = <Widget>[
+      Text(day.title, style: Ds.t.subtitle),
+      SizedBox(height: Ds.space.x4),
+      if (day.headerLabel != null) Text(day.headerLabel!, style: Ds.t.caption),
+      if (day.countLabel != null) Text(day.countLabel!, style: Ds.t.caption),
+    ];
+
+    if (!day.has) {
+      children
+        ..add(SizedBox(height: Ds.space.x12))
+        ..add(Text(day.emptyLabel ?? '', style: Ds.t.bodySecondary));
+    } else {
+      if (day.showTotals) {
+        children
+          ..add(SizedBox(height: Ds.space.x16))
+          ..add(_daySummaryLine(day.totals!, strong: true))
+          ..add(Divider(height: Ds.space.x24, color: Ds.c.divider));
+      } else {
+        children.add(SizedBox(height: Ds.space.x16));
+      }
+      for (var i = 0; i < day.workers.length; i++) {
+        if (i > 0) children.add(SizedBox(height: Ds.space.x16));
+        children.add(_daySummaryLine(day.workers[i]));
+      }
+    }
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x16),
+      child: Container(
+        width: double.infinity,
+        padding: EdgeInsets.all(Ds.space.x16),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          boxShadow: Ds.elevation.e1,
+        ),
+        child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start, children: children),
       ),
-      const SizedBox(width: 8),
-      Expanded(child: _segBtn('Builder', _topMode == 'builder', () => setState(() => _topMode = 'builder'))),
+    );
+  }
+
+  /// One worker's day — or, with [strong], the team's. The row name is empty
+  /// for the totals line, which is how the backend says "this is everyone".
+  Widget _daySummaryLine(RouteDayRow row, {bool strong = false}) {
+    final head = <Widget>[];
+    if (row.label.isNotEmpty) {
+      head
+        ..add(Expanded(
+            child: Text(row.label,
+                style: strong ? Ds.t.subtitle : Ds.t.bodyStrong,
+                overflow: TextOverflow.ellipsis)))
+        ..add(SizedBox(width: Ds.space.x8));
+    } else if (row.progressLabel != null) {
+      head.add(Expanded(
+          child: Text(row.progressLabel!,
+              style: Ds.t.bodyStrong, overflow: TextOverflow.ellipsis)));
+    }
+    if (row.conversionLabel != null) {
+      head.add(Text(row.conversionLabel!, style: Ds.t.caption));
+    }
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      if (head.isNotEmpty) Row(children: head),
+      if (row.label.isNotEmpty && row.progressLabel != null) ...[
+        SizedBox(height: Ds.space.x4),
+        Text(row.progressLabel!, style: Ds.t.caption),
+      ],
+      if (row.chips.isNotEmpty) ...[
+        SizedBox(height: Ds.space.x8),
+        Wrap(
+          spacing: Ds.space.x8,
+          runSpacing: Ds.space.x8,
+          children: row.chips.map(_toneChip).toList(),
+        ),
+      ],
     ]);
+  }
+
+  /// CMD #1872 — the mode row is the payload's own `links[]`: 'today' is the
+  /// landing mode, 'all_plans' opens the builder and 'my_route' the check-in
+  /// view. Every caption is the backend's; no mode name is written here.
+  static const Map<String, String> _kModeForLink = {
+    'today': 'today',
+    'all_plans': 'builder',
+    'my_route': 'myRoute',
+  };
+
+  Widget _buildTopModeToggle() {
+    final links = ((_today?['links'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .where((e) => _kModeForLink.containsKey(e['key']?.toString()))
+        .toList();
+    if (links.isEmpty) return const SizedBox.shrink();
+    final row = <Widget>[];
+    for (final l in links) {
+      final mode = _kModeForLink[l['key'].toString()]!;
+      if (row.isNotEmpty) row.add(SizedBox(width: Ds.space.x8));
+      row.add(Expanded(
+        child: _segBtn(l['label']?.toString() ?? '', _topMode == mode, () {
+          // CMD #1876 — a person picking a mode outranks the deep link.
+          setState(() { _openingRouteId = null; _topMode = mode; });
+          if (mode == 'myRoute' && _myRoute == null) _refreshMyRoute();
+          if (mode == 'today') _refreshToday();
+        }),
+      ));
+    }
+    return Row(children: row);
+  }
+
+  // ── CMD #1872: the landing view — today's assigned route(s) ─────────────
+
+  Widget _buildTodayView() {
+    if (_todayLoading) {
+      return Padding(
+        padding: EdgeInsets.only(top: Ds.space.x32),
+        child: Center(
+            child: CircularProgressIndicator(color: Ds.c.brand, strokeWidth: 2)),
+      );
+    }
+    final today = _today ?? const <String, dynamic>{};
+    final routes = ((today['routes'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    // The landing view PAINTED. Separate from c1872_today_routes on purpose:
+    // a day with no assigned route is a legitimate render (the backend's own
+    // empty copy), so route count 0 must not read as "the widget never drew".
+    RenderLog.write('c1872_today_view', 1);
+    final children = <Widget>[
+      // CMD #1878 — the live card sits above the day: who is on the road right
+      // now, the rep's own share toggle, and anything the device is still
+      // holding. Every string in it is the backend's.
+      _buildLiveCard(),
+      Text(today['title']?.toString() ?? '', style: Ds.t.title),
+      SizedBox(height: Ds.space.x4),
+      Text(today['header_label']?.toString() ?? '', style: Ds.t.caption),
+      SizedBox(height: Ds.space.x4),
+      Text(today['count_label']?.toString() ?? '', style: Ds.t.caption),
+      SizedBox(height: Ds.space.x16),
+    ];
+    if (routes.isEmpty) {
+      children.add(Container(
+        width: double.infinity,
+        padding: EdgeInsets.all(Ds.space.x24),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          boxShadow: Ds.elevation.e1,
+        ),
+        child: Text(today['empty_label']?.toString() ?? '',
+            style: Ds.t.bodySecondary, textAlign: TextAlign.center),
+      ));
+    } else {
+      for (final r in routes) {
+        children.add(Padding(
+          padding: EdgeInsets.only(bottom: Ds.space.x12),
+          child: _todayRouteCard(r),
+        ));
+      }
+    }
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: children);
+  }
+
+  /// CMD #1878 — route_worker_dots(), drawn verbatim. Absent for a caller the
+  /// backend does not serve (partner staff), exactly like the day card.
+  Widget _buildLiveCard() {
+    final live = _live;
+    if (live == null || !RouteLivePlan.shows(live)) return const SizedBox.shrink();
+    return RouteLiveWorkersMap(
+      live: live,
+      // The chip's caption is the backend's own, looked up by count. Dart
+      // never pluralises "check-in".
+      pendingLabel: RouteSyncPlan.pendingLabel(
+          _sync, RouteOfflineQueue.instance.pendingCount),
+      offlineLabel:
+          _offline ? (_sync?['offline_banner'])?.toString() : null,
+      sharing: WorkerLivePing.instance.sharing.value,
+      deniedLabel: WorkerLivePing.instance.denied.value,
+      onToggleShare: RouteLivePlan.canShare(live) ? _toggleShare : null,
+      onRetrySync: _flushQueue,
+      retryLabel: _sync?['retry_label']?.toString(),
+      isDesktop: MediaQuery.of(context).size.width >= 900,
+    );
+  }
+
+  Widget _todayRouteCard(Map<String, dynamic> r) {
+    final worker = r['worker_label']?.toString();
+    final next = r['next_label']?.toString();
+    final nextSub = r['next_sub']?.toString();
+    final navUri = r['nav_uri']?.toString();
+    final canNav = r['can_navigate'] == true && (navUri ?? '').isNotEmpty;
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(Ds.space.x16),
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        boxShadow: Ds.elevation.e1,
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(
+            child: Text(r['title']?.toString() ?? '',
+                style: Ds.t.subtitle, overflow: TextOverflow.ellipsis),
+          ),
+          if (worker != null && worker.isNotEmpty)
+            Container(
+              padding: EdgeInsets.symmetric(
+                  horizontal: Ds.space.x12, vertical: Ds.space.x4),
+              decoration: BoxDecoration(
+                  color: Ds.c.infoSoft, borderRadius: Ds.r.rChip),
+              child: Text(worker, style: Ds.t.caption),
+            ),
+        ]),
+        SizedBox(height: Ds.space.x4),
+        Text(r['subtitle']?.toString() ?? '', style: Ds.t.caption),
+        SizedBox(height: Ds.space.x12),
+        Text(r['progress_label']?.toString() ?? '', style: Ds.t.bodyStrong),
+        if (next != null && next.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x12),
+          Text(next, style: Ds.t.body, overflow: TextOverflow.ellipsis),
+          if (nextSub != null && nextSub.isNotEmpty)
+            Text(nextSub, style: Ds.t.caption, overflow: TextOverflow.ellipsis),
+        ],
+        SizedBox(height: Ds.space.x16),
+        SizedBox(
+          width: double.infinity,
+          height: Ds.touch.minTarget,
+          child: ElevatedButton.icon(
+            onPressed: canNav
+                ? () => launchUrl(Uri.parse(navUri!),
+                    mode: LaunchMode.externalApplication)
+                : null,
+            icon: const Icon(Icons.navigation_rounded),
+            label: Text(r['nav_label']?.toString() ?? ''),
+          ),
+        ),
+        // CMD #1873 — the route's stops, each with its outcome and its
+        // check-in button. This is the only surface that closes a stop.
+        if ((r['route_id']?.toString() ?? '').isNotEmpty)
+          _todayStopList(r['route_id'].toString()),
+      ]),
+    );
+  }
+
+  /// CMD #1873 — one route_stops_today() call per route card. The payload is
+  /// rendered verbatim: this method decides nothing about a stop.
+  Future<void> _loadRouteStops(String routeId, {bool force = false}) async {
+    if (!force &&
+        (_routeStops.containsKey(routeId) ||
+            _routeStopsInFlight.contains(routeId))) {
+      return;
+    }
+    _routeStopsInFlight.add(routeId);
+    try {
+      final res = await Supabase.instance.client
+          .rpc('route_stops_today', params: {'p_route_id': routeId});
+      if (!mounted) return;
+      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      setState(() => _routeStops[routeId] = m);
+      RenderLog.write('c1873_stop_rows', (m['stops'] as List?)?.length ?? 0);
+    } catch (_) {
+      // The card keeps its progress line; the stop list simply stays absent
+      // until the next refresh.
+    } finally {
+      _routeStopsInFlight.remove(routeId);
+    }
+  }
+
+  /// Open the check-in sheet for one stop, then refetch BOTH the stop list and
+  /// routes_today() so the outcome chip and the progress line are the
+  /// backend's new answer, never a patched local row.
+  Future<void> _openStopCheckIn(String routeId, String stopId) async {
+    // CMD #1878 — the cached sheet travels with the call so the rep can open
+    // a stop with no network, and the sync block carries the wording for a
+    // check-in that ends up held on the device.
+    final cachedSheet = _cachedSheets[stopId];
+    final res = await RouteStopCheckInSheet.open(
+      context,
+      stopId,
+      cachedSheet:
+          cachedSheet is Map ? Map<String, dynamic>.from(cachedSheet) : null,
+      sync: _sync,
+    );
+    if (res == null || !mounted) return;
+    // A check-in HELD on the device changed nothing on the server: refetching
+    // would only overwrite the row the rep just answered. The pending chip is
+    // the feedback, and the replay refetches for real.
+    if (res['queued'] == true) {
+      setState(() {});
+      return;
+    }
+    await _loadRouteStops(routeId, force: true);
+    await _refreshToday();
+
+    // CMD #1874 — a Converted check-in hands the rep straight to the
+    // registration form. WHETHER that happens is route_stop_checkin()'s call
+    // (next_action), never a status this file recognises.
+    final next = RouteStopCheckInPlan.nextAction(res);
+    if (!mounted || !RouteStopCheckInPlan.isAddCustomer(next)) return;
+    final leadId = RouteStopCheckInPlan.leadIdOf(next);
+    if (leadId == null) return;
+    RenderLog.write('c1874_convert_form', leadId);
+    await _addCustomerFromLead(leadId, routeId: routeId);
+  }
+
+  /// CMD #1874 — lead_customer_prefill() -> the SAME registration form Import
+  /// Customer and S Leads use, pre-filled from the lead and fully editable.
+  /// Saving goes through lead_import_customer(), so the customer and the
+  /// lead's matched_customer_id land in ONE transaction.
+  Future<void> _addCustomerFromLead(int leadId, {String? routeId}) async {
+    try {
+      final res = await Supabase.instance.client
+          .rpc('lead_customer_prefill', params: {'p_lead_id': leadId});
+      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      if (!mounted) return;
+      if (m['error'] != null) {
+        showToast(context, (m['hint'] ?? m['error']).toString(), isError: true);
+        return;
+      }
+      final note = m['note']?.toString();
+      if (note != null && note.isNotEmpty) showToast(context, note);
+
+      final customer = m['customer'] is Map
+          ? Map<String, dynamic>.from(m['customer'] as Map)
+          : <String, dynamic>{};
+      final missing =
+          (m['missing'] as List?)?.map((e) => e.toString()).toList() ??
+              const <String>[];
+
+      final saved = await ImportCustomerSheet.open(context,
+          prefill: customer, missing: missing, leadId: leadId);
+      if (saved == true && mounted && routeId != null) {
+        await _loadRouteStops(routeId, force: true);
+        await _refreshToday();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      showToast(context, '$e', isError: true);
+    }
+  }
+
+  /// CMD #1874 — Skip / Restore one stop. The menu entry carries the new
+  /// state, so both directions are the same call and this method decides
+  /// neither. The backend re-sequences and returns the fresh stop list.
+  Future<void> _skipStopFromMenu(
+      String routeId, String stopId, Map<String, dynamic> entry) async {
+    final params = RouteStopCheckInPlan.skipStopParams(stopId, entry);
+    if (params == null) return;
+    try {
+      final res =
+          await Supabase.instance.client.rpc('route_stop_skip', params: params);
+      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      if (!mounted) return;
+      showToast(context, m['message']?.toString() ?? '', isError: m['ok'] != true);
+      if (m['ok'] == true) {
+        RenderLog.write('c1874_stop_skipped', m['skipped']?.toString() ?? '');
+        final stops = m['stops'];
+        if (stops is Map) {
+          setState(() =>
+              _routeStops[routeId] = Map<String, dynamic>.from(stops));
+        } else {
+          await _loadRouteStops(routeId, force: true);
+        }
+        await _refreshToday();
+      }
+    } catch (e) {
+      if (mounted) showToast(context, '$e', isError: true);
+    }
+  }
+
+  /// CMD #1874 — a drag posts the WHOLE new order to route_reorder(), which
+  /// recomputes seq / leg / cum / ETA on the same OSRM matrix the planner used
+  /// and answers with the re-sequenced list. Nothing is renumbered here.
+  Future<void> _reorderStops(
+      String routeId, int oldIndex, int newIndex) async {
+    final data = _routeStops[routeId];
+    final ordered = RouteStopCheckInPlan.move(
+        RouteStopCheckInPlan.draggable(data), oldIndex, newIndex);
+    final params = RouteStopCheckInPlan.reorderParams(routeId, ordered);
+    if (params == null) return;
+    try {
+      final res =
+          await Supabase.instance.client.rpc('route_reorder', params: params);
+      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      if (!mounted) return;
+      showToast(context, m['message']?.toString() ?? '', isError: m['ok'] != true);
+      RenderLog.write('c1874_stop_reorder', ordered.length);
+      final stops = m['stops'];
+      if (stops is Map) {
+        setState(() => _routeStops[routeId] = Map<String, dynamic>.from(stops));
+      } else {
+        await _loadRouteStops(routeId, force: true);
+      }
+      await _refreshToday();
+    } catch (e) {
+      if (mounted) showToast(context, '$e', isError: true);
+    }
+  }
+
+  /// The one-tap Skip on a stop the backend flagged as shut at its ETA. The
+  /// status posted is the one the ACTION carried — Dart never decides what
+  /// skipping a stop writes.
+  Future<void> _skipStop(
+      String routeId, String stopId, Map<String, dynamic> action) async {
+    final params = RouteStopCheckInPlan.skipParams(stopId, action);
+    if (params == null) return;
+    try {
+      final res =
+          await Supabase.instance.client.rpc('route_stop_checkin', params: params);
+      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      if (!mounted) return;
+      showToast(context, m['message']?.toString() ?? '', isError: m['ok'] != true);
+      if (m['ok'] == true) {
+        RenderLog.write('c1873_stop_skipped', m['status']?.toString() ?? '');
+        await _loadRouteStops(routeId, force: true);
+        await _refreshToday();
+      }
+    } catch (e) {
+      if (mounted) showToast(context, '$e', isError: true);
+    }
+  }
+
+  /// The stop list under a today-route card. Title, count, empty copy, chips
+  /// and every action label come from route_stops_today().
+  Widget _todayStopList(String routeId) {
+    final data = _routeStops[routeId];
+    if (data == null) {
+      _loadRouteStops(routeId);
+      return Padding(
+        padding: EdgeInsets.only(top: Ds.space.x16),
+        child: Center(
+            child: SizedBox(
+          width: Ds.space.x24,
+          height: Ds.space.x24,
+          child: CircularProgressIndicator(
+              color: Ds.c.brand, strokeWidth: Ds.space.hairline * 2),
+        )),
+      );
+    }
+    // CMD #1874 — the two groups are the BACKEND's: a stop it left in the day
+    // (can_drag) and a stop it took out of the order (skipped). This file
+    // never works out which is which from a status.
+    final active = RouteStopCheckInPlan.draggable(data);
+    final parked = RouteStopCheckInPlan.skipped(data);
+    final empty = data['empty_label']?.toString();
+    final hint = data['reorder_hint']?.toString() ?? '';
+    final canReorder = RouteStopCheckInPlan.canReorder(data);
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      SizedBox(height: Ds.space.x24),
+      Row(children: [
+        Expanded(
+            child: Text(data['title']?.toString() ?? '', style: Ds.t.subtitle)),
+        Text(data['count_label']?.toString() ?? '', style: Ds.t.caption),
+      ]),
+      if (hint.isNotEmpty) ...[
+        SizedBox(height: Ds.space.x4),
+        Text(hint, style: Ds.t.caption),
+      ],
+      if (active.isEmpty && parked.isEmpty && (empty ?? '').isNotEmpty) ...[
+        SizedBox(height: Ds.space.x12),
+        Text(empty!, style: Ds.t.bodySecondary),
+      ],
+      if (active.isNotEmpty)
+        ReorderableListView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          buildDefaultDragHandles: false,
+          padding: EdgeInsets.only(top: Ds.space.x12),
+          itemCount: active.length,
+          onReorder: canReorder
+              ? (o, n) => _reorderStops(routeId, o, n)
+              : (_, __) {},
+          proxyDecorator: (child, _, _) =>
+              Material(type: MaterialType.transparency, child: child),
+          itemBuilder: (_, i) => Padding(
+            key: ValueKey(active[i]['stop_id']?.toString() ?? '$i'),
+            padding: EdgeInsets.only(bottom: Ds.space.x12),
+            child: _todayStopRow(routeId, active[i], index: i,
+                canReorder: canReorder),
+          ),
+        ),
+      for (final st in parked) ...[
+        SizedBox(height: Ds.space.x12),
+        _todayStopRow(routeId, st),
+      ],
+    ]);
+  }
+
+  Widget _todayStopRow(String routeId, Map<String, dynamic> st,
+      {int? index, bool canReorder = false}) {
+    final stopId = st['stop_id']?.toString() ?? '';
+    final skipped = RouteStopCheckInPlan.isSkipped(st);
+    final skippedLabel = st['skipped_label']?.toString();
+    final hasMenu = RouteStopCheckInPlan.menu(st).isNotEmpty;
+    final tone = st['status_tone']?.toString();
+    final closed = st['closed_label']?.toString();
+    final eta = st['eta_label']?.toString();
+    final noteLine = st['note_label']?.toString();
+    final photoUrl = st['photo_url']?.toString();
+    final photoLabel = st['photo_label']?.toString();
+    final actions = ((st['actions'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+
+    final card = Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(Ds.space.x12),
+      decoration: BoxDecoration(
+        color: Ds.c.bg,
+        borderRadius: Ds.r.rCard,
+        border: Border.all(color: Ds.c.divider, width: Ds.space.hairline),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Container(
+            width: Ds.space.x24,
+            height: Ds.space.x24,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+                color: skipped ? Ds.c.bg : Ds.c.brandSoft,
+                borderRadius: Ds.r.rChip),
+            // CMD #1874 — the badge prints the backend's seq_label, which is
+            // the placeholder for a stop that holds no place in the day.
+            child: Text(
+                st['seq_label']?.toString() ?? '${st['seq'] ?? ''}',
+                style: Ds.t.caption),
+          ),
+          SizedBox(width: Ds.space.x12),
+          Expanded(
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(st['name']?.toString() ?? '',
+                      style: Ds.t.bodyStrong, overflow: TextOverflow.ellipsis),
+                  if ((st['address']?.toString() ?? '').isNotEmpty)
+                    Text(st['address'].toString(),
+                        style: Ds.t.caption, overflow: TextOverflow.ellipsis),
+                ]),
+          ),
+          if ((eta ?? '').isNotEmpty) Text(eta!, style: Ds.t.caption),
+        ]),
+        SizedBox(height: Ds.space.x8),
+        Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x8, children: [
+          Container(
+            padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x12, vertical: Ds.space.x4),
+            decoration: BoxDecoration(
+                color: routeStopToneSoft(tone), borderRadius: Ds.r.rChip),
+            child: Text(st['status_label']?.toString() ?? '',
+                style: Ds.t.caption),
+          ),
+          if ((closed ?? '').isNotEmpty)
+            Container(
+              padding: EdgeInsets.symmetric(
+                  horizontal: Ds.space.x12, vertical: Ds.space.x4),
+              decoration: BoxDecoration(
+                  color: Ds.c.warningSoft, borderRadius: Ds.r.rChip),
+              child: Text(closed!, style: Ds.t.caption),
+            ),
+          // CMD #1874 — a skipped stop says so in the backend's own word.
+          if ((skippedLabel ?? '').isNotEmpty)
+            Container(
+              padding: EdgeInsets.symmetric(
+                  horizontal: Ds.space.x12, vertical: Ds.space.x4),
+              decoration: BoxDecoration(
+                  color: Ds.c.warningSoft, borderRadius: Ds.r.rChip),
+              child: Text(skippedLabel!, style: Ds.t.caption),
+            ),
+        ]),
+        if ((noteLine ?? '').isNotEmpty) ...[
+          SizedBox(height: Ds.space.x8),
+          Text(noteLine!, style: Ds.t.caption),
+        ],
+        SizedBox(height: Ds.space.x12),
+        Row(children: [
+          for (final a in actions) ...[
+            Expanded(
+              child: SizedBox(
+                height: Ds.touch.minTarget,
+                child: RouteStopCheckInPlan.isSkip(a)
+                    ? OutlinedButton(
+                        onPressed: () => _skipStop(routeId, stopId, a),
+                        child: Text(a['label']?.toString() ?? ''),
+                      )
+                    // CMD #1874 — Restore is the same route_stop_skip call
+                    // with the backend's own boolean.
+                    : RouteStopCheckInPlan.isUnskip(a)
+                        ? OutlinedButton(
+                            onPressed: () => _skipStopFromMenu(routeId, stopId,
+                                {'skipped': false}),
+                            child: Text(a['label']?.toString() ?? ''),
+                          )
+                        : ElevatedButton(
+                            onPressed: () => _openStopCheckIn(routeId, stopId),
+                            child: Text(a['label']?.toString() ?? ''),
+                          ),
+              ),
+            ),
+            SizedBox(width: Ds.space.x8),
+          ],
+          if ((photoUrl ?? '').isNotEmpty)
+            SizedBox(
+              height: Ds.touch.minTarget,
+              child: TextButton.icon(
+                onPressed: () => launchUrl(Uri.parse(photoUrl!),
+                    mode: LaunchMode.externalApplication),
+                icon: const Icon(Icons.photo_outlined),
+                label: Text(photoLabel ?? ''),
+              ),
+            ),
+          // CMD #1874 — the drag handle. Long-press anywhere else on the row
+          // opens the menu instead, so the two gestures never fight.
+          if (index != null && canReorder)
+            ReorderableDragStartListener(
+              index: index,
+              child: SizedBox(
+                width: Ds.touch.minTarget,
+                height: Ds.touch.minTarget,
+                child: Icon(Icons.drag_handle, color: Ds.c.textSecondary),
+              ),
+            ),
+        ]),
+      ]),
+    );
+
+    if (!hasMenu) return card;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onLongPress: () async {
+        final entry = await RouteStopMenuSheet.open(context, st);
+        if (entry == null || !mounted) return;
+        await _skipStopFromMenu(routeId, stopId, entry);
+      },
+      child: card,
+    );
   }
 
   // ── D1: Rep view — "My route today" ──────────────────────────────────────
@@ -12646,7 +15105,10 @@ class _RoutesTabState extends State<_RoutesTab> {
       else
         ...stops.map((s) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
-              child: _stopCard(s, assignmentId: assignmentId, onRefresh: _refreshMyRoute),
+              child: _stopCard(s, assignmentId: assignmentId, onRefresh: () async {
+                await _refreshMyRoute();
+                await _refreshToday();
+              }),
             )),
     ]);
   }
@@ -12903,18 +15365,73 @@ class _RoutesTabState extends State<_RoutesTab> {
         ),
         if (_pastPlansExpanded) ...[
           const Divider(height: 1, color: Color(0xFFE5E7EB)),
-          if (_pastPlans == null)
+          if (_plans == null)
             const Padding(
               padding: EdgeInsets.all(16),
               child: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)),
             )
           else if (_pastPlans!.isEmpty)
             Padding(
-              padding: EdgeInsets.all(14),
-              child: Text(c('admin_customer.no_past_plans'), style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+              padding: EdgeInsets.all(Ds.space.x16),
+              child: Text(
+                  _plans?.emptyLabel ?? c('admin_customer.no_past_plans'),
+                  style: Ds.t.caption),
             )
           else
-            ..._pastPlans!.map((p) {
+            // CHANGE #1867 — lazy rows in their own viewport: a plan row is
+            // built when it scrolls into view, and the next page is appended
+            // when the backend says there is one. Never the whole table.
+            SizedBox(
+              height: (MediaQuery.of(context).size.height * 0.5).clamp(220.0, 560.0),
+              child: NotificationListener<ScrollNotification>(
+                onNotification: (_) {
+                  _onPlansScroll();
+                  return false;
+                },
+                child: Scrollbar(
+                  controller: _plansCtrl,
+                  child: ListView.builder(
+                    controller: _plansCtrl,
+                    primary: false,
+                    itemCount: _pastPlans!.length + 1,
+                    itemBuilder: (ctx, i) {
+                      if (i >= _pastPlans!.length) return _plansListFooter();
+                      return _pastPlanRow(_pastPlans![i]);
+                    },
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ]),
+    );
+  }
+
+  /// The past-plans footer — route_plan_list()'s own more_label / end_label.
+  Widget _plansListFooter() {
+    if (_plansMoreLoading) {
+      return Padding(
+        padding: EdgeInsets.symmetric(vertical: Ds.space.x16),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          SizedBox(
+              width: 12, height: 12,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Ds.c.brand)),
+          SizedBox(width: Ds.space.x8),
+          Text(_plans?.moreLabel ?? '', style: Ds.t.caption),
+        ]),
+      );
+    }
+    final end = _plans?.endLabel;
+    if (end != null) {
+      return Padding(
+        padding: EdgeInsets.symmetric(vertical: Ds.space.x16),
+        child: Center(child: Text(end, style: Ds.t.caption)),
+      );
+    }
+    return SizedBox(height: Ds.space.x12);
+  }
+
+  Widget _pastPlanRow(Map<String, dynamic> p) {
               final planId = p['plan_id'].toString();
               final optStatus = p['opt_status'] as Map?;
               final total = (optStatus?['total_routes'] as num?)?.toInt() ?? 0;
@@ -12930,6 +15447,14 @@ class _RoutesTabState extends State<_RoutesTab> {
                           Text(p['title']?.toString() ?? '',
                               style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
                           if (optStatus != null) _optStatusBadge(total: total, optimized: optimized),
+                          // CMD #1875 — a rebuilt plan reads as v2 of the one
+                          // above it, not as a mystery duplicate.
+                          if ((p['version_label']?.toString() ?? '').isNotEmpty)
+                            _toneChip(RouteCostChip(
+                                p['version_label'].toString(), RouteChipTone.info)),
+                          if ((p['cost_label']?.toString() ?? '').isNotEmpty)
+                            _toneChip(RouteCostChip(
+                                p['cost_label'].toString(), RouteChipTone.brand)),
                         ]),
                         const SizedBox(height: 2),
                         Text(
@@ -12950,10 +15475,6 @@ class _RoutesTabState extends State<_RoutesTab> {
                   ]),
                 ),
               );
-            }),
-        ],
-      ]),
-    );
   }
 
   // ── B4: plan summary + C1: route cards ───────────────────────────────────
@@ -12974,6 +15495,12 @@ class _RoutesTabState extends State<_RoutesTab> {
     RenderLog.write('c485_google_optimize_wired', 1); // Optimize-with-Google button is built below
     RenderLog.write('c488_badges_and_delete', 1); // optimization badges + plan delete are wired
     RenderLog.write('c489_optimize_left', totalRoutes - optimizedRoutes); // any plan size/class mix
+    // CMD #1875 — the Rebuild button and the ₹ chips are built below.
+    RenderLog.write('c1875_rebuild_btn', header['can_rebuild'] == true ? 1 : 0);
+    RenderLog.write('c1875_cost_chips',
+        routes.where((r) => (r['cost_label']?.toString() ?? '').isNotEmpty).length
+            + ((summary['cost_label']?.toString() ?? '').isNotEmpty ? 1 : 0));
+    RenderLog.write('c1875_plan_version', (header['version'] as num?)?.toInt() ?? 1);
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Container(
@@ -12989,7 +15516,22 @@ class _RoutesTabState extends State<_RoutesTab> {
             Text(header['title']?.toString() ?? '',
                 style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
             _optStatusBadge(total: totalRoutes, optimized: optimizedRoutes),
+            // CMD #1875 — the plan's version, and the version that replaced it.
+            ...RoutePlanVersionChips.from(header).chips.map(_toneChip),
           ]),
+          // CMD #1875 — a rebuilt plan is queued and built by the drain; the
+          // stage caption is the backend's own build_stage.
+          if (_planIsBuilding)
+            Padding(
+              padding: EdgeInsets.only(top: Ds.space.x8),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                SizedBox(
+                    width: Ds.space.x12, height: Ds.space.x12,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Ds.c.brand)),
+                SizedBox(width: Ds.space.x8),
+                Text(header['build_stage']?.toString() ?? '', style: Ds.t.caption),
+              ]),
+            ),
           const SizedBox(height: 4),
           Wrap(spacing: 8, runSpacing: 4, children: [
             if (header['types_label'] != null)
@@ -13018,6 +15560,13 @@ class _RoutesTabState extends State<_RoutesTab> {
             Text(summary['total_km_label']?.toString() ?? '',
                 style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
           ]),
+          // CMD #1875 — plan cost + ₹ per converted lead, both backend strings.
+          _costChips(summary),
+          if ((summary['rates_label']?.toString() ?? '').isNotEmpty)
+            Padding(
+              padding: EdgeInsets.only(top: Ds.space.x4),
+              child: Text(summary['rates_label'].toString(), style: Ds.t.caption),
+            ),
           if (warning != null) ...[
             const SizedBox(height: 10),
             Container(
@@ -13053,6 +15602,24 @@ class _RoutesTabState extends State<_RoutesTab> {
               ),
               icon: const Icon(Icons.refresh, size: 15),
               label: Text(c('admin_customer.rebuild'), style: const TextStyle(fontSize: 12.5)),
+            ),
+            // CMD #1875 — re-run the builder over the CURRENT S Leads list.
+            if (header['can_rebuild'] == true)
+              FilledButton.icon(
+                onPressed: _rebuilding ? null : _openRebuildSheet,
+                icon: _rebuilding
+                    ? SizedBox(
+                        width: Ds.space.x12, height: Ds.space.x12,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Ds.c.surface))
+                    : const Icon(Icons.autorenew, size: 15),
+                label: Text(header['rebuild_label']?.toString() ?? ''),
+              ),
+            // CMD #1875 — the ₹/km and ₹/hour behind every cost chip.
+            TextButton.icon(
+              onPressed: _openRatesSheet,
+              icon: const Icon(Icons.currency_rupee, size: 15),
+              label: Text(header['rates_label']?.toString() ?? ''),
             ),
             // CHANGE #489: shown for any plan size/class mix — Google
             // failure never crashes, it just leaves each route as it was.
@@ -13151,6 +15718,23 @@ class _RoutesTabState extends State<_RoutesTab> {
                         ],
                       ]),
                     ),
+                    // CMD #1876 — bulk "visiting today" to every stop on
+                    // this route that has a phone. The caption is ui_copy's;
+                    // an empty key hides the button rather than inventing one.
+                    if (UiCopy.t('routes.msg_stops_btn').isNotEmpty)
+                      TextButton.icon(
+                        onPressed: _msgStopsBusy.contains(routeId)
+                            ? null
+                            : () => _openMessageStopsSheet(r),
+                        icon: Icon(Icons.campaign_outlined, size: Ds.space.x16),
+                        label: Text(UiCopy.t('routes.msg_stops_btn'),
+                            style: Ds.t.caption.copyWith(color: Ds.c.brand)),
+                        style: TextButton.styleFrom(
+                            foregroundColor: Ds.c.brand,
+                            padding: EdgeInsets.symmetric(horizontal: Ds.space.x4),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                      ),
                     if (assigned)
                       _infoChip(worker ?? 'Assigned', const Color(0xFFEFF6FF), const Color(0xFF1E40AF))
                     else
@@ -13170,6 +15754,8 @@ class _RoutesTabState extends State<_RoutesTab> {
                   const SizedBox(height: 2),
                   Text(r['subtitle']?.toString() ?? '',
                       style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+                  // CMD #1875 — route cost + ₹ per converted lead.
+                  _costChips(r),
                   if (dayWarning != null) ...[
                     const SizedBox(height: 4),
                     Text('⚠ $dayWarning',
@@ -13371,6 +15957,8 @@ class _RoutesTabState extends State<_RoutesTab> {
         mapData: data,
         isDesktop: widget.isDesktop,
         onTapStop: _openMapStopSheet,
+        // CMD #1878 — the same dots the live card draws, on the route line.
+        workers: RouteLivePlan.dots(_live),
       ),
       // B5 — leg buttons: Google's directions URL takes only ~9 waypoints, so
       // a 27-stop route is chunked server-side into legs. Never build one URL.
@@ -14782,6 +17370,176 @@ class _AssignRouteDialogState extends State<_AssignRouteDialog> {
               : const Text('Assign'),
         ),
       ],
+    );
+  }
+}
+
+/// CMD #366 row 176 — the admin side of substitution.
+///
+/// It offers exactly two verbs: ASK the customer, and APPLY what the customer
+/// already approved. There is deliberately no third verb that swaps a line on
+/// the customer's behalf — the backend's sub_offer_apply refuses anything that
+/// is not status='approved' with a chosen product the customer picked from the
+/// list they were shown, so this panel cannot become one either.
+class _SubstitutePanel extends StatefulWidget {
+  final String orderId;
+  const _SubstitutePanel({required this.orderId});
+
+  @override
+  State<_SubstitutePanel> createState() => _SubstitutePanelState();
+}
+
+class _SubstitutePanelState extends State<_SubstitutePanel> {
+  List<Map<String, dynamic>> _offers = const [];
+  bool _busy = false;
+  bool _loaded = false;
+  String _error = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final res = await SubstituteChoice.rpc(
+          'sub_offers_for_order', {'p_order_id': widget.orderId});
+      if (!mounted) return;
+      final rows = (res is Map ? (res['offers'] as List?) : null) ?? const [];
+      setState(() {
+        _offers = rows
+            .whereType<Map>()
+            .map((e) => e.cast<String, dynamic>())
+            .toList();
+        _loaded = true;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loaded = true);
+    }
+  }
+
+  Future<void> _run(String fn, Map<String, dynamic> params) async {
+    setState(() {
+      _busy = true;
+      _error = '';
+    });
+    try {
+      final res = await SubstituteChoice.rpc(fn, params);
+      if (res is Map && res['ok'] == false) {
+        // The refusal ships its own sentence — "The customer has not approved
+        // a substitute for this line yet." Print that, never a local one.
+        if (mounted) {
+          setState(() =>
+              _error = (res['message'] ?? res['error'] ?? '').toString());
+        }
+      }
+      await _load();
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_loaded) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(height: Ds.space.x12),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                c('admin_customer.substitute_title'),
+                style: Ds.t.caption.copyWith(
+                    fontWeight: FontWeight.w700, color: Ds.c.textSecondary),
+              ),
+            ),
+            TextButton(
+              onPressed: _busy
+                  ? null
+                  : () => _run('sub_offer_open_for_order',
+                      {'p_order_id': widget.orderId}),
+              child: Text(c('admin_customer.substitute_ask')),
+            ),
+          ],
+        ),
+        if (_error.isNotEmpty)
+          Text(_error, style: Ds.t.caption.copyWith(color: Ds.c.danger)),
+        for (final o in _offers) ...[
+          SizedBox(height: Ds.space.x8),
+          Container(
+            padding: EdgeInsets.all(Ds.space.x12),
+            decoration: BoxDecoration(
+              color: Ds.c.surface,
+              borderRadius: Ds.r.rButton,
+              border: Border.all(color: Ds.c.divider),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // readOnly: the admin sees the customer's options and their
+                // answer, and cannot answer for them.
+                SubstituteChoice(offer: o, readOnly: true),
+                if ((o['status'] ?? '') == 'approved') ...[
+                  SizedBox(height: Ds.space.x8),
+                  SizedBox(
+                    width: double.infinity,
+                    height: Ds.space.x48,
+                    child: FilledButton(
+                      onPressed: _busy
+                          ? null
+                          : () => _run(
+                              'sub_offer_apply', {'p_offer_id': o['offer_id']}),
+                      child: Text(c('admin_customer.substitute_apply')),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// CHANGE #810 — one filter chip on the Customers list. Label and count are
+/// the payload's; this widget only says whether it is on.
+class _CusChip extends StatelessWidget {
+  final String label;
+  final int? count;
+  final bool active;
+  final VoidCallback onTap;
+  const _CusChip(
+      {required this.label,
+      this.count,
+      required this.active,
+      required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: Ds.r.rChip,
+      child: Container(
+        constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+        alignment: Alignment.center,
+        padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
+        decoration: BoxDecoration(
+          color: active ? Ds.c.brandSoft : Ds.c.surface,
+          borderRadius: Ds.r.rChip,
+          border: Border.all(color: active ? Ds.c.brand : Ds.c.divider),
+        ),
+        child: Text(
+          count == null ? label : '$label  $count',
+          style:
+              active ? Ds.t.caption.copyWith(color: Ds.c.brand) : Ds.t.caption,
+        ),
+      ),
     );
   }
 }

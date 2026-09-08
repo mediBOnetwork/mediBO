@@ -1,17 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../design_tokens.dart';
 import '../../services/date_labels.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import '../../widgets/order_item_card.dart';
 
-const _kGreen       = Color(0xFF1B7A43);
-const _kBg          = Color(0xFFF5F6F8);
-const _kCard        = Color(0xFFFFFFFF);
-const _kBorder      = Color(0xFFE5E7EB);
-const _kTextPrimary = Color(0xFF111827);
-const _kTextMuted   = Color(0xFF6B7280);
+// CHANGE #465 · register row 51 — the six hardcoded colours that used to live
+// here are gone. ui_design_set() could not recolour this page; it can now.
 
 class PublicOrderPage extends StatefulWidget {
   final String token;
@@ -62,18 +59,24 @@ class _PublicOrderPageState extends State<PublicOrderPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _kBg,
+      backgroundColor: Ds.c.bg,
       appBar: AppBar(
-        backgroundColor: _kGreen,
+        backgroundColor: Ds.c.brand,
         elevation: 0,
         automaticallyImplyLeading: false,
         title: Text(c('public_order.page_title'),
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 18)),
+            style: Ds.t.subtitle.copyWith(color: Ds.c.surface)),
       ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator(color: _kGreen))
+          ? Center(child: CircularProgressIndicator(color: Ds.c.brand))
           : _error != null
-              ? Center(child: Text(_error!, style: const TextStyle(color: Colors.red, fontSize: 15)))
+              ? Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(Ds.space.x24),
+                    child: Text(_error!,
+                        style: Ds.t.body.copyWith(color: Ds.c.danger)),
+                  ),
+                )
               : _buildContent(),
     );
   }
@@ -82,28 +85,27 @@ class _PublicOrderPageState extends State<PublicOrderPage> {
     final order = _order!;
     final supplierName = order['supplier_name'] as String? ?? '—';
     final orderNo      = order['order_no']?.toString() ?? '—';
-    final status       = (order['status']       as String? ?? '').toLowerCase();
     final createdAt    = order['created_at']    as String?;
     final dateStr = createdAt != null ? _formatDate(createdAt) : '—';
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.all(Ds.space.x16),
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 680),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const SizedBox(height: 8),
-              _headerCard(supplierName, orderNo, status, dateStr),
-              const SizedBox(height: 16),
-              Text(c('public_order.section_items'), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _kTextPrimary)),
-              const SizedBox(height: 8),
+              SizedBox(height: Ds.space.x8),
+              _headerCard(supplierName, orderNo, dateStr),
+              SizedBox(height: Ds.space.x16),
+              Text(c('public_order.section_items'), style: Ds.t.subtitle),
+              SizedBox(height: Ds.space.x8),
               if (_items.isEmpty)
-                Text(c('public_order.empty_items'), style: const TextStyle(color: _kTextMuted))
+                Text(c('public_order.empty_items'), style: Ds.t.caption)
               else
                 ..._items.map((item) => OrderItemCard(item: item)),
-              const SizedBox(height: 32),
+              SizedBox(height: Ds.space.x32),
             ],
           ),
         ),
@@ -111,42 +113,52 @@ class _PublicOrderPageState extends State<PublicOrderPage> {
     );
   }
 
-  Widget _headerCard(String supplier, String orderNo, String status, String date) {
+  Widget _headerCard(String supplier, String orderNo, String date) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.all(Ds.space.x16),
       decoration: BoxDecoration(
-        color: _kCard,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _kBorder),
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        border: Border.all(color: Ds.c.divider),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          Expanded(child: Text(supplier,
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: _kTextPrimary))),
-          _statusChip(status),
+          Expanded(child: Text(supplier, style: Ds.t.subtitle)),
+          _statusChip(),
         ]),
-        const SizedBox(height: 6),
-        Text(cf('public_order.order_number', {'no': orderNo}), style: const TextStyle(fontSize: 13, color: _kTextMuted)),
-        const SizedBox(height: 4),
-        Text(date, style: const TextStyle(fontSize: 13, color: _kTextMuted)),
+        SizedBox(height: Ds.space.x4),
+        Text(cf('public_order.order_number', {'no': orderNo}),
+            style: Ds.t.caption),
+        SizedBox(height: Ds.space.x4),
+        Text(date, style: Ds.t.caption),
       ]),
     );
   }
 
-  Widget _statusChip(String status) {
-    Color bg; Color fg;
-    if (status == 'confirmed' || status == 'delivered' || status == 'accepted') {
-      bg = const Color(0xFFD1FAE5); fg = const Color(0xFF065F46);
-    } else if (status == 'cancelled' || status == 'rejected') {
-      bg = const Color(0xFFFEE2E2); fg = const Color(0xFF991B1B);
-    } else {
-      bg = const Color(0xFFFEF3C7); fg = const Color(0xFF92400E);
-    }
+  /// CHANGE #465 · row 51 — the chip's WORD and its TONE are the backend's
+  /// (`status_label`, `status_tone`). This used to branch on the status string
+  /// in Dart and pick one of six hardcoded hexes, which is a display decision
+  /// made client-side — the same bug as the literals, wearing a switch.
+  Widget _statusChip() {
+    final order = _order ?? const {};
+    final label = (order['status_label'] ?? '').toString();
+    if (label.isEmpty) return const SizedBox.shrink();
+    final tone = (order['status_tone'] ?? '').toString();
+    final fg = tone == 'success'
+        ? Ds.c.success
+        : tone == 'danger'
+            ? Ds.c.danger
+            : Ds.c.warning;
+    final bg = tone == 'success'
+        ? Ds.c.successSoft
+        : tone == 'danger'
+            ? Ds.c.dangerSoft
+            : Ds.c.warningSoft;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
-      child: Text(status.isEmpty ? c('public_order.status_pending') : status,
-          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: fg)),
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x12, vertical: Ds.space.x4),
+      decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rChip),
+      child: Text(label, style: Ds.t.caption.copyWith(color: fg)),
     );
   }
 

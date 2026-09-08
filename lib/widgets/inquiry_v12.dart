@@ -93,7 +93,10 @@ class InquiryAnswerList extends StatefulWidget {
       onBulkCompanyCategory;
   final Set<int> answeringIds;
   final bool readOnly;
-  final Widget Function(Map<String, dynamic> item)? itemTrailingWidget;
+  /// Per-item trailing row. CHANGE #353: may return null for an item that has
+  /// nothing to add (the supplier rate field only exists under an item marked
+  /// available), so an absent trailing draws no divider and no empty padding.
+  final Widget? Function(Map<String, dynamic> item)? itemTrailingWidget;
   final String? surface;
 
   const InquiryAnswerList({
@@ -565,9 +568,9 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
                 )
               else
                 _buildNarrowChips(id, currentAnswer, item),
-              if (widget.itemTrailingWidget != null) ...[
+              if (widget.itemTrailingWidget?.call(item) case final trailing?) ...[
                 const SizedBox(height: 10),
-                widget.itemTrailingWidget!.call(item),
+                trailing,
               ],
             ],
           ],

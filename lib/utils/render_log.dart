@@ -67,9 +67,23 @@ class RenderLog {
     // Don't flush to Supabase on reset — wait for new writes
   }
 
+  /// CHANGE #638 — the one hook a session recording needs. A screen that
+  /// reports itself here is a screen a recorded walkthrough can replay, so the
+  /// recorder listens instead of guessing at route names. Null in every build
+  /// where nothing is recording, which is every build until Om taps Record.
+  static void Function(String key, dynamic value)? onWrite;
+
   static void write(String key, dynamic value) {
     if (_log[key] == value) return; // skip if unchanged
     _log[key] = value;
+    final hook = onWrite;
+    if (hook != null) {
+      try {
+        hook(key, value);
+      } catch (_) {
+        // A recorder must never be able to break the screen it is watching.
+      }
+    }
     _writeToDOM();
     _scheduleSupabaseFlush(_log['build'] as String?);
   }
@@ -147,6 +161,12 @@ class RenderLog {
   // it is given rather than replacing the row, so a signed-out writer can never
   // wipe what a signed-in one recorded.
   static void _flushToSupabase(String? buildHash) {
+    // CHANGE #536 — the seam has to hold here too, not only on the debounced
+    // path. writeNow() calls this DIRECTLY, so a widget test rendering a
+    // writeNow caller reached Supabase from the VM even with flushEnabled
+    // false. It was survivable only because the throw lands in the catch
+    // below; in a test where Supabase IS initialised it would be a real write.
+    if (!flushEnabled) return;
     try {
       final data = Map<String, dynamic>.from(_log)..remove('build');
       Supabase.instance.client.rpc('render_log_note', params: {

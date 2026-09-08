@@ -237,14 +237,14 @@ class _AdminShellState extends State<AdminShell> with WidgetsBindingObserver {
   Widget _buildBody(bool isSuperAdmin) {
     if (_view == _AdminView.dashboard) {
       return QuickLinkNavigator(
-        navigate: (route) => _navigateQuickLink(context, route, isSuperAdmin),
+        navigate: (route, [seed]) => _navigateQuickLink(context, route, isSuperAdmin),
         child: const AdminDashboardScreen(),
       );
     }
     // section
     final nav = _effectiveNav(isSuperAdmin);
     if (_index == 0) return QuickLinkNavigator(
-      navigate: (route) => _navigateQuickLink(context, route, isSuperAdmin),
+      navigate: (route, [seed]) => _navigateQuickLink(context, route, isSuperAdmin),
       child: const AdminDashboardScreen(),
     );
     if (_index == 1) return const AdminAddMedicineScreen();
@@ -255,7 +255,7 @@ class _AdminShellState extends State<AdminShell> with WidgetsBindingObserver {
       return _PageBody(title: nav[_index].pageTitle, icon: nav[_index].icon);
     }
     return QuickLinkNavigator(
-      navigate: (route) => _navigateQuickLink(context, route, isSuperAdmin),
+      navigate: (route, [seed]) => _navigateQuickLink(context, route, isSuperAdmin),
       child: const AdminDashboardScreen(),
     );
   }

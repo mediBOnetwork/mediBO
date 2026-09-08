@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
+import 'restart_safety.dart';
 
 /// Presentation tokens for the Dev Queue tab.
 ///
@@ -56,11 +58,35 @@ Tone toneByName(String name) {
     case 'warning':
       return _warning;
     case 'error':
+    // 'danger' is the design-token name for the destructive tone and it is what
+    // _dev_breaker_badge() sends. Without this case an auto-pause rendered grey,
+    // which reads as "fine" — the one thing that badge must never look like.
+    case 'danger':
       return _error;
     case 'info':
       return _info;
     default: // neutral
       return _neutral;
+  }
+}
+
+/// Presentation-only glyph for a restart-safety chip (CHANGE #233). The label
+/// and the tone arrive from the backend; only this icon is chosen locally, the
+/// same way routeIcon picks a glyph for a route.
+IconData safetyChipIcon(SafetyChipKind kind) {
+  switch (kind) {
+    case SafetyChipKind.offline:
+      return Icons.cloud_off_outlined;
+    case SafetyChipKind.agentSilent:
+      return Icons.hourglass_disabled_outlined;
+    case SafetyChipKind.stall:
+      return Icons.report_problem_outlined;
+    case SafetyChipKind.stepsStale:
+      return Icons.rule_folder_outlined;
+    case SafetyChipKind.steps:
+      return Icons.checklist_rtl;
+    case SafetyChipKind.resumed:
+      return Icons.restart_alt;
   }
 }
 
@@ -71,6 +97,8 @@ IconData routeIcon(String route) {
   switch (route) {
     case 'fast':
       return Icons.bolt;
+    case 'haiku':
+      return Icons.eco_outlined;
     case 'sonnet':
       return Icons.auto_awesome;
     case 'opus':
@@ -83,7 +111,14 @@ IconData routeIcon(String route) {
 Tone androidTone(String s) {
   switch (s) {
     case 'built':
+    // CHANGE #1802 — 'published' (it is on a Play track) and 'skipped'
+    // (waived on the record, with a reason) are the two terminal states the
+    // gate added. Without them both fell to `default` and a shipped release
+    // rendered in the same grey as one that was never built.
+    case 'published':
       return _success;
+    case 'skipped':
+      return _neutral;
     case 'failed':
       return _error;
     case 'building':
@@ -159,9 +194,17 @@ class ToneChip extends StatelessWidget {
         else if (icon != null)
           Icon(icon, size: 13, color: tone.fg),
         if (spinning || icon != null) const SizedBox(width: 5),
-        Text(label,
-            style: TextStyle(
-                fontSize: 12, fontWeight: FontWeight.w600, color: tone.fg)),
+        // CHANGE #1570 — Flexible, so a chip carrying a SENTENCE wraps inside
+        // whatever width its parent gives it instead of overflowing. The Row is
+        // still mainAxisSize.min, so a short label is still hugged; this only
+        // bites when the parent has already constrained the chip (a Flexible
+        // ToneChip in a Row), which is exactly when clipping the backend's own
+        // words would be worst.
+        Flexible(
+          child: Text(label,
+              style: TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w600, color: tone.fg)),
+        ),
       ]),
     );
   }
@@ -211,6 +254,167 @@ class DqCard extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+// ── CHANGE #571 — completion integrity, on the screen ────────────────────────
+// Two states the queue previously could not show, and the reason #536 read as
+// a failure it never was. Both are PURE views over the backend payload: they
+// choose nothing, compose nothing and format nothing. Held down by
+// test/protected/completion_integrity_test.dart.
+
+/// A command that is WAITING (parked on a lease, a merge retry, a busy DB) —
+/// not failed. The chip text, the reassurance line and the tone are all the
+/// backend's own strings; absent fields mean "not waiting", never a guess.
+class WaitView {
+  final bool waiting;
+  final String chip;
+  final String hint;
+  final String reason;
+  final String kind;
+  final Tone tone;
+
+  /// CHANGE #1856 — WHAT THE WAITING COST, as one backend sentence.
+  ///
+  /// A wait has two prices and the queue used to show one word for both. A
+  /// HOLD keeps the session alive and costs nothing; a COLD RESUME tears it
+  /// down and the next session re-reads the entire context — that is how #1848
+  /// reached 9.7M tokens across four resumes. The counts and the sentence are
+  /// the backend's: nothing here pluralises, adds up or decides a tone.
+  /// An empty [costLine] means this command never waited, and draws nothing.
+  final String costLine;
+  final Tone costTone;
+  final int holds;
+  final int coldResumes;
+
+  /// True only while the session is being HELD — the backend's own state word,
+  /// never inferred from the chip text or from `waiting` plus a guess.
+  final bool holding;
+
+  const WaitView({
+    required this.waiting,
+    required this.chip,
+    required this.hint,
+    required this.reason,
+    required this.kind,
+    required this.tone,
+    this.costLine = '',
+    this.costTone = _neutral,
+    this.holds = 0,
+    this.coldResumes = 0,
+    this.holding = false,
+  });
+
+  factory WaitView.fromRow(Map<String, dynamic> row) {
+    final waiting = row['is_waiting'] == true;
+    return WaitView(
+      // A row is waiting only when the BACKEND says so. A `wait_chip` with no
+      // flag renders nothing: the flag is the state, the chip is the wording.
+      waiting: waiting,
+      chip: waiting ? (row['wait_chip'] ?? '').toString() : '',
+      hint: waiting ? (row['wait_hint'] ?? '').toString() : '',
+      reason: (row['wait_reason'] ?? '').toString(),
+      kind: (row['wait_kind'] ?? '').toString(),
+      tone: toneByName((row['wait_tone'] ?? 'warning').toString()),
+      // The cost outlives the wait: a finished command still has to show what
+      // its cold resumes cost, so this is read whatever `is_waiting` says.
+      costLine: (row['resume_cost_line'] ?? '').toString(),
+      costTone: toneByName((row['resume_cost_tone'] ?? 'neutral').toString()),
+      holds: asInt(row['hold_count']),
+      coldResumes: asInt(row['cold_resume_count']),
+      holding: (row['wait_state'] ?? '').toString() == 'holding',
+    );
+  }
+}
+
+/// One line of a command's own spec checklist.
+class SpecItemView {
+  final int n;
+  final String text;
+  final String status;
+  final String statusLabel;
+
+  /// The backend's evidence (why it is built) or drop reason (why it is not).
+  /// Never both, never invented — an item with neither shows neither.
+  final String note;
+  final Tone tone;
+  bool get open => status == 'open';
+
+  const SpecItemView({
+    required this.n,
+    required this.text,
+    required this.status,
+    required this.statusLabel,
+    required this.note,
+    required this.tone,
+  });
+
+  /// Items in PAYLOAD ORDER. The screen never sorts, never re-numbers and
+  /// never decides that an item is done.
+  static List<SpecItemView> listOf(Map<String, dynamic> payload) =>
+      ((payload['items'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .map((it) {
+            final drop = (it['drop_reason'] ?? '').toString();
+            return SpecItemView(
+              n: asInt(it['n']),
+              text: (it['text'] ?? '').toString(),
+              status: (it['status'] ?? '').toString(),
+              statusLabel: (it['status_label'] ?? '').toString(),
+              note: drop.isNotEmpty ? drop : (it['evidence'] ?? '').toString(),
+              tone: toneByName((it['tone'] ?? 'neutral').toString()),
+            );
+          })
+          .toList();
+
+  /// How many items are still open, as the BACKEND counts them — the same
+  /// number the finish gate refuses a completion on.
+  static int openCount(Map<String, dynamic> payload) => asInt(payload['open']);
+}
+
+/// CHANGE #641 — the DB circuit breaker, drawn from `dev_ctl_get().breaker`.
+///
+/// When ten database timeouts land inside five minutes the BACKEND switches
+/// Workflow off by itself and composes this badge (`_dev_breaker_badge()`):
+/// the label, the sentence explaining what happened, the IST timestamp inside
+/// it and the tone name are all server-side. Nothing here decides when the
+/// badge appears, what it says, or what colour it wears — `tripped` is the
+/// only question this widget asks, and it asks it of the payload.
+class BreakerBanner extends StatelessWidget {
+  final Map<String, dynamic> breaker;
+  const BreakerBanner({super.key, required this.breaker});
+
+  static bool tripped(Map<String, dynamic>? b) =>
+      (b?['tripped'] ?? false) == true &&
+      ((b?['label'] ?? '').toString().isNotEmpty);
+
+  @override
+  Widget build(BuildContext context) {
+    if (!tripped(breaker)) return const SizedBox.shrink();
+    final tone = toneByName((breaker['tone'] ?? 'error').toString());
+    final label = (breaker['label'] ?? '').toString();
+    final detail = (breaker['detail'] ?? '').toString();
+    return Container(
+      margin: EdgeInsets.only(top: Ds.space.x8),
+      width: double.infinity,
+      padding:
+          EdgeInsets.symmetric(horizontal: Ds.space.x12, vertical: Ds.space.x12),
+      decoration: BoxDecoration(color: tone.bg, borderRadius: Ds.r.rButton),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(Icons.pause_circle_filled, size: Ds.t.subtitleSize, color: tone.fg),
+        SizedBox(width: Ds.space.x8),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label, style: Ds.t.bodyStrong.copyWith(color: tone.fg)),
+            if (detail.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x4),
+              Text(detail, style: Ds.t.caption.copyWith(color: tone.fg)),
+            ],
+          ]),
+        ),
+      ]),
     );
   }
 }

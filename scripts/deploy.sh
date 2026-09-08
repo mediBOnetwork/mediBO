@@ -5,8 +5,89 @@
 # stale-alias trap (#582) was one `rm` away from being lost and no reviewer
 # could see it. ~/deploy.sh is now a thin wrapper that execs this file.
 set -euo pipefail
-cd ~/mediBO
+# CHANGE #324 — the merge worker deploys from its OWN git worktree, never from
+# the checkout five runners are editing at the same time. MEDIBO_REPO lets it
+# say where; unset, this is byte-for-byte the old `cd ~/mediBO`.
+MEDIBO_REPO="${MEDIBO_REPO:-$HOME/mediBO}"
+cd "$MEDIBO_REPO"
+
+# ── CHANGE #1674 — DEPLOY PHASES: the BUILD stops holding the deploy lane ────
+# Measured on 5 Sep: the lane was held 375-891s per change against a 60s target,
+# and almost all of it was `flutter clean && flutter build web` running INSIDE
+# the lock. Nothing about a build needs the lane — the merged tree is already
+# fixed by then. So this script splits in two:
+#   MEDIBO_DEPLOY_PHASE=build   clean, build, fingerprint, gate, commit — no upload
+#   MEDIBO_DEPLOY_PHASE=upload  wrangler + purge + verify on a bundle already built
+#   MEDIBO_DEPLOY_PHASE=all     (default) exactly the old behaviour, one pass
+# The change number must therefore be knowable BEFORE the lane is taken, which
+# is what merge_batch_prenumber() is for. Pass it as $1 to both phases.
+DEPLOY_PHASE="${MEDIBO_DEPLOY_PHASE:-all}"
+case "$DEPLOY_PHASE" in
+  all|build|upload) ;;
+  *) echo "❌  MEDIBO_DEPLOY_PHASE must be all, build or upload (got '$DEPLOY_PHASE')"; exit 1 ;;
+esac
+if [ "$DEPLOY_PHASE" != "all" ]; then echo "[phase] deploy phase = $DEPLOY_PHASE"; fi
+# Persistent build caches live OUTSIDE the repo, so the mandatory `flutter
+# clean` cannot cold-start pub/Gradle/Dart. Sourcing it here means the split
+# build phase gets the same warm caches the one-pass deploy always had.
+if [ -f "$HOME/mediBO-runner/cache.env" ]; then
+  # shellcheck disable=SC1091
+  . "$HOME/mediBO-runner/cache.env"
+  echo "[cache] PUB_CACHE=${PUB_CACHE:-unset}"
+fi
+_phase_t0=$(date +%s)
+_phase_mark() {  # <name> — one line per phase, so the slowest one is visible
+  local now; now=$(date +%s)
+  echo "[phase-timing] $1 $((now - _phase_t0))s"
+  _phase_t0=$now
+}
+
+# ── CHANGE #1836 — THE EXIT CODE IS NOT THE REASON ──────────────────────────
+# Every deploy from 10:41 to 11:42 UTC on 6 Sep exited 1, and the batch note
+# carried exactly that: "deploy.sh exit 1". Two completely different things were
+# wearing that number — a missing cache-purge token AFTER a successful upload,
+# and a boot gate that refused a bundle BEFORE one — and the lane could not tell
+# them apart, so batches 611-614 shipped while reporting a failure and 619 did
+# not ship while reporting the same failure.
+#
+# So: one code per cause, and the reason WRITTEN DOWN. _die leaves
+# .deploy_error in the repo (exit / reason / error, one line each) and
+# merge_worker.sh puts that error line on the batch. A machine reads the code;
+# a human reads the line.
+#   3  live, but edge caches were not purged (warning — the site IS up)
+#  10  boot gate refused the bundle (nothing uploaded)
+#  11  build-output guard refused the bundle (nothing uploaded)
+#  12  wrangler upload failed
+#  13  live alias never moved to this commit
+#  14  live-assert failed after the upload
+#  42  the pre-upload hook (critical-path smoke) refused the bundle
+#   1  anything not yet classified
+DEPLOY_ERR_FILE="${MEDIBO_DEPLOY_ERR_FILE:-$MEDIBO_REPO/.deploy_error}"
+rm -f "$DEPLOY_ERR_FILE" 2>/dev/null || true
+_reason_write() {  # <exit> <slug> <one-line error>
+  { printf 'exit=%s\n' "$1"
+    printf 'reason=%s\n' "$2"
+    printf 'error=%s\n' "$(printf '%s' "$3" | tr -d '\r' | tr '\n' ' ' | cut -c1-400)"
+    printf 'at=%s\n' "$(date -u +%FT%TZ)"
+  } > "$DEPLOY_ERR_FILE" 2>/dev/null || true
+}
+_die() {  # <exit> <slug> <one-line error> [extra lines…]
+  local code="$1" slug="$2" line="$3"; shift 3
+  _reason_write "$code" "$slug" "$line"
+  echo "❌  $line"
+  local extra; for extra in "$@"; do echo "    $extra"; done
+  exit "$code"
+}
+# A warning is not a failure, but it must not be silent either: it is collected
+# here and re-stated at the end, and it changes the exit code to 3 — never 1,
+# and never 0, because "live but unpurged" is its own state.
+DEPLOY_WARNINGS=""
+_warn() { DEPLOY_WARNINGS="${DEPLOY_WARNINGS}${DEPLOY_WARNINGS:+ | }$1"; echo "⚠️   $1"; }
 export PATH="$PATH:$HOME/flutter/bin"
+# CHANGE #324 — a warm pub/Gradle/Flutter cache is the difference between a
+# two-minute build and a ten-minute one, and `flutter clean` (mandatory, see
+# below) cannot touch any of it because it all lives outside the repo.
+[ -f "$HOME/mediBO-runner/cache.env" ] && source "$HOME/mediBO-runner/cache.env"
 
 # ── Load Cloudflare token (required for wrangler direct upload) ──────────────
 if [ ! -f ~/.medibo/cf.env ]; then
@@ -26,12 +107,23 @@ fi
 # exactly what happened to medibo-1.1.0.apk). This VM is the canonical release
 # host, so refuse to run at all when the keystore config is absent rather than
 # risk shipping a debug-signed artifact from here.
+#
+# CHANGE #173: this is now a WARNING, not an abort. The tripwire was guarding a
+# build this script does not do: deploy.sh builds `flutter build web` only —
+# the APK is built by mediBO-runner/android_build.sh, which carries its own
+# key.properties check and fails the android command loudly when it is absent
+# (see its _fail "android/key.properties missing on VM"). So the signing
+# protection is unchanged and still enforced where APKs are actually produced.
+#
+# What the abort DID do was take the whole box down: key.properties went
+# missing from this VM, and from that moment every WEB deploy died here before
+# building a single file — nothing to do with Android. A web deploy cannot
+# produce a debug-signed APK, so it must not be blocked by one being possible.
 if [ ! -f ~/mediBO/android/key.properties ]; then
-  echo "❌  DEPLOY ABORTED: android/key.properties is MISSING."
-  echo "    A release APK built from here would be silently DEBUG-signed"
-  echo "    (signature mismatch — users cannot install the update)."
-  echo "    Restore android/key.properties (release keystore config) and retry."
-  exit 1
+  echo "⚠️   android/key.properties is MISSING on this box."
+  echo "    Web deploy continues (this script never builds an APK)."
+  echo "    ANDROID RELEASES ARE BLOCKED until it is restored —"
+  echo "    android_build.sh refuses to run without it, by design."
 fi
 
 # ── CHANGE #424: PULL-FIRST GUARD — never build/commit/push on a stale local
@@ -41,12 +133,97 @@ fi
 # forces git's rebase dirty-tree precondition even in the trivial "already
 # up to date" case, which broke deploy.sh's normal flow of building/committing
 # uncommitted source edits still sitting in the working tree.
-git fetch origin --prune
-if ! git pull --ff-only origin main; then
-  echo "❌  DEPLOY ABORTED: local main is behind or diverged from origin/main."
-  echo "    A PR may have been merged on GitHub. Resolve with: git fetch origin && git rebase origin/main"
+# CHANGE #173: the guard now distinguishes "origin says we are stale" from
+# "origin is unreachable". The remote was switched to SSH (#195) before the
+# deploy key was authorised on GitHub, so `git fetch` began failing with
+# "Permission denied (publickey)" — and under `set -e` that killed EVERY deploy
+# on this box at this line, before a single file was built. That is the same
+# trap #187 fixed for `git push`: git is history/rollback only and must never
+# gate the deploy (CLAUDE.md). An unreachable origin now WARNS and continues;
+# a reachable origin keeps the strict ff-only guard that #424 added, so the
+# merged-PR protection is unchanged whenever it can actually be evaluated.
+if [ "$DEPLOY_PHASE" = "upload" ]; then
+  echo "[phase] upload — skipping the pull-first guard (the build phase already ran it)."
+elif git fetch origin --prune; then
+  if ! git pull --ff-only origin main; then
+    echo "❌  DEPLOY ABORTED: local main is behind or diverged from origin/main."
+    echo "    A PR may have been merged on GitHub. Resolve with: git fetch origin && git rebase origin/main"
+    exit 1
+  fi
+else
+  echo "⚠️   git fetch FAILED — origin is unreachable from this box."
+  echo "    Skipping the pull-first guard and continuing: the deploy is the"
+  echo "    wrangler upload, and nothing here force-pushes, so no remote"
+  echo "    history can be lost. Fix auth to restore the guard:"
+  echo "      ssh -T git@github.com   # expect a GitHub greeting, not publickey denied"
+  echo "      (authorise ~/.ssh/id_ed25519_github_medibo.pub as a deploy key)"
+fi
+
+# ── CHANGE #222: FOLD-IN SELF-TEST GATE — THE HARD GATE ─────────────────────
+# Testing is part of the build, not a separate pass. Until #222 "run the
+# protected suite before every deploy" was prose in CLAUDE.md and this script
+# ran ZERO tests, so a red suite shipped, QA failed after the fact, and a
+# "Debug pass — verify & fix #N" twin was created to clean it up — a second
+# full-price build for a bug that was catchable in the first session.
+#
+# scripts/selftest.sh runs, in THIS session, before a single byte is built:
+#   1. flutter test test/protected/   (the regression suite)
+#   2. the command's own focused test (auto-detected from the git diff)
+#
+# rg_check() used to be phase 3 here. CHANGE #273 took it off the build path:
+# it is a heavy read against production, and running it from the pre-build gate
+# is how a 13,573 ms guard query landed on top of the per-minute cron burst at
+# 10:01:24 UTC on 2026-08-18, 33 seconds before Postgres went silent for two
+# hours. It now runs ONCE, after the live alias is confirmed, from
+# scripts/rg_after_deploy.sh — and dev_cmd_complete() still refuses to complete
+# a command while the guard is red, so nothing is weakened.
+#
+# It sits ABOVE the CHANGE #N stamp on purpose: a red suite must not burn a
+# change number on a deploy that never happens (observed while building #222 —
+# an aborted run still auto-incremented version.json 758 -> 759).
+#
+# There is deliberately NO skip flag and no env escape hatch: an opt-out is how
+# a gate quietly stops being a gate. Red tests => we exit here, so no bundle is
+# ever built and there is nothing to roll back. Fix the code and re-run.
+echo ""
+echo "🧪 [gate] fold-in self-test (CHANGE #222) — tests run BEFORE the build…"
+# NOTE: this script runs under `set -e`, so the exit code must be captured with
+# `|| STATUS=$?` — a bare call would abort before the diagnosis below prints.
+SELFTEST_STATUS=0
+if [ "$DEPLOY_PHASE" = "upload" ]; then
+  echo "[phase] upload — the build phase already ran the self-test gate on this exact tree."
+else
+  bash scripts/selftest.sh --no-rg || SELFTEST_STATUS=$?
+fi
+if [ "$SELFTEST_STATUS" -ne 0 ]; then
+  echo ""
+  echo "❌  DEPLOY ABORTED — self-test gate is RED (exit $SELFTEST_STATUS)."
+  if [ "$SELFTEST_STATUS" -eq 2 ]; then
+    echo "    Attempt cap reached: qa_status was set to 'failed'. STOP and fix the"
+    echo "    root cause — do not re-run blindly."
+  else
+    echo "    Fix the failing test(s) in THIS session and run ~/deploy.sh again."
+  fi
+  echo "    Nothing was built and nothing was uploaded — production is untouched."
   exit 1
 fi
+echo "✅ [gate] self-test GREEN — proceeding to build."
+
+# ── CMD #1893: NAV-ORPHAN GATE ──────────────────────────────────────────────
+# The "Also here" strip above Customers, Suppliers and Fulfill is gone. This
+# asks the backend whether any door it carried has been left unreachable, and
+# stops the deploy before a change number is burned if one has. No database
+# credentials on the box => it reports that and passes.
+NAV_ORPHAN_STATUS=0
+bash scripts/check_nav_orphans.sh || NAV_ORPHAN_STATUS=$?
+if [ "$NAV_ORPHAN_STATUS" -ne 0 ]; then
+  echo ""
+  echo "❌  DEPLOY ABORTED — nav-orphan gate is RED (exit $NAV_ORPHAN_STATUS)."
+  echo "    Give each feature above a feature_registry.dashboard_section and"
+  echo "    re-run. Nothing was built and nothing was uploaded."
+  exit 1
+fi
+echo ""
 
 # ── CHANGE #424: dynamic CHANGE #N — kills the hardcoded/stale-label trap.
 # Pass it explicitly: ./deploy.sh 424.
@@ -81,10 +258,39 @@ json.dump(d, open('web/version.json', 'w'))
 "
 CHANGE_LABEL="$N"
 
+# ── CHANGE #198 (LEVER 4): regenerate REPO_MAP.md ───────────────────────────
+# The map is the worker context diet: a builder reads REPO_MAP.md and opens only
+# the files its task touches instead of grep -r'ing all of lib/. Regenerating it
+# on every deploy is what keeps it trustworthy — a stale map sends the worker
+# back to the expensive blanket scan. ~0.2s, deterministic, no network. Never
+# fatal: a broken map must not block a deploy.
+if [ "$DEPLOY_PHASE" != "upload" ]; then
+bash scripts/gen_repo_map.sh || echo "⚠️  REPO_MAP generation failed (continuing)"
+
 # Build release — flutter clean is MANDATORY: skipping it produces a corrupt dart2js
 # bundle (different byte count, fails to boot) even with identical source code.
 flutter clean
-flutter build web --release
+# ── CHANGE #473: stamp the crash-reporting release ──────────────────────────
+# The Sentry release id is the CHANGE number, baked into the bundle at BUILD
+# time by the same script that writes it into version.json — so a crash on a
+# pharmacist's phone names the change that shipped it, with no runtime lookup
+# and no way for the two to drift. The commit is NOT part of the release id
+# (deploy.sh amends the commit AFTER building, so it is not knowable here); the
+# app attaches it separately as a `build_commit` tag read from version.json.
+SENTRY_RELEASE="medibo@${CHANGE_LABEL}"
+SENTRY_DIST="${CHANGE_LABEL}"
+echo "[crash] release=${SENTRY_RELEASE} dist=${SENTRY_DIST}"
+# CHANGE #657 — MEDIBO_CHANGE bakes the change number into main.dart.js, so the
+# RUNNING JavaScript can be compared against the live /version.json. Every other
+# build marker (index.html's _builtCommit, <meta name="build-commit">) is stamped
+# into the DOCUMENT, and a browser on a stale document reads a stale marker and a
+# fresh version.json and concludes nothing is wrong. This one cannot be re-read
+# from a cached document. The COMMIT cannot be used here — it is created by the
+# `git commit` below, after the build.
+flutter build web --release \
+  --dart-define=MEDIBO_CHANGE="${N}" \
+  --dart-define=SENTRY_RELEASE="${SENTRY_RELEASE}" \
+  --dart-define=SENTRY_DIST="${SENTRY_DIST}"
 # NOTE: the downloadable Android APK is NOT bundled here. At 82 MB it exceeds
 # Cloudflare Pages' 25 MB-per-file limit, so it is hosted on Supabase Storage
 # (public bucket app-releases) and its URL is published via app_release_publish
@@ -96,10 +302,29 @@ cp web/_routes.json build/web/_routes.json
 # Commit first so HEAD reflects the new state
 git add -A
 git commit -m "CHANGE #${N}: deploy" || echo "nothing to commit (continuing)"
+_phase_mark "flutter build"
+else
+  echo "[phase] upload — reusing the bundle the build phase left in build/web."
+  if [ ! -f build/web/index.html ]; then
+    echo "❌  MEDIBO_DEPLOY_PHASE=upload but build/web/index.html is missing — run the build phase first."; exit 1
+  fi
+fi
 
-# Capture the just-made commit hash
-SHORT=$(git rev-parse --short HEAD)
-BUILT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+# Capture the just-made commit hash.
+# CHANGE #1674: the upload phase must NOT re-derive this. The build phase
+# amends the commit after fingerprinting, so HEAD has already moved on by the
+# time the upload runs — re-reading it would look for main.<newhash>.dart.js
+# against a bundle named with the OLD hash and abort on a perfectly good build.
+# The build phase writes what it used; the upload phase reads it back.
+PHASE_STATE="$MEDIBO_REPO/.deploy_phase_state"
+if [ "$DEPLOY_PHASE" = "upload" ] && [ -f "$PHASE_STATE" ]; then
+  # shellcheck disable=SC1090
+  . "$PHASE_STATE"
+  echo "[phase] upload — reusing fingerprint $SHORT from the build phase"
+else
+  SHORT=$(git rev-parse --short HEAD)
+  BUILT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+fi
 WEB="build/web"
 
 echo "Build fingerprint: $SHORT ($BUILT)"
@@ -188,42 +413,64 @@ cp web/_headers "$WEB/_headers"
 # ── Guard: verify build output before boot gate ──────────────────────────────
 echo "[guard] checking build output…"
 if [ ! -f "$WEB/index.html" ]; then
-  echo "❌  build/web/index.html missing — build failed"; exit 1
+  _die 11 guard_index "build/web/index.html missing — build failed"
 fi
 if ! grep -q 'base href="/"' "$WEB/index.html" 2>/dev/null; then
-  echo "❌  build/web/index.html missing base href='/' — wrong base-href or bad build"; exit 1
+  _die 11 guard_basehref "build/web/index.html missing base href='/' — wrong base-href or bad build"
 fi
 BUNDLE="$WEB/main.$SHORT.dart.js"
 if [ ! -f "$BUNDLE" ]; then
-  echo "❌  $BUNDLE missing — fingerprint step failed"; exit 1
+  _die 11 guard_bundle_missing "$BUNDLE missing — fingerprint step failed"
 fi
 BUNDLE_SIZE=$(wc -c < "$BUNDLE")
 if [ "$BUNDLE_SIZE" -lt 1500000 ]; then
-  echo "❌  $BUNDLE is only ${BUNDLE_SIZE} bytes — corrupt/partial build (must be >1.5MB). Run flutter clean and retry."; exit 1
+  _die 11 guard_bundle_small "$BUNDLE is only ${BUNDLE_SIZE} bytes — corrupt/partial build (must be >1.5MB); run flutter clean and retry"
 fi
 if [ ! -f "$WEB/assets/AssetManifest.bin" ] && [ ! -f "$WEB/assets/AssetManifest.json" ]; then
-  echo "❌  build/web/assets/AssetManifest* missing — half-built assets dir"; exit 1
+  _die 11 guard_assets "build/web/assets/AssetManifest* missing — half-built assets dir"
 fi
 LIVE_CHANGE=$(python3 -c "import json,sys; print(json.load(open('$WEB/version.json')).get('change',''))" 2>/dev/null || true)
 if [ "$LIVE_CHANGE" != "$CHANGE_LABEL" ]; then
-  echo "❌  build/web/version.json has '$LIVE_CHANGE', expected '$CHANGE_LABEL' — aborting"; exit 1
+  _die 11 guard_version "build/web/version.json has '$LIVE_CHANGE', expected '$CHANGE_LABEL'"
 fi
 # ── CHANGE #491: regression guard for the Fault-2 hardening (see cp comment
 # above) — refuse to ship if _headers ever again lacks the hardened
 # fingerprinted-bundle rule, or has `immutable` on it.
 if ! grep -q '^/main\.\*\.dart\.js$' "$WEB/_headers"; then
-  echo "❌  build/web/_headers missing the hardened /main.*.dart.js rule — aborting (would regress the 2026-07-13 outage fix)"; exit 1
+  _die 11 guard_headers "build/web/_headers missing the hardened /main.*.dart.js rule (would regress the 2026-07-13 outage fix)"
 fi
 if grep -A1 '^/main\.\*\.dart\.js$' "$WEB/_headers" | grep -qi 'immutable'; then
-  echo "❌  build/web/_headers has 'immutable' on the fingerprinted-bundle rule — this is the exact Fault-2 regression, aborting"; exit 1
+  _die 11 guard_headers_immutable "build/web/_headers has 'immutable' on the fingerprinted-bundle rule — the exact Fault-2 regression"
 fi
 echo "[guard] index.html ✓  bundle=${BUNDLE_SIZE}b ✓  assets ✓  version=${CHANGE_LABEL} ✓  headers ✓"
 
 # ── Boot gate — reject corrupt bundles BEFORE they reach production ──────────
+# CHANGE #1836 — TWO ATTEMPTS, AND THE ERROR IS KEPT.
+# The gate boots the bundle against a throwaway local HTTP server. On batch 619
+# that server answered two script requests with its own HTML 404 page, so the
+# page logged `Unexpected token '<'` twice, never painted, and a bundle that was
+# byte-identical to the one batch 620 shipped ten minutes later was refused.
+# A flaky local server must not be able to fail a batch on its own — but a
+# genuinely corrupt bundle must still never reach production, so the gate is
+# RE-RUN rather than forgiven, and only a second refusal aborts.
 echo "[boot-gate] running bundle validation…"
-if ! node ~/boot_check.js "$WEB" 2>&1; then
-  echo "❌  BOOT GATE FAILED — bundle would hang on load. NOT deploying. Fix the build and retry."
-  exit 1
+BOOT_OUT=""
+BOOT_OK=0
+for _bg_try in 1 2; do
+  if BOOT_OUT=$(node ~/boot_check.js "$WEB" 2>&1); then
+    printf '%s\n' "$BOOT_OUT"
+    BOOT_OK=1; break
+  fi
+  printf '%s\n' "$BOOT_OUT"
+  if [ "$_bg_try" = "1" ]; then
+    echo "[boot-gate] attempt 1 refused the bundle — re-running once before failing the batch"
+    sleep 5
+  fi
+done
+if [ "$BOOT_OK" -ne 1 ]; then
+  _die 10 boot_gate \
+    "BOOT GATE FAILED twice — bundle would hang on load, NOT deploying: $(printf '%s' "$BOOT_OUT" | grep -E '^\s*(•|\[boot-gate\])' | tail -3 | tr '\n' ';' | cut -c1-260)" \
+    "Fix the build and retry. Full boot-gate output is above."
 fi
 echo "[boot-gate] PASSED — bundle is safe to deploy"
 
@@ -235,7 +482,41 @@ git add functions/_middleware.js 2>/dev/null || true
 git add "$WEB/main.$SHORT.dart.js" 2>/dev/null || true
 git add "$WEB/main.$SHORT.dart.js.map" 2>/dev/null || true
 git add "$WEB/flutter_service_worker.js" 2>/dev/null || true
-git commit --amend --no-edit
+if [ "$DEPLOY_PHASE" = "upload" ]; then
+  echo "[phase] upload — the build phase already amended the commit; not touching git history again."
+else
+  git commit --amend --no-edit
+  printf 'SHORT=%s\nBUILT=%s\nN=%s\n' "$SHORT" "$BUILT" "$N" > "$PHASE_STATE"
+fi
+
+# ── CHANGE #1674 — the build phase stops HERE, lane never taken ─────────────
+# Everything above is repeatable, verifiable and needs no exclusion: tests, the
+# bundle, the fingerprint, the boot gate, the commit. Only what follows — the
+# upload, the purge and the live verify — has to be serialised.
+if [ "$DEPLOY_PHASE" = "build" ]; then
+  _phase_mark "build phase total"
+  echo ""
+  echo "✅  BUILD PHASE COMPLETE — CHANGE #${N} stamped, bundle gated, nothing uploaded."
+  echo "    Re-run with MEDIBO_DEPLOY_PHASE=upload $N to publish this exact tree."
+  exit 0
+fi
+
+# ── CHANGE #1823 — THE CRITICAL-PATH SMOKE GATE RUNS ON THIS BUNDLE FIRST ──
+# The merge worker sets MEDIBO_PRE_UPLOAD_HOOK to smoke_gate.sh, which puts
+# build/web on the Pages branch `smoke-gate`, drives the critical-path
+# journeys against it, and exits 1 (red) or 3 (crashed). Either aborts HERE,
+# before a byte reaches production: a red critical path is a failed batch and
+# nothing deployed — not a note in the journal after the fact. Exit 42 is
+# this abort and nothing else, so the worker can name it.
+if [ -n "${MEDIBO_PRE_UPLOAD_HOOK:-}" ]; then
+  echo ""
+  echo "🧪  pre-upload hook: $MEDIBO_PRE_UPLOAD_HOOK"
+  if ! bash -c "$MEDIBO_PRE_UPLOAD_HOOK"; then
+    _die 42 pre_upload_hook \
+      "DEPLOY ABORTED: the pre-upload hook refused this bundle — nothing was uploaded to production." \
+      "hook: $MEDIBO_PRE_UPLOAD_HOOK"
+  fi
+fi
 
 # ── LIVE DEPLOY: wrangler Direct Upload — bypasses Cloudflare Pages git queue ──
 echo ""
@@ -249,10 +530,10 @@ DEPLOY_STATUS=$?
 echo "$WRANGLER_OUTPUT"
 DEPLOY_END=$(date +%s)
 DEPLOY_SECS=$((DEPLOY_END - DEPLOY_START))
+_phase_mark "wrangler upload"
 
 if [ $DEPLOY_STATUS -ne 0 ]; then
-  echo "❌  wrangler deploy failed (exit $DEPLOY_STATUS)"
-  exit 1
+  _die 12 wrangler "wrangler deploy failed (exit $DEPLOY_STATUS): $(printf '%s' "$WRANGLER_OUTPUT" | grep -iE 'error|✘|failed' | tail -2 | tr '\n' ';' | cut -c1-240)"
 fi
 
 DEPLOY_URL=$(echo "$WRANGLER_OUTPUT" | grep -oE 'https://[a-z0-9-]+\.medibo(-[0-9a-z]+)?\.pages\.dev[^ ]*' | head -1 || true)
@@ -265,39 +546,69 @@ DEPLOY_URL=$(echo "$WRANGLER_OUTPUT" | grep -oE 'https://[a-z0-9-]+\.medibo(-[0-
 # $CF_API_TOKEN from ~/.medibo_secrets, so the purge silently failed on every
 # deploy (code 10000, "Authentication error") for days without anyone noticing.
 [ -f ~/.medibo_secrets ] && . ~/.medibo_secrets
+# CHANGE #1836 — THIS BLOCK NO LONGER TRUNCATES THE DEPLOY.
+# It sat immediately after a SUCCESSFUL wrangler upload and `exit 1`, so from
+# the moment CF_API_TOKEN went missing every single deploy skipped the git push,
+# the stale-alias re-upload (#582), the live-assert, verify_live.sh AND
+# rg_after_deploy.sh (#273) — the guard that is supposed to catch a schema
+# regression on the deploy that caused it. That is why 611-614 all read
+# "deploy.sh exit 1 but verify_live.sh confirmed live": the script had walked
+# out before it could verify anything. An unpurged edge cache is a real problem
+# and is still said loudly, and it still refuses to look like success — it is
+# exit 3 now, its own state, and the rest of the deploy runs.
+PURGE_STATE=ok
 if [ -z "${CF_ZONE_ID:-}" ] || [ -z "${CF_API_TOKEN:-}" ]; then
-  echo "❌  CACHE PURGE SKIPPED — CF_ZONE_ID or CF_API_TOKEN missing from ~/.medibo_secrets."
-  echo "    The site IS already live via wrangler, but edge caches were not purged."
+  PURGE_STATE=skipped
+  _warn "CACHE PURGE SKIPPED — CF_ZONE_ID or CF_API_TOKEN missing from ~/.medibo_secrets. The site IS live via wrangler; edge caches were not purged."
   echo "    Fix ~/.medibo_secrets (needs a token with Zone -> Cache Purge -> Purge"
   echo "    permission for the medibo.in zone) before trusting this deploy is live everywhere."
-  exit 1
 fi
-PURGE_RESP=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/purge_cache" \
-  -H "Authorization: Bearer $CF_API_TOKEN" \
-  -H "Content-Type: application/json" \
-  --data '{"purge_everything":true}')
-PURGE_OK=$(echo "$PURGE_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print('ok' if d.get('success') else 'fail')" 2>/dev/null || echo "fail")
-if [ "$PURGE_OK" = "ok" ]; then
-  echo "[purge] ok"
-else
-  echo "❌  CACHE PURGE FAILED — response: $PURGE_RESP"
-  echo "    The site IS already live via wrangler, but edge caches were not purged."
-  echo "    A stale/bad response cached as immutable at any edge node will NOT clear on its own."
-  echo "    Fix the Cloudflare token/zone in ~/.medibo_secrets before trusting this deploy."
-  exit 1
+if [ "$PURGE_STATE" = "ok" ]; then
+  PURGE_RESP=$(curl --max-time 60 -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/purge_cache" \
+    -H "Authorization: Bearer $CF_API_TOKEN" \
+    -H "Content-Type: application/json" \
+    --data '{"purge_everything":true}')
+  PURGE_OK=$(echo "$PURGE_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print('ok' if d.get('success') else 'fail')" 2>/dev/null || echo "fail")
+  if [ "$PURGE_OK" = "ok" ]; then
+    echo "[purge] ok"
+  else
+    PURGE_STATE=failed
+    _warn "CACHE PURGE FAILED — response: $(printf '%s' "$PURGE_RESP" | tr -d '\n' | cut -c1-200)"
+    echo "    The site IS already live via wrangler, but edge caches were not purged."
+    echo "    A stale/bad response cached as immutable at any edge node will NOT clear on its own."
+    echo "    Fix the Cloudflare token/zone in ~/.medibo_secrets before trusting this deploy."
+  fi
 fi
 
 # ── CHANGE #424: git push — NEVER --force. If origin/main moved since the
-# pull-first guard above (another deploy raced in), abort loudly instead of
+# pull-first guard above (another deploy raced in), complain loudly instead of
 # clobbering it. The site is already live via wrangler at this point, so a
 # push failure here means "reconcile git, don't re-run blindly" — not a
 # failed deploy.
-if ! git push origin main; then
-  echo "❌  DEPLOY ABORTED (git only — site is already live): push rejected, origin/main moved."
-  echo "    Run: git pull --rebase origin main, then re-run ./deploy.sh ${N} to sync history."
-  exit 1
+# CHANGE #187: the push must NEVER gate the deploy. CLAUDE.md is explicit —
+# "git push ... is history/rollback only and NEVER gates the deploy". The old
+# `exit 1` here meant a push problem reported the whole deploy as FAILED even
+# though wrangler had already put the new build live, so the runner would retry
+# a deploy that had actually succeeded. It bit us the moment the runner moved
+# GCP->EC2 (#184): the GitHub credential lived only on the old box, so on the new
+# host every deploy would have died at this line.
+#
+# The re-upload below (#582) exists only to beat the Cloudflare Git-triggered
+# build that a SUCCESSFUL push starts. If the push did not land, no Git build was
+# triggered, so the first wrangler upload is still the live Production deployment
+# and the re-upload is unnecessary — hence PUSH_OK gates it.
+PUSH_OK=no
+if git push origin main; then
+  PUSH_OK=yes
+  echo "[git] pushed $SHORT to origin"
+else
+  echo "⚠️   git push FAILED — the site IS live (wrangler already uploaded $SHORT)."
+  echo "    History was not pushed. Two usual causes:"
+  echo "      1) origin/main moved: git pull --rebase origin main, then push by hand."
+  echo "      2) no credentials on this box: git config --global credential.helper store"
+  echo "         then run one manual push and paste a GitHub PAT."
+  echo "    Deploy continues — push is history/rollback only."
 fi
-echo "[git] pushed $SHORT to origin"
 
 # ── CHANGE #582: RE-UPLOAD AFTER THE PUSH — the stale-alias trap.
 #
@@ -314,13 +625,17 @@ echo "[git] pushed $SHORT to origin"
 # Fix: upload once more AFTER the push, so the last Production deployment for
 # this project is always ours, not Cloudflare's failed build.
 echo ""
-echo "⬆  Re-uploading after git push (beats the failing Git-triggered build)…"
-npx wrangler pages deploy "$WEB" \
-  --project-name=medibo \
-  --branch=main \
-  --commit-dirty=true >/dev/null 2>&1 \
-  && echo "[reupload] ok" \
-  || echo "⚠️   re-upload failed — check medibo.in/version.json before trusting this deploy"
+if [ "$PUSH_OK" = "yes" ]; then
+  echo "⬆  Re-uploading after git push (beats the failing Git-triggered build)…"
+  npx wrangler pages deploy "$WEB" \
+    --project-name=medibo \
+    --branch=main \
+    --commit-dirty=true >/dev/null 2>&1 \
+    && echo "[reupload] ok" \
+    || echo "⚠️   re-upload failed — check medibo.in/version.json before trusting this deploy"
+else
+  echo "[reupload] skipped — no push landed, so Cloudflare started no Git build to beat."
+fi
 
 # ── Poll version.json until live (max 90s — wrangler is fast) ───────────────
 echo "Waiting for propagation…"
@@ -338,9 +653,9 @@ for i in $(seq 1 $MAX); do
     # Retry up to 3x with 5s gaps because different CF edge nodes propagate at
     # slightly different speeds (version.json can be live before bootstrap).
     echo "[live-assert] verifying edge serves the NEW bundle…"
-    IDX_CODE=$(curl -s -o /dev/null -w "%{http_code}" https://medibo.in/)
-    BS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://medibo.in/flutter_bootstrap.js?cb=${RANDOM}")
-    MAIN_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://medibo.in/main.${SHORT}.dart.js")
+    IDX_CODE=$(curl --max-time 60 -s -o /dev/null -w "%{http_code}" https://medibo.in/)
+    BS_CODE=$(curl --max-time 60 -s -o /dev/null -w "%{http_code}" "https://medibo.in/flutter_bootstrap.js?cb=${RANDOM}")
+    MAIN_CODE=$(curl --max-time 60 -s -o /dev/null -w "%{http_code}" "https://medibo.in/main.${SHORT}.dart.js")
     # CHANGE #604: retry. version.json propagates PER EDGE NODE — the poll loop
     # above can succeed on one node while this check hits another that is still
     # serving the old copy. #603 failed exactly that way on a healthy deploy.
@@ -358,14 +673,14 @@ for i in $(seq 1 $MAX); do
       # CHANGE #600: cache-bust. Without it this reads a CACHED bootstrap and
       # fails a healthy deploy — exactly what happened on #599, where
       # version.json already showed the new commit.
-      LIVE_BUNDLE_REF=$(curl -s -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+      LIVE_BUNDLE_REF=$(curl --max-time 60 -s -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
         "https://medibo.in/flutter_bootstrap.js?cb=${RANDOM}${_bsr}" 2>/dev/null \
         | grep -o "main\.[a-f0-9]*\.dart\.js" | head -1 || true)
       [ "$LIVE_BUNDLE_REF" = "main.${SHORT}.dart.js" ] && break
       [ "$_bsr" -lt 3 ] && sleep 5
     done
-    SHELL_CC=$(curl -sI https://medibo.in/ | grep -i "cache-control" | head -1 | tr -d '\r')
-    MAIN_CC=$(curl -sI "https://medibo.in/main.${SHORT}.dart.js" | grep -i "cache-control" | head -1 | tr -d '\r')
+    SHELL_CC=$(curl --max-time 60 -sI https://medibo.in/ | grep -i "cache-control" | head -1 | tr -d '\r')
+    MAIN_CC=$(curl --max-time 60 -sI "https://medibo.in/main.${SHORT}.dart.js" | grep -i "cache-control" | head -1 | tr -d '\r')
 
     ASSERT_FAIL=0
     [ "$IDX_CODE"   != "200" ] && { echo "❌  live-assert: index=$IDX_CODE (want 200)"; ASSERT_FAIL=1; }
@@ -380,8 +695,9 @@ for i in $(seq 1 $MAX); do
       ASSERT_FAIL=1
     }
     if [ "$ASSERT_FAIL" -eq 1 ]; then
-      echo "❌  LIVE ASSERT FAILED — deploy may have gone to preview or stale CDN. Investigate."
-      exit 1
+      _die 14 live_assert \
+        "LIVE ASSERT FAILED — index=${IDX_CODE} bootstrap=${BS_CODE} main=${MAIN_CODE} bundle_ref=${LIVE_BUNDLE_REF:-?} change=${LIVE_CHANGE_CHECK:-?} (wanted ${CHANGE_LABEL})" \
+        "The deploy may have gone to preview or a stale CDN. Investigate."
     fi
 
     echo "[live-assert] index=${IDX_CODE} bootstrap=${BS_CODE} main=${MAIN_CODE} ✓"
@@ -405,7 +721,7 @@ for i in $(seq 1 $MAX); do
     # script already discards it every time. .dart_tool IS safe to drop — it is
     # gitignored and the next build regenerates it.
     git worktree prune 2>/dev/null || true
-    rm -rf ~/mediBO/.dart_tool 2>/dev/null || true
+    rm -rf "$MEDIBO_REPO/.dart_tool" 2>/dev/null || true
     FREE_MB=$(df -Pm / | awk 'NR==2{print $4}')
     echo "[self-prune] worktrees pruned, .dart_tool dropped — free ${FREE_MB}MB"
     if [ "$FREE_MB" -lt 2048 ]; then
@@ -418,6 +734,22 @@ for i in $(seq 1 $MAX); do
     fi
 
     bash scripts/verify_live.sh
+
+    # CHANGE #273: the schema/RPC guard runs HERE — after the bundle is live —
+    # not in the pre-build gate. It never fails the deploy (the bundle already
+    # shipped); dev_cmd_complete() is what refuses a red guard.
+    bash scripts/rg_after_deploy.sh "${DEPLOY_CMD_ID:-}" || true
+
+    # CHANGE #1836 — a deploy that is LIVE never exits 1. If the only thing that
+    # went wrong is the edge-cache purge, that is exit 3 and the reason is on
+    # record, so the lane stops reading "failed" over a working deploy.
+    if [ -n "$DEPLOY_WARNINGS" ]; then
+      _reason_write 3 "purge_${PURGE_STATE}" "LIVE (CHANGE ${CHANGE_LABEL}, commit $SHORT) with warnings: $DEPLOY_WARNINGS"
+      echo ""
+      echo "✅  DEPLOY LIVE — CHANGE #${CHANGE_LABEL} (${SHORT}) — with warnings:"
+      echo "    $DEPLOY_WARNINGS"
+      exit 3
+    fi
     exit 0
   fi
   echo "  poll $i/$MAX: live='$LIVE', want='$SHORT' — retrying in ${DELAY}s…"
@@ -434,6 +766,7 @@ done
 echo ""
 echo "❌  DEPLOY FAILED: version.json never matched the uploaded commit."
 LIVE_NOW=$(curl -sf --max-time 8 "https://medibo.in/version.json" 2>/dev/null || echo '{}')
+_reason_write 13 alias_never_moved "version.json never matched the uploaded commit $SHORT (change ${CHANGE_LABEL}); live serving $(printf '%s' "$LIVE_NOW" | tr -d '\n' | cut -c1-160)"
 echo "    wanted commit : $SHORT (change ${CHANGE_LABEL})"
 echo "    live serving  : $LIVE_NOW"
 echo "    preview url   : ${DEPLOY_URL:-?}"
@@ -442,4 +775,4 @@ echo "    The upload succeeded but the LIVE ALIAS did not move. Most likely the"
 echo "    Git-connected Pages build (which fails — no Flutter toolchain) landed"
 echo "    after the wrangler upload and pinned the alias to the last good build."
 echo "    Re-run this script; it re-uploads after the push to win that race."
-exit 1
+exit 13

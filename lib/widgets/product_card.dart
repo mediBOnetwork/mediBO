@@ -165,18 +165,26 @@ class _PriceRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 5),
+          // CHANGE #174 — the chip's two colours come from the payload when
+          // the backend banded a margin (pricing_margin_bands), so a 4% margin
+          // and a 30% one do not look alike. No payload chip → the original
+          // styling, unchanged.
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
             decoration: BoxDecoration(
-              color: const Color(0xFFD1FAE5),
+              color: pricing.marginChip?.bg == null
+                  ? const Color(0xFFD1FAE5)
+                  : Color(pricing.marginChip!.bg!),
               borderRadius: BorderRadius.circular(4),
             ),
             child: Text(
-              pricing.discountLabel,
-              style: const TextStyle(
+              pricing.marginChip?.label ?? pricing.discountLabel,
+              style: TextStyle(
                 fontSize: 10,
                 fontWeight: FontWeight.w600,
-                color: Color(0xFF065F46),
+                color: pricing.marginChip?.fg == null
+                    ? const Color(0xFF065F46)
+                    : Color(pricing.marginChip!.fg!),
                 height: 1,
                 leadingDistribution: TextLeadingDistribution.even,
               ),

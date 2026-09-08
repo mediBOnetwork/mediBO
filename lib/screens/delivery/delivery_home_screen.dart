@@ -27,15 +27,23 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../design_tokens.dart';
 import '../../fulfill/fulfill_lookups.dart';
 import '../../services/device_location.dart';
+import '../../services/masked_call_service.dart';
+import '../../services/push_service.dart';
 import '../../user_state.dart';
+import '../../services/run_location_service.dart';
 import '../../utils/render_log.dart';
 import 'agency_team_section.dart'; // C630: PART D
 import 'delivery_google_route.dart';
 import 'delivery_home_panel.dart'; // C630: PART B + C
 import 'delivery_proof_sheet.dart';
 import 'delivery_run_map_panel.dart';
+import '../../services/ui_copy.dart';
+import '../../widgets/delivery_arrival_card.dart';
+import '../../widgets/masked_call_button.dart';
+import 'rider_profile_sheet.dart'; // C463 gap 119
 
 Color get _kGreen => FulfillLookups.instance.color('c_ff1b7a43', const Color(0xFF1B7A43));
 Color get _kBorder => FulfillLookups.instance.color('c_ffe5e7eb', const Color(0xFFE5E7EB));
@@ -44,11 +52,20 @@ Color get _kSub => FulfillLookups.instance.color('c_ff6b7280', const Color(0xFF6
 
 String _ui(String k) => FulfillLookups.instance.ui(k);
 
-Color? _hex(String? h) {
-  final s = (h ?? '').trim().replaceFirst('#', '');
-  if (s.length != 6 && s.length != 8) return null;
-  final v = int.tryParse(s.length == 6 ? 'FF$s' : s, radix: 16);
-  return v == null ? null : Color(v);
+/// CHANGE #463 gap 112 — the payload's colour is RESOLVED through the token
+/// layer, never parsed. A hex string the design system does not know returns
+/// null so the call site falls back to its own token; arbitrary hex from a
+/// payload can therefore never become a Color in this build.
+Color? _colorFromToken(String? token) {
+  if (token == null || token.isEmpty) return null;
+  final s = token.trim().toLowerCase().replaceFirst('#', '');
+  switch (s) {
+    case '1b7a43': return _kGreen;
+    case 'e5e7eb': return _kBorder;
+    case '111827': return _kText;
+    case '6b7280': return _kSub;
+    default: return null;
+  }
 }
 
 class DeliveryHomeScreen extends StatefulWidget {
@@ -88,6 +105,11 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
 
   Timer? _heartbeat;
   StreamSubscription? _watch;
+
+  /// CHANGE #700 — true once the Android foreground service accepted the run.
+  /// Android only; every other platform leaves it false and keeps the in-app
+  /// loop, which is what it has always done.
+  bool _fgsRunning = false;
   bool _busy = false;
 
   /// Guards the arrival popup so one pending stop cannot open two dialogs.
@@ -113,18 +135,51 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
   /// D1 — the agency section is gated on my_delivery_home()'s is_agency.
   bool get _isAgency => _home['is_agency'] == true;
 
+  /// CMD #477 — the rider half of #454's assignment notification.
+  ///
+  /// #454 built the whole server side (the delivery_assigned route, the inbox
+  /// row, the WhatsApp fallback) but could not land the client half, so
+  /// notif_push_send answered `no_active_token` for every rider and wrote no
+  /// notification_log row at all. This surface registers the device token, so
+  /// the push the backend already composes has somewhere to land.
+  bool _pushWired = false;
+  void Function(String)? _prevOnForeground;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     FulfillLookups.instance.ensureLoaded();
     _load();
+    // After the first frame, exactly as the shell does it: a Firebase failure
+    // must never sit in front of this screen's own build (BOOT RESILIENCE
+    // RULE), and PushService swallows every error for the same reason.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _registerPush());
+  }
+
+  /// Register this device for the signed-in rider. `ensureRegistered` is used
+  /// rather than `start` on purpose: the shell owns the deep-link router and a
+  /// second `start` would overwrite it. The call is idempotent on the token.
+  Future<void> _registerPush() async {
+    if (_pushWired || !mounted) return;
+    _pushWired = true;
+    final push = PushService.instance;
+    // A new assignment that arrives while the rider is looking at this screen
+    // must show up on it. The shell's own foreground listener (the bell) is
+    // kept and called first — this chains onto it, it does not replace it.
+    _prevOnForeground = push.onForeground;
+    push.onForeground = (link) {
+      _prevOnForeground?.call(link);
+      if (mounted) _load();
+    };
+    await push.ensureRegistered();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _stopHeartbeat();
+    if (_pushWired) PushService.instance.onForeground = _prevOnForeground;
     super.dispose();
   }
 
@@ -168,7 +223,7 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
       if (_runStarted) {
         _startHeartbeat();
       } else {
-        _stopHeartbeat();
+        _stopRunSharing();
       }
 
       await _loadRunMap();
@@ -205,6 +260,14 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
 
   void _startHeartbeat() {
     if (_heartbeat != null) return;
+    // CHANGE #700 — on Android the run is carried by a foreground service that
+    // keeps its own location subscription, so it survives the app going to the
+    // background or the screen locking. The in-app loop below is the fallback
+    // for web and iOS, which have no equivalent; it is ALSO left running on
+    // Android when the service refuses to start (permission denied, an older
+    // APK with no native half), because a rider reporting from the foreground
+    // is better than a rider reporting nothing.
+    _startForegroundService();
     _push();
     _heartbeat = Timer.periodic(const Duration(seconds: 25), (_) => _push());
     // …and on significant movement, which the browser reports itself.
@@ -212,6 +275,17 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
     RenderLog.write('c629_delivery_heartbeat', 'started');
   }
 
+  Future<void> _startForegroundService() async {
+    if (!RunLocationService.instance.isSupported) return;
+    _fgsRunning = await RunLocationService.instance.start();
+    if (mounted) setState(() {});
+  }
+
+  /// Stops the IN-APP loop only. Deliberately leaves the Android foreground
+  /// service alone: this runs on dispose, and disposing this screen is exactly
+  /// what happens when the rider backgrounds the app or walks into another
+  /// tab — the ten minutes the service exists to survive. Only the run ending
+  /// stops the service (see [_stopRunSharing]).
   void _stopHeartbeat() {
     _heartbeat?.cancel();
     _heartbeat = null;
@@ -219,6 +293,17 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
       _watch?.cancel();
     } catch (_) {}
     _watch = null;
+  }
+
+  /// The trip is over. Android stops sharing the rider's position the moment
+  /// the run does, never a minute later — after which the customer's map is
+  /// supposed to say "last seen", and does.
+  void _stopRunSharing() {
+    _stopHeartbeat();
+    if (_fgsRunning || RunLocationService.instance.isSupported) {
+      RunLocationService.instance.stop();
+      _fgsRunning = false;
+    }
   }
 
   Future<void> _push() async {
@@ -233,15 +318,31 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
         _meLng = fix.lng;
       });
     }
+    // CHANGE #700 — through rider-location, so a web/iOS fix is road-snapped by
+    // the same code path the Android service uses. One snapper, one broadcast,
+    // no second opinion about where the rider is.
     try {
-      await Supabase.instance.client.rpc('delivery_update_location', params: {
-        'p_lat': fix.lat,
-        'p_lng': fix.lng,
-        'p_heading': fix.heading,
-        'p_accuracy': fix.accuracy,
+      await Supabase.instance.client.functions.invoke('rider-location', body: {
+        'lat': fix.lat,
+        'lng': fix.lng,
+        'heading': fix.heading,
+        'accuracy': fix.accuracy,
+        'source': 'inapp',
       });
     } catch (_) {
-      // A dropped heartbeat is not an error the rider can act on.
+      // The function is unreachable — write the raw fix directly rather than
+      // lose the position. It publishes the same broadcast, just unsnapped,
+      // and the payload's own note says so.
+      try {
+        await Supabase.instance.client.rpc('delivery_update_location', params: {
+          'p_lat': fix.lat,
+          'p_lng': fix.lng,
+          'p_heading': fix.heading,
+          'p_accuracy': fix.accuracy,
+        });
+      } catch (_) {
+        // A dropped heartbeat is not an error the rider can act on.
+      }
     }
   }
 
@@ -273,7 +374,7 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
     try {
       final res = await Supabase.instance.client.rpc('delivery_finish_run');
       if (!mounted) return;
-      _stopHeartbeat();
+      _stopRunSharing();
       if (res is Map) {
         // The response's own sentence says how many came back as returns.
         _toast(res['message']?.toString() ?? '');
@@ -388,6 +489,93 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
     } catch (_) {}
   }
 
+  // ── CHANGE #703: the rider confirming the arrival the geofence stamped ────
+  //
+  // It is a CONFIRMATION, not a second arrival — the backend never moves
+  // arrived_at — and the button disappears because the reloaded payload says
+  // confirm_arrival.has is now false, not because this screen remembered a tap.
+  Future<void> _confirmArrival(String deliveryId) async {
+    if (deliveryId.isEmpty) return;
+    try {
+      final res = await Supabase.instance.client
+          .rpc('delivery_confirm_arrival', params: {'p_delivery_id': deliveryId});
+      if (!mounted) return;
+      if (res is Map) _toast(res['label']?.toString() ?? '');
+      RenderLog.write('c703_confirm_arrival', 1);
+      await _load();
+    } catch (_) {}
+  }
+
+  // ── CHANGE #309 (1): warehouse -> rider handover ──────────────────────────
+  //
+  // The rider takes custody by scanning the parcel's QR, or by typing the code
+  // printed under it when the camera will not focus in a dark loading bay.
+  // Every string in this sheet comes from ui_copy: the title, the hint, the
+  // field label and the button. Nothing here decides anything — the backend
+  // answers whether the scan was accepted and what to say about it.
+  Future<void> _handover(Map<String, dynamic> stop) async {
+    final token = stop['qr_token']?.toString() ?? '';
+    final ctrl = TextEditingController(text: token);
+
+    final go = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+          left: Ds.space.x16, right: Ds.space.x16, top: Ds.space.x16,
+          bottom: Ds.space.x16 + MediaQuery.of(ctx).viewInsets.bottom,
+        ),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(c('delivery.handover_section_title'), style: Ds.t.subtitle),
+          SizedBox(height: Ds.space.x8),
+          Text(c('delivery.handover_scan_hint'), style: Ds.t.caption),
+          SizedBox(height: Ds.space.x16),
+          TextField(
+            controller: ctrl,
+            decoration: InputDecoration(
+              labelText: c('delivery.handover_manual_label'),
+              filled: true,
+              fillColor: Ds.c.bg,
+              border: OutlineInputBorder(
+                borderRadius: Ds.r.rButton,
+                borderSide: BorderSide(color: _kBorder),
+              ),
+            ),
+          ),
+          SizedBox(height: Ds.space.x16),
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _kGreen, foregroundColor: Ds.c.surface),
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: Text(c('delivery.handover_submit'),
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
+            ),
+          ),
+        ]),
+      ),
+    );
+
+    if (go != true) return;
+
+    try {
+      final res = await Supabase.instance.client.rpc('delivery_handover_scan', params: {
+        'p_token': ctrl.text.trim(),
+        'p_lat': _meLat,
+        'p_lng': _meLng,
+        'p_method': 'qr',
+      });
+      if (!mounted) return;
+      if (res is Map) _toast(res['message']?.toString() ?? '');
+      RenderLog.write('c309_handover_scan', 1);
+      await _load();
+    } catch (_) {}
+  }
+
   // ── B4: row actions ───────────────────────────────────────────────────────
 
   Future<void> _open(String url) async {
@@ -458,13 +646,32 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
           ],
         ),
         actions: [
+          // CHANGE #463 gap 119 — my_delivery_profile_update() existed with no
+          // caller anywhere in lib/. This is the way in: a rider edits their
+          // own details instead of asking an admin to do it.
+          IconButton(
+            tooltip: _ui('dlv_my_details'),
+            onPressed: () async {
+              final saved = await RiderProfileSheet.show(context);
+              if (saved == true) _load();
+            },
+            icon: const Icon(Icons.person_outline, size: 20),
+          ),
           IconButton(
             tooltip: _ui('dlv_refresh'),
             onPressed: _load,
             icon: const Icon(Icons.refresh, size: 20),
           ),
           TextButton(
-            onPressed: () => UserState.read(context).signOut(),
+            // CMD #477 — retire this device's token BEFORE the credential
+            // goes, so a signed-out phone stops receiving rider pushes. The
+            // token is only known to PushService, so it has to happen here
+            // rather than inside signOut().
+            onPressed: () async {
+              final user = UserState.read(context);
+              await PushService.instance.clearOnLogout();
+              await user.signOut();
+            },
             child: Text(_ui('dlv_sign_out'), style: TextStyle(fontSize: 12.5, color: _kSub)),
           ),
         ],
@@ -474,6 +681,16 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
         child: ListView(
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 28),
           children: [
+            // ── CHANGE #703: an open anomaly, in the rider's own words, above
+            // everything else — off route, stopped, speeding or GPS-silent. The
+            // run decides nothing here; `nudge.has` is the backend's verdict and
+            // a clean run renders no strip at all.
+            RiderNudgeStrip(
+              nudge: _run['nudge'] is Map
+                  ? Map<String, dynamic>.from(_run['nudge'] as Map)
+                  : const <String, dynamic>{},
+            ),
+
             // ── CHANGE #630 (PART B): the home strip sits ABOVE the map, as
             // the spec puts it — shift, today's tiles, earnings, History.
             DeliveryHomePanel(home: _home, onChanged: _load),
@@ -635,7 +852,51 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
         : const <String, dynamic>{};
     final statusLabel = s['status_label']?.toString() ?? '';
 
-    final call = actions['call_number']?.toString() ?? '';
+    // CHANGE #309 — every chip below is (text, colours) straight from the
+    // payload. A chip whose text is empty is not rendered at all, which is how
+    // the backend switches one off: absence, never a placeholder dash.
+    final handover = s['handover'] is Map
+        ? Map<String, dynamic>.from(s['handover'] as Map)
+        : const <String, dynamic>{};
+    final sla = s['sla'] is Map
+        ? Map<String, dynamic>.from(s['sla'] as Map)
+        : const <String, dynamic>{};
+    final cold = s['cold_chain'] is Map
+        ? Map<String, dynamic>.from(s['cold_chain'] as Map)
+        : const <String, dynamic>{};
+    final needsHandover = s['needs_handover'] == true;
+    final coldNote = cold['is_cold_chain'] == true ? (cold['note']?.toString() ?? '') : '';
+    // CHANGE #703 — both are backend verdicts, not states this screen keeps.
+    final confirmArrival = s['confirm_arrival'] is Map
+        ? Map<String, dynamic>.from(s['confirm_arrival'] as Map)
+        : const <String, dynamic>{};
+    final missedHandover = s['missed_handover'] is Map
+        ? Map<String, dynamic>.from(s['missed_handover'] as Map)
+        : const <String, dynamic>{};
+
+    final chips = <(String, Map<String, dynamic>)>[
+      if (statusLabel.isNotEmpty) (statusLabel, colors),
+      if ((handover['chip']?.toString() ?? '').isNotEmpty)
+        (handover['chip'].toString(), handover['colors'] is Map
+            ? Map<String, dynamic>.from(handover['colors'] as Map)
+            : const <String, dynamic>{}),
+      if (cold['is_cold_chain'] == true && (cold['badge']?.toString() ?? '').isNotEmpty)
+        (cold['badge'].toString(), cold['colors'] is Map
+            ? Map<String, dynamic>.from(cold['colors'] as Map)
+            : const <String, dynamic>{}),
+      if ((sla['chip']?.toString() ?? '').isNotEmpty)
+        (sla['chip'].toString(), sla['chip_colors'] is Map
+            ? Map<String, dynamic>.from(sla['chip_colors'] as Map)
+            : const <String, dynamic>{}),
+      if ((s['arrived_chip']?.toString() ?? '').isNotEmpty)
+        (s['arrived_chip'].toString(), const {'bg': '#D1FAE5', 'fg': '#065F46'}),
+    ];
+
+    // CHANGE #404 — the stop no longer carries the pharmacy's real number.
+    // `call_action` is the backend's masked-call descriptor: a label, a target
+    // role and the order it belongs to. There is nothing here to dial.
+    final callAction =
+        MaskedCallTarget.from(s['order_id']?.toString() ?? '', actions['call_action']);
     final wa = actions['whatsapp_number']?.toString() ?? '';
     final dir = actions['directions_url']?.toString() ?? '';
 
@@ -655,7 +916,7 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
               margin: const EdgeInsets.only(right: 8, top: 2),
               alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: _hex(s['pin_color']?.toString()) ?? _kBorder,
+                color: _colorFromToken(s['pin_color']?.toString()) ?? _kBorder,
                 shape: BoxShape.circle,
               ),
               child: Text('${(s['seq'] as num).toInt()}',
@@ -684,6 +945,25 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(fontSize: 12, color: _kSub)),
               ],
+              // CHANGE #463 gap 118 — the note the customer left for the door.
+              // Absent from the payload means the customer left none; the row
+              // is then absent too, never an empty placeholder.
+              if ((s['delivery_instruction']?.toString() ?? '').isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Icon(Icons.sticky_note_2_outlined, size: 13, color: _kGreen),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      '${_ui('dlv_instruction_label')}: ${s['delivery_instruction']}',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Ds.t.caption.copyWith(
+                          fontWeight: FontWeight.w600, color: _kGreen),
+                    ),
+                  ),
+                ]),
+              ],
             ]),
           ),
           const SizedBox(width: 8),
@@ -695,23 +975,51 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
           ]),
         ]),
 
-        if (statusLabel.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: _hex(colors['bg']?.toString()) ?? Colors.transparent,
-                borderRadius: BorderRadius.circular(6),
+        // CHANGE #309 — the status chip is joined by three more, all of them
+        // backend strings with backend colours: custody, the promise, and the
+        // cold-chain badge. They wrap rather than overflow on a 360 px phone.
+        if (chips.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x8),
+          Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x8, children: [
+            for (final c in chips) _chip(c.$1, c.$2),
+          ]),
+        ],
+
+        if (coldNote.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x4),
+          Text(coldNote, style: Ds.t.caption),
+        ],
+
+        // CHANGE #703 — the same cold-chain block the buyer sees, so the rider
+        // and the customer are never looking at two different clocks. The badge
+        // above still comes from _cold_chain_block; this adds elapsed against
+        // the allowed window and turns red when the backend says breached.
+        ColdChainStrip(cold: cold),
+
+        // CHANGE #703 — the geofence stamped the arrival; the rider confirms
+        // it. `confirm_arrival.has` goes false the moment they do, so the
+        // button cannot be pressed twice and no local flag remembers it.
+        if (confirmArrival['has'] == true) ...[
+          SizedBox(height: Ds.space.x8),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: _kGreen,
+                side: BorderSide(color: _kGreen),
               ),
-              child: Text(statusLabel,
-                  style: TextStyle(
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w700,
-                      color: _hex(colors['fg']?.toString()) ?? _kText)),
+              onPressed: () async {
+                await _confirmArrival(s['delivery_id']?.toString() ?? '');
+              },
+              child: Text(confirmArrival['label']?.toString() ?? ''),
             ),
           ),
+        ],
+
+        if (missedHandover['has'] == true) ...[
+          SizedBox(height: Ds.space.x8),
+          Text(missedHandover['label']?.toString() ?? '',
+              style: Ds.t.caption.copyWith(color: Ds.c.danger)),
         ],
 
         // B5 — prominent, and also reachable from the row itself.
@@ -752,8 +1060,7 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
 
         const SizedBox(height: 10),
         Wrap(spacing: 8, runSpacing: 8, children: [
-          if (call.isNotEmpty)
-            _actionBtn(Icons.call_outlined, _ui('dlv_call'), () => _open('tel:$call')),
+          if (callAction != null) MaskedCallButton(target: callAction, dense: true),
           if (wa.isNotEmpty)
             // The 91 prefix is the wa.me URL's country segment, per the spec's
             // own contract for this action — a URL, not a label on screen.
@@ -762,6 +1069,38 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
           if (dir.isNotEmpty)
             _actionBtn(Icons.directions_outlined, _ui('dlv_directions'), () => _open(dir)),
         ]),
+
+        // CHANGE #309 (2) — the promise, printed as the backend formatted it.
+        if (sla['has'] == true && (sla['promised_label']?.toString() ?? '').isNotEmpty) ...[
+          SizedBox(height: Ds.space.x8),
+          Text(
+            '${sla['promise_label'] ?? ''} ${sla['promised_label']}',
+            style: Ds.t.caption,
+          ),
+        ],
+
+        // CHANGE #309 (1) — custody first. While this shows, canDeliver is
+        // false, so this button REPLACES Deliver rather than sitting beside it:
+        // there is only ever one next action on a stop.
+        if (needsHandover) ...[
+          SizedBox(height: Ds.space.x12),
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: _kGreen,
+                side: BorderSide(color: _kGreen),
+              ),
+              onPressed: () => _handover(s),
+              icon: const Icon(Icons.qr_code_scanner_outlined, size: 18),
+              label: Text(
+                (handover['button_label']?.toString() ?? ''),
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+          ),
+        ],
 
         // B4 — only when the backend says so.
         if (canDeliver) ...[
@@ -781,6 +1120,21 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
           ),
         ],
       ]),
+    );
+  }
+
+  // One chip, drawn from a backend (text, colours) pair. Never decides a colour.
+  Widget _chip(String text, Map<String, dynamic> colors) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: Ds.space.x8, vertical: Ds.space.x4),
+      decoration: BoxDecoration(
+        color: _colorFromToken(colors['bg']?.toString()) ?? Colors.transparent,
+        borderRadius: Ds.r.rChip,
+      ),
+      child: Text(text,
+          style: Ds.t.caption.copyWith(
+              fontWeight: FontWeight.w700,
+              color: _colorFromToken(colors['fg']?.toString()) ?? _kText)),
     );
   }
 

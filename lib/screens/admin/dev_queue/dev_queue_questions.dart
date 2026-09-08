@@ -163,7 +163,7 @@ class _DevQueueQuestionsState extends State<DevQueueQuestions> {
           (((res['result'] as Map?)?['added'] as List?) ?? const []).length;
       final msg = added == 1
           ? c('dev_queue.q_queued_one')
-          : c('dev_queue.q_queued_many').replaceFirst('{n}', '$added');
+          : cf('dev_queue.q_queued_many', {'n': '$added'});
       showToast(context, msg);
       Navigator.of(context).pop(true);
     } catch (e) {
@@ -538,8 +538,8 @@ class _DevQueueQuestionsState extends State<DevQueueQuestions> {
         accent: toneByName('info').fg,
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(
-              c('dev_queue.q_split_note')
-                  .replaceAll('{n}', '${_emitMulti.length + 1}'),
+              cf('dev_queue.q_split_note',
+                  {'n': '${_emitMulti.length + 1}'}),
               style: Ds.t.body.copyWith(fontWeight: FontWeight.w600)),
           SizedBox(height: Ds.space.x8),
           Row(children: [

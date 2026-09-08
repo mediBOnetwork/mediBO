@@ -1,0 +1,16 @@
+[Unit]
+Description=mediBO nightly safety net timer — 02:40 IST (21:10 UTC)
+
+[Timer]
+# 21:10 UTC sits inside the 21:00-02:00 UTC heavy-work window the DB lane rule
+# reserves, and the :10 offset keeps it off the minute every bare */N schedule
+# collides on (the 2026-08-18 connection-exhaustion outage).
+OnCalendar=*-*-* 21:10:00 UTC
+# The box powers itself off when idle, so a missed window must still run on the
+# next boot rather than silently skipping a night.
+Persistent=true
+RandomizedDelaySec=300
+Unit=medibo-safety-net.service
+
+[Install]
+WantedBy=timers.target

@@ -2,6 +2,11 @@
 //
 // THE THREE WAYS TO COMPLETE A DELIVERY, plus failed and partial.
 //
+// CMD #453 (feature_gaps 92, 93): the sheet now has the THIRD method the spec
+// always named — a signature — and every write it makes rides the rider's
+// offline action queue (DeliveryOfflineQueue -> delivery_replay), so a stop
+// completed in a basement is kept and sent on reconnect instead of thrown away.
+//
 // C — "All three are geo-stamped — always pass the device's current
 // p_lat / p_lng." Every one of the five write RPCs below takes its coordinates
 // from _fix(), which asks the device at the moment of the tap. There is no path
@@ -20,13 +25,16 @@
 // of this sheet is a table UPDATE, never a rebuild.
 
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../design_tokens.dart';
 import '../../fulfill/fulfill_lookups.dart';
+import '../../services/delivery_offline_queue.dart';
 import '../../services/device_location.dart';
 import '../../utils/render_log.dart';
 
@@ -66,7 +74,7 @@ class _DeliveryProofSheet extends StatefulWidget {
 }
 
 class _DeliveryProofSheetState extends State<_DeliveryProofSheet> {
-  // 0 = QR, 1 = OTP, 2 = Photo
+  // 0 = QR, 1 = OTP, 2 = Photo, 3 = Signature
   int _method = 0;
   bool _busy = false;
 
@@ -84,6 +92,11 @@ class _DeliveryProofSheetState extends State<_DeliveryProofSheet> {
   Uint8List? _photoBytes;
   String _photoMime = 'image/jpeg';
 
+  /// C6 — the signature. Strokes are points in the pad's own coordinate space;
+  /// they become a PNG only at submit time.
+  final List<List<Offset>> _strokes = <List<Offset>>[];
+  Size _padSize = Size.zero;
+
   List<Map<String, dynamic>> _failReasons = const [];
   bool _showOther = false;
 
@@ -94,6 +107,8 @@ class _DeliveryProofSheetState extends State<_DeliveryProofSheet> {
     super.initState();
     _otpSent = (widget.stop['otp_sent'] as bool?) ?? false;
     _loadFailReasons();
+    // anything the rider completed while offline goes out now
+    DeliveryOfflineQueue.instance.start();
   }
 
   @override
@@ -142,7 +157,8 @@ class _DeliveryProofSheetState extends State<_DeliveryProofSheet> {
   /// Closes the sheet on a successful write, surfacing the backend's own
   /// sentence to the screen behind it.
   void _done(Map res) {
-    RenderLog.write('c629_delivery_completed', res['method']?.toString() ?? 'ok');
+    RenderLog.write('c629_delivery_completed',
+        res['queued'] == true ? 'queued' : (res['method']?.toString() ?? 'ok'));
     final msg = res['message']?.toString() ?? '';
     Navigator.of(context).pop(true);
     if (msg.isNotEmpty) {
@@ -169,17 +185,17 @@ class _DeliveryProofSheetState extends State<_DeliveryProofSheet> {
       // last path segment is what is sent; it is not validated here.
       final token = raw.contains('/') ? raw.split('/').where((s) => s.isNotEmpty).last : raw;
       final fix = await _fix();
-      final res = await Supabase.instance.client.rpc('delivery_scan_qr', params: {
-        'p_token': token.split('?').first,
-        'p_lat': fix?.lat,
-        'p_lng': fix?.lng,
+      final res = await DeliveryOfflineQueue.instance.send('scan_qr', {
+        'token': token.split('?').first,
+        'lat': fix?.lat,
+        'lng': fix?.lng,
       });
       if (!mounted) return;
-      if (res is Map && res['ok'] == true) {
+      if (res['ok'] == true || res['queued'] == true) {
         _done(res);
         return;
       }
-      if (res is Map) _showError(res);
+      _showError(res);
     } catch (_) {
       // Network failure — leave the scanner open, no invented message.
     } finally {
@@ -218,20 +234,20 @@ class _DeliveryProofSheetState extends State<_DeliveryProofSheet> {
     _clearError();
     try {
       final fix = await _fix();
-      final res = await Supabase.instance.client.rpc('delivery_verify_otp', params: {
-        'p_delivery_id': _deliveryId,
-        'p_code': _otpCtrl.text.trim(),
-        'p_lat': fix?.lat,
-        'p_lng': fix?.lng,
-        'p_receiver': _receiverCtrl.text.trim(),
+      final res = await DeliveryOfflineQueue.instance.send('verify_otp', {
+        'delivery_id': _deliveryId,
+        'code': _otpCtrl.text.trim(),
+        'lat': fix?.lat,
+        'lng': fix?.lng,
+        'receiver': _receiverCtrl.text.trim(),
       });
       if (!mounted) return;
-      if (res is Map && res['ok'] == true) {
+      if (res['ok'] == true || res['queued'] == true) {
         _done(res);
         return;
       }
       // no_otp / expired / wrong_otp — each carries its own message.
-      if (res is Map) _showError(res);
+      _showError(res);
     } catch (_) {
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -286,20 +302,96 @@ class _DeliveryProofSheetState extends State<_DeliveryProofSheet> {
     try {
       final photoPath = await _uploadPhoto();
       final fix = await _fix();
-      final res = await Supabase.instance.client.rpc('delivery_mark_delivered', params: {
-        'p_delivery_id': _deliveryId,
-        'p_photo_path': photoPath,
-        'p_receiver': _receiverCtrl.text.trim(),
-        'p_lat': fix?.lat,
-        'p_lng': fix?.lng,
+      final res = await DeliveryOfflineQueue.instance.send('mark_delivered', {
+        'delivery_id': _deliveryId,
+        'photo_path': photoPath,
+        'receiver': _receiverCtrl.text.trim(),
+        'lat': fix?.lat,
+        'lng': fix?.lng,
       });
       if (!mounted) return;
-      if (res is Map && res['ok'] == true) {
+      if (res['ok'] == true || res['queued'] == true) {
         _done(res);
         return;
       }
       // photo_required comes back with its own title + message.
-      if (res is Map) _showError(res);
+      _showError(res);
+    } catch (_) {
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  // ── C6: SIGNATURE ─────────────────────────────────────────────────────────
+  // delivery_attach_signature() ends in _delivery_complete(), the same choke
+  // point the photo and OTP methods pass through, so the custody gate and the
+  // cold-chain rule apply to a signature exactly as they do to the other two.
+
+  /// Flattens the strokes into a PNG at the pad's own size. Returns null when
+  /// nothing was drawn — the RPC owns "signature required", not this file.
+  Future<Uint8List?> _signatureBytes() async {
+    if (_strokes.isEmpty || _padSize.isEmpty) return null;
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    canvas.drawRect(
+        Rect.fromLTWH(0, 0, _padSize.width, _padSize.height),
+        Paint()..color = Colors.white);
+    final paint = Paint()
+      ..color = _kText
+      ..strokeWidth = Ds.space.x4 / 2
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+    for (final stroke in _strokes) {
+      for (var i = 1; i < stroke.length; i++) {
+        canvas.drawLine(stroke[i - 1], stroke[i], paint);
+      }
+      if (stroke.length == 1) canvas.drawPoints(ui.PointMode.points, stroke, paint);
+    }
+    final img = await recorder
+        .endRecording()
+        .toImage(_padSize.width.round(), _padSize.height.round());
+    final data = await img.toByteData(format: ui.ImageByteFormat.png);
+    return data?.buffer.asUint8List();
+  }
+
+  Future<String?> _uploadSignature(Uint8List bytes) async {
+    try {
+      final path =
+          'signatures/${_deliveryId}_${DateTime.now().millisecondsSinceEpoch}.png';
+      await Supabase.instance.client.storage.from('delivery-proofs').uploadBinary(
+            path,
+            bytes,
+            fileOptions: const FileOptions(contentType: 'image/png', upsert: true),
+          );
+      return path;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _completeWithSignature() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    _clearError();
+    try {
+      final bytes = await _signatureBytes();
+      final path = bytes == null ? null : await _uploadSignature(bytes);
+      final fix = await _fix();
+      final res = await DeliveryOfflineQueue.instance.send('signature', {
+        'delivery_id': _deliveryId,
+        'signature_path': path,
+        'receiver': _receiverCtrl.text.trim(),
+        'lat': fix?.lat,
+        'lng': fix?.lng,
+      });
+      if (!mounted) return;
+      if (res['ok'] == true || res['queued'] == true) {
+        _done(res);
+        return;
+      }
+      // signature_required / handover_required / cold_chain_photo_required —
+      // each arrives with its own title and message.
+      _showError(res);
     } catch (_) {
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -313,20 +405,20 @@ class _DeliveryProofSheetState extends State<_DeliveryProofSheet> {
     _clearError();
     try {
       final fix = await _fix();
-      final res = await Supabase.instance.client.rpc('delivery_fail', params: {
-        'p_delivery_id': _deliveryId,
-        'p_reason_code': reasonCode,
-        'p_note': _noteCtrl.text.trim(),
-        'p_lat': fix?.lat,
-        'p_lng': fix?.lng,
+      final res = await DeliveryOfflineQueue.instance.send('fail', {
+        'delivery_id': _deliveryId,
+        'reason_code': reasonCode,
+        'note': _noteCtrl.text.trim(),
+        'lat': fix?.lat,
+        'lng': fix?.lng,
       });
       if (!mounted) return;
-      if (res is Map && res['ok'] == true) {
+      if (res['ok'] == true || res['queued'] == true) {
         // The response's own sentence says whether it is reattempted tomorrow.
         _done(res);
         return;
       }
-      if (res is Map) _showError(res);
+      _showError(res);
     } catch (_) {
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -341,22 +433,22 @@ class _DeliveryProofSheetState extends State<_DeliveryProofSheet> {
     try {
       final photoPath = await _uploadPhoto();
       final fix = await _fix();
-      final res = await Supabase.instance.client.rpc('delivery_partial', params: {
-        'p_delivery_id': _deliveryId,
-        'p_delivered_qty': int.tryParse(_deliveredQtyCtrl.text.trim()) ?? 0,
-        'p_returned_qty': int.tryParse(_returnedQtyCtrl.text.trim()) ?? 0,
-        'p_note': _noteCtrl.text.trim(),
-        'p_lat': fix?.lat,
-        'p_lng': fix?.lng,
-        'p_photo': photoPath,
-        'p_receiver': _receiverCtrl.text.trim(),
+      final res = await DeliveryOfflineQueue.instance.send('partial', {
+        'delivery_id': _deliveryId,
+        'delivered_qty': int.tryParse(_deliveredQtyCtrl.text.trim()) ?? 0,
+        'returned_qty': int.tryParse(_returnedQtyCtrl.text.trim()) ?? 0,
+        'note': _noteCtrl.text.trim(),
+        'lat': fix?.lat,
+        'lng': fix?.lng,
+        'photo_path': photoPath,
+        'receiver': _receiverCtrl.text.trim(),
       });
       if (!mounted) return;
-      if (res is Map && res['ok'] == true) {
+      if (res['ok'] == true || res['queued'] == true) {
         _done(res);
         return;
       }
-      if (res is Map) _showError(res);
+      _showError(res);
     } catch (_) {
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -409,6 +501,7 @@ class _DeliveryProofSheetState extends State<_DeliveryProofSheet> {
               if (_method == 0) _qrBody(),
               if (_method == 1) _otpBody(),
               if (_method == 2) _photoBody(),
+              if (_method == 3) _signBody(),
 
               const SizedBox(height: 18),
               Divider(height: 1, color: _kBorder),
@@ -471,6 +564,8 @@ class _DeliveryProofSheetState extends State<_DeliveryProofSheet> {
       tab(1, 'dlv_method_otp'),
       const SizedBox(width: 8),
       tab(2, 'dlv_method_photo'),
+      SizedBox(width: Ds.space.x8),
+      tab(3, 'dlv_method_sign'),
     ]);
   }
 
@@ -560,6 +655,49 @@ class _DeliveryProofSheetState extends State<_DeliveryProofSheet> {
       _receiverField(),
       const SizedBox(height: 12),
       _primaryButton(_ui('dlv_photo_complete'), _completeWithPhoto),
+    ]);
+  }
+
+  Widget _signBody() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Text(_ui('dlv_sign_hint'), style: Ds.t.caption),
+      SizedBox(height: Ds.space.x8),
+      LayoutBuilder(builder: (context, box) {
+        final size = Size(box.maxWidth, Ds.touch.minTarget * 4);
+        _padSize = size;
+        return GestureDetector(
+          onPanStart: (d) => setState(() => _strokes.add(<Offset>[d.localPosition])),
+          onPanUpdate: (d) => setState(() {
+            if (_strokes.isEmpty) _strokes.add(<Offset>[]);
+            _strokes.last.add(d.localPosition);
+          }),
+          child: Container(
+            height: size.height,
+            decoration: BoxDecoration(
+              color: Ds.c.surface,
+              borderRadius: Ds.r.rCard,
+              border: Border.all(color: Ds.c.divider),
+            ),
+            child: CustomPaint(
+              painter: _SignaturePainter(_strokes, _kText),
+              size: size,
+            ),
+          ),
+        );
+      }),
+      SizedBox(height: Ds.space.x8),
+      Align(
+        alignment: Alignment.centerRight,
+        child: TextButton(
+          onPressed: _busy || _strokes.isEmpty
+              ? null
+              : () => setState(_strokes.clear),
+          child: Text(_ui('dlv_sign_clear')),
+        ),
+      ),
+      _receiverField(),
+      SizedBox(height: Ds.space.x12),
+      _primaryButton(_ui('dlv_sign_complete'), _completeWithSignature),
     ]);
   }
 
@@ -667,4 +805,29 @@ class _DeliveryProofSheetState extends State<_DeliveryProofSheet> {
       const SizedBox(height: 8),
     ]);
   }
+}
+
+/// Draws what has been signed so far. It renders the same list the PNG is built
+/// from, so what the rider sees is exactly what is uploaded.
+class _SignaturePainter extends CustomPainter {
+  final List<List<Offset>> strokes;
+  final Color ink;
+  const _SignaturePainter(this.strokes, this.ink);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = ink
+      ..strokeWidth = Ds.space.x4 / 2
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+    for (final stroke in strokes) {
+      for (var i = 1; i < stroke.length; i++) {
+        canvas.drawLine(stroke[i - 1], stroke[i], paint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_SignaturePainter old) => true;
 }

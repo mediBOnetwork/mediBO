@@ -40,9 +40,6 @@ class _LocationHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cartItems = AppState.of(context).distinctItems;
-    // CHANGE #298 — the inbox belongs to a signed-in identity; there is nothing
-    // for it to count before one exists.
-    final signedIn = UserState.of(context).isAuthenticated;
     return SafeArea(
       bottom: false,
       child: Container(
@@ -102,15 +99,21 @@ class _LocationHeader extends StatelessWidget {
                 ),
               ),
             ),
-            // RIGHT: the customer's own app-bar actions (CHANGE #745 — the
-            // wishlist heart lives here now, placed by
-            // customer_feature_placement rather than by this file), then the
-            // inbox bell (every signed-in role), then the cart (customers
-            // only). CHANGE #298 — the bell is what makes an event readable
-            // later whichever channel delivered it.
-            if (!isAdmin) const CustomerAppBarActions(),
-            if (signedIn) NotificationBell(key: bellKey),
-            if (!isAdmin) _MobileCartIcon(cartItems: cartItems, onCart: onCart),
+            // RIGHT: the cart, and on an admin's header nothing at all.
+            //
+            // CMD #1914 (Om) — the wishlist heart and the inbox bell used to
+            // stand here too, so the right edge was three icons wide against a
+            // single 40px avatar on the left and the "centred" logo sat
+            // wherever the leftover space put it. Both moved into the profile
+            // dropdown, which is a `customer_feature_placement` row rather than
+            // anything this file decides, and the two sides are the same width
+            // now — so Expanded + Center puts the logo in the actual centre.
+            // The unread count did not go with the bell: it rides the avatar
+            // (ProfileUnreadDot) and the dropdown's own row.
+            if (!isAdmin)
+              _MobileCartIcon(cartItems: cartItems, onCart: onCart)
+            else
+              SizedBox(width: Ds.touch.minTarget),
           ],
         ),
       ),
@@ -120,13 +123,33 @@ class _LocationHeader extends StatelessWidget {
 
 // ─────────────────────── Mobile profile avatar (left) ───────────────────────
 
-class _MobileProfileAvatar extends StatelessWidget {
+class _MobileProfileAvatar extends StatefulWidget {
   final ValueChanged<String>? onAdminNav;
   final bool isSuperAdmin;
   final int deletionCount;
   /// CHANGE #306 — unactioned unpaid orders, for the nav badge.
   final int alertCount;
   const _MobileProfileAvatar({this.onAdminNav, this.isSuperAdmin = false, this.deletionCount = 0, this.alertCount = 0});
+
+  @override
+  State<_MobileProfileAvatar> createState() => _MobileProfileAvatarState();
+}
+
+/// CMD #1914 — the avatar is stateful now because it carries the unread count.
+/// The bell used to fetch it from the header; the header has no bell any more,
+/// so the first ask happens here and the answer is a notifier every reader
+/// shares (NotifUnread).
+class _MobileProfileAvatarState extends State<_MobileProfileAvatar> {
+  ValueChanged<String>? get onAdminNav => widget.onAdminNav;
+  bool get isSuperAdmin => widget.isSuperAdmin;
+  int get deletionCount => widget.deletionCount;
+  int get alertCount => widget.alertCount;
+
+  @override
+  void initState() {
+    super.initState();
+    NotifUnread.refresh();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -153,11 +176,19 @@ class _MobileProfileAvatar extends StatelessWidget {
           } else if (onAdminNav != null) {
             _showAdminSheet(context, auth);
           } else {
-            Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const ProfileScreen()));
+            // CMD #1914 (Om) — a customer's avatar opens the profile DROPDOWN,
+            // not the profile page. My profile is the sheet's first row, so
+            // the door the tap used to be is still one tap away; the wishlist
+            // and the notifications inbox that used to sit on the header are
+            // the rows under it. WHICH rows is `profile_dropdown` in
+            // customer_feature_placement, so this file names none of them.
+            _showCustomerSheet(context, auth);
           }
         },
-        child: Container(
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+        Container(
           width: 40,
           height: 40,
           decoration: BoxDecoration(
@@ -190,7 +221,22 @@ class _MobileProfileAvatar extends StatelessWidget {
                     color: Colors.white, size: 20),
           ),
         ),
+            if (auth.isAuthenticated)
+              const Positioned(
+                  top: -2, right: -2, child: ProfileUnreadDot()),
+          ],
+        ),
       ),
+    );
+  }
+
+  /// The customer's dropdown. `showResponsiveSheet` is the same door the admin
+  /// sheet uses, so a wide viewport gets a dialog and a phone gets a sheet
+  /// without this file deciding which.
+  void _showCustomerSheet(BuildContext context, AuthNotifier auth) {
+    showResponsiveSheet(
+      context: context,
+      builder: (_) => CustomerProfileDropdown(title: auth.headerTitle),
     );
   }
 

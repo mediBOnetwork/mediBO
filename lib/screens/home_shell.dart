@@ -599,7 +599,7 @@ class _HomeShellState extends State<HomeShell> {
     if (_pushStarted || !mounted) return;
     _pushStarted = true;
     final push = PushService.instance;
-    push.onForeground = (_) => _bellKey.currentState?.refresh();
+    push.onForeground = (_) => NotifUnread.refresh(); // CMD #1914 — the count
     await push.start(onOpen: _openDeepLink);
     if (!mounted) return;
     _pushBoundUid = Supabase.instance.client.auth.currentUser?.id;

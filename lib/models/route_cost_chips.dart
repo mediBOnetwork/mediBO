@@ -21,7 +21,8 @@ library;
 /// The tone a chip is drawn in. The screen maps these onto Ds tokens; keeping
 /// them as names means this file needs no Flutter import and the test needs no
 /// widget binding.
-enum RouteChipTone { brand, success, muted, info, warning }
+/// `danger` joined the vocabulary with CMD #1877's "Not interested" chip.
+enum RouteChipTone { brand, success, muted, info, warning, danger }
 
 class RouteCostChip {
   final String label;

@@ -439,13 +439,12 @@ class AdminCustomerScreen extends StatefulWidget {
   /// CMD #1876 — open ONE route from a link (`?tab=routes&route=<uuid>`), the
   /// link the assignment WhatsApp carries. Same retry story as [openTab]: the
   /// shell reads the URL before this screen's state exists.
-  static void openRoute(String? routeId, {int tries = 12}) {
+  static void openRoute(String? routeId) {
     if (routeId == null || routeId.isEmpty) return;
+    // Park FIRST: openTab may mount the Routes sub-tab synchronously, and its
+    // initState is what collects the parked id.
+    _RoutesTab.openRoute(routeId);
     openTab('routes');
-    if (_RoutesTab.openRoute(routeId)) return;
-    if (tries <= 0) return;
-    WidgetsBinding.instance
-        .addPostFrameCallback((_) => openRoute(routeId, tries: tries - 1));
   }
 
   static void openTab(String? filterName, {int tries = 12}) {
@@ -12412,13 +12411,30 @@ class _RoutesTab extends StatefulWidget {
     return true;
   }
 
-  /// CMD #1876 — the deep link's route. False while this sub-tab is not
-  /// mounted yet, which is what makes AdminCustomerScreen.openRoute retry.
+  /// CMD #1876 — the deep link's route.
+  ///
+  /// This sub-tab is built only while Routes is the active filter, and on a
+  /// cold start that is several seconds of auth and fetching away — far longer
+  /// than a post-frame retry survives. So the id is PARKED and the tab's own
+  /// initState collects it: whenever this widget next mounts, it opens that
+  /// route. Already mounted → open it now.
+  static String? _pendingRouteId;
+
   static bool openRoute(String routeId) {
     final state = _routesKey.currentState;
-    if (state == null) return false;
+    if (state == null) {
+      _pendingRouteId = routeId;
+      return false;
+    }
     state.openRouteById(routeId);
     return true;
+  }
+
+  /// Consumed once, by the state that mounts next.
+  static String? takePendingRoute() {
+    final id = _pendingRouteId;
+    _pendingRouteId = null;
+    return id;
   }
 
   final bool isDesktop;
@@ -12596,11 +12612,21 @@ class _RoutesTabState extends State<_RoutesTab> {
     return leads > 0 ? max(1, (leads / 25).ceil()) : 1;
   }
 
+  /// CMD #1876 — set while a deep-linked route is being opened, so the
+  /// screen-load default below cannot drop the view back onto 'today'.
+  String? _openingRouteId;
+
   @override
   void initState() {
     super.initState();
+    _openingRouteId = _RoutesTab.takePendingRoute();
     _loadScreen();
     _subscribePlanRealtime();
+    final pending = _openingRouteId;
+    if (pending != null) {
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => openRouteById(pending));
+    }
   }
 
   @override
@@ -12754,7 +12780,11 @@ class _RoutesTabState extends State<_RoutesTab> {
         // CMD #1872 — the tab opens on today's assigned route for EVERY role.
         // 'All plans' (the builder) and 'Check in' are secondary links, and
         // the payload names them.
-        _topMode = today['ok'] == true ? 'today' : 'builder';
+        // CMD #1876 — a deep-linked route owns the mode; routes_today() must
+        // not pull the view back to 'today' underneath it.
+        _topMode = _openingRouteId != null
+            ? 'builder'
+            : (today['ok'] == true ? 'today' : 'builder');
         _loading = false;
       });
       _logToday(today);
@@ -13745,12 +13775,20 @@ class _RoutesTabState extends State<_RoutesTab> {
         return;
       }
       setState(() {
+        _openingRouteId = routeId;
         _topMode = 'builder';
         _expandedRouteIds = {routeId};
       });
       await _loadPlan(data['plan_id'].toString());
       if (!mounted) return;
-      setState(() => _expandedRouteIds = {routeId});
+      setState(() {
+        _topMode = 'builder';
+        _expandedRouteIds = {routeId};
+      });
+      // _openingRouteId is deliberately NOT cleared here: _loadScreen()'s own
+      // setState can still land after this one, and it reads the flag to decide
+      // the mode. The mode row clears it — the first time a person picks a mode
+      // themselves, the link has been honoured and is no longer in charge.
       RenderLog.write('c1876_route_opened', routeId);
       _loadRouteMap(routeId);
     } catch (e) {
@@ -14038,7 +14076,8 @@ class _RoutesTabState extends State<_RoutesTab> {
       if (row.isNotEmpty) row.add(SizedBox(width: Ds.space.x8));
       row.add(Expanded(
         child: _segBtn(l['label']?.toString() ?? '', _topMode == mode, () {
-          setState(() => _topMode = mode);
+          // CMD #1876 — a person picking a mode outranks the deep link.
+          setState(() { _openingRouteId = null; _topMode = mode; });
           if (mode == 'myRoute' && _myRoute == null) _refreshMyRoute();
           if (mode == 'today') _refreshToday();
         }),

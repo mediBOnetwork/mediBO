@@ -447,7 +447,7 @@ class AdminCustomerScreen extends StatefulWidget {
     openTab('routes');
   }
 
-  static void openTab(String? filterName, {int tries = 12}) {
+  static void openTab(String? filterName, {int tries = 60}) {
     if (filterName == null || filterName.isEmpty) return;
     final st = _screenKey.currentState;
     if (st != null) {
@@ -455,8 +455,13 @@ class AdminCustomerScreen extends StatefulWidget {
       return;
     }
     if (tries <= 0) return;
-    WidgetsBinding.instance
-        .addPostFrameCallback((_) => openTab(filterName, tries: tries - 1));
+    // CMD #1876 — a TIMER, not a post-frame chain. #1867's twelve frames elapse
+    // in about a fifth of a second, and a cold start is several SECONDS of auth
+    // and fetching before this screen's state exists: the link expired before
+    // its destination was built, and did so intermittently, which is worse than
+    // never. 60 × 250 ms covers a slow boot and still gives up.
+    Timer(const Duration(milliseconds: 250),
+        () => openTab(filterName, tries: tries - 1));
   }
 
   @override

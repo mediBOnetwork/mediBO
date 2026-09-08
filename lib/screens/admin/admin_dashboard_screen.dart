@@ -17,6 +17,7 @@ import '../../models/c529_admin_gaps.dart';
 import '../../widgets/crashes_card.dart'; // CHANGE #473
 import '../../widgets/dashboard_v2_card.dart'; // CHANGE #812
 import '../../widgets/dashboard_home_sections.dart'; // CMD #1891
+import '../../widgets/dashboard_nav_search.dart'; // CMD #1892
 import 'admin_customer_screen.dart'; // CMD #1891 — sub-tab doors
 import 'admin_supplier_screen.dart'; // CMD #1891 — sub-tab doors
 import '../../services/ui_copy.dart';
@@ -502,6 +503,17 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     );
   }
 
+  /// CMD #1892 — the search field and the section grids live in a column that
+  /// stops growing at [kDashboardMaxWidth] and stays centred, so a 6-across
+  /// grid on a wide monitor is a grid and not a scatter. The KPI cards above
+  /// keep the full width they had: the spec leaves them exactly as they are.
+  static Widget _centred(Widget child) => Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: kDashboardMaxWidth),
+          child: child,
+        ),
+      );
+
   Widget _buildBody(BuildContext context, {required bool legacy}) {
     RenderLog.write('c1016_dashboard_layout', legacy ? 'v1' : 'v2');
     return LayoutBuilder(builder: (ctx, box) {
@@ -516,8 +528,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       // only copy of them in the console — and it collapses to a single line
       // as the page scrolls. Under it, the universal search bar.
       final slivers = <Widget>[
+        // CMD #1892 — the spec asks for one page that scrolls with nothing
+        // fixed, so the header scrolls away with everything else. It keeps the
+        // date and zone pickers: they are still the ONLY copy of them in the
+        // console, they simply no longer float over the content.
         SliverPersistentHeader(
-          pinned: true,
+          pinned: false,
           delegate: _StickyDashHeader(
             title: (header['title'] ?? '').toString(),
             subLabel: (header['sub_label'] ?? '').toString(),
@@ -534,19 +550,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 RenderLog.write('titles_removed_dashboard', 'true');
                 return const SizedBox.shrink();
               }),
-              // The entity door, full width, directly under the header: order
-              // code, phone, pharmacy, supplier or product. Its wording is
-              // universal_search()'s own hint, never a Dart literal.
-              _SearchBar(
-                key: const Key('c813_search_bar'),
-                label: (header['search_hint'] ?? '').toString().isNotEmpty
-                    ? (header['search_hint'] ?? '').toString()
-                    : c('usearch.placeholder'),
-                onTap: _openUniversalSearch,
-                paletteLabel: _label('search_button'),
-                onPalette: _openPalette,
-              ),
-              SizedBox(height: Ds.space.x24),
               if (_loading && _dash.isEmpty)
                 // Loading is a shape, not a spinner.
                 const DashboardV2Skeleton()
@@ -558,14 +561,32 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   onShare: _shareMetric,
                 ),
                 if (_dash.isNotEmpty) SizedBox(height: Ds.space.x24),
+                // CMD #1892 — the ONE search control, directly under today's
+                // KPI cards: an inline nav_search() field. #813's entity sheet
+                // and #325's palette are its trailing icons, so neither door
+                // was closed by moving the bar.
+                _centred(DashboardNavSearchField(
+                  key: const Key('c813_search_bar'),
+                  search: _search,
+                  onPick: _openTile,
+                  hint: (header['search_hint'] ?? '').toString().isNotEmpty
+                      ? (header['search_hint'] ?? '').toString()
+                      : c('dashboard_home.search_hint'),
+                  entityLabel: c('usearch.placeholder'),
+                  onEntitySearch: _openUniversalSearch,
+                  paletteLabel: _label('search_button'),
+                  onPalette: _openPalette,
+                )),
+                SizedBox(height: Ds.space.x24),
                 if (_ops.isNotEmpty) _OpsBoardCard(payload: _ops),
                 // CMD #1891 — every door that used to hide in the "Also
                 // here" strip above Customers, Suppliers and Fulfill, in the
                 // six sections dashboard_home() names.
-                DashboardHomeSections(
+                // CMD #1892 — needs-you-now as rows, the rest as tile grids.
+                _centred(DashboardHomeSections(
                   load: loadDashboardHome,
                   onOpen: _openTile,
-                ),
+                )),
                 const OrderHoursCard(),
                 const NotificationsCard(),
                 const CrashesCard(),
@@ -699,70 +720,12 @@ class _StickyDashHeader extends SliverPersistentHeaderDelegate {
       old.hpad != hpad;
 }
 
-// ── CHANGE #813: the one search bar ──────────────────────────────────────────
+// ── CHANGE #813 / CMD #1892: the one search control ─────────────────────────
 //
-// #812 put the entity search behind a quiet text button so it would not read as
-// a second identical box. The spec asks for ONE bar under the header, so this
-// is that bar — the entity door — with the screen jumper kept as its trailing
-// icon rather than a second full-width control.
-class _SearchBar extends StatelessWidget {
-  final String label;
-  final VoidCallback onTap;
-  final String paletteLabel;
-  final VoidCallback onPalette;
-
-  const _SearchBar({
-    super.key,
-    required this.label,
-    required this.onTap,
-    required this.paletteLabel,
-    required this.onPalette,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    RenderLog.write('c325_palette_button', 1);
-    return Row(children: [
-      Expanded(
-        child: InkWell(
-          key: const Key('c812_search_button'),
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(Ds.r.button),
-          child: Container(
-            height: Ds.space.x48,
-            padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-            decoration: BoxDecoration(
-              color: Ds.c.bg,
-              borderRadius: BorderRadius.circular(Ds.r.button),
-              border: Border.all(color: Ds.c.divider),
-            ),
-            child: Row(children: [
-              Icon(Icons.search,
-                  size: Ds.space.x24, color: Ds.c.textSecondary),
-              SizedBox(width: Ds.space.x12),
-              Expanded(
-                  child: Text(label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Ds.t.bodySecondary)),
-            ]),
-          ),
-        ),
-      ),
-      SizedBox(width: Ds.space.x8),
-      Tooltip(
-        message: paletteLabel,
-        child: IconButton(
-          key: const Key('c813_palette_button'),
-          onPressed: onPalette,
-          iconSize: Ds.space.x24,
-          constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-          icon: Icon(Icons.bolt_outlined, color: Ds.c.textSecondary),
-        ),
-      ),
-    ]);
-  }
-}
+// #813's tap-to-open bar has become an INLINE nav_search() field
+// (widgets/dashboard_nav_search.dart), moved to sit directly under today's
+// KPI cards where #1892's layout puts it. It is still ONE control: the entity
+// search sheet and the command palette ride on it as trailing icons.
 
 // ── #58 — the stuck-work card ────────────────────────────────────────────────
 //
@@ -933,5 +896,5 @@ class QuickLinkNavigator extends InheritedWidget {
 
 
 // CHANGE #813 — _PaletteButton is gone: the screen jumper now lives as the
-// trailing icon on the ONE search bar (_SearchBar above), so the dashboard has
-// a single search control instead of two stacked boxes.
+// trailing icon on the ONE search control (DashboardNavSearchField), so the
+// dashboard has a single search box instead of two stacked ones.

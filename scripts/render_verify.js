@@ -108,6 +108,11 @@ const supplierKeys    = argv.includes('--supplier-keys');
 // and reads the render-log THERE; --shot saves that page's pixels, which is the
 // screenshot the completion gate asks for.
 const adminPath       = argVal('--admin-path');
+// CMD #1892 — the admin phase always drove a 1280px desktop, so a screenshot of
+// a responsive admin screen could only ever prove the wide layout. --admin-width
+// drives the same authed session at a phone width (390) or anything else; it
+// defaults to 1280, so every existing caller behaves exactly as before.
+const adminWidth      = parseInt(argVal('--admin-width') || '1280', 10);
 const shotPath        = argVal('--shot');
 
 // CMD #466 — a card BELOW the fold is still unphotographed evidence.
@@ -619,7 +624,9 @@ async function phaseAdmin(browser, session, expectedHash) {
 
   for (let attempt = 1; attempt <= MAX_RETRIES && !passed; attempt++) {
     console.log(`  Attempt ${attempt}/${MAX_RETRIES}`);
-    const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const ctx = await browser.newContext({
+      viewport: { width: adminWidth, height: 900 },
+    });
     await ctx.addInitScript(({ key, val }) => {
       localStorage.setItem(key, val);
     }, { key: STORAGE_KEY, val: JSON.stringify(session) });

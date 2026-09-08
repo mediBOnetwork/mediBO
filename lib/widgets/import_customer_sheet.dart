@@ -47,6 +47,12 @@ class ImportCustomerSheet extends StatefulWidget {
   /// lead_customer_prefill().missing[]: fields the lead could not supply.
   final List<String> missing;
 
+  /// CMD #1874 — the lead this form was opened from. When it is set the save
+  /// goes through lead_import_customer(), which writes the customer AND the
+  /// lead's matched_customer_id in ONE transaction, so a converted shop can
+  /// never be left as an unlinked lead.
+  final int? leadId;
+
   /// Which schema the backend should send. A caller may name it; otherwise a
   /// sheet opened with a LEAD prefill is the Convert-lead surface and asks for
   /// that schema, so the S Leads call sites need no change to get their own
@@ -62,6 +68,7 @@ class ImportCustomerSheet extends StatefulWidget {
     this.prefill,
     this.missing = const [],
     this.formContext,
+    this.leadId,
   });
 
   /// Returns true when a customer was imported (caller should refresh).
@@ -71,6 +78,7 @@ class ImportCustomerSheet extends StatefulWidget {
     Map<String, dynamic>? prefill,
     List<String> missing = const [],
     String? formContext,
+    int? leadId,
   }) =>
       showDialog<bool>(
         context: context,
@@ -79,7 +87,8 @@ class ImportCustomerSheet extends StatefulWidget {
             extracted: extracted,
             prefill: prefill,
             missing: missing,
-            formContext: formContext),
+            formContext: formContext,
+            leadId: leadId),
       );
 
   @override
@@ -346,8 +355,13 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
       // CHANGE #1887 — straight to the RPC. admin_import_customer() makes the
       // auth login itself when there is no user_id, so adding a shop is one
       // call, not an edge-function round-trip first.
-      final res = await Supabase.instance.client
-          .rpc('admin_import_customer', params: {'p': _form.payload()});
+      // CMD #1874 — opened from a lead, the save is the lead-aware wrapper:
+      // same import, plus the link back onto scraped_leads, one transaction.
+      final res = widget.leadId == null
+          ? await Supabase.instance.client
+              .rpc('admin_import_customer', params: {'p': _form.payload()})
+          : await Supabase.instance.client.rpc('lead_import_customer',
+              params: {'p': _form.payload(), 'p_lead_id': widget.leadId});
       final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
 
       if (m['error'] != null) {
@@ -361,12 +375,14 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
       final code = m['customer_code']?.toString() ?? '';
       final msg = m['message']?.toString() ?? '';
       final stage = m['stage_label']?.toString() ?? '';
+      // CMD #1874 — the link's own sentence, verbatim, when there was a lead.
+      final link = m['link_message']?.toString() ?? '';
       RenderLog.write('c1887_import_ok',
           'code=$code;login=${m['login_created']};stage=${m['registration_stage']}');
       if (!mounted) return;
       Navigator.of(context).pop(true);
       final banner =
-          [msg, code, stage].where((s) => s.isNotEmpty).join('  ·  ');
+          [msg, link, code, stage].where((s) => s.isNotEmpty).join('  ·  ');
       if (banner.isNotEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(banner),

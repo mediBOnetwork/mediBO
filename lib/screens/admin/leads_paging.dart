@@ -109,6 +109,7 @@ class SLeadRow {
     this.phoneLabel,
     this.branchesLabel,
     this.branchesExpandable = false,
+    this.revisitLabel,
   });
 
   final int? id;
@@ -127,6 +128,12 @@ class SLeadRow {
   /// it has anything to open. Neither is derived from a count here.
   final String? branchesLabel;
   final bool branchesExpandable;
+
+  /// CMD #1874 — the revisit engine's chip. The backend sends a label ONLY
+  /// when the lead's revisit date has come due, so the row shows a chip
+  /// exactly when the next plan build would pick this lead up again. Nothing
+  /// here compares a date.
+  final String? revisitLabel;
 
   static String? _s(Map<String, dynamic> r, List<String> keys) {
     for (final k in keys) {
@@ -150,5 +157,6 @@ class SLeadRow {
         phoneLabel: _s(r, const ['phone_label', 'phone']),
         branchesLabel: _s(r, const ['branches_label']),
         branchesExpandable: r['branches_expandable'] == true,
+        revisitLabel: _s(r, const ['revisit_label']),
       );
 }

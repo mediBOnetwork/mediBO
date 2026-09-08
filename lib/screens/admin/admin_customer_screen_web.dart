@@ -11253,6 +11253,10 @@ class _SLeadsTabState extends State<_SLeadsTab> {
                 // CMD #1871 — "3 branches". Tapping opens the row WITH its
                 // branch list; when the toggle is on the backend sends
                 // branches_expandable:false and the chip is a plain label.
+                // CMD #1874 — "Revisit": this lead's parked date has come
+                // due, so the next plan build is allowed to pick it up again.
+                if (row.revisitLabel != null && row.revisitLabel!.isNotEmpty)
+                  _leadRowChip(row.revisitLabel!, Ds.c.warningSoft, Ds.c.warning),
                 if (row.branchesLabel != null && row.branchesLabel!.isNotEmpty)
                   _branchChip(row.branchesLabel!,
                       open: false,
@@ -11664,6 +11668,18 @@ class _SLeadsTabState extends State<_SLeadsTab> {
                             fontWeight: FontWeight.w700,
                             color: _colorFromHex(
                                 openColors['fg']?.toString(), const Color(0xFF6B7280)))),
+                  ),
+                // CMD #1874 — the revisit engine's chip, on the same row as
+                // every other state. Present only when the backend sent a
+                // label, which is its answer to "is this lead due again?".
+                if ((r['revisit_label']?.toString() ?? '').isNotEmpty)
+                  Container(
+                    padding: EdgeInsets.symmetric(
+                        horizontal: Ds.space.x8, vertical: Ds.space.x4),
+                    decoration: BoxDecoration(
+                        color: Ds.c.warningSoft, borderRadius: Ds.r.rChip),
+                    child: Text(r['revisit_label'].toString(),
+                        style: Ds.t.caption.copyWith(color: Ds.c.warning)),
                   ),
               ]),
               if (hoursLabel != null && hoursLabel.isNotEmpty) ...[
@@ -13723,10 +13739,114 @@ class _RoutesTabState extends State<_RoutesTab> {
   /// routes_today() so the outcome chip and the progress line are the
   /// backend's new answer, never a patched local row.
   Future<void> _openStopCheckIn(String routeId, String stopId) async {
-    final saved = await RouteStopCheckInSheet.open(context, stopId);
-    if (!saved || !mounted) return;
+    final res = await RouteStopCheckInSheet.open(context, stopId);
+    if (res == null || !mounted) return;
     await _loadRouteStops(routeId, force: true);
     await _refreshToday();
+
+    // CMD #1874 — a Converted check-in hands the rep straight to the
+    // registration form. WHETHER that happens is route_stop_checkin()'s call
+    // (next_action), never a status this file recognises.
+    final next = RouteStopCheckInPlan.nextAction(res);
+    if (!mounted || !RouteStopCheckInPlan.isAddCustomer(next)) return;
+    final leadId = RouteStopCheckInPlan.leadIdOf(next);
+    if (leadId == null) return;
+    RenderLog.write('c1874_convert_form', leadId);
+    await _addCustomerFromLead(leadId, routeId: routeId);
+  }
+
+  /// CMD #1874 — lead_customer_prefill() -> the SAME registration form Import
+  /// Customer and S Leads use, pre-filled from the lead and fully editable.
+  /// Saving goes through lead_import_customer(), so the customer and the
+  /// lead's matched_customer_id land in ONE transaction.
+  Future<void> _addCustomerFromLead(int leadId, {String? routeId}) async {
+    try {
+      final res = await Supabase.instance.client
+          .rpc('lead_customer_prefill', params: {'p_lead_id': leadId});
+      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      if (!mounted) return;
+      if (m['error'] != null) {
+        showToast(context, (m['hint'] ?? m['error']).toString(), isError: true);
+        return;
+      }
+      final note = m['note']?.toString();
+      if (note != null && note.isNotEmpty) showToast(context, note);
+
+      final customer = m['customer'] is Map
+          ? Map<String, dynamic>.from(m['customer'] as Map)
+          : <String, dynamic>{};
+      final missing =
+          (m['missing'] as List?)?.map((e) => e.toString()).toList() ??
+              const <String>[];
+
+      final saved = await ImportCustomerSheet.open(context,
+          prefill: customer, missing: missing, leadId: leadId);
+      if (saved == true && mounted && routeId != null) {
+        await _loadRouteStops(routeId, force: true);
+        await _refreshToday();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      showToast(context, '$e', isError: true);
+    }
+  }
+
+  /// CMD #1874 — Skip / Restore one stop. The menu entry carries the new
+  /// state, so both directions are the same call and this method decides
+  /// neither. The backend re-sequences and returns the fresh stop list.
+  Future<void> _skipStopFromMenu(
+      String routeId, String stopId, Map<String, dynamic> entry) async {
+    final params = RouteStopCheckInPlan.skipStopParams(stopId, entry);
+    if (params == null) return;
+    try {
+      final res =
+          await Supabase.instance.client.rpc('route_stop_skip', params: params);
+      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      if (!mounted) return;
+      showToast(context, m['message']?.toString() ?? '', isError: m['ok'] != true);
+      if (m['ok'] == true) {
+        RenderLog.write('c1874_stop_skipped', m['skipped']?.toString() ?? '');
+        final stops = m['stops'];
+        if (stops is Map) {
+          setState(() =>
+              _routeStops[routeId] = Map<String, dynamic>.from(stops));
+        } else {
+          await _loadRouteStops(routeId, force: true);
+        }
+        await _refreshToday();
+      }
+    } catch (e) {
+      if (mounted) showToast(context, '$e', isError: true);
+    }
+  }
+
+  /// CMD #1874 — a drag posts the WHOLE new order to route_reorder(), which
+  /// recomputes seq / leg / cum / ETA on the same OSRM matrix the planner used
+  /// and answers with the re-sequenced list. Nothing is renumbered here.
+  Future<void> _reorderStops(
+      String routeId, int oldIndex, int newIndex) async {
+    final data = _routeStops[routeId];
+    final ordered = RouteStopCheckInPlan.move(
+        RouteStopCheckInPlan.draggable(data), oldIndex, newIndex);
+    final params = RouteStopCheckInPlan.reorderParams(routeId, ordered);
+    if (params == null) return;
+    try {
+      final res =
+          await Supabase.instance.client.rpc('route_reorder', params: params);
+      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      if (!mounted) return;
+      showToast(context, m['message']?.toString() ?? '', isError: m['ok'] != true);
+      RenderLog.write('c1874_stop_reorder', ordered.length);
+      final stops = m['stops'];
+      if (stops is Map) {
+        setState(() => _routeStops[routeId] = Map<String, dynamic>.from(stops));
+      } else {
+        await _loadRouteStops(routeId, force: true);
+      }
+      await _refreshToday();
+    } catch (e) {
+      if (mounted) showToast(context, '$e', isError: true);
+    }
   }
 
   /// The one-tap Skip on a stop the backend flagged as shut at its ETA. The
@@ -13769,11 +13889,14 @@ class _RoutesTabState extends State<_RoutesTab> {
         )),
       );
     }
-    final stops = ((data['stops'] as List?) ?? const [])
-        .whereType<Map>()
-        .map((e) => Map<String, dynamic>.from(e))
-        .toList();
+    // CMD #1874 — the two groups are the BACKEND's: a stop it left in the day
+    // (can_drag) and a stop it took out of the order (skipped). This file
+    // never works out which is which from a status.
+    final active = RouteStopCheckInPlan.draggable(data);
+    final parked = RouteStopCheckInPlan.skipped(data);
     final empty = data['empty_label']?.toString();
+    final hint = data['reorder_hint']?.toString() ?? '';
+    final canReorder = RouteStopCheckInPlan.canReorder(data);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       SizedBox(height: Ds.space.x24),
       Row(children: [
@@ -13781,19 +13904,46 @@ class _RoutesTabState extends State<_RoutesTab> {
             child: Text(data['title']?.toString() ?? '', style: Ds.t.subtitle)),
         Text(data['count_label']?.toString() ?? '', style: Ds.t.caption),
       ]),
-      if (stops.isEmpty && (empty ?? '').isNotEmpty) ...[
+      if (hint.isNotEmpty) ...[
+        SizedBox(height: Ds.space.x4),
+        Text(hint, style: Ds.t.caption),
+      ],
+      if (active.isEmpty && parked.isEmpty && (empty ?? '').isNotEmpty) ...[
         SizedBox(height: Ds.space.x12),
         Text(empty!, style: Ds.t.bodySecondary),
       ],
-      for (final st in stops) ...[
+      if (active.isNotEmpty)
+        ReorderableListView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          buildDefaultDragHandles: false,
+          padding: EdgeInsets.only(top: Ds.space.x12),
+          itemCount: active.length,
+          onReorder: canReorder
+              ? (o, n) => _reorderStops(routeId, o, n)
+              : (_, __) {},
+          proxyDecorator: (child, _, _) =>
+              Material(type: MaterialType.transparency, child: child),
+          itemBuilder: (_, i) => Padding(
+            key: ValueKey(active[i]['stop_id']?.toString() ?? '$i'),
+            padding: EdgeInsets.only(bottom: Ds.space.x12),
+            child: _todayStopRow(routeId, active[i], index: i,
+                canReorder: canReorder),
+          ),
+        ),
+      for (final st in parked) ...[
         SizedBox(height: Ds.space.x12),
         _todayStopRow(routeId, st),
       ],
     ]);
   }
 
-  Widget _todayStopRow(String routeId, Map<String, dynamic> st) {
+  Widget _todayStopRow(String routeId, Map<String, dynamic> st,
+      {int? index, bool canReorder = false}) {
     final stopId = st['stop_id']?.toString() ?? '';
+    final skipped = RouteStopCheckInPlan.isSkipped(st);
+    final skippedLabel = st['skipped_label']?.toString();
+    final hasMenu = RouteStopCheckInPlan.menu(st).isNotEmpty;
     final tone = st['status_tone']?.toString();
     final closed = st['closed_label']?.toString();
     final eta = st['eta_label']?.toString();
@@ -13805,7 +13955,7 @@ class _RoutesTabState extends State<_RoutesTab> {
         .map((e) => Map<String, dynamic>.from(e))
         .toList();
 
-    return Container(
+    final card = Container(
       width: double.infinity,
       padding: EdgeInsets.all(Ds.space.x12),
       decoration: BoxDecoration(
@@ -13820,8 +13970,13 @@ class _RoutesTabState extends State<_RoutesTab> {
             height: Ds.space.x24,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-                color: Ds.c.brandSoft, borderRadius: Ds.r.rChip),
-            child: Text('${st['seq'] ?? ''}', style: Ds.t.caption),
+                color: skipped ? Ds.c.bg : Ds.c.brandSoft,
+                borderRadius: Ds.r.rChip),
+            // CMD #1874 — the badge prints the backend's seq_label, which is
+            // the placeholder for a stop that holds no place in the day.
+            child: Text(
+                st['seq_label']?.toString() ?? '${st['seq'] ?? ''}',
+                style: Ds.t.caption),
           ),
           SizedBox(width: Ds.space.x12),
           Expanded(
@@ -13856,6 +14011,15 @@ class _RoutesTabState extends State<_RoutesTab> {
                   color: Ds.c.warningSoft, borderRadius: Ds.r.rChip),
               child: Text(closed!, style: Ds.t.caption),
             ),
+          // CMD #1874 — a skipped stop says so in the backend's own word.
+          if ((skippedLabel ?? '').isNotEmpty)
+            Container(
+              padding: EdgeInsets.symmetric(
+                  horizontal: Ds.space.x12, vertical: Ds.space.x4),
+              decoration: BoxDecoration(
+                  color: Ds.c.warningSoft, borderRadius: Ds.r.rChip),
+              child: Text(skippedLabel!, style: Ds.t.caption),
+            ),
         ]),
         if ((noteLine ?? '').isNotEmpty) ...[
           SizedBox(height: Ds.space.x8),
@@ -13872,10 +14036,18 @@ class _RoutesTabState extends State<_RoutesTab> {
                         onPressed: () => _skipStop(routeId, stopId, a),
                         child: Text(a['label']?.toString() ?? ''),
                       )
-                    : ElevatedButton(
-                        onPressed: () => _openStopCheckIn(routeId, stopId),
-                        child: Text(a['label']?.toString() ?? ''),
-                      ),
+                    // CMD #1874 — Restore is the same route_stop_skip call
+                    // with the backend's own boolean.
+                    : RouteStopCheckInPlan.isUnskip(a)
+                        ? OutlinedButton(
+                            onPressed: () => _skipStopFromMenu(routeId, stopId,
+                                {'skipped': false}),
+                            child: Text(a['label']?.toString() ?? ''),
+                          )
+                        : ElevatedButton(
+                            onPressed: () => _openStopCheckIn(routeId, stopId),
+                            child: Text(a['label']?.toString() ?? ''),
+                          ),
               ),
             ),
             SizedBox(width: Ds.space.x8),
@@ -13890,8 +14062,30 @@ class _RoutesTabState extends State<_RoutesTab> {
                 label: Text(photoLabel ?? ''),
               ),
             ),
+          // CMD #1874 — the drag handle. Long-press anywhere else on the row
+          // opens the menu instead, so the two gestures never fight.
+          if (index != null && canReorder)
+            ReorderableDragStartListener(
+              index: index,
+              child: SizedBox(
+                width: Ds.touch.minTarget,
+                height: Ds.touch.minTarget,
+                child: Icon(Icons.drag_handle, color: Ds.c.textSecondary),
+              ),
+            ),
         ]),
       ]),
+    );
+
+    if (!hasMenu) return card;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onLongPress: () async {
+        final entry = await RouteStopMenuSheet.open(context, st);
+        if (entry == null || !mounted) return;
+        await _skipStopFromMenu(routeId, stopId, entry);
+      },
+      child: card,
     );
   }
 

@@ -31,6 +31,11 @@ alter table public.lead_scrape_runs
   add column if not exists include_keys  text[]  not null default '{}',
   add column if not exists exclude_keys  text[]  not null default '{}';
 
+-- scrape_runs_list() counts a run's leads (50 runs at a time) and delete
+-- archives them by run_id; both were sequential scans until now.
+create index if not exists scraped_leads_run_id_idx
+  on public.scraped_leads (run_id);
+
 create index if not exists lead_scrape_runs_live_idx
   on public.lead_scrape_runs (created_at desc)
   where deleted_at is null;

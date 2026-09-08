@@ -12630,6 +12630,15 @@ class _RoutesTabState extends State<_RoutesTab> {
       });
       RenderLog.write('c1867_plan_page_rows', page.length);
       RenderLog.write('c1867_plans_loaded', next.rows.length);
+      // CMD #1875 — the ₹ chip on a saved-plan row is the ONLY part of this
+      // change that paints without a tap, so it is the one the render-log can
+      // prove. Count the rows the backend priced; 0 here means route_plan_list
+      // stopped sending cost_label and the chip is gone.
+      RenderLog.write(
+          'c1875_list_cost_chips',
+          next.rows
+              .where((r) => (r['cost_label']?.toString() ?? '').isNotEmpty)
+              .length);
       _fetchOptStatusFor(page);
     } catch (_) {
       if (mounted) setState(() => _plansMoreLoading = false);

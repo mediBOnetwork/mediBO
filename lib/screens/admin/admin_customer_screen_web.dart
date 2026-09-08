@@ -25,6 +25,7 @@ import '../../user_state.dart'; // CMD #633 — the session gate below
 import '../../design_tokens.dart'; // CHANGE #238 — Ds tokens for the new panel chrome
 import 'sleads_filter_bar.dart'; // CMD #1868 — the S Leads filter row
 import 'sleads_bulk.dart'; // CMD #1869 — the bulk lane's pure decisions
+import 'scrape_run.dart'; // CMD #1870 — the scrape run's pure decisions
 import '../../services/sleads_filter_service.dart'; // CMD #1868
 import '../../models/order_item_panel_view.dart'; // CHANGE #238
 import '../../fulfill/fulfill_lookups.dart'; // C639: backend-owned entry label
@@ -8650,37 +8651,6 @@ class _LeadImageTileState extends State<_LeadImageTile> {
 // it never touches the shared _AdminCustomerScreenState._load() pipeline.
 // ═══════════════════════════════════════════════════════════════════════════
 
-class _LeadTypeOption {
-  final String uiType;
-  final String label;
-  final int sortOrder;
-
-  /// CHANGE #552 — needed to resolve a category-tree selection back to the
-  /// ui_types lead_scrape_start() still speaks. See _resolveUiTypes().
-  final List<String> googleTypes;
-
-  const _LeadTypeOption(
-      {required this.uiType,
-      required this.label,
-      required this.sortOrder,
-      this.googleTypes = const []});
-
-  factory _LeadTypeOption.fromMap(Map<String, dynamic> m) => _LeadTypeOption(
-        uiType: m['ui_type'] as String? ?? '',
-        label: m['label'] as String? ?? '',
-        sortOrder: (m['sort_order'] as num?)?.toInt() ?? 0,
-        googleTypes:
-            ((m['google_types'] as List?) ?? const []).map((e) => e.toString()).toList(),
-      );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// CHANGE #552 — ONE lead taxonomy, owned by lead_categories and served by
-// lead_category_tree(p_use). Both the scrape form ('scrape') and the route
-// builder ('route') render their chips from this — no Dart-side chip list,
-// label, order or key survives anywhere.
-// ═══════════════════════════════════════════════════════════════════════════
-
 class _LeadCategoryNode {
   final String key;
   final String label;
@@ -8706,8 +8676,6 @@ class _LeadCategoryNode {
       );
 
   /// Every google type this branch can contribute — its own plus its subs'.
-  Set<String> get allGoogleTypes =>
-      {...googleTypes, for (final s in sub) ...s.googleTypes};
 }
 
 List<_LeadCategoryNode> _parseCategoryTree(dynamic raw) => (raw as List? ?? const [])
@@ -8757,7 +8725,6 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   final Set<String> _exclude = {};
   final Set<String> _expandedCats = {};
   final TextEditingController _nameCtrl = TextEditingController();
-  List<_LeadTypeOption> _typeOptions = [];
   final TextEditingController _budgetCtrl = TextEditingController();
   bool _starting = false;
   String? _formError;
@@ -8983,11 +8950,11 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       ]);
 
       // #593 — admin_lead_type_map() returns {rows, count}; rows are already
-      // active-filtered and sort_order-ordered by the backend.
+      // active-filtered and sort_order-ordered by the backend. CMD #1870 — the
+      // screen no longer keeps them: mapping chips to Google types moved into
+      // lead_scrape_start(). The count still proves the map loaded.
       final types = (((results[0] is List ? results[0].first : results[0]) as Map)['rows']
-              as List<dynamic>? ?? const [])
-          .map((e) => _LeadTypeOption.fromMap(Map<String, dynamic>.from(e as Map)))
-          .toList();
+              as List<dynamic>? ?? const []);
       final summary = Map<String, dynamic>.from(results[1] as Map);
       final form = Map<String, dynamic>.from(results[2] as Map);
       final runs = (results[3] as List)
@@ -9007,7 +8974,6 @@ class _SLeadsTabState extends State<_SLeadsTab> {
 
       if (!mounted) return;
       setState(() {
-        _typeOptions = types;
         _summary = summary;
         _applyFormOptions(form);
         _runs = runs;
@@ -9588,38 +9554,12 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     return null;
   }
 
-  /// Effective include set: picking a top category implies all of its subs
-  /// UNLESS specific subs of that category were chosen.
-  Set<String> _effectiveGoogleTypes(Set<String> keys) {
-    final out = <String>{};
-    for (final c in _cats) {
-      final chosenSubs = c.sub.where((s) => keys.contains(s.key)).toList();
-      if (chosenSubs.isNotEmpty) {
-        for (final s in chosenSubs) {
-          out.addAll(s.googleTypes.isEmpty ? c.googleTypes : s.googleTypes);
-        }
-      } else if (keys.contains(c.key)) {
-        out.addAll(c.allGoogleTypes);
-      }
-    }
-    return out;
-  }
-
-  /// CHANGE #552 — the deployed lead_scrape_start() still takes p_ui_types
-  /// only; it has no include/exclude parameters. So the tray selection is
-  /// resolved here, through the backend's own google_types, into the ui_types
-  /// that RPC understands: include contributes types, exclude takes them away.
-  /// Nothing is keyed off a hardcoded category name.
-  List<String> _resolveUiTypes() {
-    final include = _effectiveGoogleTypes(_include);
-    final exclude = _effectiveGoogleTypes(_exclude);
-    final wanted = include.difference(exclude);
-    if (wanted.isEmpty) return const [];
-    return _typeOptions
-        .where((o) => o.googleTypes.any(wanted.contains))
-        .map((o) => o.uiType)
-        .toList();
-  }
+  // CMD #1870 — _effectiveGoogleTypes() and _resolveUiTypes() are GONE.
+  // They turned the tray selection into ui_types in Dart, which meant the
+  // screen had to know what a Google place type is and which parent implies
+  // which child. lead_scrape_start() now takes the chip keys themselves and
+  // resolves them against lead_categories, so the same rule also decides
+  // which places are allowed back in (lead_scrape_finish_cell).
 
   int? get _budgetValue {
     final n = int.tryParse(_budgetCtrl.text.trim());
@@ -9650,40 +9590,61 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     return msg;
   }
 
+  /// CMD #1870 — the labels of the Include chips the admin actually tapped,
+  /// read straight out of lead_category_tree(). Picking a label off the
+  /// payload is not a decision; deciding which Google types it stands for is,
+  /// and that now happens in lead_scrape_start().
+  List<String> _includeChipLabels() {
+    final out = <String>[];
+    for (final c in _cats) {
+      if (_include.contains(c.key)) out.add(c.label);
+      for (final sub in c.sub) {
+        if (_include.contains(sub.key)) out.add(sub.label);
+      }
+    }
+    return out;
+  }
+
   Future<void> _startScrape() async {
     final src = _isRescrape ? _sourceRun : null;
 
     // Re-scrape replays the saved run's own area; a fresh scrape uses the
     // typed City/District. Categories chosen in the trays always win — a
-    // re-scrape with no tray selection falls back to that run's own types.
+    // re-scrape with no tray selection falls back to that run's own chips
+    // (and, for a run started before CMD #1870, to its stored ui_types, which
+    // lead_scrape_start() still understands).
     final name = src != null ? (src['city']?.toString() ?? '') : _nameCtrl.text.trim();
     final level = src != null ? (src['level']?.toString() ?? _level) : _level;
-    var types = _resolveUiTypes();
-    if (types.isEmpty && src != null) {
-      types = ((src['types'] as List?) ?? const []).map((e) => e.toString()).toList();
+    var include = _include;
+    if (include.isEmpty && src != null) {
+      final saved = ((src['include_keys'] as List?) ?? const []).map((e) => e.toString());
+      final legacy = ((src['types'] as List?) ?? const []).map((e) => e.toString());
+      include = {...(saved.isEmpty ? legacy : saved)};
     }
     final budget = _budgetValue;
     if (budget == null) return;
+
+    final args = ScrapeStartArgs.fromTrays(
+      name: name,
+      level: level,
+      include: include,
+      exclude: _exclude,
+      maxCalls: budget,
+    );
 
     setState(() {
       _starting = true;
       _formError = null;
     });
     try {
-      final runId = await Supabase.instance.client.rpc('lead_scrape_start', params: {
-        'p_name': name,
-        'p_level': level,
-        'p_ui_types': types,
-        'p_cell_km': null,
-        'p_max_calls': budget,
-      });
+      final runId = await Supabase.instance.client
+          .rpc('lead_scrape_start', params: args.toParams());
       if (!mounted) return;
       final id = runId?.toString();
       setState(() {
         _activeRunId = id;
         _activeRunLevel = level;
-        _activeRunTypeLabels =
-            _typeOptions.where((o) => types.contains(o.uiType)).map((o) => o.label).toList();
+        _activeRunTypeLabels = _includeChipLabels();
         _starting = false;
       });
       if (id != null) {
@@ -10168,7 +10129,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           const SizedBox(height: 14),
 
           // Re-scrape replaces City/District + Name with the saved-run picker.
-          if (_isRescrape)
+          if (_isRescrape) ...[
             widget.isDesktop
                 ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Expanded(child: _sourceDropdown()),
@@ -10179,8 +10140,9 @@ class _SLeadsTabState extends State<_SLeadsTab> {
                     _sourceDropdown(),
                     const SizedBox(height: 10),
                     _budgetField(),
-                  ])
-          else
+                  ]),
+            _sourceDeleteAction(),
+          ] else
             widget.isDesktop
                 ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     SizedBox(width: 220, child: _levelToggle()),
@@ -10246,6 +10208,28 @@ class _SLeadsTabState extends State<_SLeadsTab> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// CMD #1870 — the saved run picked here is also the one you can get rid
+  /// of. A run scraped for the wrong city is the reason this exists: choose
+  /// it, delete it, and its leads go to Archived where Restore can undo it.
+  /// The caption is the backend's; the action is the same _deleteRun().
+  Widget _sourceDeleteAction() {
+    final src = _sourceRun;
+    if (src == null) return const SizedBox.shrink();
+    final view = ScrapeRunView.from(src);
+    final d = view.delete;
+    if (d == null) return const SizedBox.shrink();
+    final busy = _runBusy.contains(view.runId);
+    return Padding(
+      padding: EdgeInsets.only(top: Ds.space.x12),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: _runActionButton(d.label, Icons.delete_outline,
+            busy ? null : () => _deleteRun(src),
+            danger: true),
       ),
     );
   }
@@ -11917,13 +11901,17 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   /// city, date, the status chip (colours included), types_label and
   /// summary_label. Expanding shows breakdown[] as a small table.
   Widget _buildRunCard(Map<String, dynamic> r) {
-    final runId = r['run_id']?.toString() ?? '';
+    final view = ScrapeRunView.from(r);
+    final runId = view.runId;
     final expanded = _expandedRuns.contains(runId);
     final busy = _runBusy.contains(runId);
     final breakdown = _mapList(r['breakdown']);
-    final typesLabel = r['types_label']?.toString() ?? '';
-    final summaryLabel = r['summary_label']?.toString() ?? '';
-    final error = r['error']?.toString();
+    final typesLabel = view.typesLabel;
+    final summaryLabel = view.summaryLabel;
+    // CMD #1870 — one more backend sentence: what the Include chips kept and
+    // what they threw away before anything was stored.
+    final keptDropped = view.keptDroppedLabel;
+    final error = view.error;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -11961,6 +11949,11 @@ class _SLeadsTabState extends State<_SLeadsTab> {
               Text(summaryLabel,
                   style: const TextStyle(fontSize: 12, color: Color(0xFF4B5563))),
             ],
+            if (keptDropped != null) ...[
+              const SizedBox(height: 2),
+              Text(keptDropped,
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF4B5563))),
+            ],
             if (error != null && error.isNotEmpty) ...[
               const SizedBox(height: 4),
               Text(error, style: const TextStyle(fontSize: 11.5, color: Color(0xFFB42318))),
@@ -11976,9 +11969,9 @@ class _SLeadsTabState extends State<_SLeadsTab> {
                 busy ? null : () => _exportRun(r, share: false)),
             _runActionButton('Share', Icons.ios_share,
                 busy ? null : () => _exportRun(r, share: true)),
-            _runActionButton('Delete', Icons.delete_outline,
-                busy || r['can_delete'] == false ? null : () => _deleteRun(r),
-                danger: true),
+            if (view.delete != null)
+              _runActionButton(view.delete!.label, Icons.delete_outline,
+                  busy ? null : () => _deleteRun(r), danger: true),
             if (busy)
               const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
           ]),
@@ -12071,66 +12064,65 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     }
   }
 
-  /// Confirm first, then show scrape_run_delete()'s own message — it is the
-  /// only thing that knows how many leads were protected.
+  /// CMD #1870 — deleting a run ARCHIVES its leads (the CMD #1869 lane:
+  /// Restore from the Archived filter, auto-purged after the backend's own
+  /// number of days) and soft-deletes the run. There is no checkbox any more:
+  /// the choice used to be the client's, and a hard DELETE made a mis-typed
+  /// city unrecoverable. Every word of the confirmation — title, body with
+  /// the count in it, both buttons — is scrape_runs_list().delete, printed.
   Future<void> _deleteRun(Map<String, dynamic> r) async {
-    final runId = r['run_id']?.toString();
-    if (runId == null) return;
-    var withLeads = false;
+    final view = ScrapeRunView.from(r);
+    final d = view.delete;
+    final runId = view.runId;
+    if (d == null || runId.isEmpty) return;
+
     final ok = await showDialog<bool>(
       context: context,
-      builder: (dCtx) => StatefulBuilder(
-        builder: (dCtx, setDlg) => AlertDialog(
-          title: Text(c('admin_customer.delete_scrape_q')),
-          content: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text('${r['city'] ?? ''} · ${_fmtRunDate(r['created_at']?.toString())}',
-                style: const TextStyle(fontSize: 13)),
-            const SizedBox(height: 8),
-            CheckboxListTile(
-              value: withLeads,
-              onChanged: (v) => setDlg(() => withLeads = v == true),
-              controlAffinity: ListTileControlAffinity.leading,
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-              activeColor: const Color(0xFF1B7A43),
-              title: Text(cf('admin_customer.also_delete_leads', {'n': '${(r['lead_count'] as num?)?.toInt() ?? 0}'}),
-                  style: const TextStyle(fontSize: 13)),
-            ),
-          ]),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(dCtx, false), child: Text(c('admin_customer.cancel'))),
-            FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: const Color(0xFFB42318)),
-              onPressed: () => Navigator.pop(dCtx, true),
-              child: const Text('Delete'),
-            ),
-          ],
-        ),
+      builder: (dCtx) => AlertDialog(
+        title: Text(d.title),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text('${view.city} · ${_fmtRunDate(r['created_at']?.toString())}',
+              style: Ds.t.body),
+          SizedBox(height: Ds.space.x8),
+          Text(d.body, style: Ds.t.caption),
+        ]),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dCtx, false), child: Text(d.cancel)),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Ds.c.danger),
+            onPressed: () => Navigator.pop(dCtx, true),
+            child: Text(d.ok),
+          ),
+        ],
       ),
     );
     if (ok != true) return;
 
     setState(() => _runBusy.add(runId));
     try {
-      final res = await Supabase.instance.client.rpc('scrape_run_delete',
-          params: {'p_run_id': runId, 'p_with_leads': withLeads});
+      final res = await Supabase.instance.client
+          .rpc('scrape_run_delete', params: {'p_run_id': runId});
       final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
       if (!mounted) return;
       setState(() {
         _runBusy.remove(runId);
         _expandedRuns.remove(runId);
+        if (_sourceRunId == runId) _sourceRunId = null;
         if (_resultsRunId == runId) {
           _resultsRunId = null;
           _runLeads = [];
           _leadSelection.clear();
         }
       });
+      RenderLog.write('c1870_run_deleted', '${m['archived'] ?? 0}');
       final msg = (m['message'] ?? m['error'])?.toString();
       if (msg != null && msg.isNotEmpty) {
-        showToast(context, msg, isError: m['error'] != null);
+        showToast(context, msg, isError: m['ok'] != true);
       }
       await _loadPastRuns();
       await _refreshSummaryAndUsage();
+      await _refreshFilterModel();
       await _loadRows(reset: true);
     } catch (e) {
       if (!mounted) return;

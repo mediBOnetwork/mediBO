@@ -179,7 +179,12 @@ class CompactProductCard extends StatelessWidget {
               ),
             ),
             const SizedBox(height: _gapM),
-            _CardPriceBlock(price: pricing?.cardPrice),
+            CardPriceLines(
+              price: pricing?.cardPrice,
+              mrpHeight: _mrpH,
+              priceHeight: _ptrH,
+              gap: _gapS,
+            ),
           ],
         ),
       ),
@@ -680,20 +685,30 @@ class _MiniChip extends StatelessWidget {
 /// What LEFT the card in #1895: the "Register and get approved to see trade
 /// prices" sentence. It was a third line of copy on every card a visitor saw;
 /// it is the prompt behind the word now.
-class _CardPriceBlock extends StatelessWidget {
+///
+/// It is PUBLIC because the catalogue card renders the same two lines from the
+/// same block: "identical everywhere" is one widget, not two that agree today.
+/// The two heights are the caller's, because the two grids reserve different
+/// extents; everything else is shared.
+class CardPriceLines extends StatelessWidget {
   final CardPrice? price;
-  const _CardPriceBlock({required this.price});
+  final double mrpHeight;
+  final double priceHeight;
+  final double gap;
+
+  const CardPriceLines({
+    super.key,
+    required this.price,
+    required this.mrpHeight,
+    required this.priceHeight,
+    required this.gap,
+  });
 
   @override
   Widget build(BuildContext context) {
     final p = price;
     if (p == null) {
-      return const SizedBox(
-        height:
-            CompactProductCard._mrpH +
-            CompactProductCard._gapS +
-            CompactProductCard._ptrH,
-      );
+      return SizedBox(height: mrpHeight + gap + priceHeight);
     }
 
     return Column(
@@ -704,7 +719,7 @@ class _CardPriceBlock extends StatelessWidget {
         // #1895 is whenever there is one: the printed ceiling is a fact about
         // the pack, not about who is looking at it.
         SizedBox(
-          height: CompactProductCard._mrpH,
+          height: mrpHeight,
           child: !p.hasMrp
               ? const SizedBox.shrink()
               : Row(
@@ -735,15 +750,12 @@ class _CardPriceBlock extends StatelessWidget {
                   ],
                 ),
         ),
-        const SizedBox(height: CompactProductCard._gapS),
+        SizedBox(height: gap),
         // Line 5 — the sale line. ONE string either way, so there is no branch
         // here on approval, on a role, or on whether a number arrived: the
         // backend already answered all three when it chose what to put in
         // price_display. The only thing the lock changes is the tap.
-        SizedBox(
-          height: CompactProductCard._ptrH,
-          child: _SaleLine(price: p),
-        ),
+        SizedBox(height: priceHeight, child: _SaleLine(price: p)),
       ],
     );
   }

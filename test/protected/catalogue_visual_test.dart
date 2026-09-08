@@ -489,15 +489,22 @@ void main() {
   });
 
   group('the card is the five things Om asked for', () {
-    testWidgets('trade rate yes, MRP row no', (tester) async {
+    testWidgets('trade rate AND the struck MRP above it', (tester) async {
+      // REVERSED BY CMD #1895. #799 cut the MRP row from this card because a
+      // struck ceiling beside a rate reads as a consumer discount. Om's 08-Sep
+      // sketch answers that differently: the ceiling is shown to EVERYONE,
+      // struck, and what sits under it is the trade amount for an approved
+      // pharmacy and the word "PTR" for anyone else. Both lines come from the
+      // SAME `pricing.card_price` the storefront card reads, which is what
+      // makes the two tabs one card.
       await _pump(tester, queued: {
         'catalogue_home': [_home()],
         'catalogue_list': [_list()],
       }, route: const CatalogueRoute(listKind: 'tab', listKey: 'cold_chain'));
       expect(find.text('₹82.50'), findsOneWidget,
           reason: 'the PTR is what a pharmacy buys on and it prints verbatim');
-      expect(find.text('₹117.19'), findsNothing,
-          reason: 'the MRP row is the thing #799 removed from this card');
+      expect(find.text('₹117.19'), findsOneWidget,
+          reason: '#1895 — the printed ceiling is back, struck, on every card');
       expect(find.text('ABBOTT'), findsOneWidget);
       expect(find.text('10.0 tablets in 1 strip'), findsOneWidget);
       expect(find.text('ADD'), findsOneWidget,

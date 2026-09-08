@@ -10218,10 +10218,17 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   /// The caption is the backend's; the action is the same _deleteRun().
   Widget _sourceDeleteAction() {
     final src = _sourceRun;
-    if (src == null) return const SizedBox.shrink();
+    if (src == null) {
+      RenderLog.write('c1870_rescrape_delete', 'no_source_picked');
+      return const SizedBox.shrink();
+    }
     final view = ScrapeRunView.from(src);
     final d = view.delete;
-    if (d == null) return const SizedBox.shrink();
+    if (d == null) {
+      RenderLog.write('c1870_rescrape_delete', 'backend_withheld');
+      return const SizedBox.shrink();
+    }
+    RenderLog.write('c1870_rescrape_delete', d.label);
     final busy = _runBusy.contains(view.runId);
     return Padding(
       padding: EdgeInsets.only(top: Ds.space.x12),
@@ -11912,6 +11919,11 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     // what they threw away before anything was stored.
     final keptDropped = view.keptDroppedLabel;
     final error = view.error;
+    RenderLog.write('c1870_run_cards', _runs.length);
+    RenderLog.write('c1870_kept_dropped',
+        _runs.where((x) => ScrapeRunView.from(x).keptDroppedLabel != null).length);
+    RenderLog.write('c1870_delete_actions',
+        _runs.where((x) => ScrapeRunView.from(x).canDelete).length);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),

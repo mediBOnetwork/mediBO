@@ -47,6 +47,7 @@ import '../../widgets/backend_table.dart'; // CHANGE #607
 import '../../widgets/bill_actions_row.dart'; // CHANGE #465
 import '../../widgets/bill_viewer.dart'; // CHANGE #465
 import '../../widgets/import_customer_sheet.dart'; // CHANGE #547
+import '../../widgets/route_view_panel.dart'; // CMD #1917 — the ONE route component
 import '../../widgets/native_signed_image.dart'; // CHANGE #550
 import '../../widgets/cash_payment_sheet.dart';
 import '../../widgets/fullscreen_image.dart';
@@ -12583,11 +12584,9 @@ class _RoutesTabState extends State<_RoutesTab> {
   /// count, km figure, ₹ string and percentage is the backend's own wording.
   RouteDaySummary? _daySummary;
 
-  /// CMD #1873 — route_stops_today(route_id) per today-route card: the stop
-  /// rows, their outcome chips, the "Closed at ETA" warning and the actions
-  /// (Check in / Skip). Cached by route id; refetched after every check-in.
-  final Map<String, Map<String, dynamic>> _routeStops = {};
-  final Set<String> _routeStopsInFlight = {};
+  // CMD #1917 — the per-route stop cache is GONE. route_view() carries the
+  // stops, and RouteViewStore holds its payload for 24h, so it is also what
+  // renders instantly on a dead connection.
 
   // ── B1: filter bar — the ONLY inputs that drive the count + build ────────
   String _city = 'Raipur';
@@ -12627,11 +12626,8 @@ class _RoutesTabState extends State<_RoutesTab> {
   // window (0 = stops 1-10, 1 = 11-20, ...).
   final Map<String, int> _routeStopWindow = {};
 
-  /// CHANGE #550 — lead_stop_card() payloads, keyed by lead_id. The card's
-  /// photo, labels, action buttons and URIs are ALL backend-owned; nothing is
-  /// constructed here.
-  final Map<String, Map<String, dynamic>> _stopCards = {};
-  final Set<String> _stopCardsInFlight = {};
+  // CMD #1917 — the lead_stop_card() cache is GONE with #550's stop card:
+  // route_view() carries every stop's photo, score and action set already.
   final Map<String, Map<String, dynamic>?> _routeMapData = {};
   final Map<String, bool> _routeMapLoading = {};
 
@@ -12929,7 +12925,9 @@ class _RoutesTabState extends State<_RoutesTab> {
       RenderLog.write('c1878_queue_synced', landed);
       // The server has changed: the stop rows, the progress line and the day
       // summary are all re-asked rather than patched here.
-      _routeStops.clear();
+      for (final id in _todayRouteIds()) {
+        RouteViewPanel.refresh(id);
+      }
       await _refreshToday();
     }
   }
@@ -12972,14 +12970,10 @@ class _RoutesTabState extends State<_RoutesTab> {
         // Offline the cached payload IS the screen. Online it is only the
         // cache — routes_today() has already answered for itself.
         if (today is Map) _today = Map<String, dynamic>.from(today);
-        if (stops is Map) {
-          for (final e in stops.entries) {
-            if (e.value is Map) {
-              _routeStops[e.key.toString()] =
-                  Map<String, dynamic>.from(e.value as Map);
-            }
-          }
-        }
+        // CMD #1917 — the bundle's `stops` are route_stops_today's shape and
+        // no longer have a renderer: RouteViewPanel draws route_view()'s own
+        // rows and keeps its last payload for 24h, which is the offline
+        // fallback now. Kept in the bundle for the check-in sheets below.
         _topMode = 'today';
         _loading = false;
       }
@@ -13799,69 +13793,7 @@ class _RoutesTabState extends State<_RoutesTab> {
     await _loadPlan(planId); // re-fetch; picks up Google's order + road_polyline
   }
 
-  // B4 DETAIL: tapping a numbered pin -> title/subtitle/leg/cum/open + phone/
-  // Navigate. Navigate/phone links are ALREADY built by route_map() — never
-  // construct a maps URL or tel: link here.
-  void _openMapStopSheet(Map<String, dynamic> stop) {
-    final phone = stop['phone']?.toString();
-    final address = stop['address']?.toString();
-    final openLabel = stop['open_label']?.toString();
-    final navigateUrl = stop['navigate_url']?.toString();
-    final navigateLabel = stop['navigate_label']?.toString() ?? 'Navigate';
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (sheetCtx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(stop['title']?.toString() ?? '',
-                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-            if (stop['subtitle'] != null) ...[
-              const SizedBox(height: 2),
-              Text(stop['subtitle'].toString(),
-                  style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
-            ],
-            const SizedBox(height: 8),
-            Wrap(spacing: 10, runSpacing: 4, children: [
-              if (stop['leg_label'] != null)
-                Text(stop['leg_label'].toString(), style: const TextStyle(fontSize: 12.5, color: Color(0xFF374151))),
-              if (stop['cum_label'] != null)
-                Text(stop['cum_label'].toString(), style: const TextStyle(fontSize: 12.5, color: Color(0xFF374151))),
-            ]),
-            if (openLabel != null) ...[
-              const SizedBox(height: 4),
-              Text(openLabel,
-                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFFDC2626))),
-            ],
-            if (address != null && address.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              Text(address, style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
-            ],
-            const SizedBox(height: 14),
-            Wrap(spacing: 8, runSpacing: 8, children: [
-              if (phone != null && phone.isNotEmpty)
-                _stopActionBtn(Icons.call, 'Call', () => launchUrl(Uri.parse('tel:$phone'))),
-              if (navigateUrl != null && navigateUrl.isNotEmpty)
-                _stopActionBtn(Icons.navigation_outlined, navigateLabel,
-                    () => launchUrl(Uri.parse(navigateUrl), mode: LaunchMode.externalApplication)),
-              _stopActionBtn(Icons.check_circle, 'Check in', () {
-                Navigator.of(sheetCtx).pop();
-                _openCheckIn(
-                  {'lead_id': stop['lead_id'], 'name': stop['name'] ?? stop['title']},
-                  onRefresh: () {
-                    if (_planId != null) _loadPlan(_planId!);
-                  },
-                );
-              }, filled: true),
-            ]),
-          ]),
-        ),
-      ),
-    );
-  }
+  // CMD #1917 — _openMapStopSheet() DELETED with the second map view.
 
   Future<void> _toggleRouteIncluded(String routeId, bool included) async {
     try {
@@ -13875,17 +13807,7 @@ class _RoutesTabState extends State<_RoutesTab> {
     }
   }
 
-  Future<void> _toggleStopIncluded(String stopId, bool included) async {
-    try {
-      await Supabase.instance.client.rpc('route_plan_toggle_stop', params: {
-        'p_stop_id': stopId, 'p_included': included,
-      });
-      if (_planId != null) await _loadPlan(_planId!);
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
-    }
-  }
+  // CMD #1917 — _toggleStopIncluded() DELETED with #550's stop card.
 
   // ── C3: Rebalance — unchecked leads move into the remaining routes ───────
   Future<void> _rebalance() async {
@@ -14560,10 +14482,10 @@ class _RoutesTabState extends State<_RoutesTab> {
             style: Ds.t.bodySecondary, textAlign: TextAlign.center),
       ));
     } else {
-      for (final r in routes) {
+      for (var i = 0; i < routes.length; i++) {
         children.add(Padding(
           padding: EdgeInsets.only(bottom: Ds.space.x12),
-          child: _todayRouteCard(r),
+          child: _todayRouteCard(routes[i], first: i == 0),
         ));
       }
     }
@@ -14592,89 +14514,69 @@ class _RoutesTabState extends State<_RoutesTab> {
     );
   }
 
-  Widget _todayRouteCard(Map<String, dynamic> r) {
-    final worker = r['worker_label']?.toString();
-    final next = r['next_label']?.toString();
-    final nextSub = r['next_sub']?.toString();
-    final navUri = r['nav_uri']?.toString();
-    final canNav = r['can_navigate'] == true && (navUri ?? '').isNotEmpty;
-    return Container(
-      width: double.infinity,
-      padding: EdgeInsets.all(Ds.space.x16),
-      decoration: BoxDecoration(
-        color: Ds.c.surface,
-        borderRadius: Ds.r.rCard,
-        boxShadow: Ds.elevation.e1,
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Expanded(
-            child: Text(r['title']?.toString() ?? '',
-                style: Ds.t.subtitle, overflow: TextOverflow.ellipsis),
-          ),
-          if (worker != null && worker.isNotEmpty)
-            Container(
-              padding: EdgeInsets.symmetric(
-                  horizontal: Ds.space.x12, vertical: Ds.space.x4),
-              decoration: BoxDecoration(
-                  color: Ds.c.infoSoft, borderRadius: Ds.r.rChip),
-              child: Text(worker, style: Ds.t.caption),
-            ),
-        ]),
-        SizedBox(height: Ds.space.x4),
-        Text(r['subtitle']?.toString() ?? '', style: Ds.t.caption),
-        SizedBox(height: Ds.space.x12),
-        Text(r['progress_label']?.toString() ?? '', style: Ds.t.bodyStrong),
-        if (next != null && next.isNotEmpty) ...[
-          SizedBox(height: Ds.space.x12),
-          Text(next, style: Ds.t.body, overflow: TextOverflow.ellipsis),
-          if (nextSub != null && nextSub.isNotEmpty)
-            Text(nextSub, style: Ds.t.caption, overflow: TextOverflow.ellipsis),
-        ],
-        SizedBox(height: Ds.space.x16),
-        SizedBox(
-          width: double.infinity,
-          height: Ds.touch.minTarget,
-          child: ElevatedButton.icon(
-            onPressed: canNav
-                ? () => launchUrl(Uri.parse(navUri!),
-                    mode: LaunchMode.externalApplication)
-                : null,
-            icon: const Icon(Icons.navigation_rounded),
-            label: Text(r['nav_label']?.toString() ?? ''),
-          ),
-        ),
-        // CMD #1873 — the route's stops, each with its outcome and its
-        // check-in button. This is the only surface that closes a stop.
-        if ((r['route_id']?.toString() ?? '').isNotEmpty)
-          _todayStopList(r['route_id'].toString()),
-      ]),
+  /// CMD #1917 — Today no longer draws a route of its own. It renders THE
+  /// route component, the same one All plans renders, from the same
+  /// route_view(route_id) payload: map, cost, warnings, Assign, Message
+  /// stops, jump chips and the identical stop rows. The old bespoke card
+  /// (a progress line, a Navigate button and text-only stop rows) is deleted
+  /// — it is exactly the drift this change exists to end.
+  ///
+  /// [first] is the logged-in worker's route for admin_active_date(): it is
+  /// PRE-SELECTED, so Today opens with that route's map already large.
+  Widget _todayRouteCard(Map<String, dynamic> r, {bool first = false}) {
+    final routeId = r['route_id']?.toString() ?? '';
+    if (routeId.isEmpty) return const SizedBox.shrink();
+    RenderLog.write('c1917_today_panel', routeId);
+    return RouteViewPanel(
+      routeId: routeId,
+      isDesktop: widget.isDesktop,
+      screen: 'today',
+      startLarge: first,
+      workers: RouteLivePlan.dots(_live),
+      actions: _routeViewActions,
     );
   }
 
-  /// CMD #1873 — one route_stops_today() call per route card. The payload is
-  /// rendered verbatim: this method decides nothing about a stop.
-  Future<void> _loadRouteStops(String routeId, {bool force = false}) async {
-    if (!force &&
-        (_routeStops.containsKey(routeId) ||
-            _routeStopsInFlight.contains(routeId))) {
-      return;
-    }
-    _routeStopsInFlight.add(routeId);
+  /// The one handler set both screens hand the panel. Same callbacks, so the
+  /// same five actions do the same thing wherever the stop is tapped.
+  RouteViewActions get _routeViewActions => RouteViewActions(
+        onCheckIn: (routeId, stopId) => _openStopCheckIn(routeId, stopId),
+        onSkip: (routeId, stopId, entry) =>
+            _skipStopFromMenu(routeId, stopId, entry),
+        onReorder: (routeId, stopIds) => _reorderStopIds(routeId, stopIds),
+        onImportCustomer: (routeId, leadId) =>
+            _addCustomerFromLead(leadId, routeId: routeId),
+        onAssign: (route) => _openAssignRouteSheet(route),
+        onMessageStops: (route) => _openMessageStopsSheet(route),
+      );
+
+  /// CMD #1917 — the panel has already worked out the new order, so this
+  /// posts the ids straight to route_reorder(). Nothing is renumbered here.
+  Future<void> _reorderStopIds(String routeId, List<String> stopIds) async {
+    if (routeId.isEmpty || stopIds.isEmpty) return;
     try {
-      final res = await Supabase.instance.client
-          .rpc('route_stops_today', params: {'p_route_id': routeId});
-      if (!mounted) return;
+      final res = await Supabase.instance.client.rpc('route_reorder',
+          params: {'p_route_id': routeId, 'p_stop_ids': stopIds});
       final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
-      setState(() => _routeStops[routeId] = m);
-      RenderLog.write('c1873_stop_rows', (m['stops'] as List?)?.length ?? 0);
-    } catch (_) {
-      // The card keeps its progress line; the stop list simply stays absent
-      // until the next refresh.
-    } finally {
-      _routeStopsInFlight.remove(routeId);
+      if (!mounted) return;
+      showToast(context, m['message']?.toString() ?? '', isError: m['ok'] != true);
+      RenderLog.write('c1874_stop_reorder', stopIds.length);
+      await _refreshToday();
+    } catch (e) {
+      if (mounted) showToast(context, '$e', isError: true);
     }
   }
+
+  // CMD #1917 — _loadRouteStops() DELETED: route_stops_today() has no caller.
+  // The shared panel asks route_view() once per route and caches it for 24h.
+
+  /// The routes Today is currently showing — the panels to refresh after a
+  /// write that changed the server's answer.
+  List<String> _todayRouteIds() => ((_today?['routes'] as List?) ?? const [])
+      .whereType<Map>()
+      .map((e) => e['route_id']?.toString() ?? '')
+      .where((e) => e.isNotEmpty)
+      .toList();
 
   /// Open the check-in sheet for one stop, then refetch BOTH the stop list and
   /// routes_today() so the outcome chip and the progress line are the
@@ -14699,7 +14601,7 @@ class _RoutesTabState extends State<_RoutesTab> {
       setState(() {});
       return;
     }
-    await _loadRouteStops(routeId, force: true);
+    RouteViewPanel.refresh(routeId);
     await _refreshToday();
 
     // CMD #1874 — a Converted check-in hands the rep straight to the
@@ -14740,7 +14642,7 @@ class _RoutesTabState extends State<_RoutesTab> {
       final saved = await ImportCustomerSheet.open(context,
           prefill: customer, missing: missing, leadId: leadId);
       if (saved == true && mounted && routeId != null) {
-        await _loadRouteStops(routeId, force: true);
+        RouteViewPanel.refresh(routeId);
         await _refreshToday();
       }
     } catch (e) {
@@ -14764,13 +14666,7 @@ class _RoutesTabState extends State<_RoutesTab> {
       showToast(context, m['message']?.toString() ?? '', isError: m['ok'] != true);
       if (m['ok'] == true) {
         RenderLog.write('c1874_stop_skipped', m['skipped']?.toString() ?? '');
-        final stops = m['stops'];
-        if (stops is Map) {
-          setState(() =>
-              _routeStops[routeId] = Map<String, dynamic>.from(stops));
-        } else {
-          await _loadRouteStops(routeId, force: true);
-        }
+        RouteViewPanel.refresh(routeId);
         await _refreshToday();
       }
     } catch (e) {
@@ -14778,274 +14674,13 @@ class _RoutesTabState extends State<_RoutesTab> {
     }
   }
 
-  /// CMD #1874 — a drag posts the WHOLE new order to route_reorder(), which
-  /// recomputes seq / leg / cum / ETA on the same OSRM matrix the planner used
-  /// and answers with the re-sequenced list. Nothing is renumbered here.
-  Future<void> _reorderStops(
-      String routeId, int oldIndex, int newIndex) async {
-    final data = _routeStops[routeId];
-    final ordered = RouteStopCheckInPlan.move(
-        RouteStopCheckInPlan.draggable(data), oldIndex, newIndex);
-    final params = RouteStopCheckInPlan.reorderParams(routeId, ordered);
-    if (params == null) return;
-    try {
-      final res =
-          await Supabase.instance.client.rpc('route_reorder', params: params);
-      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
-      if (!mounted) return;
-      showToast(context, m['message']?.toString() ?? '', isError: m['ok'] != true);
-      RenderLog.write('c1874_stop_reorder', ordered.length);
-      final stops = m['stops'];
-      if (stops is Map) {
-        setState(() => _routeStops[routeId] = Map<String, dynamic>.from(stops));
-      } else {
-        await _loadRouteStops(routeId, force: true);
-      }
-      await _refreshToday();
-    } catch (e) {
-      if (mounted) showToast(context, '$e', isError: true);
-    }
-  }
+  // CMD #1917 — _reorderStops() DELETED: RouteViewPanel hands the new order
+  // straight to _reorderStopIds(), which posts it to route_reorder().
 
-  /// The one-tap Skip on a stop the backend flagged as shut at its ETA. The
-  /// status posted is the one the ACTION carried — Dart never decides what
-  /// skipping a stop writes.
-  Future<void> _skipStop(
-      String routeId, String stopId, Map<String, dynamic> action) async {
-    final params = RouteStopCheckInPlan.skipParams(stopId, action);
-    if (params == null) return;
-    try {
-      final res =
-          await Supabase.instance.client.rpc('route_stop_checkin', params: params);
-      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
-      if (!mounted) return;
-      showToast(context, m['message']?.toString() ?? '', isError: m['ok'] != true);
-      if (m['ok'] == true) {
-        RenderLog.write('c1873_stop_skipped', m['status']?.toString() ?? '');
-        await _loadRouteStops(routeId, force: true);
-        await _refreshToday();
-      }
-    } catch (e) {
-      if (mounted) showToast(context, '$e', isError: true);
-    }
-  }
+  // CMD #1917 — _skipStop() DELETED with the second stop row; the shared
+  // row's long-press menu goes through _skipStopFromMenu().
 
-  /// The stop list under a today-route card. Title, count, empty copy, chips
-  /// and every action label come from route_stops_today().
-  Widget _todayStopList(String routeId) {
-    final data = _routeStops[routeId];
-    if (data == null) {
-      _loadRouteStops(routeId);
-      return Padding(
-        padding: EdgeInsets.only(top: Ds.space.x16),
-        child: Center(
-            child: SizedBox(
-          width: Ds.space.x24,
-          height: Ds.space.x24,
-          child: CircularProgressIndicator(
-              color: Ds.c.brand, strokeWidth: Ds.space.hairline * 2),
-        )),
-      );
-    }
-    // CMD #1874 — the two groups are the BACKEND's: a stop it left in the day
-    // (can_drag) and a stop it took out of the order (skipped). This file
-    // never works out which is which from a status.
-    final active = RouteStopCheckInPlan.draggable(data);
-    final parked = RouteStopCheckInPlan.skipped(data);
-    final empty = data['empty_label']?.toString();
-    final hint = data['reorder_hint']?.toString() ?? '';
-    final canReorder = RouteStopCheckInPlan.canReorder(data);
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      SizedBox(height: Ds.space.x24),
-      Row(children: [
-        Expanded(
-            child: Text(data['title']?.toString() ?? '', style: Ds.t.subtitle)),
-        Text(data['count_label']?.toString() ?? '', style: Ds.t.caption),
-      ]),
-      if (hint.isNotEmpty) ...[
-        SizedBox(height: Ds.space.x4),
-        Text(hint, style: Ds.t.caption),
-      ],
-      if (active.isEmpty && parked.isEmpty && (empty ?? '').isNotEmpty) ...[
-        SizedBox(height: Ds.space.x12),
-        Text(empty!, style: Ds.t.bodySecondary),
-      ],
-      if (active.isNotEmpty)
-        ReorderableListView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          buildDefaultDragHandles: false,
-          padding: EdgeInsets.only(top: Ds.space.x12),
-          itemCount: active.length,
-          onReorder: canReorder
-              ? (o, n) => _reorderStops(routeId, o, n)
-              : (_, __) {},
-          proxyDecorator: (child, _, _) =>
-              Material(type: MaterialType.transparency, child: child),
-          itemBuilder: (_, i) => Padding(
-            key: ValueKey(active[i]['stop_id']?.toString() ?? '$i'),
-            padding: EdgeInsets.only(bottom: Ds.space.x12),
-            child: _todayStopRow(routeId, active[i], index: i,
-                canReorder: canReorder),
-          ),
-        ),
-      for (final st in parked) ...[
-        SizedBox(height: Ds.space.x12),
-        _todayStopRow(routeId, st),
-      ],
-    ]);
-  }
-
-  Widget _todayStopRow(String routeId, Map<String, dynamic> st,
-      {int? index, bool canReorder = false}) {
-    final stopId = st['stop_id']?.toString() ?? '';
-    final skipped = RouteStopCheckInPlan.isSkipped(st);
-    final skippedLabel = st['skipped_label']?.toString();
-    final hasMenu = RouteStopCheckInPlan.menu(st).isNotEmpty;
-    final tone = st['status_tone']?.toString();
-    final closed = st['closed_label']?.toString();
-    final eta = st['eta_label']?.toString();
-    final noteLine = st['note_label']?.toString();
-    final photoUrl = st['photo_url']?.toString();
-    final photoLabel = st['photo_label']?.toString();
-    final actions = ((st['actions'] as List?) ?? const [])
-        .whereType<Map>()
-        .map((e) => Map<String, dynamic>.from(e))
-        .toList();
-
-    final card = Container(
-      width: double.infinity,
-      padding: EdgeInsets.all(Ds.space.x12),
-      decoration: BoxDecoration(
-        color: Ds.c.bg,
-        borderRadius: Ds.r.rCard,
-        border: Border.all(color: Ds.c.divider, width: Ds.space.hairline),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Container(
-            width: Ds.space.x24,
-            height: Ds.space.x24,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-                color: skipped ? Ds.c.bg : Ds.c.brandSoft,
-                borderRadius: Ds.r.rChip),
-            // CMD #1874 — the badge prints the backend's seq_label, which is
-            // the placeholder for a stop that holds no place in the day.
-            child: Text(
-                st['seq_label']?.toString() ?? '${st['seq'] ?? ''}',
-                style: Ds.t.caption),
-          ),
-          SizedBox(width: Ds.space.x12),
-          Expanded(
-            child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(st['name']?.toString() ?? '',
-                      style: Ds.t.bodyStrong, overflow: TextOverflow.ellipsis),
-                  if ((st['address']?.toString() ?? '').isNotEmpty)
-                    Text(st['address'].toString(),
-                        style: Ds.t.caption, overflow: TextOverflow.ellipsis),
-                ]),
-          ),
-          if ((eta ?? '').isNotEmpty) Text(eta!, style: Ds.t.caption),
-        ]),
-        SizedBox(height: Ds.space.x8),
-        Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x8, children: [
-          Container(
-            padding: EdgeInsets.symmetric(
-                horizontal: Ds.space.x12, vertical: Ds.space.x4),
-            decoration: BoxDecoration(
-                color: routeStopToneSoft(tone), borderRadius: Ds.r.rChip),
-            child: Text(st['status_label']?.toString() ?? '',
-                style: Ds.t.caption),
-          ),
-          if ((closed ?? '').isNotEmpty)
-            Container(
-              padding: EdgeInsets.symmetric(
-                  horizontal: Ds.space.x12, vertical: Ds.space.x4),
-              decoration: BoxDecoration(
-                  color: Ds.c.warningSoft, borderRadius: Ds.r.rChip),
-              child: Text(closed!, style: Ds.t.caption),
-            ),
-          // CMD #1874 — a skipped stop says so in the backend's own word.
-          if ((skippedLabel ?? '').isNotEmpty)
-            Container(
-              padding: EdgeInsets.symmetric(
-                  horizontal: Ds.space.x12, vertical: Ds.space.x4),
-              decoration: BoxDecoration(
-                  color: Ds.c.warningSoft, borderRadius: Ds.r.rChip),
-              child: Text(skippedLabel!, style: Ds.t.caption),
-            ),
-        ]),
-        if ((noteLine ?? '').isNotEmpty) ...[
-          SizedBox(height: Ds.space.x8),
-          Text(noteLine!, style: Ds.t.caption),
-        ],
-        SizedBox(height: Ds.space.x12),
-        Row(children: [
-          for (final a in actions) ...[
-            Expanded(
-              child: SizedBox(
-                height: Ds.touch.minTarget,
-                child: RouteStopCheckInPlan.isSkip(a)
-                    ? OutlinedButton(
-                        onPressed: () => _skipStop(routeId, stopId, a),
-                        child: Text(a['label']?.toString() ?? ''),
-                      )
-                    // CMD #1874 — Restore is the same route_stop_skip call
-                    // with the backend's own boolean.
-                    : RouteStopCheckInPlan.isUnskip(a)
-                        ? OutlinedButton(
-                            onPressed: () => _skipStopFromMenu(routeId, stopId,
-                                {'skipped': false}),
-                            child: Text(a['label']?.toString() ?? ''),
-                          )
-                        : ElevatedButton(
-                            onPressed: () => _openStopCheckIn(routeId, stopId),
-                            child: Text(a['label']?.toString() ?? ''),
-                          ),
-              ),
-            ),
-            SizedBox(width: Ds.space.x8),
-          ],
-          if ((photoUrl ?? '').isNotEmpty)
-            SizedBox(
-              height: Ds.touch.minTarget,
-              child: TextButton.icon(
-                onPressed: () => launchUrl(Uri.parse(photoUrl!),
-                    mode: LaunchMode.externalApplication),
-                icon: const Icon(Icons.photo_outlined),
-                label: Text(photoLabel ?? ''),
-              ),
-            ),
-          // CMD #1874 — the drag handle. Long-press anywhere else on the row
-          // opens the menu instead, so the two gestures never fight.
-          if (index != null && canReorder)
-            ReorderableDragStartListener(
-              index: index,
-              child: SizedBox(
-                width: Ds.touch.minTarget,
-                height: Ds.touch.minTarget,
-                child: Icon(Icons.drag_handle, color: Ds.c.textSecondary),
-              ),
-            ),
-        ]),
-      ]),
-    );
-
-    if (!hasMenu) return card;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onLongPress: () async {
-        final entry = await RouteStopMenuSheet.open(context, st);
-        if (entry == null || !mounted) return;
-        await _skipStopFromMenu(routeId, stopId, entry);
-      },
-      child: card,
-    );
-  }
+  // CMD #1917 — _todayStopRow() DELETED: one stop row lives in RouteViewPanel.
 
   // ── D1: Rep view — "My route today" ──────────────────────────────────────
 
@@ -15689,11 +15324,9 @@ class _RoutesTabState extends State<_RoutesTab> {
                   setState(() {
                     if (expanded) { _expandedRouteIds.remove(routeId); } else { _expandedRouteIds.add(routeId); }
                   });
-                  // CHANGE #463 B1/B2: opening a route -> call route_map(routeId).
-                  // Default mode is Map, so fetch immediately unless cached.
-                  if (!expanded && !_routeMapData.containsKey(routeId)) {
-                    _loadRouteMap(routeId);
-                  }
+                  // CMD #1917 — expanding no longer prefetches route_map():
+                  // RouteViewPanel asks route_view() once and keeps the map
+                  // alive per route, so a second open costs nothing.
                 },
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Row(children: [
@@ -15751,19 +15384,27 @@ class _RoutesTabState extends State<_RoutesTab> {
                     Icon(expanded ? Icons.expand_less : Icons.expand_more,
                         size: 20, color: const Color(0xFF6B7280)),
                   ]),
-                  const SizedBox(height: 2),
-                  Text(r['subtitle']?.toString() ?? '',
-                      style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
-                  // CMD #1875 — route cost + ₹ per converted lead.
-                  _costChips(r),
-                  if (dayWarning != null) ...[
-                    const SizedBox(height: 4),
-                    Text('⚠ $dayWarning',
-                        style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: Color(0xFFD97706))),
-                  ],
-                  if (closedLabel != null) ...[
+                  // CMD #1917 — the subtitle, the cost chips and the two
+                  // warnings are the SHARED component's, drawn below by
+                  // RouteViewPanel from route_view().header. The collapsed row
+                  // keeps them so a closed route still reads at a glance;
+                  // expanded, printing them twice is exactly the drift this
+                  // change removes.
+                  if (!expanded) ...[
                     const SizedBox(height: 2),
-                    Text(closedLabel, style: const TextStyle(fontSize: 11.5, color: Color(0xFF9CA3AF))),
+                    Text(r['subtitle']?.toString() ?? '',
+                        style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+                    // CMD #1875 — route cost + ₹ per converted lead.
+                    _costChips(r),
+                    if (dayWarning != null) ...[
+                      const SizedBox(height: 4),
+                      Text('⚠ $dayWarning',
+                          style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: Color(0xFFD97706))),
+                    ],
+                    if (closedLabel != null) ...[
+                      const SizedBox(height: 2),
+                      Text(closedLabel, style: const TextStyle(fontSize: 11.5, color: Color(0xFF9CA3AF))),
+                    ],
                   ],
                 ]),
               ),
@@ -15781,53 +15422,24 @@ class _RoutesTabState extends State<_RoutesTab> {
     );
   }
 
-  // ── CHANGE #550: the Map/List toggle is DELETED. Both are always visible,
-  // stacked: map on top, then the stop-range buttons, then the stop list.
+  /// CMD #1917 — the expanded route on All plans IS the shared route
+  /// component: the same map, the same "Stops 1–10" jump chips and the same
+  /// stop rows with the same five actions that Today draws. #550's own map
+  /// view, window buttons and stop card are DELETED — two implementations of
+  /// one route is the drift this change removes.
+  ///
+  /// The only thing the host still owns here is the pair of Optimize buttons,
+  /// which is a plan-builder concern, so they ride in as headerExtras.
   Widget _buildRouteDetail(String routeId, List<Map<String, dynamic>> stops) {
-    RenderLog.write('c550_route_stacked', 'stops=${stops.length}');
-    final visible = _stopsInWindow(routeId, stops);
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      _buildRouteOptimizeButtons(routeId),
-      const SizedBox(height: 10),
-      _buildRouteMapView(routeId),
-      const SizedBox(height: 10),
-      // Stop-range buttons sit directly under the map and scope the list.
-      _buildStopRangeButtons(routeId, stops.length),
-      const SizedBox(height: 10),
-      Column(
-          children: visible
-              .map((s) => Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: _builderStopRow(s),
-                  ))
-              .toList()),
-    ]);
-  }
-
-  /// CHANGE #550 — Stops 1-10 / 11-20 / 21-25, sized to the real stop count.
-  /// Windows are 10 wide; the last one is clamped to the number of stops.
-  Widget _buildStopRangeButtons(String routeId, int total) {
-    if (total <= 10) return const SizedBox.shrink();
-    final windows = <List<int>>[];
-    for (var start = 1; start <= total; start += 10) {
-      windows.add([start, (start + 9) > total ? total : (start + 9)]);
-    }
-    final sel = _routeStopWindow[routeId] ?? 0;
-    return Wrap(spacing: 8, runSpacing: 8, children: [
-      for (var i = 0; i < windows.length; i++)
-        _segBtn('Stops ${windows[i][0]}-${windows[i][1]}', sel == i,
-            () => setState(() => _routeStopWindow[routeId] = i)),
-    ]);
-  }
-
-  List<Map<String, dynamic>> _stopsInWindow(
-      String routeId, List<Map<String, dynamic>> stops) {
-    if (stops.length <= 10) return stops;
-    final sel = _routeStopWindow[routeId] ?? 0;
-    final start = sel * 10;
-    if (start >= stops.length) return stops;
-    final end = (start + 10) > stops.length ? stops.length : start + 10;
-    return stops.sublist(start, end);
+    RenderLog.write('c1917_allplans_panel', routeId);
+    return RouteViewPanel(
+      routeId: routeId,
+      isDesktop: widget.isDesktop,
+      screen: 'all_plans',
+      workers: RouteLivePlan.dots(_live),
+      actions: _routeViewActions,
+      headerExtras: _buildRouteOptimizeButtons(routeId),
+    );
   }
 
   // ── CHANGE #494: two equal-size, ~46dp-tall optimize buttons, side by
@@ -15902,88 +15514,10 @@ class _RoutesTabState extends State<_RoutesTab> {
     );
   }
 
-  Widget _buildRouteMapView(String routeId) {
-    final loading = _routeMapLoading[routeId] == true;
-    final data = _routeMapData[routeId];
-    final mapHeight = widget.isDesktop ? 420.0 : 320.0;
-
-    if (loading && data == null) {
-      return SizedBox(
-        height: mapHeight,
-        child: const Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)),
-      );
-    }
-    if (data == null) {
-      return SizedBox(
-        height: mapHeight,
-        child: Center(
-          child: Text(c('admin_customer.nothing_to_map'), style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
-        ),
-      );
-    }
-
-    final summary = data['summary']?.toString();
-    final closedLabel = data['closed_label']?.toString();
-    final legs = ((data['legs'] as List?) ?? []).map((l) => Map<String, dynamic>.from(l as Map)).toList();
-
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      // B3 — header above the map: label/summary/closed_label, VERBATIM.
-      if (data['label'] != null)
-        Text(data['label'].toString(),
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-      if (summary != null) ...[
-        const SizedBox(height: 2),
-        Text(summary, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-      ],
-      if (closedLabel != null) ...[
-        const SizedBox(height: 2),
-        Text(closedLabel,
-            style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: Color(0xFFDC2626))),
-      ],
-      // CHANGE #488 (1B): route-map header status line.
-      const SizedBox(height: 2),
-      Text(
-        data['google_optimized'] == true
-            ? '✓ Google optimized'
-            : 'Tap Optimize with Google for road route',
-        style: TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w600,
-          color: data['google_optimized'] == true ? const Color(0xFF065F46) : const Color(0xFF9CA3AF),
-        ),
-      ),
-      const SizedBox(height: 8),
-      RouteGoogleMapPanel(
-        mapData: data,
-        isDesktop: widget.isDesktop,
-        onTapStop: _openMapStopSheet,
-        // CMD #1878 — the same dots the live card draws, on the route line.
-        workers: RouteLivePlan.dots(_live),
-      ),
-      // B5 — leg buttons: Google's directions URL takes only ~9 waypoints, so
-      // a 27-stop route is chunked server-side into legs. Never build one URL.
-      if (legs.isNotEmpty) ...[
-        const SizedBox(height: 10),
-        Wrap(
-          spacing: 8, runSpacing: 8,
-          children: legs.map((leg) {
-            final url = leg['url']?.toString();
-            return OutlinedButton(
-              onPressed: url == null || url.isEmpty
-                  ? null
-                  : () => launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: const Color(0xFF1B7A43),
-                side: const BorderSide(color: Color(0xFF1B7A43)),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              ),
-              child: Text(leg['label']?.toString() ?? '', style: const TextStyle(fontSize: 12.5)),
-            );
-          }).toList(),
-        ),
-      ],
-    ]);
-  }
+  // CMD #1917 — _buildRouteMapView() is DELETED. The map is drawn once, by
+  // RouteViewPanel, from route_view().map, and is kept alive across both
+  // screens. _loadRouteMap()/_routeMapData survive only as the input the two
+  // Optimize-with-Google flows read before they call route_apply_google().
 
   // ── D3: Today's Visits collapsible panel ─────────────────────────────────
 
@@ -16193,245 +15727,15 @@ class _RoutesTabState extends State<_RoutesTab> {
   // has branch_label/stale_label/pin_label/visit_label instead). Reuses
   // _openCheckIn / the SAME #446 check-in sheet — record_visit only needs
   // lead_id, which both shapes carry.
-  /// CHANGE #550 — redesigned stop card, driven by lead_stop_card().
-  ///
-  /// Layout: a large photo across the top with the score chip and the include
-  /// checkbox overlaid on it, then the pharmacy name and address, then ONE
-  /// compact row of actions built from the backend's actions[].
-  ///
-  /// Everything user-visible is backend-owned: photo_url, name, address,
-  /// score_label, each action's label/enabled flag, and the call / whatsapp /
-  /// navigate URIs. No URI is constructed in Dart.
-  Widget _builderStopRow(Map<String, dynamic> s) {
-    final stopId = s['stop_id'].toString();
-    final leadId = s['lead_id'];
-    final included = s['included'] == true;
-    final card = leadId == null ? null : _stopCards[leadId.toString()];
-    if (leadId != null && card == null) _loadStopCard(leadId);
+  // CMD #1917 — the builder stop row and its compact action button are DELETED. Both
+  // screens now draw RouteViewPanel's single stop row, which carries the photo,
+  // the score chip, the status chip and the SAME five actions — Call, WhatsApp,
+  // Navigate, Check in, Import customer — from route_view().stops[].actions.
 
-    final photoUrl = (card?['photo_url'] ?? s['photo_url'])?.toString();
-    final name = (card?['name'] ?? s['name'])?.toString() ?? '';
-    final address = (card?['address'] ?? s['area'])?.toString() ?? '';
-    final scoreLabel = (card?['score_label'] ?? s['score_label'])?.toString();
-    final openLabel = s['open_label']?.toString();
-    final shut = openLabel == 'SHUT on arrival';
-    final photoH = widget.isDesktop ? 168.0 : 140.0;
-    RenderLog.write('c452_checkin_wired', 1);
+  // CMD #1917 — _loadStopCard() DELETED: route_view() already carries every
+  // stop's photo, score and action set, so lead_stop_card() has no caller.
 
-    // actions[] is backend-owned; disabled (never hidden) when enabled=false.
-    final actions = ((card?['actions'] as List?) ?? [])
-        .whereType<Map>()
-        .map((a) => Map<String, dynamic>.from(a))
-        .toList();
-
-    VoidCallback? tapFor(String key, bool enabled) {
-      if (!enabled) return null;
-      String? uri;
-      switch (key) {
-        case 'call':
-          uri = card?['call_uri']?.toString();
-          break;
-        case 'whatsapp':
-          uri = card?['whatsapp_uri']?.toString();
-          break;
-        case 'navigate':
-          uri = card?['navigate_uri']?.toString();
-          break;
-        case 'checkin':
-          return () => _openCheckIn(s, onRefresh: () {
-                if (leadId != null) _refreshStopCard(leadId);
-                if (_planId != null) _loadPlan(_planId!);
-              });
-      }
-      if (uri == null || uri.isEmpty) return null;
-      final u = uri;
-      return () => launchUrl(Uri.parse(u), mode: LaunchMode.externalApplication);
-    }
-
-    return Container(
-      decoration: BoxDecoration(
-        color: shut ? const Color(0xFFFEF2F2) : Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-            color: shut ? const Color(0xFFFECACA) : const Color(0xFFE5E7EB)),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // ── Photo with overlaid score chip + checkbox ─────────────────────
-        SizedBox(
-          height: photoH,
-          width: double.infinity,
-          child: Stack(fit: StackFit.expand, children: [
-            if (photoUrl != null && photoUrl.isNotEmpty)
-              NativeSignedImage(url: photoUrl, cacheKey: photoUrl)
-            else
-              // Neutral placeholder of the SAME height so cards stay uniform.
-              Container(
-                color: const Color(0xFFF3F4F6),
-                child: const Center(
-                  child: Icon(Icons.storefront_outlined,
-                      size: 34, color: Color(0xFF9CA3AF)),
-                ),
-              ),
-            Positioned(
-              top: 6,
-              left: 6,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.92),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Checkbox(
-                  value: included,
-                  onChanged: (v) => _toggleStopIncluded(stopId, v == true),
-                  activeColor: const Color(0xFF1B7A43),
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  visualDensity: VisualDensity.compact,
-                ),
-              ),
-            ),
-            if (scoreLabel != null && scoreLabel.isNotEmpty)
-              Positioned(
-                top: 8,
-                right: 8,
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.62),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(scoreLabel,
-                      style: const TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white)),
-                ),
-              ),
-            if (s['seq'] != null)
-              Positioned(
-                bottom: 8,
-                left: 8,
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.62),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text('${s['seq']}',
-                      style: const TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w800,
-                          color: Colors.white)),
-                ),
-              ),
-          ]),
-        ),
-
-        // ── Name / address ────────────────────────────────────────────────
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(name,
-                style: const TextStyle(
-                    fontSize: 14.5,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFF111827))),
-            if (address.isNotEmpty) ...[
-              const SizedBox(height: 2),
-              Text(address,
-                  style: const TextStyle(
-                      fontSize: 12, color: Color(0xFF6B7280))),
-            ],
-          ]),
-        ),
-
-        // ── ONE compact action row, from actions[] ───────────────────────
-        Padding(
-          padding: const EdgeInsets.fromLTRB(8, 8, 8, 10),
-          child: Row(children: [
-            for (final a in actions) ...[
-              Expanded(
-                child: _stopActionCompact(
-                  a['key']?.toString() ?? '',
-                  a['label']?.toString() ?? '',
-                  tapFor(a['key']?.toString() ?? '', a['enabled'] != false),
-                ),
-              ),
-            ],
-          ]),
-        ),
-      ]),
-    );
-  }
-
-  static const Map<String, IconData> _stopActionIcons = {
-    'call': Icons.call,
-    'whatsapp': Icons.chat,
-    'navigate': Icons.navigation_outlined,
-    'checkin': Icons.check_circle,
-  };
-
-  /// Compact action button. Disabled (greyed, not hidden) when the backend
-  /// says enabled=false, or when it supplied no URI for that action.
-  Widget _stopActionCompact(String key, String label, VoidCallback? onTap) {
-    final on = onTap != null;
-    final green = const Color(0xFF1B7A43);
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 2),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-          decoration: BoxDecoration(
-            color: on ? const Color(0xFFECFDF5) : const Color(0xFFF3F4F6),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-                color: on ? const Color(0xFFBBDDC8) : const Color(0xFFE5E7EB)),
-          ),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Icon(_stopActionIcons[key] ?? Icons.circle_outlined,
-                size: 16, color: on ? green : const Color(0xFF9CA3AF)),
-            const SizedBox(height: 3),
-            Text(label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w600,
-                    color: on ? green : const Color(0xFF9CA3AF))),
-          ]),
-        ),
-      ),
-    );
-  }
-
-  /// lead_stop_card() fetch + cache. One call per lead, on first render.
-  Future<void> _loadStopCard(dynamic leadId) async {
-    final key = leadId.toString();
-    if (_stopCards.containsKey(key) || _stopCardsInFlight.contains(key)) return;
-    _stopCardsInFlight.add(key);
-    try {
-      final res = await Supabase.instance.client
-          .rpc('lead_stop_card', params: {'p_lead_id': leadId});
-      if (res is Map && mounted) {
-        setState(() => _stopCards[key] = Map<String, dynamic>.from(res));
-        RenderLog.write('c550_stop_card', 'lead=$key');
-      }
-    } catch (_) {
-      // Card falls back to the stop row's own fields until a later rebuild.
-    } finally {
-      _stopCardsInFlight.remove(key);
-    }
-  }
-
-  /// Force a refetch — used after an import so already_customer flips.
-  Future<void> _refreshStopCard(dynamic leadId) async {
-    _stopCards.remove(leadId.toString());
-    await _loadStopCard(leadId);
-  }
+  // CMD #1917 — _refreshStopCard() DELETED with lead_stop_card()'s caller.
 
   // ── B6 + C: stop card (#445/#446 my_route() shape) — unchanged, used by
   // the rep view only. ──────────────────────────────────────────────────────

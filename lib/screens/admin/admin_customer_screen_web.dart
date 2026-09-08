@@ -51,6 +51,7 @@ import 'leads_paging.dart'; // CHANGE #1867 — PagedList / SLeadRow
 import '../../widgets/customer_console_row.dart'; // CHANGE #810
 import '../../widgets/customer_payment_term_sheet.dart'; // CHANGE #1888
 import '../../widgets/customer_autofill_strip.dart'; // CHANGE #1888
+import '../../url_sync.dart' show initialSearch; // CHANGE #1888
 
 // CHANGE #242: payment-image sharing now goes through the platform-conditional
 // download_bytes wrapper (Web Share API on web / share_plus on Android), so no
@@ -765,7 +766,21 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   /// unknown panel name is ignored the way [openTab] ignores an unknown tab,
   /// and it fires once because [_bootedForAdmin] has already been set.
   void _openDeepLinkPanel() {
-    final panel = Uri.base.queryParameters['panel'];
+    // initialSearch(), never Uri.base: usePathUrlStrategy() rewrites the
+    // browser URL to '/' about a second into boot, and this screen mounts
+    // after that — Uri.base was ALWAYS empty here, so the link opened the
+    // customer list and nothing else. CHANGE #747 captured the query at the
+    // top of main() for exactly this class of deep link; the catalogue and
+    // orders screens already read it the same way.
+    String? panel;
+    try {
+      panel = Uri.splitQueryString(
+          initialSearch().replaceFirst('?', ''))['panel'];
+    } catch (_) {
+      // A malformed percent-escape in someone's URL is not worth losing
+      // the admin customer screen over.
+      return;
+    }
     if (panel == null || panel.isEmpty) return;
     RenderLog.write('c1888_panel_link', panel);
     if (panel != 'import') return;

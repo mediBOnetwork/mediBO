@@ -550,7 +550,7 @@ class _HomeShellState extends State<HomeShell> {
     // Uri.base: boot's rewrite erases the query (#747).
     if (path == '/admin/customers') {
       _index = 6;
-      AdminCustomerScreen.openTab(Uri.splitQueryString(initialSearch().replaceFirst('?', ''))['tab']);
+      AdminCustomerScreen.openFromLink(initialSearch()); // #1876 tab|route
       return;
     }
     if (path.startsWith('/c/')) {

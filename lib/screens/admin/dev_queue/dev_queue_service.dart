@@ -303,6 +303,13 @@ class DevQueueService {
   Future<Map<String, dynamic>> ctlGet() async =>
       _asMap(await _c.rpc('dev_ctl_get'));
 
+  /// CMD #1911 — the Deploy lock banner. One render-ready payload: who holds
+  /// the lock RIGHT NOW (its real command id, never a number baked into a
+  /// string), how long of the hold cap it has used, and the forced releases
+  /// the reaper has had to make. Every string is the backend's.
+  Future<Map<String, dynamic>> deployLockBanner() async =>
+      _asMap(await _c.rpc('deploy_lock_banner'));
+
   /// Flip one toggle (vm|claude|workflow → on|off). Returns the backend verdict
   /// (for 'vm' it carries call_edge:true + action so the caller invokes the fn).
   Future<Map<String, dynamic>> ctlSet(String key, String value) async =>

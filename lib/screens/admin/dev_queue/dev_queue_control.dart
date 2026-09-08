@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 
+import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
 import 'dev_queue_common.dart';
@@ -23,6 +24,7 @@ class _DevQueueControlState extends State<DevQueueControl> {
   Timer? _poll;
   Map<String, dynamic> _snap = const {};
   Map<String, dynamic> _usage = const {};
+  Map<String, dynamic> _lock = const {}; // deploy_lock_banner()
   final Set<String> _busy = {}; // keys mid-flip
   bool _expanded = false; // collapsed by default — tap the header to open
   // Anchors so a lock/confirm popup can float right next to the tapped toggle.
@@ -62,11 +64,13 @@ class _DevQueueControlState extends State<DevQueueControl> {
       final results = await Future.wait([
         widget.service.ctlGet(),
         widget.service.sessionUsage(),
+        widget.service.deployLockBanner(),
       ]);
       if (mounted) {
         setState(() {
           _snap = results[0];
           _usage = results[1];
+          _lock = results[2];
         });
       }
     } catch (_) {}
@@ -315,10 +319,64 @@ class _DevQueueControlState extends State<DevQueueControl> {
             service: widget.service,
             onChanged: _load,
           ),
+          if ((_lock['has'] ?? false) == true) ...[
+            _divider(),
+            _deployLockRow(),
+          ],
           if ((_usage['has_usage'] ?? false) == true) ...[
             _divider(),
             _usageMeter(),
           ],
+        ],
+      ]),
+    );
+  }
+
+  /// CMD #1911 — WHO HOLDS THE DEPLOY LOCK, and what the reaper has had to
+  /// take back. Every string here is `deploy_lock_banner()`'s: the banner used
+  /// to be a sentence with "CMD #1859" baked into it, so a command waiting
+  /// behind #1895 read someone else's number off its own card.
+  Widget _deployLockRow() {
+    final recent = (_lock['recent'] as List?) ?? const [];
+    final detail = (_lock['detail'] ?? '').toString();
+    final renewals = (_lock['renewals_label'] ?? '').toString();
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: Ds.space.x8),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(Icons.lock_clock_outlined,
+              size: Ds.t.captionSize, color: Ds.c.textSecondary),
+          SizedBox(width: Ds.space.x8),
+          Text((_lock['title'] ?? '').toString(), style: Ds.t.caption),
+          const Spacer(),
+          if (renewals.isNotEmpty)
+            ToneChip(label: renewals, tone: toneByName('neutral')),
+          SizedBox(width: Ds.space.x8),
+          ToneChip(
+              label: (_lock['cap_label'] ?? '').toString(),
+              tone: toneByName((_lock['tone'] ?? 'neutral').toString())),
+        ]),
+        SizedBox(height: Ds.space.x4),
+        Text((_lock['banner'] ?? '').toString(), style: Ds.t.body),
+        if (detail.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x4),
+          Text(detail, style: Ds.t.caption),
+        ],
+        SizedBox(height: Ds.space.x8),
+        Text((_lock['recent_label'] ?? '').toString(), style: Ds.t.caption),
+        for (final r in recent.whereType<Map>().take(3)) ...[
+          SizedBox(height: Ds.space.x4),
+          Row(children: [
+            ToneChip(
+                label: (r['label'] ?? '').toString(),
+                tone: toneByName((r['tone'] ?? 'neutral').toString())),
+            SizedBox(width: Ds.space.x8),
+            Expanded(
+                child: Text((r['value_label'] ?? '').toString(),
+                    style: Ds.t.caption)),
+            SizedBox(width: Ds.space.x8),
+            Text((r['at_label'] ?? '').toString(), style: Ds.t.caption),
+          ]),
         ],
       ]),
     );

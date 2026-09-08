@@ -550,9 +550,15 @@ class CardPrice {
       ptrFg: Availability._argb(m['ptr_fg']),
       hasNote: m['has_note'] == true && (m['note'] ?? '').toString().isNotEmpty,
       note: (m['note'] ?? '').toString(),
-      // #1895. Absent on a payload built before this change — the fallbacks
-      // above fill it there, and an empty string simply prints no sale line.
-      priceDisplay: (m['price_display'] ?? '').toString(),
+      // #1895. A payload built BEFORE this change carries no price_display in
+      // its card_price — the offline cache is full of them the day this ships.
+      // Fall back to the trade amount it does carry, so a cached card still
+      // prints a sale line. There is deliberately no fallback for the LOCKED
+      // shape: an old payload's word would have to be typed here, and the app
+      // does not own that word.
+      priceDisplay: (m['price_display'] ??
+              ((m['has_ptr'] == true) ? (m['ptr_display'] ?? '') : ''))
+          .toString(),
       priceLocked: m['price_locked'] == true,
       lockedTitle: (m['locked_title'] ?? '').toString(),
       lockedNote: (m['locked_note'] ?? '').toString(),

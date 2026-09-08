@@ -8843,6 +8843,10 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   /// more_label / end_label / has_more / next_offset). PagedList owns the two
   /// paging decisions; see lib/screens/admin/leads_paging.dart.
   PagedList _leadPage = const PagedList();
+
+  /// CMD #1871 — which collapsed rows have their branch list open. The rows
+  /// themselves come from scrape_lead_card(); this only remembers the taps.
+  final Set<int> _expandedBranchIds = {};
   bool _moreLoading = false;
   /// The results list scrolls in its own viewport so ListView.builder is
   /// genuinely lazy (a shrinkWrap list inside the page's SingleChildScrollView
@@ -9402,6 +9406,14 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       RenderLog.write('c443_rows_rendered', page);
       RenderLog.write('c443_total_count', _leadPage.total);
       RenderLog.write('c443_rows', page);
+      // CMD #1871 — proof the collapse reached the screen, not just the RPC.
+      RenderLog.write('c1871_rows', _leadPage.rows.length);
+      RenderLog.write(
+          'c1871_branch_chips',
+          _leadPage.rows
+              .where((r) => (r['branches_label'] as String?)?.isNotEmpty == true)
+              .length);
+      RenderLog.write('c1871_show_all', _fs.toggle('show_all_branches') ? 1 : 0);
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -11237,6 +11249,24 @@ class _SLeadsTabState extends State<_SLeadsTab> {
                 if (openLabel != null && openLabel.isNotEmpty)
                   _leadRowChip(openLabel, Ds.hex(row.openBg, Ds.c.bg),
                       Ds.hex(row.openFg, Ds.c.textSecondary)),
+                // CMD #1871 — "3 branches". Tapping opens the row WITH its
+                // branch list; when the toggle is on the backend sends
+                // branches_expandable:false and the chip is a plain label.
+                if (row.branchesLabel != null && row.branchesLabel!.isNotEmpty)
+                  _branchChip(row.branchesLabel!,
+                      open: false,
+                      onTap: (row.branchesExpandable && id != null)
+                          ? () {
+                              setState(() {
+                                _expandedIds.add(id);
+                                _expandedBranchIds.add(id);
+                              });
+                              if (!_leadDetailCache.containsKey(id) &&
+                                  !_detailLoading.contains(id)) {
+                                _fetchLeadDetail(id);
+                              }
+                            }
+                          : null),
               ]),
               if (address != null && address.isNotEmpty) ...[
                 SizedBox(height: Ds.space.x4),
@@ -11266,6 +11296,115 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         child: Text(label,
             style: Ds.t.caption.copyWith(color: fg, fontWeight: FontWeight.w600)),
       );
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // CMD #1871 — one row per phone, with the branch count on it.
+  //
+  // A chain publishes ONE phone and Maps lists every branch, so the same shop
+  // was in the list N times. The backend now returns the best-scored member of
+  // each phone group and puts the group size on the row. Everything printed
+  // here is a backend string: the chip's own label says whether this is a
+  // collapsed group ("3 branches") or one member of an expanded one
+  // ("1 of 3 branches"), and each branch line is rendered exactly as
+  // scrape_lead_card() composed it.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  Widget _branchChip(String label, {required bool open, VoidCallback? onTap}) {
+    final padH = Ds.space.x8;
+    final padV = Ds.space.x4;
+
+    final chip = Container(
+      constraints: BoxConstraints(
+          minHeight: onTap == null ? 0 : Ds.touch.minTarget),
+      padding: EdgeInsets.symmetric(horizontal: padH, vertical: padV),
+      decoration: BoxDecoration(
+        color: Ds.c.infoSoft,
+        borderRadius: Ds.r.rChip,
+        border: Border.all(color: Ds.c.info),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.store_mall_directory_outlined,
+            size: Ds.t.bodySize, color: Ds.c.info),
+        SizedBox(width: padV),
+        Text(label,
+            style: Ds.t.caption
+                .copyWith(color: Ds.c.info, fontWeight: FontWeight.w700)),
+        if (onTap != null) ...[
+          SizedBox(width: padV),
+          Icon(open ? Icons.expand_less : Icons.expand_more,
+              size: Ds.t.bodySize, color: Ds.c.info),
+        ],
+      ]),
+    );
+
+    if (onTap == null) return chip;
+    return InkWell(borderRadius: Ds.r.rChip, onTap: onTap, child: chip);
+  }
+
+  /// The branch list behind the chip. `loaded` is false only for the instant
+  /// before scrape_lead_card() lands, and it draws a skeleton, not a spinner.
+  Widget _branchPanel(String? title, List<Map<String, dynamic>> rows,
+      {required bool loaded}) {
+    String str(Map<String, dynamic> b, String k) => b[k]?.toString() ?? '';
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+          Ds.space.x12, Ds.space.x8, Ds.space.x12, 0),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (title != null && title.isNotEmpty)
+          Text(title,
+              style: Ds.t.caption.copyWith(fontWeight: FontWeight.w700)),
+        SizedBox(height: Ds.space.x4),
+        if (!loaded)
+          Container(
+            height: Ds.touch.minTarget,
+            decoration:
+                BoxDecoration(color: Ds.c.bg, borderRadius: Ds.r.rButton),
+          )
+        else
+          for (final b in rows)
+            Container(
+              width: double.infinity,
+              margin: EdgeInsets.only(bottom: Ds.space.x4),
+              padding: EdgeInsets.all(Ds.space.x8),
+              decoration: BoxDecoration(
+                color: b['is_primary'] == true ? Ds.c.infoSoft : Ds.c.bg,
+                borderRadius: Ds.r.rButton,
+              ),
+              child:
+                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Expanded(
+                    child: Text(str(b, 'name'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Ds.t.caption.copyWith(
+                            color: Ds.c.text, fontWeight: FontWeight.w700)),
+                  ),
+                  if (str(b, 'score_label').isNotEmpty)
+                    Text(str(b, 'score_label'), style: Ds.t.caption),
+                ]),
+                if (str(b, 'address').isNotEmpty)
+                  Text(str(b, 'address'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Ds.t.caption),
+                Row(children: [
+                  if (str(b, 'rating_label').isNotEmpty)
+                    Text(str(b, 'rating_label'), style: Ds.t.caption),
+                  if (str(b, 'badge_label').isNotEmpty) ...[
+                    if (str(b, 'rating_label').isNotEmpty)
+                      SizedBox(width: Ds.space.x8),
+                    Text(str(b, 'badge_label'),
+                        style: Ds.t.caption.copyWith(
+                            color: Ds.c.info, fontWeight: FontWeight.w700)),
+                  ],
+                ]),
+              ]),
+            ),
+      ]),
+    );
+  }
 
   static const Map<String, IconData> _scrapeActionIcons = {
     'call': Icons.call,
@@ -11354,6 +11493,16 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         ? Map<String, dynamic>.from(card!['disabled_reason'] as Map)
         : const <String, dynamic>{};
     final actions = _mapList(card?['actions']);
+    // ── CMD #1871 — the branches sharing this lead's phone ───────────────
+    // The chip's wording is the LIST row's, so it still says "3 branches"
+    // while collapsed and "1 of 3 branches" once the toggle is on; the branch
+    // rows are scrape_lead_card()'s. Dart counts and formats nothing.
+    final branchesLabel =
+        (r['branches_label'] ?? card?['branches_label'])?.toString();
+    final branchesExpandable = r['branches_expandable'] == true;
+    final branchesTitle = card?['branches_title']?.toString();
+    final branchRows = _mapList(card?['branches']);
+    final branchesOpen = id != null && _expandedBranchIds.contains(id);
     final photoH = widget.isDesktop ? 168.0 : 140.0;
     final expanded = id != null && _expandedIds.contains(id);
     final selected = id != null && _selectedLeadIds.contains(id);
@@ -11570,6 +11719,29 @@ class _SLeadsTabState extends State<_SLeadsTab> {
               ),
             ),
           ),
+
+        // ── CMD #1871 — the branch chip, and the branches behind it ───────
+        if (branchesLabel != null && branchesLabel.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+                Ds.space.x12, Ds.space.x8, Ds.space.x12, 0),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: _branchChip(branchesLabel,
+                  open: branchesOpen,
+                  onTap: (branchesExpandable && id != null)
+                      ? () => setState(() {
+                            if (branchesOpen) {
+                              _expandedBranchIds.remove(id);
+                            } else {
+                              _expandedBranchIds.add(id);
+                            }
+                          })
+                      : null),
+            ),
+          ),
+        if (branchesOpen)
+          _branchPanel(branchesTitle, branchRows, loaded: card != null),
 
         // ── ONE compact action row, from actions[] ────────────────────────
         Padding(

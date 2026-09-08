@@ -107,6 +107,8 @@ class SLeadRow {
     this.openFg,
     this.addressLabel,
     this.phoneLabel,
+    this.branchesLabel,
+    this.branchesExpandable = false,
   });
 
   final int? id;
@@ -118,6 +120,13 @@ class SLeadRow {
   final String? openFg;
   final String? addressLabel;
   final String? phoneLabel;
+
+  /// CMD #1871 — leads sharing one phone are ONE row. The label is the
+  /// backend's ("3 branches" collapsed, "1 of 3 branches" once the toggle is
+  /// on) and `branchesExpandable` is the backend's answer to whether tapping
+  /// it has anything to open. Neither is derived from a count here.
+  final String? branchesLabel;
+  final bool branchesExpandable;
 
   static String? _s(Map<String, dynamic> r, List<String> keys) {
     for (final k in keys) {
@@ -139,5 +148,7 @@ class SLeadRow {
         openFg: _s(r, const ['open_fg']),
         addressLabel: _s(r, const ['address_label', 'short_address', 'address']),
         phoneLabel: _s(r, const ['phone_label', 'phone']),
+        branchesLabel: _s(r, const ['branches_label']),
+        branchesExpandable: r['branches_expandable'] == true,
       );
 }

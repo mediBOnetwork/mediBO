@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 
 import '../../../design_tokens.dart';
+import '../../../utils/render_log.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
 import 'dev_queue_branch.dart';
@@ -869,6 +870,8 @@ class _DevQueueControlState extends State<DevQueueControl> {
   /// to be a sentence with "CMD #1859" baked into it, so a command waiting
   /// behind #1895 read someone else's number off its own card.
   Widget _deployLockRow() {
+    RenderLog.write('c1911_deploy_lock',
+        '${_lock['busy'] == true ? 'held' : 'free'}:${_lock['command_id'] ?? '-'}');
     final recent = (_lock['recent'] as List?) ?? const [];
     final detail = (_lock['detail'] ?? '').toString();
     final renewals = (_lock['renewals_label'] ?? '').toString();
@@ -990,6 +993,9 @@ class _DevQueueControlState extends State<DevQueueControl> {
   /// Slim one-line summary shown when collapsed: workflow state + the top usage
   /// percent, so Om reads the essentials without opening the panel.
   Widget _collapsedHeader() {
+    if ((_lock['has'] ?? false) == true) {
+      RenderLog.write('c1911_deploy_lock_chip', (_lock['label'] ?? '').toString());
+    }
     final wf = _isOn('workflow');
     final limits = (_usage['limits'] as List?) ?? const [];
     Map<String, dynamic>? first =
@@ -1017,6 +1023,15 @@ class _DevQueueControlState extends State<DevQueueControl> {
             style: const TextStyle(fontSize: 12, color: kTextLo)),
       ),
       RunnerHealthChip(health: _health),
+      // CMD #1911 — a held deploy lock is the thing Om needs at a glance, so
+      // its label rides the COLLAPSED strip too. Backend string, backend tone.
+      if ((_lock['has'] ?? false) == true &&
+          (_lock['label'] ?? '').toString().isNotEmpty) ...[
+        SizedBox(width: Ds.space.x4),
+        ToneChip(
+            label: (_lock['label'] ?? '').toString(),
+            tone: toneByName((_lock['tone'] ?? 'neutral').toString())),
+      ],
       if (first != null) ...[
         const SizedBox(width: 6),
         ToneChip(

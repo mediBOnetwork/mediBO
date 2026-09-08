@@ -27,6 +27,7 @@ import 'sleads_filter_bar.dart'; // CMD #1868 — the S Leads filter row
 import 'route_stop_checkin_sheet.dart'; // CMD #1873 — the route stop check-in sheet
 import 'sleads_bulk.dart'; // CMD #1869 — the bulk lane's pure decisions
 import 'scrape_run.dart'; // CMD #1870 — the scrape run's pure decisions
+import 'route_notify.dart'; // CMD #1876 — assign/message-stops payload readers
 import '../../services/sleads_filter_service.dart'; // CMD #1868
 import '../../models/order_item_panel_view.dart'; // CHANGE #238
 import '../../fulfill/fulfill_lookups.dart'; // C639: backend-owned entry label
@@ -420,6 +421,33 @@ class AdminCustomerScreen extends StatefulWidget {
   /// It retries for a few frames because the caller is the shell reading the
   /// URL in initState, before this screen's state exists — the deep link must
   /// survive a cold start, which is the only kind that matters for a link.
+  /// CMD #1876 — the whole of `/admin/customers?…`, decided in ONE place.
+  ///
+  /// The shell hands over its query string and nothing else: which of the two
+  /// link shapes this is (a sub-tab, or the single route the assignment
+  /// WhatsApp points at) is [RouteDeepLink]'s judgement, not the shell's, so
+  /// the shell keeps its one job — boot and routing.
+  static void openFromLink(String search) {
+    final link = RouteDeepLink.parse(search);
+    if (link.opensRoute) {
+      openRoute(link.routeId);
+    } else {
+      openTab(link.tab);
+    }
+  }
+
+  /// CMD #1876 — open ONE route from a link (`?tab=routes&route=<uuid>`), the
+  /// link the assignment WhatsApp carries. Same retry story as [openTab]: the
+  /// shell reads the URL before this screen's state exists.
+  static void openRoute(String? routeId, {int tries = 12}) {
+    if (routeId == null || routeId.isEmpty) return;
+    openTab('routes');
+    if (_RoutesTab.openRoute(routeId)) return;
+    if (tries <= 0) return;
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => openRoute(routeId, tries: tries - 1));
+  }
+
   static void openTab(String? filterName, {int tries = 12}) {
     if (filterName == null || filterName.isEmpty) return;
     final st = _screenKey.currentState;
@@ -12384,6 +12412,15 @@ class _RoutesTab extends StatefulWidget {
     return true;
   }
 
+  /// CMD #1876 — the deep link's route. False while this sub-tab is not
+  /// mounted yet, which is what makes AdminCustomerScreen.openRoute retry.
+  static bool openRoute(String routeId) {
+    final state = _routesKey.currentState;
+    if (state == null) return false;
+    state.openRouteById(routeId);
+    return true;
+  }
+
   final bool isDesktop;
   final ValueChanged<int> onZonesChanged;
   final VoidCallback onOpenWarehouseCard;
@@ -13537,6 +13574,189 @@ class _RoutesTabState extends State<_RoutesTab> {
       builder: (_) => _AssignRouteDialog(route: route, initialWorkers: workers),
     );
     if (assigned == true && _planId != null) await _loadPlan(_planId!);
+  }
+
+  // ── CMD #1876: bulk "visiting today" to every stop on a route ─────────────
+  //
+  // Two RPCs, nothing decided here. route_message_stops_sheet() says what the
+  // confirm sheet reads and whether there is anyone to reach; route_message_stops()
+  // does the sending through the SAME switchboard every other WhatsApp uses
+  // (wa_send_event_or_fallback), so the opt-out, notification and dedupe rails
+  // are the ones already in place. Every count and every skip reason below is
+  // a string the backend wrote — this widget only prints them.
+  final Set<String> _msgStopsBusy = <String>{};
+
+  Future<void> _openMessageStopsSheet(Map<String, dynamic> route) async {
+    final routeId = route['route_id']?.toString() ?? '';
+    if (routeId.isEmpty || _msgStopsBusy.contains(routeId)) return;
+    Map<String, dynamic> sheet;
+    try {
+      final res = await Supabase.instance.client
+          .rpc('route_message_stops_sheet', params: {'p_route_id': routeId});
+      sheet = Map<String, dynamic>.from(res as Map);
+    } catch (e) {
+      if (!mounted) return;
+      showToast(context, e.toString(), isError: true);
+      return;
+    }
+    if (!mounted) return;
+    if (sheet['ok'] != true) {
+      showToast(context, sheet['message']?.toString() ?? '', isError: true);
+      return;
+    }
+    RenderLog.write('c1876_msg_sheet', sheet['reachable'] ?? 0);
+    final canSend = sheet['can_send'] == true;
+    final go = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.fromLTRB(
+            Ds.space.x24, Ds.space.x24, Ds.space.x24, Ds.space.x24),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(sheet['title']?.toString() ?? '', style: Ds.t.title),
+          SizedBox(height: Ds.space.x8),
+          Text(sheet['body']?.toString() ?? '', style: Ds.t.bodySecondary),
+          SizedBox(height: Ds.space.x12),
+          Text(
+              (canSend
+                      ? sheet['count_label']?.toString()
+                      : sheet['blocked_label']?.toString()) ??
+                  '',
+              style: Ds.t.caption),
+          SizedBox(height: Ds.space.x24),
+          Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text(sheet['cancel_label']?.toString() ?? '')),
+            SizedBox(width: Ds.space.x12),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                  backgroundColor: Ds.c.brand,
+                  minimumSize: Size(Ds.space.x48 * 2, Ds.touch.minTarget)),
+              onPressed: canSend ? () => Navigator.pop(ctx, true) : null,
+              child: Text(sheet['send_label']?.toString() ?? ''),
+            ),
+          ]),
+        ]),
+      ),
+    );
+    if (go != true || !mounted) return;
+
+    setState(() => _msgStopsBusy.add(routeId));
+    Map<String, dynamic> result;
+    try {
+      final res = await Supabase.instance.client
+          .rpc('route_message_stops', params: {'p_route_id': routeId});
+      result = Map<String, dynamic>.from(res as Map);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _msgStopsBusy.remove(routeId));
+      showToast(context, e.toString(), isError: true);
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _msgStopsBusy.remove(routeId));
+    if (result['ok'] != true) {
+      showToast(context, result['message']?.toString() ?? '', isError: true);
+      return;
+    }
+    final parsed = RouteMessageResult.fromPayload(result);
+    RenderLog.write('c1876_msg_sent', parsed.sent);
+    RenderLog.write('c1876_msg_skipped', parsed.skipped);
+    _showMessageStopsResult(parsed);
+  }
+
+  void _showMessageStopsResult(RouteMessageResult result) {
+    final rows = result.orderedRows;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.fromLTRB(
+            Ds.space.x24, Ds.space.x24, Ds.space.x24, Ds.space.x24),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(result.title, style: Ds.t.title),
+          SizedBox(height: Ds.space.x8),
+          Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x8, children: [
+            _c1876Chip(result.sentLabel, 'success'),
+            _c1876Chip(result.skippedLabel, 'warning'),
+          ]),
+          SizedBox(height: Ds.space.x12),
+          Text(result.summaryLabel, style: Ds.t.bodySecondary),
+          SizedBox(height: Ds.space.x16),
+          ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: Ds.space.x48 * 6),
+            child: ListView.separated(
+              shrinkWrap: true,
+              itemCount: rows.length,
+              separatorBuilder: (_, __) => Divider(height: Ds.space.x16, color: Ds.c.divider),
+              itemBuilder: (_, i) {
+                final r = rows[i];
+                return Row(children: [
+                  Expanded(
+                      child: Text(r.name,
+                          style: Ds.t.body, overflow: TextOverflow.ellipsis)),
+                  SizedBox(width: Ds.space.x8),
+                  _c1876Chip(r.label, r.tone),
+                ]);
+              },
+            ),
+          ),
+          SizedBox(height: Ds.space.x16),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text(UiCopy.t('routes.msg_stops_cancel'))),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  /// Tone name → the token pair for it. The NAME is the backend's; the colours
+  /// are always the design system's, never a hex written here.
+  Widget _c1876Chip(String text, String tone) {
+    final bg = tone == 'success' ? Ds.c.successSoft : Ds.c.warningSoft;
+    final fg = tone == 'success' ? Ds.c.success : Ds.c.warning;
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: Ds.space.x8, vertical: Ds.space.x4),
+      decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rChip),
+      child: Text(text, style: Ds.t.caption.copyWith(color: fg)),
+    );
+  }
+
+  /// CMD #1876 — a WhatsApp link carries a ROUTE id. route_open() resolves the
+  /// plan that holds it, so the deep link is one backend answer rather than a
+  /// client-side hunt through every plan.
+  Future<void> openRouteById(String routeId) async {
+    if (routeId.isEmpty) return;
+    try {
+      final res = await Supabase.instance.client
+          .rpc('route_open', params: {'p_route_id': routeId});
+      final data = Map<String, dynamic>.from(res as Map);
+      if (!mounted) return;
+      if (data['ok'] != true) {
+        showToast(context, data['message']?.toString() ?? '', isError: true);
+        return;
+      }
+      setState(() {
+        _topMode = 'builder';
+        _expandedRouteIds = {routeId};
+      });
+      await _loadPlan(data['plan_id'].toString());
+      if (!mounted) return;
+      setState(() => _expandedRouteIds = {routeId});
+      RenderLog.write('c1876_route_opened', routeId);
+      _loadRouteMap(routeId);
+    } catch (e) {
+      if (!mounted) return;
+      showToast(context, e.toString(), isError: true);
+    }
   }
 
   // ── C5: Past plans ─────────────────────────────────────────────────────────
@@ -14986,6 +15206,23 @@ class _RoutesTabState extends State<_RoutesTab> {
                         ],
                       ]),
                     ),
+                    // CMD #1876 — bulk "visiting today" to every stop on
+                    // this route that has a phone. The caption is ui_copy's;
+                    // an empty key hides the button rather than inventing one.
+                    if (UiCopy.t('routes.msg_stops_btn').isNotEmpty)
+                      TextButton.icon(
+                        onPressed: _msgStopsBusy.contains(routeId)
+                            ? null
+                            : () => _openMessageStopsSheet(r),
+                        icon: Icon(Icons.campaign_outlined, size: Ds.space.x16),
+                        label: Text(UiCopy.t('routes.msg_stops_btn'),
+                            style: Ds.t.caption.copyWith(color: Ds.c.brand)),
+                        style: TextButton.styleFrom(
+                            foregroundColor: Ds.c.brand,
+                            padding: EdgeInsets.symmetric(horizontal: Ds.space.x4),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                      ),
                     if (assigned)
                       _infoChip(worker ?? 'Assigned', const Color(0xFFEFF6FF), const Color(0xFF1E40AF))
                     else

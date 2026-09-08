@@ -1031,15 +1031,16 @@ class PdPriceLines {
 /// by `pdp_other_packs()` inside `product_detail()`.
 ///
 /// The page renders the labels verbatim and switches to the tapped pack's own
-/// product id. Nothing here derives a label from a name, and the pack being
-/// viewed is always in the list, always [PdPack.selected] — the strip is a
-/// switch, not a set of links away from the page.
+/// product id. Nothing here derives a label from a name.
+///
+/// CMD #1903 (Om, live) — the pack being viewed is NOT in this list and no
+/// item carries a selected flag. The row offers the packs you are not on; the
+/// page's own title already says which one you are. A payload from before that
+/// call still parses — its `selected` key is simply not read.
 class PdPack {
   final String productId;
   final String label;
-  final bool selected;
-  const PdPack(
-      {required this.productId, required this.label, required this.selected});
+  const PdPack({required this.productId, required this.label});
 }
 
 class PdOtherPacks {
@@ -1061,11 +1062,12 @@ class PdOtherPacks {
         .map((e) => PdPack(
               productId: (e['product_id'] ?? '').toString(),
               label: (e['label'] ?? '').toString(),
-              selected: e['selected'] == true,
             ))
         .where((p) => p.productId.isNotEmpty && p.label.isNotEmpty)
         .toList(growable: false);
-    if (items.length < 2) return const PdOtherPacks.empty();
+    // One other pack is a row worth drawing now that the pack being viewed is
+    // no longer one of the entries; the old floor of 2 counted the anchor.
+    if (items.isEmpty) return const PdOtherPacks.empty();
     return PdOtherPacks(
       has: true,
       title: (raw['title'] ?? '').toString(),

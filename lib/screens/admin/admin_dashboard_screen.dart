@@ -18,6 +18,7 @@ import '../../widgets/crashes_card.dart'; // CHANGE #473
 import '../../widgets/dashboard_v2_card.dart'; // CHANGE #812
 import '../../widgets/dashboard_home_sections.dart'; // CMD #1891
 import '../../widgets/dashboard_nav_search.dart'; // CMD #1892
+import '../../widgets/dashboard_quick_actions.dart'; // CMD #1893
 import 'admin_customer_screen.dart'; // CMD #1891 — sub-tab doors
 import 'admin_supplier_screen.dart'; // CMD #1891 — sub-tab doors
 import '../../services/ui_copy.dart';
@@ -79,6 +80,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   // does, so it sits FIRST on the admin home and carries its own wording.
   Map<String, dynamic> _ops = const {};
 
+  /// CMD #1893 — ONE dashboard_home() read feeds the personal rows AND the six
+  /// sections, and a pin toggle re-reads it for both at once.
+  late final DashboardHomeFeed _homeFeed = DashboardHomeFeed(loadDashboardHome);
+
   // CHANGE #812 — the whole dashboard head in ONE payload: today's strip with
   // deltas and 7-day sparklines, the needs-you queue, the stage funnel, the
   // promised ring, alerts, quick actions and (super admin) the zone cards.
@@ -103,6 +108,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   @override
   void dispose() {
     _refresh?.cancel();
+    _homeFeed.dispose();
     super.dispose();
   }
 
@@ -368,6 +374,18 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     QuickLinkNavigator.of(context)?.navigate(route);
   }
 
+  /// CMD #1893 — long-press on any dashboard tile. The sheet's one line and
+  /// the toast under it are both the backend's strings; all this does is ask
+  /// nav_pin_toggle() and re-read dashboard_home() so Quick actions and the
+  /// held tile's own label agree again.
+  void _holdTile(Map<String, dynamic> tile) {
+    showDashboardPinSheet(context, tile, (featureKey) async {
+      final reply = await _togglePin(featureKey);
+      _homeFeed.invalidate();
+      return reply;
+    });
+  }
+
   Future<Map<String, dynamic>> _togglePin(String featureKey) async {
     try {
       final raw = await Supabase.instance.client
@@ -578,14 +596,26 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   onPalette: _openPalette,
                 )),
                 SizedBox(height: Ds.space.x24),
+                // CMD #1893 — Quick actions (this login's nav_pin pins, 4
+                // across) and Recently used (its last six nav_usage opens),
+                // directly under the search field and above everything else.
+                _centred(DashboardPersonalRows(
+                  key: const Key('c1893_personal'),
+                  load: _homeFeed.read,
+                  onOpen: _openTile,
+                  onHold: _holdTile,
+                  revision: _homeFeed.revision,
+                )),
                 if (_ops.isNotEmpty) _OpsBoardCard(payload: _ops),
                 // CMD #1891 — every door that used to hide in the "Also
                 // here" strip above Customers, Suppliers and Fulfill, in the
                 // six sections dashboard_home() names.
                 // CMD #1892 — needs-you-now as rows, the rest as tile grids.
                 _centred(DashboardHomeSections(
-                  load: loadDashboardHome,
+                  load: _homeFeed.read,
                   onOpen: _openTile,
+                  onHold: _holdTile,
+                  revision: _homeFeed.revision,
                 )),
                 const OrderHoursCard(),
                 const NotificationsCard(),

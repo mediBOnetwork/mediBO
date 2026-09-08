@@ -13,6 +13,7 @@
 //
 // Nothing here imports Supabase: the loader is injected, so the protected test
 // pumps every state on the Dart VM with an inline payload.
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../design_tokens.dart';
@@ -24,6 +25,10 @@ typedef DashboardHomeLoad = Future<Map<String, dynamic>> Function();
 
 /// A tile was tapped — the backend's own map, untouched.
 typedef DashboardTileTap = void Function(Map<String, dynamic> tile);
+
+/// CMD #1893 — a tile was held down. The Pin / Unpin sheet is the host's, not
+/// the tile's: the tile only reports which one was held.
+typedef DashboardTileHold = void Function(Map<String, dynamic> tile);
 
 /// The section drawn as full-width rows rather than as a tile grid. It is the
 /// one section whose items are all badged, so a row can afford to spend the
@@ -65,10 +70,20 @@ class DashboardHomeSections extends StatefulWidget {
     super.key,
     required this.load,
     required this.onOpen,
+    this.onHold,
+    this.revision,
   });
 
   final DashboardHomeLoad load;
   final DashboardTileTap onOpen;
+
+  /// CMD #1893 — long-press a tile to pin or unpin it. Null on a surface that
+  /// has no Quick actions row to pin into.
+  final DashboardTileHold? onHold;
+
+  /// Ticks when a pin changed, so the sections redraw with the new
+  /// `pin_action_label` the backend now returns for that tile.
+  final ValueListenable<int>? revision;
 
   @override
   State<DashboardHomeSections> createState() => _DashboardHomeSectionsState();
@@ -81,7 +96,14 @@ class _DashboardHomeSectionsState extends State<DashboardHomeSections> {
   @override
   void initState() {
     super.initState();
+    widget.revision?.addListener(_fetch);
     _fetch();
+  }
+
+  @override
+  void dispose() {
+    widget.revision?.removeListener(_fetch);
+    super.dispose();
   }
 
   Future<void> _fetch() async {
@@ -120,16 +142,22 @@ class _DashboardHomeSectionsState extends State<DashboardHomeSections> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         for (final s in sections) ...[
-          _SectionLabel(_s(s, 'label')),
+          DashboardSectionLabel(_s(s, 'label')),
           if (_list(s, 'items').isEmpty)
             Padding(
               padding: EdgeInsets.only(bottom: Ds.space.x8),
               child: Text(_s(s, 'empty_label'), style: Ds.t.bodySecondary),
             )
           else if (_s(s, 'key') == kNeedsNowSection)
-            _NeedsNowRows(tiles: _list(s, 'items'), onOpen: widget.onOpen)
+            _NeedsNowRows(
+                tiles: _list(s, 'items'),
+                onOpen: widget.onOpen,
+                onHold: widget.onHold)
           else
-            _TileGrid(tiles: _list(s, 'items'), onOpen: widget.onOpen),
+            DashboardTileGrid(
+                tiles: _list(s, 'items'),
+                onOpen: widget.onOpen,
+                onHold: widget.onHold),
           SizedBox(height: Ds.space.x24),
         ],
       ],
@@ -137,8 +165,11 @@ class _DashboardHomeSectionsState extends State<DashboardHomeSections> {
   }
 }
 
-class _SectionLabel extends StatelessWidget {
-  const _SectionLabel(this.text);
+/// The row heading every dashboard row wears — the six sections and, since
+/// CMD #1893, Quick actions and Recently used too. One class, so a personal row
+/// can never drift away from a section heading.
+class DashboardSectionLabel extends StatelessWidget {
+  const DashboardSectionLabel(this.text, {super.key});
   final String text;
   @override
   Widget build(BuildContext context) => Padding(
@@ -159,9 +190,10 @@ class _SectionLabel extends StatelessWidget {
 /// Full-width rows, worst first (the backend already ordered them). The bar
 /// down the left is the payload's tone: a breach is red, due-soon is amber.
 class _NeedsNowRows extends StatelessWidget {
-  const _NeedsNowRows({required this.tiles, required this.onOpen});
+  const _NeedsNowRows({required this.tiles, required this.onOpen, this.onHold});
   final List<Map<String, dynamic>> tiles;
   final DashboardTileTap onOpen;
+  final DashboardTileHold? onHold;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -169,7 +201,8 @@ class _NeedsNowRows extends StatelessWidget {
           for (final t in tiles)
             Padding(
               padding: EdgeInsets.only(bottom: Ds.space.x8),
-              child: DashboardNeedsNowRow(tile: t, onOpen: onOpen),
+              child: DashboardNeedsNowRow(
+                  tile: t, onOpen: onOpen, onHold: onHold),
             ),
         ],
       );
@@ -182,10 +215,12 @@ class DashboardNeedsNowRow extends StatelessWidget {
     super.key,
     required this.tile,
     required this.onOpen,
+    this.onHold,
   });
 
   final Map<String, dynamic> tile;
   final DashboardTileTap onOpen;
+  final DashboardTileHold? onHold;
 
   @override
   Widget build(BuildContext context) {
@@ -199,6 +234,7 @@ class DashboardNeedsNowRow extends StatelessWidget {
       child: InkWell(
         key: Key('c1891_tile_${_s(tile, 'feature_key')}'),
         onTap: () => onOpen(tile),
+        onLongPress: onHold == null ? null : () => onHold!(tile),
         borderRadius: Ds.r.rButton,
         child: Container(
           decoration: BoxDecoration(
@@ -256,22 +292,36 @@ class DashboardNeedsNowRow extends StatelessWidget {
 
 // ── The tile grid ────────────────────────────────────────────────────────────
 
-class _TileGrid extends StatelessWidget {
-  const _TileGrid({required this.tiles, required this.onOpen});
+/// The square-tile grid. [columns] overrides the responsive count — Quick
+/// actions is 4 across because the payload says `columns: 4`, not because Dart
+/// decided a pinned row looks better that way.
+class DashboardTileGrid extends StatelessWidget {
+  const DashboardTileGrid({
+    super.key,
+    required this.tiles,
+    required this.onOpen,
+    this.onHold,
+    this.columns,
+  });
   final List<Map<String, dynamic>> tiles;
   final DashboardTileTap onOpen;
+  final DashboardTileHold? onHold;
+  final int? columns;
   @override
   Widget build(BuildContext context) => LayoutBuilder(builder: (_, box) {
-        final w = dashboardTileWidth(box.maxWidth, Ds.space.x12);
+        final gap = Ds.space.x12;
+        final cols = columns ?? dashboardTileColumns(box.maxWidth);
+        final w = (box.maxWidth - gap * (cols - 1)) / cols;
         return Wrap(
-          spacing: Ds.space.x12,
-          runSpacing: Ds.space.x12,
+          spacing: gap,
+          runSpacing: gap,
           children: [
             for (final t in tiles)
               SizedBox(
                   width: w,
                   height: dashboardTileSide,
-                  child: DashboardHomeTile(tile: t, onOpen: onOpen)),
+                  child: DashboardHomeTile(
+                      tile: t, onOpen: onOpen, onHold: onHold)),
           ],
         );
       });
@@ -288,10 +338,12 @@ class DashboardHomeTile extends StatelessWidget {
     super.key,
     required this.tile,
     required this.onOpen,
+    this.onHold,
   });
 
   final Map<String, dynamic> tile;
   final DashboardTileTap onOpen;
+  final DashboardTileHold? onHold;
 
   static Color toneColor(String tone) => switch (tone) {
         'bad' => Ds.c.danger,
@@ -316,6 +368,7 @@ class DashboardHomeTile extends StatelessWidget {
       child: InkWell(
         key: Key('c1891_tile_${_s(tile, 'feature_key')}'),
         onTap: () => onOpen(tile),
+        onLongPress: onHold == null ? null : () => onHold!(tile),
         borderRadius: Ds.r.rButton,
         child: Container(
           decoration: BoxDecoration(

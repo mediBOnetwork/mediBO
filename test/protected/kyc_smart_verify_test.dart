@@ -170,6 +170,11 @@ Map<String, dynamic> _panelItem(
       'status_label': 'Awaiting verification',
       'status_tone': 'info',
       'reason_line': '',
+      // CMD #1914 — the worksheet is FOLDED. The caption that opens it is a
+      // backend string, and an item whose checks have not run carries none.
+      'checks_show_label':
+          (verify != null && verify['has'] == true) ? 'See checks' : '',
+      'checks_hide_label': 'Hide checks',
       'button_label': buttonLabel,
       'verify': verify,
     };
@@ -307,7 +312,17 @@ void main() {
       // reupload_label wins over button_label — and neither is composed here.
       expect(find.text('Upload a corrected document'), findsOneWidget);
       expect(find.text('Replace'), findsNothing);
+
+      // CMD #1914 — the machine's worksheet is no longer the first thing on
+      // the card. Its tier word is behind the link until the link is tapped.
+      expect(find.text('Rejected automatically'), findsNothing);
+      await tester.tap(find.text('See checks'));
+      await tester.pumpAndSettle();
       expect(find.text('Rejected automatically'), findsWidgets);
+      // …and it folds away again, in the backend's word for it.
+      await tester.tap(find.text('Hide checks'));
+      await tester.pumpAndSettle();
+      expect(find.text('Rejected automatically'), findsNothing);
     });
 
     testWidgets('with no reupload_label the panel keeps its own caption',

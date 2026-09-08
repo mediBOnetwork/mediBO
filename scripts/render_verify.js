@@ -644,11 +644,18 @@ async function phaseAdmin(browser, session, expectedHash) {
           { waitUntil: 'domcontentloaded', timeout: 30000 });
         await waitForFlutter(page, 10, adminPath);
       }
+      // CMD #1892 — the wheel runs BEFORE the log is read, not just before the
+      // capture. A Flutter SliverList only builds what is in (or near) the
+      // viewport, so a section below the fold has not run its build method yet
+      // and its RenderLog key does not exist. Reading first meant --shot-wheel
+      // photographed the section while the SAME run reported its key MISSING —
+      // which is how the dashboard's tile grids looked broken at 390 px and
+      // fine at 1280 px, on one identical build. Scroll, then read, then shoot.
+      await wheelBeforeShot(page);
       const logText = await readRenderLog(page);
       lastLog = logText;
       if (shotPath) {
         try {
-          await wheelBeforeShot(page);
           await page.screenshot({ path: shotPath, fullPage: false });
           console.log(`  Screenshot : ${shotPath}`);
         } catch (e) {

@@ -24,6 +24,7 @@ import 'customer_pipeline_screen.dart';
 import '../../user_state.dart'; // CMD #633 — the session gate below
 import '../../design_tokens.dart'; // CHANGE #238 — Ds tokens for the new panel chrome
 import 'sleads_filter_bar.dart'; // CMD #1868 — the S Leads filter row
+import 'sleads_bulk.dart'; // CMD #1869 — the bulk lane's pure decisions
 import '../../services/sleads_filter_service.dart'; // CMD #1868
 import '../../models/order_item_panel_view.dart'; // CHANGE #238
 import '../../fulfill/fulfill_lookups.dart'; // C639: backend-owned entry label
@@ -8805,8 +8806,37 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   String? _resultsRunId;
   List<Map<String, dynamic>> _runLeads = [];
   bool _runLeadsLoading = false;
-  final Set<int> _selectedLeadIds = {};
+  /// CMD #1869 — the tested model (SLeadsSelection) IS the selection: the
+  /// screen holds no second copy of these rules.
+  final SLeadsSelection _leadSelection = SLeadsSelection();
+  Set<int> get _selectedLeadIds => _leadSelection.ids;
+  bool get _selectMode => _leadSelection.mode;
   bool _bulkBusy = false;
+
+  // ── CMD #1869 — S Leads bulk lane ─────────────────────────────────────
+  /// Multi-select is entered by long-pressing a card (or Select all) and left
+  /// by Clear. Every label below comes from lead_leads_summary().bulk.
+  /// The "Archived" view is a FILTER (CMD #1868's canonical map), so the
+  /// existing filter row draws its toggle and a saved view can carry it.
+  bool get _archivedFilter => SLeadsBulk.isArchivedView(_fs.value);
+
+  /// The toolbar's copy rides the page envelope (sleads_page().bulk), falling
+  /// back to the summary's copy of the SAME block before the first page lands.
+  SLeadsBulk get _bulkUi {
+    final fromPage = _leadPage.meta['bulk'];
+    if (fromPage is Map) return SLeadsBulk(Map<String, dynamic>.from(fromPage));
+    final fromSummary = _summary?['bulk'];
+    if (fromSummary is Map) {
+      return SLeadsBulk(Map<String, dynamic>.from(fromSummary));
+    }
+    return const SLeadsBulk(<String, dynamic>{});
+  }
+
+  Map<String, dynamic> get _bulk => _bulkUi.payload;
+
+  List<Map<String, String>> get _bulkClasses => _bulkUi.classes;
+
+  String _bulkLabel(String key, {int? n}) => _bulkUi.label(key, n: n);
 
   // ── CHANGE #552 — scrape_lead_card() cache, one call per lead ──────────
   final Map<int, Map<String, dynamic>> _leadCards = {};
@@ -10564,7 +10594,11 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         // whatever that run produced, so they are hidden in run mode.
         if (!runMode) ...[
           _buildFilterBar(byClass, cities, total),
-          const SizedBox(height: 14),
+          // CMD #1869 — the bulk toolbar, drawn entirely from the payload's
+          // own bulk block. The Archived toggle itself lives in the filter
+          // row above, because it is a filter like any other.
+          _bulkToolbar(rows),
+          SizedBox(height: Ds.space.x12),
         ] else ...[
           _selectionBar(rows),
           const SizedBox(height: 14),
@@ -10579,7 +10613,8 @@ class _SLeadsTabState extends State<_SLeadsTab> {
               ? 'This run has no leads left.'
               : (_leadPage.emptyLabel ?? ''))
         else
-          _leadCardGrid(rows, selectable: runMode),
+          _leadCardGrid(rows,
+              selectable: runMode || _selectMode || _selectedLeadIds.isNotEmpty),
       ],
     );
   }
@@ -10620,9 +10655,9 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           tristate: false,
           onChanged: (v) => setState(() {
             if (v == true) {
-              _selectedLeadIds.addAll(ids);
+              _leadSelection.selectAll(ids);
             } else {
-              _selectedLeadIds.removeAll(ids);
+              _leadSelection.removeAll(ids);
             }
           }),
           activeColor: const Color(0xFF1B7A43),
@@ -10654,10 +10689,275 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     ]);
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // CMD #1869 — S Leads bulk lane: Archived filter, multi-select toolbar,
+  // Archive / Restore / Reclassify.
+  //
+  // Nothing below decides anything. Every label, every count and every message
+  // arrives in lead_leads_summary().bulk or in the reply of the two mutation
+  // RPCs (leads_bulk_set_status, leads_bulk_set_class); this code renders them
+  // and sends the ids back.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /// Idle it is the backend's one-line hint; with a selection it is the
+  /// toolbar. Archive is replaced by Restore while the Archived filter is on —
+  /// the UI can never hard-delete a lead.
+  Widget _bulkToolbar(List<Map<String, dynamic>> rows) {
+    final n = _selectedLeadIds.length;
+    final ids = rows.map((r) => (r['id'] as num?)?.toInt()).whereType<int>().toSet();
+    if (!_selectMode && n == 0) {
+      final hint = _bulk['select_hint']?.toString() ?? '';
+      if (hint.isEmpty) return const SizedBox.shrink();
+      return Padding(
+        padding: EdgeInsets.only(top: Ds.space.x8),
+        child: Text(hint, style: Ds.t.caption),
+      );
+    }
+    RenderLog.write('c1869_bulk_bar', 1);
+    RenderLog.write('c1869_selected', n);
+    final selectedLabel = _bulkUi.selectedLabel(n);
+    return Container(
+      margin: EdgeInsets.only(top: Ds.space.x12),
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x12, vertical: Ds.space.x8),
+      decoration: BoxDecoration(color: Ds.c.brandSoft, borderRadius: Ds.r.rCard),
+      child: Wrap(
+        spacing: Ds.space.x12,
+        runSpacing: Ds.space.x8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text(selectedLabel, style: Ds.t.body),
+          _bulkTextButton(_bulk['select_all_label']?.toString() ?? '', () {
+            setState(() => _leadSelection.selectAll(ids));
+          }),
+          _bulkTextButton(_bulk['clear_label']?.toString() ?? '', () {
+            setState(() => _leadSelection.clear());
+          }),
+          _bulkAction(_bulkUi.primaryActionLabel(_archivedFilter, n),
+              primary: true,
+              onTap: n == 0
+                  ? null
+                  : () => _archivedFilter
+                      ? _setLeadStatus(_selectedLeadIds.toList(),
+                          _bulkUi.primaryActionKey(true))
+                      : _confirmArchive(_selectedLeadIds.toList())),
+          _bulkAction(_bulkUi.reclassifyLabel(n), primary: false,
+              onTap:
+                  n == 0 ? null : () => _pickLeadClass(_selectedLeadIds.toList())),
+          if (_bulkBusy)
+            SizedBox(
+                width: Ds.space.x16,
+                height: Ds.space.x16,
+                child: const CircularProgressIndicator(strokeWidth: 2)),
+        ],
+      ),
+    );
+  }
+
+  Widget _bulkTextButton(String label, VoidCallback onTap) {
+    if (label.isEmpty) return const SizedBox.shrink();
+    return TextButton(
+      onPressed: _bulkBusy ? null : onTap,
+      style: TextButton.styleFrom(
+        foregroundColor: Ds.c.brand,
+        minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget),
+      ),
+      child: Text(label, style: Ds.t.caption.copyWith(color: Ds.c.brand)),
+    );
+  }
+
+  /// One brand-filled action per bar; everything else is outlined.
+  Widget _bulkAction(String label,
+      {required bool primary, required VoidCallback? onTap}) {
+    if (label.isEmpty) return const SizedBox.shrink();
+    final child = Text(label,
+        style: Ds.t.body.copyWith(color: primary ? Ds.c.surface : Ds.c.brand));
+    if (primary) {
+      return ElevatedButton(
+        onPressed: _bulkBusy ? null : onTap,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Ds.c.brand,
+          foregroundColor: Ds.c.surface,
+          minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget),
+          shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+        ),
+        child: child,
+      );
+    }
+    return OutlinedButton(
+      onPressed: _bulkBusy ? null : onTap,
+      style: OutlinedButton.styleFrom(
+        foregroundColor: Ds.c.brand,
+        side: BorderSide(color: Ds.c.brand),
+        minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget),
+        shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+      ),
+      child: child,
+    );
+  }
+
+  void _toggleLeadSelected(int id) {
+    setState(() => _leadSelection.toggle(id));
+  }
+
+  /// Long-press is the entry into multi-select.
+  void _enterLeadSelect(int id) {
+    setState(() => _leadSelection.enter(id));
+  }
+
+  Future<void> _confirmArchive(List<int> ids) async {
+    if (ids.isEmpty) return;
+    final title = _bulkUi.confirmTitle(ids.length);
+    final body = _bulk['confirm_body']?.toString() ?? '';
+    final okLabel = _bulk['confirm_ok']?.toString() ?? '';
+    final cancelLabel = _bulk['confirm_cancel']?.toString() ?? '';
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+              Ds.space.x16, Ds.space.x8, Ds.space.x16, Ds.space.x16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: Ds.t.title),
+              SizedBox(height: Ds.space.x8),
+              Text(body, style: Ds.t.bodySecondary),
+              SizedBox(height: Ds.space.x24),
+              Row(children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.of(ctx).pop(false),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Ds.c.brand,
+                      side: BorderSide(color: Ds.c.divider),
+                      minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget),
+                      shape:
+                          RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+                    ),
+                    child: Text(cancelLabel, style: Ds.t.body),
+                  ),
+                ),
+                SizedBox(width: Ds.space.x12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.of(ctx).pop(true),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Ds.c.brand,
+                      foregroundColor: Ds.c.surface,
+                      minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget),
+                      shape:
+                          RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+                    ),
+                    child: Text(okLabel,
+                        style: Ds.t.body.copyWith(color: Ds.c.surface)),
+                  ),
+                ),
+              ]),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (ok == true) await _setLeadStatus(ids, 'archive');
+  }
+
+  /// The class list, its order and its labels are all app_settings + ui_copy.
+  Future<void> _pickLeadClass(List<int> ids) async {
+    if (ids.isEmpty) return;
+    final classes = _bulkClasses;
+    if (classes.isEmpty) return;
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+                Ds.space.x16, Ds.space.x8, Ds.space.x16, Ds.space.x8),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(_bulk['class_title']?.toString() ?? '',
+                  style: Ds.t.title),
+            ),
+          ),
+          Flexible(
+            child: ListView(
+              shrinkWrap: true,
+              children: [
+                for (final k in classes)
+                  ListTile(
+                    minVerticalPadding: Ds.space.x12,
+                    title: Text(k['label']?.toString() ?? '', style: Ds.t.body),
+                    onTap: () => Navigator.of(ctx).pop(k['key']?.toString()),
+                  ),
+              ],
+            ),
+          ),
+          SizedBox(height: Ds.space.x8),
+        ]),
+      ),
+    );
+    if (picked != null && picked.isNotEmpty) await _setLeadClass(ids, picked);
+  }
+
+  Future<void> _setLeadStatus(List<int> ids, String action) async {
+    if (ids.isEmpty || _bulkBusy) return;
+    setState(() => _bulkBusy = true);
+    try {
+      final res = await Supabase.instance.client.rpc('leads_bulk_set_status',
+          params: {'p_ids': ids, 'p_status': action});
+      await _afterBulk(res, ids, 'c1869_${action}_n');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _bulkBusy = false);
+      showToast(context, '$e', isError: true);
+    }
+  }
+
+  Future<void> _setLeadClass(List<int> ids, String classKey) async {
+    if (ids.isEmpty || _bulkBusy) return;
+    setState(() => _bulkBusy = true);
+    try {
+      final res = await Supabase.instance.client.rpc('leads_bulk_set_class',
+          params: {'p_ids': ids, 'p_class': classKey});
+      await _afterBulk(res, ids, 'c1869_reclassify_n');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _bulkBusy = false);
+      showToast(context, '$e', isError: true);
+    }
+  }
+
+  /// One reply shape for both RPCs: ok + n + the message to show, verbatim.
+  Future<void> _afterBulk(
+      dynamic res, List<int> ids, String renderKey) async {
+    final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+    final ok = m['ok'] == true;
+    final msg = m['message']?.toString();
+    RenderLog.write(renderKey, (m['n'] as num?)?.toInt() ?? 0);
+    if (!mounted) return;
+    setState(() {
+      _bulkBusy = false;
+      if (ok) _leadSelection.removeAll(ids);
+    });
+    if (msg != null && msg.isNotEmpty) showToast(context, msg, isError: !ok);
+    if (!ok) return;
+    _leadCards.clear();
+    _leadCardsFailed.clear();
+    // The archived count, the chip counts and the "S Leads (N)" tab chip are
+    // all the backend's answer to the SAME filter map — re-ask for all three.
+    await _refreshSummaryAndUsage();
+    await _loadRows(reset: true);
+    await _refreshFilterModel();
+  }
+
   Future<void> _selectResultsRun(String? runId) async {
     setState(() {
       _resultsRunId = runId;
-      _selectedLeadIds.clear();
+      _leadSelection.clear();
       _runLeads = [];
       _runLeadsLoading = runId != null;
     });
@@ -10700,7 +11000,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         showToast(context, msg, isError: m['error'] != null);
       }
       if (m['error'] == null) {
-        _selectedLeadIds.clear();
+        _leadSelection.clear();
         _leadCards.clear();
         _leadCardsFailed.clear();
         await _selectResultsRun(runId);
@@ -11077,7 +11377,10 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       return () => launchUrl(Uri.parse(uri), mode: LaunchMode.externalApplication);
     }
 
-    return Container(
+    // CMD #1869 — long-press is how multi-select starts.
+    return GestureDetector(
+      onLongPress: id == null ? null : () => _enterLeadSelect(id),
+      child: Container(
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
@@ -11115,9 +11418,9 @@ class _SLeadsTabState extends State<_SLeadsTab> {
                     value: selected,
                     onChanged: (v) => setState(() {
                       if (v == true) {
-                        _selectedLeadIds.add(id);
-                      } else {
-                        _selectedLeadIds.remove(id);
+                        _leadSelection.enter(id);
+                      } else if (_leadSelection.contains(id)) {
+                        _leadSelection.toggle(id);
                       }
                     }),
                     activeColor: const Color(0xFF1B7A43),
@@ -11164,6 +11467,12 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           onTap: id == null
               ? null
               : () {
+                  // CMD #1869 — while a selection is live, a tap picks the
+                  // card instead of expanding it.
+                  if (_selectMode || _selectedLeadIds.isNotEmpty) {
+                    _toggleLeadSelected(id);
+                    return;
+                  }
                   setState(() {
                     if (expanded) {
                       _expandedIds.remove(id);
@@ -11185,6 +11494,8 @@ class _SLeadsTabState extends State<_SLeadsTab> {
                       fontSize: 14.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
               const SizedBox(height: 6),
               Wrap(spacing: 6, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                // CMD #1869 — tap the class to reclassify just this lead.
+                if (id != null) _leadClassChip(id, r),
                 if (typeLabel != null && typeLabel.isNotEmpty)
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
@@ -11246,6 +11557,29 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           ),
         ),
 
+        // ── CMD #1869 — Restore, the only way back out of Archived ───────
+        if (SLeadsBulk.rowArchived(r) && id != null)
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+                Ds.space.x12, Ds.space.x8, Ds.space.x12, 0),
+            child: SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: _bulkBusy
+                    ? null
+                    : () => _setLeadStatus([id], 'restore'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Ds.c.brand,
+                  side: BorderSide(color: Ds.c.brand),
+                  minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget),
+                  shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+                ),
+                child: Text(_bulk['row_restore']?.toString() ?? '',
+                    style: Ds.t.body.copyWith(color: Ds.c.brand)),
+              ),
+            ),
+          ),
+
         // ── ONE compact action row, from actions[] ────────────────────────
         Padding(
           padding: const EdgeInsets.fromLTRB(6, 8, 6, 8),
@@ -11268,6 +11602,39 @@ class _SLeadsTabState extends State<_SLeadsTab> {
             child: _buildLeadExpandPanel(r, id),
           ),
       ]),
+      ),
+    );
+  }
+
+  /// The lead's own class, tappable. The key comes from get_scraped_leads
+  /// (effective_class) and the label from lead_leads_summary().bulk.classes —
+  /// nothing here names a class in Dart.
+  Widget _leadClassChip(int id, Map<String, dynamic> r) {
+    final key = (r['class_key'] ?? r['effective_class'] ?? r['lead_class'])
+            ?.toString() ??
+        '';
+    if (key.isEmpty) return const SizedBox.shrink();
+    // The row carries its own rendered label; the bulk block is the fallback.
+    final rowLabel = r['class_label']?.toString() ?? '';
+    final label = rowLabel.isNotEmpty ? rowLabel : _bulkUi.classLabel(key);
+    final title = _bulk['row_reclassify']?.toString() ?? '';
+    return Tooltip(
+      message: title,
+      child: InkWell(
+        onTap: _bulkBusy ? null : () => _pickLeadClass([id]),
+        borderRadius: Ds.r.rChip,
+        child: Container(
+          padding: EdgeInsets.symmetric(
+              horizontal: Ds.space.x8, vertical: Ds.space.x4),
+          decoration: BoxDecoration(
+            color: Ds.c.brandSoft,
+            borderRadius: Ds.r.rChip,
+            border: Border.all(color: Ds.c.brand),
+          ),
+          child: Text(label,
+              style: Ds.t.caption.copyWith(color: Ds.c.brand)),
+        ),
+      ),
     );
   }
 
@@ -11755,7 +12122,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         if (_resultsRunId == runId) {
           _resultsRunId = null;
           _runLeads = [];
-          _selectedLeadIds.clear();
+          _leadSelection.clear();
         }
       });
       final msg = (m['message'] ?? m['error'])?.toString();

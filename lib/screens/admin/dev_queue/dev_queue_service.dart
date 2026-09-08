@@ -722,6 +722,13 @@ class DevQueueService {
   Future<Map<String, dynamic>> autoscaleState() async =>
       _asMap(await _rpc('runner_autoscale_state'));
 
+  /// CMD #1911 — the Deploy lock banner. One render-ready payload: who holds
+  /// the lock RIGHT NOW (its real command id, never a number baked into a
+  /// string), how long of the hold cap it has used, and the forced releases
+  /// the reaper has had to make. Every string is the backend's.
+  Future<Map<String, dynamic>> deployLockBanner() async =>
+      _asMap(await _rpc('deploy_lock_banner'));
+
   /// CHANGE #1401 — the Runner card's re-login tap, the SAME RPC the Cron
   /// health panel calls, so the two surfaces can never start different logins.
   /// The backend starts `claude auth login` on the VM and answers with the

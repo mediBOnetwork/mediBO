@@ -1,22 +1,20 @@
-// PROTECTED — CHANGE #636, rewritten by #673, rewritten again by CHANGE #274.
+// PROTECTED — CHANGE #636, rewritten by #673, by #274, and again by CMD #1895.
 //
 // See CLAUDE.md: runs before EVERY deploy; editable only by a CHANGE that
 // deliberately changes compact-card behaviour, never to make an unrelated
-// change go green. #274 rebuilt the card's anatomy and its price block, so
-// this file moved with it. Two of the old rules are deliberately REVERSED and
-// are called out below; everything else is unchanged and simply re-pointed at
-// the new widgets.
+// change go green. #1895 rebuilt the card to Om's 08-Sep sketch, so this file
+// moved with it. The rules it REVERSES are called out below; everything else
+// is unchanged and simply re-pointed.
 //
 // What this holds down:
 //
-//   1. The card prints backend strings and computes nothing. Name, pack badge,
-//      type chip, manufacturer, MRP, PTR, the locked-price note, the ribbon and
-//      the ADD word all arrive rendered from storefront_pricing() /
-//      storefront_cta(). The card two generations back had a `_SchemePill` that
-//      showed a "5+1" badge for ~30% of products, chosen from a hash of the
-//      product id — the app answering a question ("what scheme does this
-//      have?") only the backend can answer. A badge must never appear unless
-//      the payload sent one.
+//   1. The card prints backend strings and computes nothing. Name, pack
+//      sentence, type chip, company, MRP, the sale line and the ADD word all
+//      arrive rendered from storefront_pricing() / storefront_cta(). The card
+//      three generations back had a `_SchemePill` that showed a "5+1" badge
+//      for ~30% of products, chosen from a hash of the product id — the app
+//      answering a question ("what scheme does this have?") only the backend
+//      can answer. A badge must never appear unless the payload sent one.
 //
 //   2. The ribbon is TWO explicit backend fields (ribbon_top / ribbon_bottom),
 //      never one string split in Dart, and never derived from discount_label.
@@ -24,44 +22,50 @@
 //      `has_offer`) and not on "the string is non-empty" — an offer is a fact
 //      about the product, not about the payload.
 //
-//   3. This is B2B, and the price block says so. MRP is the printed ceiling,
-//      struck through; PTR in the filled box is what the pharmacy pays. Both
-//      the numbers AND the two words come from `pricing.card_price`, so
-//      nothing here may type "PTR", "MRP", "% OFF" or "Best offer applied".
+//   3. **ONE FIELD IS THE SALE LINE.** `card_price.price_display` is either
+//      the formatted trade amount or the literal word "PTR", and the card
+//      prints whichever arrived. There is no approval check in Dart, no
+//      arithmetic and no second branch: the string that says "this viewer may
+//      not see the rate" and the string that says "₹2,337.30" are the same
+//      field. Nothing here may type "PTR", "MRP", "% OFF" or "Best offer".
 //
-//   4. **PTR IS NOT HIDDEN IN FLUTTER — IT NEVER ARRIVES.** A payload without
-//      a `ptr_display` renders no trade price anywhere on the card and shows
-//      the backend's own "register to see trade prices" note instead. The
-//      matching server-side half is the `storefront_ptr_entitlement` regression
-//      guard, which proves an anonymous viewer's payload carries no PTR key and
-//      no PTR number. This test is the client half of that contract: given a
-//      withheld payload, the card must reveal nothing.
+//   4. **A WITHHELD PTR IS NOT HIDDEN IN FLUTTER — IT NEVER ARRIVES.** A
+//      locked payload carries no `ptr_display` at all; it carries the WORD in
+//      price_display. The matching server-side half is the
+//      `storefront_ptr_entitlement` regression guard, which proves an
+//      anonymous viewer's payload carries no PTR number. This test is the
+//      client half: given a withheld payload, the card reveals nothing.
 //
-//   5. ADD ⇄ stepper morphs in place off the CART's own quantity. The label is
+//   5. REVERSED BY #1895 — the "Register and get approved to see trade prices"
+//      SENTENCE is no longer on the card. It was a third line of copy on every
+//      card an unapproved visitor saw. Tapping the locked word opens the
+//      backend's prompt, and that prompt's title, sentence, button word and
+//      ROUTE are all payload strings.
+//
+//   6. REVERSED BY #1895 — the MRP is struck whether or not a trade price sits
+//      under it. It is the printed pack ceiling, and it is shown to everyone,
+//      including a visitor who is not signed in. The card still follows
+//      `strike_mrp` rather than deciding: the backend simply always sends it.
+//
+//   7. ADD ⇄ stepper morphs in place off the CART's own quantity. The label is
 //      `availability.cta_short` verbatim, falling back to `cta_label` — never
 //      the word "ADD" typed here, and never `cta_label` truncated in Dart.
 //
-//   6. Out of stock is the backend's `can_add:false` verdict, never a stock
+//   8. Out of stock is the backend's `can_add:false` verdict, never a stock
 //      number or a supplier count compared in Dart. In that state the card
 //      offers no cart control at all.
 //
-//   7. REVERSED BY #274 — the manufacturer line IS on the card now. Om's
-//      reference layout puts it under the name, and the extent below was
-//      re-summed to pay for it. The composition line is still off the card.
+//   9. The company line IS on the card (under the name, #274). The
+//      composition line is not.
 //
-//   8. REVERSED BY #274 — the offer chip no longer owns a row under the price.
-//      It rides on the image plate, where it costs no height on the majority
-//      of cards that have no scheme. The gating rule is unchanged.
-//
-//   9. CHANGE #287 — THE TWO PACK STRINGS SWAPPED PLACES, and each is a
-//      SEPARATE backend key. `pack_type_label` (one word) is the only thing
-//      printed in the plate's footer strip, because that strip is the card
-//      minus the 72px add pill and the quantity sentence was ellipsised there
-//      on every card. `pack_qty_label` — MEDICINE.pack_qty VERBATIM, the long
-//      stored form, not the shortened badge — is the chip above the name, and
-//      an EMPTY one draws no chip at all rather than falling back to another
-//      column. The card must never choose between pack_qty / pack_size /
-//      pack_type again: that chain now lives only in the outage fallbacks.
+//  10. **THE TWO PACK STRINGS SWAPPED PLACES AGAIN (#1895), and each is still
+//      a SEPARATE backend key.** `pack_qty_label` — MEDICINE.pack_qty
+//      VERBATIM, the long stored sentence — is ON the plate now, in its
+//      full-width footer strip, which is what stopped it being ellipsised as
+//      "10 tablet er…". `pack_type_label` (one word) is the chip in the row
+//      under the plate, beside the ADD control. An EMPTY label draws nothing
+//      rather than falling back to another column; the card must never choose
+//      between pack_qty / pack_size / pack_type again.
 //
 // Fixtures mirror a real storefront_page() row. No network, no Supabase, no
 // camera.
@@ -134,7 +138,8 @@ Map<String, dynamic> _row({
           'has_mrp': hasPrice,
           'mrp_label': hasPrice ? 'MRP' : '',
           'mrp_display': hasPrice ? '₹2,597.00' : '',
-          'strike_mrp': hasPrice && entitled,
+          // #1895 — struck for everyone: the ceiling is a fact about the pack.
+          'strike_mrp': hasPrice,
           'has_ptr': hasPrice && entitled,
           // The withheld payload carries NEITHER key — this is the shape the
           // RPC really sends, and the whole point of rule 4.
@@ -142,8 +147,20 @@ Map<String, dynamic> _row({
           if (hasPrice && entitled) 'ptr_display': '₹2,337.30',
           if (hasPrice && entitled) 'ptr_bg': '#1B7A43',
           if (hasPrice && entitled) 'ptr_fg': '#FFFFFF',
-          'has_note': !entitled,
-          'note': entitled ? '' : 'Register and get approved to see trade prices',
+          // #1895 — the ONE field the sale line prints, either way.
+          'price_display':
+              (hasPrice && entitled) ? '₹2,337.30' : 'PTR',
+          'price_locked': !(hasPrice && entitled),
+          if (!(hasPrice && entitled)) ...{
+            'locked_title': 'Trade price',
+            'locked_note': 'Register and get approved to see trade prices',
+            'locked_cta': 'Register now',
+            'locked_route': '/register',
+          },
+          // #1895 — the sentence LEFT the card. The backend sends the block
+          // with the note switched off, and this fixture is that shape.
+          'has_note': false,
+          'note': '',
         },
       },
     };
@@ -184,13 +201,13 @@ void main() {
       await _pump(tester, _row());
 
       expect(find.text('Alkacel 100mg Injection'), findsOneWidget);
-      // #287 — the footer strip beside the ADD pill takes pack_type_label…
+      // #1895 — the chip in the row under the plate takes pack_type_label…
       expect(find.text('Vial'), findsOneWidget,
-          reason: 'the strip beside the add pill is pack_type_label');
-      // …and the chip above the name takes pack_qty_label, VERBATIM: the long
-      // stored sentence, not the shortened '1 injection' badge.
+          reason: 'the chip beside the ADD control is pack_type_label');
+      // …and the plate's own footer strip takes pack_qty_label, VERBATIM: the
+      // long stored sentence, not the shortened '1 injection' badge.
       expect(find.text('1.0 Injection in 1 vial'), findsOneWidget,
-          reason: 'the chip above the name is pack_qty_label, stored verbatim');
+          reason: 'the strip on the image is pack_qty_label, stored verbatim');
       expect(find.text('1 injection'), findsNothing,
           reason: 'the shortened badge is not what #287 prints on the card');
     });
@@ -210,9 +227,10 @@ void main() {
       expect(find.text('Vial of 1 Injection'), findsNothing);
     });
 
-    testWidgets('an empty pack_qty_label draws no chip at all', (tester) async {
-      // Most `Piece` rows carry no pack_qty. Om's rule on #287: hide the chip —
-      // never fall back to pack_size, never print a placeholder.
+    testWidgets('an empty pack_qty_label prints nothing on the plate',
+        (tester) async {
+      // Most `Piece` rows carry no pack_qty. Om's rule, unchanged since #287:
+      // print nothing — never fall back to pack_size, never a placeholder.
       final r = _row();
       r['pack_qty_label'] = '';
       await _pump(tester, r);
@@ -220,8 +238,23 @@ void main() {
       expect(find.byType(Chip), findsNothing);
       expect(find.text('1.0 Injection in 1 vial'), findsNothing);
       expect(find.text('Vial of 1 Injection'), findsNothing);
-      // the one-word type still prints beside the add pill
+      // the one-word type still prints in the row beside the ADD control
       expect(find.text('Vial'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('an empty pack_type_label draws no chip at all',
+        (tester) async {
+      // The other half of the same rule, on the string that moved in #1895.
+      final r = _row();
+      r['pack_type_label'] = '';
+      await _pump(tester, r);
+
+      expect(find.text('Vial'), findsNothing);
+      expect(find.text('Vial of 1 Injection'), findsNothing,
+          reason: 'an empty label is empty — it never falls back to pack_size');
+      // the pack sentence on the plate is untouched by it
+      expect(find.text('1.0 Injection in 1 vial'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 
@@ -252,46 +285,63 @@ void main() {
   });
 
   group('the B2B price block', () {
-    testWidgets('MRP and PTR are the rendered strings, each with its own '
-        'backend word', (tester) async {
+    testWidgets('the MRP and the sale line are the rendered strings',
+        (tester) async {
       await _pump(tester, _row());
 
       expect(find.text('MRP'), findsOneWidget,
           reason: 'card_price.mrp_label — never typed in Dart');
       expect(find.text('₹2,597.00'), findsOneWidget,
           reason: 'card_price.mrp_display verbatim');
-      expect(find.text('PTR'), findsOneWidget,
-          reason: 'card_price.ptr_label — B2B does not buy at MRP');
       expect(find.text('₹2,337.30'), findsOneWidget,
-          reason: 'card_price.ptr_display verbatim — never mrp × (1 - pct)');
+          reason: 'card_price.price_display verbatim — never mrp × (1 - pct)');
+      expect(find.text('PTR'), findsNothing,
+          reason: 'an entitled card shows the AMOUNT, not the word');
     });
 
-    testWidgets('reword the captions in Postgres and the card follows',
+    testWidgets('reword the MRP caption in Postgres and the card follows',
         (tester) async {
       final r = _row();
       final cp = (r['pricing'] as Map<String, dynamic>)['card_price']
           as Map<String, dynamic>;
       cp['mrp_label'] = 'LIST';
-      cp['ptr_label'] = 'NET RATE';
       await _pump(tester, r);
 
       expect(find.text('LIST'), findsOneWidget);
-      expect(find.text('NET RATE'), findsOneWidget);
       expect(find.text('MRP'), findsNothing,
           reason: 'if "MRP" were a Dart literal it would still be here');
-      expect(find.text('PTR'), findsNothing);
     });
 
-    testWidgets('the MRP is struck only when a trade price sits under it',
+    testWidgets('the sale line is ONE field — reword it and the card follows',
         (tester) async {
-      await _pump(tester, _row());
-      final struck = tester
-          .widgetList<Text>(find.text('₹2,597.00'))
-          .any((t) => t.style?.decoration == TextDecoration.lineThrough);
-      expect(struck, isTrue, reason: 'strike_mrp:true');
+      // RULE 3. The same key carries the amount and the word, so a surface
+      // that renamed the locked word (or a backend that started sending a
+      // second currency) needs no deploy.
+      final r = _row(entitled: false);
+      ((r['pricing'] as Map<String, dynamic>)['card_price']
+          as Map<String, dynamic>)['price_display'] = 'ON APPROVAL';
+      await _pump(tester, r);
 
-      // strike_mrp:false — a struck price with nothing beneath it reads as
-      // "unavailable", which is a different claim entirely.
+      expect(find.text('ON APPROVAL'), findsOneWidget);
+      expect(find.text('PTR'), findsNothing,
+          reason: 'if "PTR" were a Dart literal it would still be here');
+    });
+
+    testWidgets('the MRP follows strike_mrp — and it is struck for everyone',
+        (tester) async {
+      // REVERSED BY #1895 (rule 6). It used to be struck only when a trade
+      // price sat under it. The printed ceiling is now shown struck to an
+      // anonymous visitor too, with the word PTR beneath it.
+      for (final entitled in [true, false]) {
+        await _pump(tester, _row(entitled: entitled));
+        final struck = tester
+            .widgetList<Text>(find.text('₹2,597.00'))
+            .any((t) => t.style?.decoration == TextDecoration.lineThrough);
+        expect(struck, isTrue, reason: 'strike_mrp:true, entitled=$entitled');
+      }
+
+      // Still the BACKEND's flag, not a Dart decision: send false and the
+      // strike goes away.
       final r = _row();
       ((r['pricing'] as Map<String, dynamic>)['card_price']
           as Map<String, dynamic>)['strike_mrp'] = false;
@@ -302,35 +352,65 @@ void main() {
       expect(struck2, isFalse);
     });
 
-    testWidgets('a withheld PTR is NOT on the card, and the backend note is',
+    testWidgets('a withheld PTR is the WORD, and the sentence is off the card',
         (tester) async {
-      // RULE 4. The payload an unapproved visitor gets: no ptr_display key at
-      // all. The card must reveal no trade price and must print the backend's
-      // own explanation of why.
+      // RULES 4 + 5. The payload an unapproved visitor gets: no ptr_display
+      // key at all, price_display carrying the word. The card must reveal no
+      // trade price — and must NOT print the register sentence, which is the
+      // prompt's copy now.
       await _pump(tester, _row(entitled: false));
 
       expect(find.text('₹2,337.30'), findsNothing,
           reason: 'there is no PTR in this payload to print');
-      expect(find.text('PTR'), findsNothing);
+      expect(find.text('PTR'), findsOneWidget,
+          reason: 'price_display verbatim — the word IS the sale line');
       expect(find.text('Register and get approved to see trade prices'),
-          findsOneWidget,
-          reason: 'card_price.note verbatim — the wording is an UPDATE away');
+          findsNothing,
+          reason: '#1895 — that sentence belongs to the prompt, not the card');
 
-      // MRP still shows: it is public, printed on the pack.
+      // MRP still shows, struck: it is public, printed on the pack.
       expect(find.text('₹2,597.00'), findsOneWidget);
       expect(find.text('MRP'), findsOneWidget);
     });
 
-    testWidgets('has_ptr:true with an empty display is still no PTR',
+    testWidgets('tapping the locked word opens the backend prompt',
         (tester) async {
-      // A half-filled payload must not paint an empty filled box. hasPtr is
-      // the flag AND a value, never the flag alone.
+      await _pump(tester, _row(entitled: false));
+
+      await tester.tap(find.text('PTR'));
+      await tester.pumpAndSettle();
+
+      // Every word in the sheet is a payload string.
+      expect(find.text('Trade price'), findsOneWidget);
+      expect(find.text('Register and get approved to see trade prices'),
+          findsOneWidget);
+      expect(find.text('Register now'), findsOneWidget);
+    });
+
+    testWidgets('an unlocked sale line opens no prompt', (tester) async {
+      // price_locked is the backend's verdict and the ONLY thing that makes
+      // the line tappable. An approved viewer taps the card, not a sheet.
+      await _pump(tester, _row());
+
+      await tester.tap(find.text('₹2,337.30'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Trade price'), findsNothing);
+      expect(find.text('Register now'), findsNothing);
+    });
+
+    testWidgets('an empty price_display draws no sale line at all',
+        (tester) async {
+      // A half-filled payload must not paint an empty row. The card prints a
+      // string it was given or nothing — it never substitutes a word.
       final r = _row();
       final cp = (r['pricing'] as Map<String, dynamic>)['card_price']
           as Map<String, dynamic>;
-      cp['ptr_display'] = '';
+      cp['price_display'] = '';
       await _pump(tester, r);
       expect(find.text('PTR'), findsNothing);
+      expect(find.text('₹2,337.30'), findsNothing);
+      expect(tester.takeException(), isNull);
     });
 
     testWidgets('has_price:false shows no price at all', (tester) async {
@@ -507,8 +587,10 @@ void main() {
       // AND the skeleton, so a taller card overflowed silently in both. The
       // extent is derived, and this pins that it stays derived.
       //
-      // #274 sum: plate + pill overhang + gap + type chip + gap + two name
-      //           lines + gap + manufacturer + gap + MRP line + gap + PTR box.
+      // #1895 sum: plate + gap + the pack-type/ADD row + gap + two name lines
+      //            + gap + company + gap + MRP line + gap + sale line. It
+      //            comes to the SAME 300 the #274 card did, which is why no
+      //            grid or rail had to move for this rebuild.
       expect(CompactProductCard.extent, 300);
       expect(CompactProductCard.extent,
           greaterThan(CompactProductCard.tileH + CompactProductCard.pillH),
@@ -536,14 +618,13 @@ void main() {
       await _pump(tester, _row());
 
       final nameLeft = tester.getTopLeft(find.text('Alkacel 100mg Injection')).dx;
-      expect(
-          tester.getTopLeft(find.text('1.0 Injection in 1 vial')).dx,
-          lessThan(nameLeft + 12),
-          reason: 'the pack quantity chip is left-aligned, not centred');
+      expect(tester.getTopLeft(find.text('Vial')).dx, lessThan(nameLeft + 12),
+          reason: 'the pack type chip is left-aligned, not centred');
       expect(tester.getTopLeft(find.text('MRP')).dx, lessThan(nameLeft + 4),
           reason: 'the MRP line starts on the same edge');
-      expect(tester.getTopLeft(find.text('PTR')).dx, lessThan(nameLeft + 12),
-          reason: 'and so does the filled trade-price box');
+      expect(tester.getTopLeft(find.text('₹2,337.30')).dx,
+          lessThan(nameLeft + 12),
+          reason: 'and so does the sale line');
     });
 
     testWidgets('the card never overflows the extent the grid reserves',

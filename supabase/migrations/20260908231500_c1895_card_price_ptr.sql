@@ -460,3 +460,83 @@ AS $function$
       SELECT jsonb_agg(i.obj ORDER BY i.rn) FROM item i), '[]'::jsonb)
   );
 $function$;
+
+-- ── 4. The product page reads the SAME field ───────────────────────────────
+-- #1826 gave the PDP a two-line block; its sale row printed the GST-inclusive
+-- net when entitled and the whole "Register and get approved…" SENTENCE when
+-- not. #1895 makes that row the same one string every card prints — the PTR
+-- amount or the word "PTR" — so a pharmacy sees one number in both places and
+-- the sentence lives only in the prompt.
+insert into public.storefront_ui_label (key, value, note) values
+  ('pdp_sale_net_note', 'Net {net} · {gst}',
+   'CHANGE #1895 — under the PTR on the product page')
+on conflict (key) do nothing;
+
+create or replace function public.pdp_price_lines(p_product_id bigint, p_mrp numeric)
+returns jsonb
+language plpgsql
+stable security definer
+set search_path to 'public'
+as $function$
+declare
+  v_has_mrp boolean := (p_mrp is not null and p_mrp > 0);
+  v_pb jsonb;
+  v_mrp_cap text := public._pdp_label('mrp_caption', 'MRP');
+  v_mrp_val text;
+  v_mrp_note text := public._pdp_label('pdp_mrp_ceiling_note', 'Printed pack ceiling — not the selling price');
+  v_sale_cap text := public._pdp_label('pdp_sale_price_caption', 'Sale price');
+  v_sale_val text; v_sale_note text := ''; v_sale_amount boolean := false; v_sale_tone text := 'secondary';
+  v_side text := '';
+  v_sticky_main text;
+begin
+  v_mrp_val := case when v_has_mrp then public.inr_money(p_mrp)
+                    else public._pdp_label('pdp_mrp_missing', 'Not printed on this pack') end;
+
+  -- The SAME block every card reads. It has already decided entitlement, and
+  -- it has already formatted the string.
+  v_pb := public.storefront_pricing(p_mrp, null::numeric, p_product_id);
+
+  v_sale_val    := coalesce(nullif(v_pb->>'price_display', ''),
+                            public._pdp_label('ptr_caption', 'PTR'));
+  v_sale_amount := not coalesce((v_pb->>'price_locked')::boolean, true);
+
+  if v_sale_amount then
+    v_sale_tone := 'primary';
+    v_sale_note := replace(replace(
+        public._pdp_label('pdp_sale_net_note', 'Net {net} · {gst}'),
+        '{net}', coalesce(v_pb->>'net_display', '')),
+        '{gst}', coalesce(v_pb#>>'{gst,pct_display}', ''));
+    v_sale_note := btrim(regexp_replace(v_sale_note, '\s·\s*$', ''));
+  else
+    v_sticky_main := public._pdp_label('pdp_sticky_locked', 'Trade price on approval');
+  end if;
+
+  if v_has_mrp then
+    v_side := btrim(public._pdp_label('pdp_sticky_mrp_prefix', 'MRP') || ' ' || public.inr_money(p_mrp));
+  end if;
+
+  return jsonb_build_object(
+    'has', true,
+    'mrp', jsonb_build_object(
+      'caption',    v_mrp_cap,
+      'value',      v_mrp_val,
+      'has_amount', v_has_mrp,
+      'has_note',   v_has_mrp,
+      'note',       case when v_has_mrp then v_mrp_note else '' end,
+      'tone',       'secondary'),
+    'sale', jsonb_build_object(
+      'caption',    v_sale_cap,
+      'value',      v_sale_val,
+      'has_amount', v_sale_amount,
+      'has_note',   v_sale_note <> '',
+      'note',       v_sale_note,
+      'locked',     not v_sale_amount,
+      'prompt',     v_pb -> 'locked_prompt',
+      'tone',       v_sale_tone),
+    'sticky', jsonb_build_object(
+      'main',         coalesce(v_sticky_main, v_sale_val),
+      'main_caption', public._pdp_label('pdp_sticky_sale_caption', 'Sale price'),
+      'main_tone',    v_sale_tone,
+      'has_side',     v_side <> '',
+      'side',         v_side));
+end $function$;

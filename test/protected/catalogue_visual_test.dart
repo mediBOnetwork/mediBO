@@ -32,9 +32,10 @@
 //      `p_letter`. A rail that only drew letters with rows behind them would
 //      change length as the list filtered.
 //
-//   6. VARIANT CHIPS ARRIVE AFTER THE GRID. `catalogue_variants` is a SECOND
-//      call made once the cards are already on screen — the grid must paint
-//      without it — and `has:false` (a one-pack family) draws no chips.
+//   6. REVERSED BY CMD #1903 — A LIST IS ROWS, AND IT ASKS FOR NOTHING ELSE.
+//      The pack family is no longer a chip on a card: `catalogue_variants` is
+//      not called from a list at all, and the family lives on the product page
+//      as the "Other packs" strip under the price.
 //
 //   8. THE ERROR STATE IS THE BACKEND'S SENTENCE. A failed load prints
 //      `catalogue.load_error` and a Retry labelled `catalogue.retry` — never
@@ -59,7 +60,7 @@ import 'package:pharma_b2b/screens/catalogue_screen.dart';
 import 'package:pharma_b2b/services/ui_copy.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/widgets/catalogue_alphabet_rail.dart';
-import 'package:pharma_b2b/widgets/catalogue_product_card.dart';
+import 'package:pharma_b2b/widgets/product_row_card.dart';
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
@@ -457,38 +458,37 @@ void main() {
     });
   });
 
-  group('variant chips arrive after the grid', () {
-    testWidgets('the grid paints from catalogue_list alone', (tester) async {
-      // catalogue_variants is deliberately NOT queued: an outage on the second
-      // call must leave a correct, chipless grid rather than an empty screen.
+  group('CMD #1903 — a list is rows, and it never asks for a family', () {
+    testWidgets('the list paints from catalogue_list ALONE', (tester) async {
       await _pump(tester, queued: {
         'catalogue_home': [_home()],
         'catalogue_list': [_list()],
       }, route: const CatalogueRoute(listKind: 'tab', listKey: 'cold_chain'));
-      expect(find.byType(CatalogueProductCard), findsOneWidget);
+      expect(find.byType(ProductRowCard), findsOneWidget);
       expect(find.text('Azithral 250mg DT Tablet'), findsOneWidget);
     });
 
-    testWidgets('a two-pack family draws its chips; a one-pack family does not',
+    testWidgets('catalogue_variants is never called, and no chip is drawn',
         (tester) async {
-      // Wide: the chip row is a horizontal list inside the card, so on a
-      // 430pt phone the second chip is off the card's edge and simply never
-      // built — which would read as "the chip was wrong" rather than "the chip
-      // was not on screen".
+      // REVERSED BY CMD #1903. #799 asked for the pack family as a SECOND
+      // call and drew it as chips on every card. The family now lives on the
+      // product page ("Other packs", under the price), so a list must make
+      // exactly one call and show exactly one row per product. The variant
+      // payload is still queued here on purpose: if anything ever asks for it
+      // again, the count assertion below catches it.
       final rpc = await _pump(tester, size: const Size(1400, 900), queued: {
         'catalogue_home': [_home()],
         'catalogue_list': [_list()],
         'catalogue_variants': [_variants()],
       }, route: const CatalogueRoute(listKind: 'tab', listKey: 'cold_chain'));
-      expect(rpc.count('catalogue_variants'), 1,
-          reason: 'the families are a SECOND call, made once the cards are up');
-      expect(find.text('JR Oral Suspension'), findsOneWidget);
-      // 9001 arrived has:false. Its label must not appear anywhere.
-      expect(find.text('Dolo 650 Tablet'), findsNothing);
+      expect(rpc.count('catalogue_variants'), 0,
+          reason: 'a list asks for products and nothing else');
+      expect(find.text('JR Oral Suspension'), findsNothing,
+          reason: 'a variant label must not appear on a list surface');
     });
   });
 
-  group('the card is the five things Om asked for', () {
+  group('the row is the five things Om asked for', () {
     testWidgets('trade rate AND the struck MRP above it', (tester) async {
       // REVERSED BY CMD #1895. #799 cut the MRP row from this card because a
       // struck ceiling beside a rate reads as a consumer discount. Om's 08-Sep
@@ -506,7 +506,10 @@ void main() {
       expect(find.text('₹117.19'), findsOneWidget,
           reason: '#1895 — the printed ceiling is back, struck, on every card');
       expect(find.text('ABBOTT'), findsOneWidget);
-      expect(find.text('10.0 tablets in 1 strip'), findsOneWidget);
+      // CMD #1903 — the row prints BOTH decided pack strings on one line,
+      // type then quantity, joined by the one separator this app uses. Each
+      // is still its own backend key; nothing here falls back to pack_size.
+      expect(find.text('Strip · 10.0 tablets in 1 strip'), findsOneWidget);
       expect(find.text('ADD'), findsOneWidget,
           reason: 'the add word is the payload\'s cta_short');
     });

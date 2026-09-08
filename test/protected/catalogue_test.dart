@@ -47,7 +47,7 @@ import 'package:pharma_b2b/models/cart_model.dart';
 import 'package:pharma_b2b/models/catalogue.dart';
 import 'package:pharma_b2b/screens/catalogue_screen.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
-import 'package:pharma_b2b/widgets/catalogue_product_card.dart';
+import 'package:pharma_b2b/widgets/product_row_card.dart';
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
@@ -398,7 +398,7 @@ void main() {
       expect(find.text('Paracetamol (500mg)'), findsOneWidget);
       expect(find.text('Every brand for this salt'), findsOneWidget);
       expect(find.text('15 products'), findsOneWidget);
-      expect(find.byType(CatalogueProductCard), findsOneWidget);
+      expect(find.byType(ProductRowCard), findsOneWidget);
     });
 
     testWidgets('an empty list prints the backend empty state, never a Dart one',
@@ -409,7 +409,7 @@ void main() {
       }, route: const CatalogueRoute(
           tab: 'cold_chain', listKind: 'tab', listKey: 'cold_chain'));
       expect(find.text('Nothing here in this view.'), findsOneWidget);
-      expect(find.byType(CatalogueProductCard), findsNothing);
+      expect(find.byType(ProductRowCard), findsNothing);
     });
 
     testWidgets('the end label is the backend\'s, and only when it says so',

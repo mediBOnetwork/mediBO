@@ -1,542 +1,56 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
-import '../app_state.dart';
 import '../design_tokens.dart';
-import '../models/catalogue.dart';
 import '../models/product.dart';
-import 'compact_product_card.dart' show CardPriceLines;
 import 'product_image.dart';
+import 'product_row_card.dart';
 
-/// CHANGE #799 — the Catalogue tab's card.
+/// CMD #1903 — the Catalogue tab's grid card is GONE, and with it the variant
+/// chips that used to sit on it.
 ///
-/// Om's direction, verbatim: "Image, name, company, pack, one green Add. No
-/// MRP row, no compare, no margin. Variant chips on the card (10s · 15s ·
-/// Syrup) instead of duplicate cards."
+/// Om: searching or browsing must answer with ONE ROW PER PRODUCT. A card that
+/// folded a brand's packs behind "10s · 15s · Syrup" hid the pack a pharmacy
+/// was actually looking for, and it made the Catalogue tab and the search
+/// results two different-looking lists of the same products. Both surfaces now
+/// draw [ProductRowCard], so they cannot look different, and the pack family
+/// lives on the product page as the "Other packs" strip under the price.
 ///
-/// So this is NOT [CompactProductCard] with things hidden. That card is the
-/// storefront's B2B card and it stays exactly as it is — MRP struck above the
-/// trade rate, scheme ribbon, purchase overlay — because the home rails and
-/// the product page are still that shop. This one is the browse card: five
-/// elements, one green action, and the pack family it belongs to.
-///
-/// What survived the cut and why:
-///  * The TRADE RATE stays. It is the only number a pharmacy buys on
-///    (`legal_get_page('about')`: MRP is the printed ceiling, never the selling
-///    price). What went is the margin chip and the compare affordance — two of
-///    the three consumer-shop devices Om named.
-///  * CMD #1895 PUT THE MRP ROW BACK, struck, on this card and every other.
-///    #799 cut it because a struck ceiling beside a rate reads as a consumer
-///    discount; Om's 08-Sep sketch answers that differently — the ceiling is
-///    shown to EVERYONE, including a visitor who is not approved and therefore
-///    sees the word "PTR" under it rather than a number. Both lines are the
-///    shared [CardPriceLines], reading the same `pricing.card_price` the
-///    storefront card reads, so the two tabs cannot drift apart.
-///  * Variant chips arrive from `catalogue_variants()` AFTER the grid paints,
-///    so a card with no chips yet is a card that is still correct. The row is
-///    reserved either way, so chips landing never reflows the grid.
-///
-/// Two rules, the same two every card in this app keeps: it invents no string,
-/// and every size is a constant summed into [extent] so the grid's reserved
-/// height and the widget's laid-out height cannot drift apart.
-class CatalogueProductCard extends StatefulWidget {
-  final Product product;
+/// What stayed here is what a LIST still needs and the row card does not own:
+/// the loading skeleton at the row's own height, and the long-press peek.
 
-  /// The pack family this card belongs to. Empty until
-  /// `catalogue_variants()` answers — and empty forever for a one-pack family,
-  /// because the BACKEND said `has:false`.
-  final List<CatVariant> variants;
-
-  /// Opens the full product page.
-  final VoidCallback onTap;
-
-  /// Opens another pack of the same family.
-  final ValueChanged<String>? onVariant;
-
-  /// Long-press → the quick peek sheet. Null disables the gesture.
-  final VoidCallback? onPeek;
-
-  /// The toast the backend words for a successful add, and its undo word.
-  /// Both empty → no snackbar at all rather than one worded here.
-  final String addedLabel;
-  final String undoLabel;
-
-  const CatalogueProductCard({
-    super.key,
-    required this.product,
-    required this.onTap,
-    this.variants = const <CatVariant>[],
-    this.onVariant,
-    this.onPeek,
-    this.addedLabel = '',
-    this.undoLabel = '',
-  });
-
-  // ── Fixed geometry, on the 4-point rhythm ────────────────────────────────
-  static const double plateH = 132;
-
-  /// The strip along the bottom of the plate, holding the pack sentence
-  /// ("10 capsules in 1 strip") clear of the artwork (#1895).
-  static const double _footerH = 26;
-
-  /// The pack-type + ADD row under the plate (#1895).
-  static const double _addH = 36;
-
-  /// The add control's width in that row. Wide enough for −/qty/+ at the
-  /// row's own height, so the box does not move when the first tap lands.
-  static const double _addW = 108;
-
-  static const double _chipsH = 26; // the variant chip row, always reserved
-  static const double _nameH = 36; // exactly two lines
-  static const double _metaH = 16; // company, one line
-  static const double _mrpH = 16; // "MRP ₹174.38", struck (#1895)
-  static const double _priceH = 20; // the sale line: the amount, or "PTR"
-
-  static const double _gapS = 4;
-  static const double _gapM = 8;
-  static const double _pad = 8;
-
-  /// The grid's mainAxisExtent, summed from the parts below it.
-  static const double extent = plateH +
-      _gapM +
-      _addH + // pack type left, ADD right (#1895)
-      _gapM +
-      _chipsH +
-      _gapS +
-      _nameH +
-      _gapS +
-      _metaH +
-      _gapS +
-      _mrpH +
-      _gapS +
-      _priceH +
-      _pad * 2; // 330 — the same number #799 reserved, so the grid did not move
-
-  @override
-  State<CatalogueProductCard> createState() => _CatalogueProductCardState();
-}
-
-class _CatalogueProductCardState extends State<CatalogueProductCard> {
-  /// The tick that replaces the ADD word for one beat. Motion with a meaning:
-  /// it confirms the tap landed, and it is the only animation on this card.
-  bool _ticked = false;
-
-  void _add(BuildContext context) {
-    final cart = AppState.of(context);
-    if (cart.isPending(widget.product.id)) return;
-    cart.addId(widget.product.id);
-    HapticFeedback.selectionClick();
-    setState(() => _ticked = true);
-    Future<void>.delayed(Ds.motion.standard * 3, () {
-      if (mounted) setState(() => _ticked = false);
-    });
-
-    // An undo snackbar, never a confirm dialog — the design contract's rule and
-    // Om's ninth line. Both words are the backend's; with neither, nothing is
-    // shown rather than a sentence invented here.
-    if (widget.addedLabel.isEmpty) return;
-    final messenger = ScaffoldMessenger.maybeOf(context);
-    if (messenger == null) return;
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(
-        content: Text(widget.addedLabel, style: Ds.t.body.copyWith(color: Ds.c.surface)),
-        backgroundColor: Ds.c.text,
-        behavior: SnackBarBehavior.floating,
-        duration: Ds.motion.standard * 20,
-        action: widget.undoLabel.isEmpty
-            ? null
-            : SnackBarAction(
-                label: widget.undoLabel,
-                textColor: Ds.c.surface,
-                onPressed: () => cart.decrementId(widget.product.id),
-              ),
-      ));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final p = widget.product;
-    final cart = AppState.of(context);
-    final qty = cart.quantityOf(p.id);
-    final canAdd = p.availability?.canAdd ?? true;
-
-    return Semantics(
-      button: true,
-      label: p.name,
-      child: InkWell(
-        onTap: widget.onTap,
-        onLongPress: widget.onPeek,
-        borderRadius: Ds.r.rCard,
-        child: Ink(
-          decoration: BoxDecoration(
-            color: Ds.c.surface,
-            borderRadius: Ds.r.rCard,
-            boxShadow: Ds.elevation.e1,
-          ),
-          padding: const EdgeInsets.all(CatalogueProductCard._pad),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _Plate(product: p),
-              const SizedBox(height: CatalogueProductCard._gapM),
-              // #1895 — the pack TYPE hard left, the add control hard right.
-              // The same row the storefront card has, in the same order, so a
-              // pharmacy meets one card on both tabs.
-              SizedBox(
-                height: CatalogueProductCard._addH,
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: p.packTypeLabel.isEmpty
-                          ? const SizedBox.shrink()
-                          : Align(
-                              alignment: Alignment.centerLeft,
-                              child: _TypeChip(text: p.packTypeLabel),
-                            ),
-                    ),
-                    const SizedBox(width: CatalogueProductCard._gapM),
-                    SizedBox(
-                      width: CatalogueProductCard._addW,
-                      child: qty > 0
-                          ? _QtyBar(
-                              qty: qty,
-                              onMinus: () => cart.decrementId(p.id),
-                              onPlus: () => cart.incrementId(p.id),
-                            )
-                          : _AddButton(
-                              // One green Add, and its word is the backend's.
-                              label: _addLabel(p),
-                              enabled: canAdd,
-                              ticked: _ticked,
-                              onTap: () => _add(context),
-                            ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: CatalogueProductCard._gapM),
-              SizedBox(
-                height: CatalogueProductCard._chipsH,
-                child: _VariantChips(
-                  variants: widget.variants,
-                  onPick: widget.onVariant,
-                ),
-              ),
-              const SizedBox(height: CatalogueProductCard._gapS),
-              SizedBox(
-                height: CatalogueProductCard._nameH,
-                child: Text(
-                  p.name,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: Ds.t.bodyStrong,
-                ),
-              ),
-              const SizedBox(height: CatalogueProductCard._gapS),
-              SizedBox(
-                height: CatalogueProductCard._metaH,
-                child: Text(
-                  p.manufacturer,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Ds.t.caption.copyWith(color: Ds.c.textSecondary),
-                ),
-              ),
-              const SizedBox(height: CatalogueProductCard._gapS),
-              // #1895 — the SAME widget the storefront card prints, reading the
-              // same `pricing.card_price`: the struck MRP, then the sale line
-              // (the trade amount, or the word "PTR" that opens the prompt).
-              // #799 cut the MRP row from this card; Om's 08-Sep sketch puts it
-              // back on every card, because it is the printed ceiling and a
-              // visitor who cannot see a rate should still see that.
-              CardPriceLines(
-                price: p.pricing?.cardPrice,
-                mrpHeight: CatalogueProductCard._mrpH,
-                priceHeight: CatalogueProductCard._priceH,
-                gap: CatalogueProductCard._gapS,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  static String _addLabel(Product p) {
-    final a = p.availability;
-    if (a == null) return '';
-    return a.ctaShort.isNotEmpty ? a.ctaShort : a.ctaLabel;
-  }
-}
-
-/// A square white plate: same crop, white pad, never stretched. An absent image
-/// is an absence the backend declared (empty string), so the placeholder is a
-/// state of the card and not an error in it.
-///
-/// #1895 put two things ON it, both where Om drew them and both because the
-/// grid's extent is a SUM of this card's constants — a new row below would
-/// silently overflow every grid that reserves it:
-///  * the pack SENTENCE, in a full-width strip along the bottom,
-///  * the Rx / OTC badge, top-right, in the backend's own tone.
-class _Plate extends StatelessWidget {
-  final Product product;
-  const _Plate({required this.product});
-
-  @override
-  Widget build(BuildContext context) {
-    final tone = product.rxTone;
-    return Container(
-      height: CatalogueProductCard.plateH,
-      width: double.infinity,
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: Ds.c.surface,
-        borderRadius: Ds.r.rCard,
-        border: Border.all(color: Ds.c.divider),
-      ),
-      child: Stack(
-        children: [
-          Positioned(
-            left: 0,
-            right: 0,
-            top: 0,
-            bottom: CatalogueProductCard._footerH,
-            child: Padding(
-              padding: const EdgeInsets.all(CatalogueProductCard._gapM),
-              child: Center(
-                child: ProductImage(
-                  url: product.imageUrl,
-                  width: CatalogueProductCard.plateH,
-                  height: CatalogueProductCard.plateH -
-                      CatalogueProductCard._footerH -
-                      CatalogueProductCard._gapM * 2,
-                  fit: BoxFit.contain,
-                  radius: Ds.r.rChip,
-                ),
-              ),
-            ),
-          ),
-          // The class the BACKEND decided, in the tone it sent. No schedule is
-          // mapped, inferred or coloured here.
-          if (product.hasRxBadge && product.rxLabel.isNotEmpty)
-            Positioned(
-              right: CatalogueProductCard._gapS,
-              top: CatalogueProductCard._gapS,
-              child: Container(
-                padding: EdgeInsets.symmetric(
-                  horizontal: Ds.space.x8,
-                  vertical: Ds.space.x4,
-                ),
-                decoration: BoxDecoration(
-                  color: Ds.hex(tone?['bg'], Ds.c.infoSoft),
-                  borderRadius: Ds.r.rChip,
-                ),
-                child: Text(
-                  product.rxLabel,
-                  maxLines: 1,
-                  style: Ds.t.caption
-                      .copyWith(color: Ds.hex(tone?['fg'], Ds.c.text)),
-                ),
-              ),
-            ),
-          // The pack sentence, full width, verbatim. Empty draws an empty
-          // strip rather than shortening the plate — the extent is a constant.
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            height: CatalogueProductCard._footerH,
-            child: Container(
-              color: Ds.c.bg,
-              padding: EdgeInsets.symmetric(horizontal: Ds.space.x8),
-              alignment: Alignment.centerLeft,
-              child: Text(
-                product.packQtyLabel,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Ds.t.caption.copyWith(color: Ds.c.textSecondary),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// The pack TYPE — one word ("Strip", "Vial"), the chip beside the add control.
-class _TypeChip extends StatelessWidget {
-  final String text;
-  const _TypeChip({required this.text});
-
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: EdgeInsets.symmetric(horizontal: Ds.space.x8),
-        decoration: BoxDecoration(
-          color: Ds.c.bg,
-          borderRadius: Ds.r.rChip,
-        ),
-        child: Text(
-          text,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: Ds.t.caption.copyWith(color: Ds.c.textSecondary),
-        ),
-      );
-}
-
-/// "250mg DT Tablet · JR Oral Suspension · 5D Tablet" — the family's other
-/// packs, so the grid shows one card per brand instead of five near-identical
-/// ones. Every word is the backend's slice of the stored product name.
-class _VariantChips extends StatelessWidget {
-  final List<CatVariant> variants;
-  final ValueChanged<String>? onPick;
-  const _VariantChips({required this.variants, required this.onPick});
-
-  @override
-  Widget build(BuildContext context) {
-    if (variants.isEmpty) return const SizedBox.shrink();
-    return ListView.separated(
-      scrollDirection: Axis.horizontal,
-      physics: const ClampingScrollPhysics(),
-      itemCount: variants.length,
-      separatorBuilder: (_, _) => SizedBox(width: Ds.space.x4),
-      itemBuilder: (context, i) {
-        final v = variants[i];
-        return Center(
-          child: InkWell(
-            onTap: v.selected || onPick == null ? null : () => onPick!(v.productId),
-            borderRadius: Ds.r.rChip,
-            child: Container(
-              padding: EdgeInsets.symmetric(horizontal: Ds.space.x8),
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: v.selected ? Ds.c.brand : Ds.c.bg,
-                borderRadius: Ds.r.rChip,
-                border: Border.all(color: v.selected ? Ds.c.brand : Ds.c.divider),
-              ),
-              child: Text(
-                v.label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Ds.t.caption.copyWith(
-                    color: v.selected ? Ds.c.surface : Ds.c.textSecondary),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-/// The one green action. Full width, 40 high inside a 44 tap row, and it says
-/// what the backend told it to say.
-class _AddButton extends StatelessWidget {
-  final String label;
-  final bool enabled;
-  final bool ticked;
-  final VoidCallback onTap;
-  const _AddButton({
-    required this.label,
-    required this.enabled,
-    required this.ticked,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    if (label.isEmpty) return const SizedBox.shrink();
-    final on = enabled && !ticked;
-    return Material(
-      color: enabled ? Ds.c.brand : Ds.c.bg,
-      borderRadius: Ds.r.rButton,
-      child: InkWell(
-        onTap: on ? onTap : null,
-        borderRadius: Ds.r.rButton,
-        child: Center(
-          child: ticked
-              ? Icon(Icons.check_rounded, color: Ds.c.surface, size: Ds.t.bodySize)
-              : Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Ds.t.bodyStrong.copyWith(
-                      color: enabled ? Ds.c.surface : Ds.c.textSecondary),
-                ),
-        ),
-      ),
-    );
-  }
-}
-
-/// −  qty  + , in the same box the Add button occupied, so nothing moves when
-/// the first tap lands.
-class _QtyBar extends StatelessWidget {
-  final int qty;
-  final VoidCallback onMinus;
-  final VoidCallback onPlus;
-  const _QtyBar({required this.qty, required this.onMinus, required this.onPlus});
-
-  @override
-  Widget build(BuildContext context) => Container(
-        decoration: BoxDecoration(
-          color: Ds.c.brand,
-          borderRadius: Ds.r.rButton,
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            _Step(icon: Icons.remove_rounded, onTap: onMinus),
-            Text('$qty', style: Ds.t.bodyStrong.copyWith(color: Ds.c.surface)),
-            _Step(icon: Icons.add_rounded, onTap: onPlus),
-          ],
-        ),
-      );
-}
-
-class _Step extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback onTap;
-  const _Step({required this.icon, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) => InkWell(
-        onTap: onTap,
-        borderRadius: Ds.r.rButton,
-        child: SizedBox(
-          width: CatalogueProductCard._addH,
-          height: CatalogueProductCard._addH,
-          child: Icon(icon, color: Ds.c.surface, size: Ds.t.bodySize),
-        ),
-      );
-}
-
-/// The grid's loading state: the card's own boxes, at the card's own heights.
+/// The list's loading state: the ROW's own boxes, at the row's own height.
 /// A skeleton, never a spinner — the design QA gate's rule six.
 class CatalogueCardSkeleton extends StatelessWidget {
   const CatalogueCardSkeleton({super.key});
 
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.all(CatalogueProductCard._pad),
+        height: ProductRowCard.rowHeight,
+        padding: EdgeInsets.all(Ds.space.x12),
         decoration: BoxDecoration(color: Ds.c.surface, borderRadius: Ds.r.rCard),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _bone(CatalogueProductCard.plateH),
-            const SizedBox(height: CatalogueProductCard._gapM),
-            _bone(CatalogueProductCard._nameH),
-            const SizedBox(height: CatalogueProductCard._gapS),
-            _bone(CatalogueProductCard._metaH),
-            const Spacer(),
-            _bone(CatalogueProductCard._addH),
+            _bone(ProductRowCard.imageSize, ProductRowCard.imageSize),
+            SizedBox(width: Ds.space.x12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _bone(double.infinity, Ds.space.x16),
+                  SizedBox(height: Ds.space.x8),
+                  _bone(double.infinity, Ds.space.x12),
+                ],
+              ),
+            ),
+            SizedBox(width: Ds.space.x12),
+            _bone(ProductRowCard.priceColW, ProductRowCard.addH),
           ],
         ),
       );
 
-  Widget _bone(double h) => Container(
+  Widget _bone(double w, double h) => Container(
+        width: w,
         height: h,
         decoration: BoxDecoration(color: Ds.c.bg, borderRadius: Ds.r.rChip),
       );
@@ -550,20 +64,16 @@ class CatalogueCardSkeleton extends StatelessWidget {
 /// to fetch, and it never invents a heading: an absent salt is an absent row.
 class CataloguePeekSheet extends StatelessWidget {
   final Product product;
-  final List<CatVariant> variants;
   final String title;
   final String openLabel;
   final VoidCallback onOpen;
-  final ValueChanged<String> onVariant;
 
   const CataloguePeekSheet({
     super.key,
     required this.product,
-    required this.variants,
     required this.title,
     required this.openLabel,
     required this.onOpen,
-    required this.onVariant,
   });
 
   static const double _plate = 96;
@@ -629,33 +139,6 @@ class CataloguePeekSheet extends StatelessWidget {
                 ),
               ],
             ),
-            if (variants.isNotEmpty) ...[
-              SizedBox(height: Ds.space.x16),
-              Wrap(
-                spacing: Ds.space.x8,
-                runSpacing: Ds.space.x8,
-                children: [
-                  for (final v in variants)
-                    InkWell(
-                      onTap: v.selected ? null : () => onVariant(v.productId),
-                      borderRadius: Ds.r.rChip,
-                      child: Container(
-                        padding: EdgeInsets.symmetric(
-                            horizontal: Ds.space.x12, vertical: Ds.space.x8),
-                        decoration: BoxDecoration(
-                          color: v.selected ? Ds.c.brand : Ds.c.bg,
-                          borderRadius: Ds.r.rChip,
-                          border: Border.all(
-                              color: v.selected ? Ds.c.brand : Ds.c.divider),
-                        ),
-                        child: Text(v.label,
-                            style: Ds.t.caption.copyWith(
-                                color: v.selected ? Ds.c.surface : Ds.c.text)),
-                      ),
-                    ),
-                ],
-              ),
-            ],
             if (openLabel.isNotEmpty) ...[
               SizedBox(height: Ds.space.x24),
               SizedBox(

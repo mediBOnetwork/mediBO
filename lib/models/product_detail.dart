@@ -153,6 +153,12 @@ class ProductDetail {
   /// and the page then reads the `header` fields it always did.
   final PdTitle title;
 
+  /// CMD #1903 — the pack family, and the only place it appears any more: an
+  /// "Other packs" strip under the price. `has` is false for a pack that is
+  /// the only one of its brand, so the page draws nothing rather than a strip
+  /// with a single chip in it.
+  final PdOtherPacks otherPacks;
+
   final bool hasHistory;
   final String historyLabel;
 
@@ -207,6 +213,7 @@ class ProductDetail {
     this.supply = const PdSupply.empty(),
     this.priceLines = const PdPriceLines.empty(),
     this.title = const PdTitle.empty(),
+    this.otherPacks = const PdOtherPacks.empty(),
     required this.hasHistory,
     required this.historyLabel,
     required this.showWishlist,
@@ -312,6 +319,7 @@ class ProductDetail {
       supply: PdSupply.fromMap(m['supply']),
       priceLines: PdPriceLines.fromMap(m['price_lines']),
       title: PdTitle.fromMap(m['title']),
+      otherPacks: PdOtherPacks.fromMap(m['other_packs']),
       hasHistory: hist['has'] == true,
       historyLabel: _s(hist['label']),
       showWishlist: m['show_wishlist'] == true,
@@ -1015,6 +1023,53 @@ class PdPriceLines {
       sale: PdPriceLine.fromMap(raw['sale']),
       sticky: PdSticky.fromMap(raw['sticky']),
       discount: PdChip.fromMap(raw['discount']),
+    );
+  }
+}
+
+/// CMD #1903 — the "Other packs" strip: the same brand's other packs, worded
+/// by `pdp_other_packs()` inside `product_detail()`.
+///
+/// The page renders the labels verbatim and switches to the tapped pack's own
+/// product id. Nothing here derives a label from a name, and the pack being
+/// viewed is always in the list, always [PdPack.selected] — the strip is a
+/// switch, not a set of links away from the page.
+class PdPack {
+  final String productId;
+  final String label;
+  final bool selected;
+  const PdPack(
+      {required this.productId, required this.label, required this.selected});
+}
+
+class PdOtherPacks {
+  final bool has;
+  final String title;
+  final List<PdPack> items;
+
+  const PdOtherPacks(
+      {required this.has, required this.title, required this.items});
+  const PdOtherPacks.empty()
+      : has = false,
+        title = '',
+        items = const <PdPack>[];
+
+  factory PdOtherPacks.fromMap(Object? raw) {
+    if (raw is! Map || raw['has'] != true) return const PdOtherPacks.empty();
+    final items = ((raw['items'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => PdPack(
+              productId: (e['product_id'] ?? '').toString(),
+              label: (e['label'] ?? '').toString(),
+              selected: e['selected'] == true,
+            ))
+        .where((p) => p.productId.isNotEmpty && p.label.isNotEmpty)
+        .toList(growable: false);
+    if (items.length < 2) return const PdOtherPacks.empty();
+    return PdOtherPacks(
+      has: true,
+      title: (raw['title'] ?? '').toString(),
+      items: items,
     );
   }
 }

@@ -17,6 +17,7 @@ import '../../utils/file_pick_io.dart' as filepick;
 
 import '../../utils/download_bytes.dart'; // CHANGE #463
 import '../../utils/render_log.dart';
+import '../../design_tokens.dart'; // CMD #1871 — branch chip uses Ds tokens
 import '../../fulfill/fulfill_lookups.dart'; // C639: backend-owned entry label
 import 'demand_preview_sheet.dart'; // C639 PART D
 import '../../services/admin_date_scope.dart'; // CHANGE #545
@@ -8536,6 +8537,12 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   bool _withPhone = false;
   bool _openNowOnly = false;
   bool _withEmailOnly = false;
+  // ── CMD #1871 — branches sharing one phone ────────────────────────────
+  /// OFF (the default) = the backend returns ONE row per phone10. ON = every
+  /// branch is its own row. The flag is the ONLY thing Dart owns here: the
+  /// count, the chip label and the branch list all arrive from the payload.
+  bool _showAllBranches = false;
+  final Set<int> _expandedBranchIds = {};
   final TextEditingController _searchCtrl = TextEditingController();
   Timer? _searchDebounce;
   int _page = 0;
@@ -9066,6 +9073,8 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         'p_with_email': _withEmailOnly,
         'p_limit': _pageSize,
         'p_offset': offset,
+        // CMD #1871 — collapsing is the backend's job; the toggle inverts it.
+        'p_collapse_branches': !_showAllBranches,
       }) as List;
       final rows = res.map((e) => Map<String, dynamic>.from(e as Map)).toList();
       final total = rows.isNotEmpty
@@ -9080,6 +9089,11 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       RenderLog.write('c443_with_photo', withPhoto);
       RenderLog.write('c443_with_hours', withHours);
       RenderLog.write('c443_open_now_true', openNowTrue);
+      // CMD #1871 — proof the collapse actually reached the screen.
+      RenderLog.write('c1871_rows', rows.length);
+      RenderLog.write('c1871_branch_chips',
+          rows.where((r) => (r['branches_label'] as String?)?.isNotEmpty == true).length);
+      RenderLog.write('c1871_show_all', _showAllBranches ? 1 : 0);
       if (!mounted) return;
       setState(() {
         _rows = rows;
@@ -9102,6 +9116,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     bool? withPhone,
     bool? openNow,
     bool? withEmail,
+    bool? showAllBranches,
   }) {
     setState(() {
       if (cityIsAll) _cityFilter = null;
@@ -9111,6 +9126,10 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       if (withPhone != null) _withPhone = withPhone;
       if (openNow != null) _openNowOnly = openNow;
       if (withEmail != null) _withEmailOnly = withEmail;
+      if (showAllBranches != null) {
+        _showAllBranches = showAllBranches;
+        _expandedBranchIds.clear();
+      }
     });
     _loadRows(reset: true);
   }
@@ -10327,6 +10346,11 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     final phoneToggle = _filterToggle('Only with phone', _withPhone, (v) => _changeFilters(withPhone: v));
     final openNowToggle = _filterToggle('Open now', _openNowOnly, (v) => _changeFilters(openNow: v));
     final emailToggle = _filterToggle('Has email', _withEmailOnly, (v) => _changeFilters(withEmail: v));
+    // CMD #1871 — wording lives in ui_copy, never in Dart.
+    final branchesToggle = _filterToggle(
+        c('admin_customer.leads_show_all_branches'),
+        _showAllBranches,
+        (v) => _changeFilters(showAllBranches: v));
 
     final searchBox = TextField(
       controller: _searchCtrl,
@@ -10347,6 +10371,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       // desktop/mobile boundary once "Open now" + "Has email" were added.
       Wrap(spacing: 16, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
         cityDropdown, targetsToggle, phoneToggle, openNowToggle, emailToggle,
+        branchesToggle,
       ]),
       const SizedBox(height: 10),
       widget.isDesktop
@@ -10527,6 +10552,15 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         ? Map<String, dynamic>.from(card!['disabled_reason'] as Map)
         : const <String, dynamic>{};
     final actions = _mapList(card?['actions']);
+    // ── CMD #1871 — branches sharing this lead's phone ──────────────────
+    // The chip's wording is the LIST row's (it says "3 branches" while
+    // collapsed and "1 of 3 branches" once the toggle is on); the branch
+    // rows themselves come from scrape_lead_card(). Dart counts nothing.
+    final branchesLabel = (r['branches_label'] ?? card?['branches_label'])?.toString();
+    final branchesExpandable = r['branches_expandable'] == true;
+    final branchesTitle = card?['branches_title']?.toString();
+    final branchRows = _mapList(card?['branches']);
+    final branchesOpen = id != null && _expandedBranchIds.contains(id);
     final photoH = widget.isDesktop ? 168.0 : 140.0;
     final expanded = id != null && _expandedIds.contains(id);
     final selected = id != null && _selectedLeadIds.contains(id);
@@ -10710,6 +10744,25 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           ),
         ),
 
+        // ── CMD #1871 — the branch chip and the branches behind it ────────
+        if (branchesLabel != null && branchesLabel.isNotEmpty)
+          _branchChipRow(
+            branchesLabel,
+            open: branchesOpen,
+            onTap: (branchesExpandable && id != null)
+                ? () => setState(() {
+                      if (branchesOpen) {
+                        _expandedBranchIds.remove(id);
+                      } else {
+                        _expandedBranchIds.add(id);
+                        _loadLeadCard(id);
+                      }
+                    })
+                : null,
+          ),
+        if (branchesOpen)
+          _branchPanel(branchesTitle, branchRows, loaded: card != null),
+
         // ── ONE compact action row, from actions[] ────────────────────────
         Padding(
           padding: const EdgeInsets.fromLTRB(6, 8, 6, 8),
@@ -10731,6 +10784,120 @@ class _SLeadsTabState extends State<_SLeadsTab> {
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
             child: _buildLeadExpandPanel(r, id),
           ),
+      ]),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // CMD #1871 — one row per phone, with the branch count on it.
+  //
+  // Everything printed here is a backend string: the chip's own label decides
+  // whether this is a collapsed group ("3 branches") or one member of an
+  // expanded one ("1 of 3 branches"), the panel heading comes from the card
+  // payload, and each branch row is rendered exactly as the RPC composed it.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  Widget _branchChipRow(String label, {required bool open, VoidCallback? onTap}) {
+    final padH = Ds.space.x12;
+    final padV = Ds.space.x8;
+    final gap = Ds.space.x8;
+    final chipH = Ds.space.x8;
+    final chipV = Ds.space.x4;
+    final iconSize = Ds.t.captionSize;
+
+    final chip = Container(
+      padding: EdgeInsets.symmetric(horizontal: chipH, vertical: chipV),
+      decoration: BoxDecoration(
+        color: Ds.c.infoSoft,
+        borderRadius: Ds.r.rChip,
+        border: Border.all(color: Ds.c.info),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.store_mall_directory_outlined, size: iconSize, color: Ds.c.info),
+        SizedBox(width: chipV),
+        Text(label,
+            style: Ds.t.caption.copyWith(color: Ds.c.info, fontWeight: FontWeight.w700)),
+      ]),
+    );
+
+    final body = Padding(
+      padding: EdgeInsets.fromLTRB(padH, padV, padH, chipV),
+      child: Row(children: [
+        chip,
+        SizedBox(width: gap),
+        if (onTap != null)
+          Icon(open ? Icons.expand_less : Icons.expand_more,
+              size: Ds.t.bodySize, color: Ds.c.textSecondary),
+      ]),
+    );
+
+    if (onTap == null) return body;
+    return InkWell(
+      onTap: onTap,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+        child: Align(alignment: Alignment.centerLeft, child: body),
+      ),
+    );
+  }
+
+  Widget _branchPanel(String? title, List<Map<String, dynamic>> rows,
+      {required bool loaded}) {
+    final padH = Ds.space.x12;
+    final gap = Ds.space.x8;
+    final tight = Ds.space.x4;
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(padH, tight, padH, tight),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (title != null && title.isNotEmpty)
+          Text(title, style: Ds.t.caption.copyWith(fontWeight: FontWeight.w700)),
+        SizedBox(height: tight),
+        if (!loaded)
+          // Skeleton, not a spinner: the card RPC is already in flight.
+          Container(
+            height: Ds.touch.minTarget,
+            decoration: BoxDecoration(color: Ds.c.bg, borderRadius: Ds.r.rButton),
+          )
+        else
+          for (final b in rows) ...[
+            Container(
+              width: double.infinity,
+              margin: EdgeInsets.only(bottom: tight),
+              padding: EdgeInsets.symmetric(horizontal: gap, vertical: gap),
+              decoration: BoxDecoration(
+                color: b['is_primary'] == true ? Ds.c.infoSoft : Ds.c.bg,
+                borderRadius: Ds.r.rButton,
+              ),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Expanded(
+                    child: Text(b['name']?.toString() ?? '',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Ds.t.caption
+                            .copyWith(color: Ds.c.text, fontWeight: FontWeight.w700)),
+                  ),
+                  if ((b['score_label']?.toString() ?? '').isNotEmpty)
+                    Text(b['score_label'].toString(), style: Ds.t.caption),
+                ]),
+                if ((b['address']?.toString() ?? '').isNotEmpty)
+                  Text(b['address'].toString(),
+                      maxLines: 1, overflow: TextOverflow.ellipsis, style: Ds.t.caption),
+                Row(children: [
+                  if ((b['rating_label']?.toString() ?? '').isNotEmpty)
+                    Text(b['rating_label'].toString(), style: Ds.t.caption),
+                  if ((b['badge_label']?.toString() ?? '').isNotEmpty) ...[
+                    if ((b['rating_label']?.toString() ?? '').isNotEmpty)
+                      SizedBox(width: gap),
+                    Text(b['badge_label'].toString(),
+                        style: Ds.t.caption
+                            .copyWith(color: Ds.c.info, fontWeight: FontWeight.w700)),
+                  ],
+                ]),
+              ]),
+            ),
+          ],
       ]),
     );
   }

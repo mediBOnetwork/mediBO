@@ -456,6 +456,16 @@ class CardPrice {
   /// is the only thing that makes the sale line tappable.
   final bool priceLocked;
 
+  /// CHANGE #1895b — the word that sits BEFORE the sale badge ("Sale price:").
+  /// Empty on a payload built before the change, which renders the badge with
+  /// no label rather than a label typed here.
+  final String saleLabel;
+
+  /// The sale badge's colours, ARGB ints parsed from the backend's `#RRGGBB`.
+  /// Null keeps the card's own tint, so a pre-#1895b payload still paints.
+  final int? saleBg;
+  final int? saleFg;
+
   /// The sheet the locked word opens. Every string is the backend's, including
   /// the route, so "register and get approved" can be reworded — or pointed
   /// somewhere else — with an UPDATE.
@@ -478,6 +488,9 @@ class CardPrice {
     this.note = '',
     this.priceDisplay = '',
     this.priceLocked = false,
+    this.saleLabel = '',
+    this.saleBg,
+    this.saleFg,
     this.lockedTitle = '',
     this.lockedNote = '',
     this.lockedCta = '',
@@ -534,6 +547,10 @@ class CardPrice {
     );
   }
 
+  /// 0xFF1B7A43 → "ff1b7a43". The cache's own dialect, not a display string.
+  static String _hex(int argb) =>
+      argb.toRadixString(16).padLeft(8, '0');
+
   static CardPrice? fromMap(Object? raw) {
     if (raw is! Map) return null;
     final m = Map<String, dynamic>.from(raw);
@@ -560,6 +577,9 @@ class CardPrice {
               ((m['has_ptr'] == true) ? (m['ptr_display'] ?? '') : ''))
           .toString(),
       priceLocked: m['price_locked'] == true,
+      saleLabel: (m['sale_label'] ?? '').toString(),
+      saleBg: Availability._argb(m['sale_bg']),
+      saleFg: Availability._argb(m['sale_fg']),
       lockedTitle: (m['locked_title'] ?? '').toString(),
       lockedNote: (m['locked_note'] ?? '').toString(),
       lockedCta: (m['locked_cta'] ?? '').toString(),
@@ -579,6 +599,11 @@ class CardPrice {
         'note': note,
         'price_display': priceDisplay,
         'price_locked': priceLocked,
+        'sale_label': saleLabel,
+        // 8-digit hex, because that is what [Availability._argb] reads back.
+        // Writing the raw int would round-trip to null through the cache.
+        if (saleBg != null) 'sale_bg': _hex(saleBg!),
+        if (saleFg != null) 'sale_fg': _hex(saleFg!),
         if (priceLocked) 'locked_title': lockedTitle,
         if (priceLocked) 'locked_note': lockedNote,
         if (priceLocked) 'locked_cta': lockedCta,

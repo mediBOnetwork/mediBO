@@ -18,6 +18,7 @@ import '../services/customer_shop_api.dart';
 import '../services/ui_copy.dart';
 import '../util.dart';
 import '../view_as_state.dart';
+import 'shell_routes.dart'; // #1892 — the path ↔ tab table
 import '../utils/render_log.dart';
 import '../utils/responsive.dart';
 import '../widgets/animations.dart';
@@ -504,16 +505,7 @@ class _HomeShellState extends State<HomeShell> {
 
   // ── URL helpers ─────────────────────────────────────────────────────────────
 
-  static String _catToSlug(String cat) => cat.toLowerCase().replaceAll(' ', '-');
-  static String _slugToCat(String slug) => slug.toUpperCase().replaceAll('-', ' ');
-
-  String _urlForState() {
-    if (_index == 1) return '/orders';
-    if (_index == 2) return '/bulk-upload';
-    if (_index == 12) return '/catalogue';
-    if (_category != 'All') return '/c/${_catToSlug(_category)}';
-    return '/';
-  }
+  String _urlForState() => ShellRoutes.urlForState(_index, _category);
 
   // Read the URL on first load and set initial shell state.
   void _initFromUrl() {
@@ -553,22 +545,15 @@ class _HomeShellState extends State<HomeShell> {
       AdminCustomerScreen.openFromLink(initialSearch()); // #1876 tab|route
       return;
     }
-    // #1892 — /admin/dashboard. The dashboard lives in the shell's
-    // IndexedStack (index 3), so it is BUILT on every admin boot but only
-    // VISIBLE once the tab is selected. Without a path there was no way to
-    // land on it directly — a screenshot of the home screen could only ever
-    // catch the storefront. This is the /admin/customers pattern, one index
-    // along.
-    if (path == '/admin/dashboard') {
-      _index = 3;
+    // #1892 — every plain tab path is one ShellRoutes entry, /admin/dashboard
+    // (the dashboard home screen, index 3) included.
+    final tab = ShellRoutes.indexFor(path);
+    if (tab != null) {
+      _index = tab;
       return;
     }
     if (path.startsWith('/c/')) {
-      _category = _slugToCat(path.substring(3));
-    } else if (path == '/orders') {
-      _index = 1;
-    } else if (path == '/bulk-upload') {
-      _index = 2;
+      _category = ShellRoutes.slugToCat(path.substring(3));
     } else if (CatalogueRoute.matches(path)) {
       _index = 12; // #747 — the screen parses its own query string
     }
@@ -679,18 +664,12 @@ class _HomeShellState extends State<HomeShell> {
       // the only path that carries an argument the shell must keep.
       if (_applyOrderDeepLink(path)) return;
       if (path.startsWith('/c/')) {
-        _category = _slugToCat(path.substring(3));
+        _category = ShellRoutes.slugToCat(path.substring(3));
         _index = 0;
         _cartOpen = false;
         _scrollToTopTrigger++;
-      } else if (path == '/orders') {
-        _index = 1;
-        _cartOpen = false;
-      } else if (path == '/bulk-upload') {
-        _index = 2;
-        _cartOpen = false;
-      } else if (path == '/admin/dashboard') {
-        _index = 3;
+      } else if (ShellRoutes.indexFor(path) case final tab?) {
+        _index = tab;
         _cartOpen = false;
       } else {
         _category = 'All';
@@ -1478,7 +1457,7 @@ class _HomeShellState extends State<HomeShell> {
       _index = 0;
       _cartOpen = false;
     });
-    pushUrl(c == 'All' ? '/' : '/c/${_catToSlug(c)}');
+    pushUrl(c == 'All' ? '/' : '/c/${ShellRoutes.catToSlug(c)}');
   }
 
   // "Show all products" / "Browse catalogue": open the full product grid for

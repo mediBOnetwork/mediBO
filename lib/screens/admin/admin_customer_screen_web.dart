@@ -57,6 +57,7 @@ import '../../widgets/customer_console_row.dart'; // CHANGE #810
 import '../../widgets/customer_payment_term_sheet.dart'; // CHANGE #1888
 import '../../widgets/customer_autofill_strip.dart'; // CHANGE #1888
 import '../../url_sync.dart' show initialSearch; // CHANGE #1888
+import '../../models/route_cost_chips.dart'; // CMD #1875 — ₹ chip decisions
 
 // CHANGE #242: payment-image sharing now goes through the platform-conditional
 // download_bytes wrapper (Web Share API on web / share_plus on Android), so no
@@ -12480,6 +12481,11 @@ class _RoutesTabState extends State<_RoutesTab> {
   // that re-anchors to the hub, same keying pattern as the location one.
   final Map<String, bool> _routeOptimizingByWarehouse = {};
 
+  // ── CMD #1875: "Rebuild from current leads" is in flight. The rebuilt plan
+  // is QUEUED, so the card keeps showing the backend's own build_stage until
+  // route_plans realtime says it is ready.
+  bool _rebuilding = false;
+
   // ── C5: past plans, collapsible, lazy-loaded ──────────────────────────────
   bool _pastPlansExpanded = false;
   // CHANGE #1867 — route_plan_list() is paged and its rows are built lazily.
@@ -12583,7 +12589,13 @@ class _RoutesTabState extends State<_RoutesTab> {
         .watch(
           channelPrefix: 'route_plans_changes',
           tables: const ['route_plans'],
-          onChange: (_) => _refetchPlans(),
+          onChange: (_) {
+            _refetchPlans();
+            // CMD #1875 — a rebuilt plan is queued, then built by the drain.
+            // The open card must follow it to 'ready' on its own.
+            final id = _planId;
+            if (id != null && _planIsBuilding) _loadPlan(id);
+          },
         )
         .then((h) {
       if (!mounted) {
@@ -12849,6 +12861,211 @@ class _RoutesTabState extends State<_RoutesTab> {
     } catch (e) {
       if (!mounted) return;
       setState(() { _buildingPlan = false; _planError = e.toString(); });
+    }
+  }
+
+  /// CMD #1875 — true while the OPEN plan has not finished building. The
+  /// status and the stage caption are the backend's; nothing is inferred.
+  bool get _planIsBuilding {
+    final st = (_plan?['header'] as Map?)?['status']?.toString();
+    return st == 'queued' || st == 'building';
+  }
+
+  /// CMD #1875 — the ₹ chips. Every string is the backend's own
+  /// (cost_label / cost_per_converted_label / converted_label): Dart never
+  /// does money arithmetic and never formats a rupee.
+  Widget _costChips(Map<String, dynamic> m) {
+    final model = RouteCostChips.from(m);
+    if (model.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.only(top: Ds.space.x8),
+      child: Wrap(
+        spacing: Ds.space.x8,
+        runSpacing: Ds.space.x4,
+        children: model.chips.map(_toneChip).toList(),
+      ),
+    );
+  }
+
+  /// The ONLY place a tone name becomes a colour. RouteCostChips decides which
+  /// chips exist; Ds decides what they look like.
+  Widget _toneChip(RouteCostChip chip) {
+    switch (chip.tone) {
+      case RouteChipTone.brand:
+        return _tokenChip(chip.label, Ds.c.brandSoft, Ds.c.brand);
+      case RouteChipTone.success:
+        return _tokenChip(chip.label, Ds.c.successSoft, Ds.c.success);
+      case RouteChipTone.info:
+        return _tokenChip(chip.label, Ds.c.infoSoft, Ds.c.info);
+      case RouteChipTone.warning:
+        return _tokenChip(chip.label, Ds.c.warningSoft, Ds.c.warning);
+      case RouteChipTone.muted:
+        return _tokenChip(chip.label, Ds.c.bg, Ds.c.textSecondary);
+    }
+  }
+
+  Widget _tokenChip(String label, Color bg, Color fg) => Container(
+        padding: EdgeInsets.symmetric(
+            horizontal: Ds.space.x8, vertical: Ds.space.x4),
+        decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rChip),
+        child: Text(label,
+            style: Ds.t.caption.copyWith(color: fg, fontWeight: FontWeight.w600)),
+      );
+
+  void _toast(String? msg) {
+    if (msg == null || msg.isEmpty || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  /// CMD #1875 — "Rebuild from current leads". The preview counts the leads
+  /// that pass the S Leads DEFAULT filters right now (archived, non-target and
+  /// matched are out; the header zone and date apply), and every word of the
+  /// confirmation is that payload printed verbatim.
+  Future<void> _openRebuildSheet() async {
+    final planId = _planId;
+    if (planId == null) return;
+    Map<String, dynamic> pv;
+    try {
+      final res = await Supabase.instance.client
+          .rpc('route_plan_rebuild_preview', params: {'p_plan_id': planId});
+      pv = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+    } catch (e) {
+      _toast(e.toString());
+      return;
+    }
+    if (!mounted) return;
+    RenderLog.write('c1875_rebuild_preview', (pv['leads'] as num?)?.toInt() ?? 0);
+    final canRebuild = pv['can_rebuild'] == true;
+    final go = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.all(Ds.space.x24),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(pv['title']?.toString() ?? '', style: Ds.t.subtitle),
+            SizedBox(height: Ds.space.x12),
+            Text(pv['body']?.toString() ?? '', style: Ds.t.body),
+            if ((pv['hint']?.toString() ?? '').isNotEmpty) ...[
+              SizedBox(height: Ds.space.x8),
+              Text(pv['hint'].toString(), style: Ds.t.caption),
+            ],
+            SizedBox(height: Ds.space.x24),
+            Row(children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: Text(pv['cancel_label']?.toString() ?? ''),
+                ),
+              ),
+              SizedBox(width: Ds.space.x12),
+              Expanded(
+                child: FilledButton(
+                  onPressed: canRebuild ? () => Navigator.pop(ctx, true) : null,
+                  child: Text(pv['confirm_label']?.toString() ?? ''),
+                ),
+              ),
+            ]),
+          ]),
+        ),
+      ),
+    );
+    if (go != true) return;
+    setState(() => _rebuilding = true);
+    try {
+      final res = await Supabase.instance.client
+          .rpc('route_plan_rebuild', params: {'p_plan_id': planId});
+      final out = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      if (!mounted) return;
+      setState(() => _rebuilding = false);
+      _toast((out['toast'] ?? out['message'])?.toString());
+      if (out['ok'] == true) {
+        RenderLog.write('c1875_rebuilt_version', (out['version'] as num?)?.toInt() ?? 0);
+        await _loadPlan(out['plan_id'].toString(), isNewBuild: true);
+        await _refetchPlans();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _rebuilding = false);
+      _toast(e.toString());
+    }
+  }
+
+  /// CMD #1875 — the ₹/km and ₹/hour rates behind every cost chip. They live
+  /// in app_settings, so changing them re-prices every plan with no deploy.
+  Future<void> _openRatesSheet() async {
+    Map<String, dynamic> r;
+    try {
+      final res = await Supabase.instance.client.rpc('route_rates_get');
+      r = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+    } catch (e) {
+      _toast(e.toString());
+      return;
+    }
+    if (!mounted) return;
+    final kmCtrl = TextEditingController(text: '${r['km_rate'] ?? ''}');
+    final hrCtrl = TextEditingController(text: '${r['hour_rate'] ?? ''}');
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+        child: SafeArea(
+          child: Padding(
+            padding: EdgeInsets.all(Ds.space.x24),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(r['title']?.toString() ?? '', style: Ds.t.subtitle),
+              SizedBox(height: Ds.space.x8),
+              Text(r['hint']?.toString() ?? '', style: Ds.t.caption),
+              SizedBox(height: Ds.space.x16),
+              TextField(
+                controller: kmCtrl,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: InputDecoration(labelText: r['km_label']?.toString() ?? ''),
+              ),
+              SizedBox(height: Ds.space.x12),
+              TextField(
+                controller: hrCtrl,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: InputDecoration(labelText: r['hour_label']?.toString() ?? ''),
+              ),
+              SizedBox(height: Ds.space.x24),
+              Row(children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: Text(r['cancel_label']?.toString() ?? ''),
+                  ),
+                ),
+                SizedBox(width: Ds.space.x12),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: Text(r['save_label']?.toString() ?? ''),
+                  ),
+                ),
+              ]),
+            ]),
+          ),
+        ),
+      ),
+    );
+    if (saved != true) return;
+    try {
+      final res = await Supabase.instance.client.rpc('route_rates_set', params: {
+        'p_km_rate': num.tryParse(kmCtrl.text.trim()) ?? r['km_rate'],
+        'p_hour_rate': num.tryParse(hrCtrl.text.trim()) ?? r['hour_rate'],
+      });
+      final out = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      _toast(out['toast']?.toString());
+      RenderLog.write('c1875_rates_saved', 1);
+      if (_planId != null) await _loadPlan(_planId!);
+      await _refetchPlans();
+    } catch (e) {
+      _toast(e.toString());
     }
   }
 
@@ -14489,6 +14706,14 @@ class _RoutesTabState extends State<_RoutesTab> {
                           Text(p['title']?.toString() ?? '',
                               style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
                           if (optStatus != null) _optStatusBadge(total: total, optimized: optimized),
+                          // CMD #1875 — a rebuilt plan reads as v2 of the one
+                          // above it, not as a mystery duplicate.
+                          if ((p['version_label']?.toString() ?? '').isNotEmpty)
+                            _toneChip(RouteCostChip(
+                                p['version_label'].toString(), RouteChipTone.info)),
+                          if ((p['cost_label']?.toString() ?? '').isNotEmpty)
+                            _toneChip(RouteCostChip(
+                                p['cost_label'].toString(), RouteChipTone.brand)),
                         ]),
                         const SizedBox(height: 2),
                         Text(
@@ -14529,6 +14754,12 @@ class _RoutesTabState extends State<_RoutesTab> {
     RenderLog.write('c485_google_optimize_wired', 1); // Optimize-with-Google button is built below
     RenderLog.write('c488_badges_and_delete', 1); // optimization badges + plan delete are wired
     RenderLog.write('c489_optimize_left', totalRoutes - optimizedRoutes); // any plan size/class mix
+    // CMD #1875 — the Rebuild button and the ₹ chips are built below.
+    RenderLog.write('c1875_rebuild_btn', header['can_rebuild'] == true ? 1 : 0);
+    RenderLog.write('c1875_cost_chips',
+        routes.where((r) => (r['cost_label']?.toString() ?? '').isNotEmpty).length
+            + ((summary['cost_label']?.toString() ?? '').isNotEmpty ? 1 : 0));
+    RenderLog.write('c1875_plan_version', (header['version'] as num?)?.toInt() ?? 1);
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Container(
@@ -14544,7 +14775,22 @@ class _RoutesTabState extends State<_RoutesTab> {
             Text(header['title']?.toString() ?? '',
                 style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
             _optStatusBadge(total: totalRoutes, optimized: optimizedRoutes),
+            // CMD #1875 — the plan's version, and the version that replaced it.
+            ...RoutePlanVersionChips.from(header).chips.map(_toneChip),
           ]),
+          // CMD #1875 — a rebuilt plan is queued and built by the drain; the
+          // stage caption is the backend's own build_stage.
+          if (_planIsBuilding)
+            Padding(
+              padding: EdgeInsets.only(top: Ds.space.x8),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                SizedBox(
+                    width: Ds.space.x12, height: Ds.space.x12,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Ds.c.brand)),
+                SizedBox(width: Ds.space.x8),
+                Text(header['build_stage']?.toString() ?? '', style: Ds.t.caption),
+              ]),
+            ),
           const SizedBox(height: 4),
           Wrap(spacing: 8, runSpacing: 4, children: [
             if (header['types_label'] != null)
@@ -14573,6 +14819,13 @@ class _RoutesTabState extends State<_RoutesTab> {
             Text(summary['total_km_label']?.toString() ?? '',
                 style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
           ]),
+          // CMD #1875 — plan cost + ₹ per converted lead, both backend strings.
+          _costChips(summary),
+          if ((summary['rates_label']?.toString() ?? '').isNotEmpty)
+            Padding(
+              padding: EdgeInsets.only(top: Ds.space.x4),
+              child: Text(summary['rates_label'].toString(), style: Ds.t.caption),
+            ),
           if (warning != null) ...[
             const SizedBox(height: 10),
             Container(
@@ -14608,6 +14861,24 @@ class _RoutesTabState extends State<_RoutesTab> {
               ),
               icon: const Icon(Icons.refresh, size: 15),
               label: Text(c('admin_customer.rebuild'), style: const TextStyle(fontSize: 12.5)),
+            ),
+            // CMD #1875 — re-run the builder over the CURRENT S Leads list.
+            if (header['can_rebuild'] == true)
+              FilledButton.icon(
+                onPressed: _rebuilding ? null : _openRebuildSheet,
+                icon: _rebuilding
+                    ? SizedBox(
+                        width: Ds.space.x12, height: Ds.space.x12,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Ds.c.surface))
+                    : const Icon(Icons.autorenew, size: 15),
+                label: Text(header['rebuild_label']?.toString() ?? ''),
+              ),
+            // CMD #1875 — the ₹/km and ₹/hour behind every cost chip.
+            TextButton.icon(
+              onPressed: _openRatesSheet,
+              icon: const Icon(Icons.currency_rupee, size: 15),
+              label: Text(header['rates_label']?.toString() ?? ''),
             ),
             // CHANGE #489: shown for any plan size/class mix — Google
             // failure never crashes, it just leaves each route as it was.
@@ -14725,6 +14996,8 @@ class _RoutesTabState extends State<_RoutesTab> {
                   const SizedBox(height: 2),
                   Text(r['subtitle']?.toString() ?? '',
                       style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+                  // CMD #1875 — route cost + ₹ per converted lead.
+                  _costChips(r),
                   if (dayWarning != null) ...[
                     const SizedBox(height: 4),
                     Text('⚠ $dayWarning',

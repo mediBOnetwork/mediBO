@@ -382,6 +382,14 @@ class _Body extends StatelessWidget {
           subscribed: subscribed,
           notifyRequest: notifyRequest,
         ),
+        // CMD #1903 — the pack family, and the ONLY place it appears in the
+        // app. Every list is one row per product now; a buyer who wants the
+        // syrup instead of the tablet chooses it here, on the page where they
+        // are already deciding, rather than from a chip on a card in a list.
+        if (data.otherPacks.has) ...[
+          SizedBox(height: Ds.space.x12),
+          _OtherPacks(packs: data.otherPacks),
+        ],
         // CMD #791 — this pharmacy's own history with the pack, and the one
         // tap that re-orders its usual quantity. `has` is false for an
         // anonymous visitor because the RPC returned nothing, not because this
@@ -545,6 +553,91 @@ class _Body extends StatelessWidget {
 /// sentence ("Strip of 10 tablets") and the tone are all rendered in SQL. A
 /// payload older than this change has no `title`, and the block then reads the
 /// `header` fields it always did, so an app build in a cache still works.
+/// CMD #1903 — "Other packs": the strip under the price.
+///
+/// One chip per OTHER pack, in the backend's order. The pack being viewed is
+/// not in the row — the page's own title already says which one it is — so
+/// every chip is the same outlined pill and none of them is highlighted.
+/// Tapping one REPLACES this page with that pack's own page, so the back stack
+/// does not fill up with a walk around one family. Every word is
+/// `pdp_other_packs()`'s — the heading and each label.
+class _OtherPacks extends StatelessWidget {
+  final PdOtherPacks packs;
+  const _OtherPacks({required this.packs});
+
+  @override
+  Widget build(BuildContext context) {
+    RenderLog.write('c1903_other_packs', 'n=${packs.items.length}');
+    // CMD #1903 (Om, live) — ONE sideways-scrolling row, never a stack. A
+    // Wrap gave each pack its own full-width line as soon as three labels no
+    // longer fitted across, which read as three buttons to press rather than
+    // as a list of the other packs. The row scrolls instead: the packs stay
+    // side by side however many there are, and a long family runs off the
+    // right edge rather than down the page.
+    RenderLog.write('c1903_packs_hscroll', '${packs.items.length}');
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (packs.title.isNotEmpty) ...[
+          Text(packs.title,
+              style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+          SizedBox(height: Ds.space.x8),
+        ],
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          clipBehavior: Clip.none,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var i = 0; i < packs.items.length; i++) ...[
+                if (i > 0) SizedBox(width: Ds.space.x8),
+                _PackChip(
+                  label: packs.items[i].label,
+                  onTap: () => Navigator.of(context).pushReplacementNamed(
+                      '/product/${packs.items[i].productId}'),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// CMD #1903 (Om, live) — every pack in the row is the SAME chip: a small
+/// outlined pill the height of the form chip above the title. There is no
+/// selected state, because the pack being viewed is not in the row at all.
+class _PackChip extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  const _PackChip({required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: Ds.r.rChip,
+      child: Container(
+        alignment: Alignment.center,
+        padding: EdgeInsets.symmetric(
+            horizontal: Ds.space.x12, vertical: Ds.space.x4),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rChip,
+          border: Border.all(color: Ds.c.divider),
+        ),
+        child: Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Ds.t.caption.copyWith(color: Ds.c.text),
+        ),
+      ),
+    );
+  }
+}
+
 class _TitleBlock extends StatelessWidget {
   final ProductDetail data;
   const _TitleBlock({required this.data});
@@ -924,22 +1017,19 @@ class _GalleryState extends State<_Gallery> {
             key: const ValueKey('pdp-gallery-dots'),
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
+              // Indicators, not controls. An 8px dot cannot be a 44px tap
+              // target and does not need to be: the hero is swiped, and a tap
+              // ON the hero opens the zoom. A tappable dot would be the one
+              // control on this page below the touch minimum.
               for (var i = 0; i < imgs.length; i++)
-                GestureDetector(
-                  onTap: () {
-                    setState(() => _page = i);
-                    _ctrl.animateToPage(i,
-                        duration: Ds.motion.standard, curve: Ds.motion.curve);
-                  },
-                  child: AnimatedContainer(
-                    duration: Ds.motion.standard,
-                    margin: EdgeInsets.symmetric(horizontal: Ds.space.x4),
-                    width: i == page ? Ds.space.x16 : Ds.space.x8,
-                    height: Ds.space.x8,
-                    decoration: BoxDecoration(
-                      color: i == page ? Ds.c.brand : Ds.c.divider,
-                      borderRadius: Ds.r.rChip,
-                    ),
+                AnimatedContainer(
+                  duration: Ds.motion.standard,
+                  margin: EdgeInsets.symmetric(horizontal: Ds.space.x4),
+                  width: i == page ? Ds.space.x16 : Ds.space.x8,
+                  height: Ds.space.x8,
+                  decoration: BoxDecoration(
+                    color: i == page ? Ds.c.brand : Ds.c.divider,
+                    borderRadius: Ds.r.rChip,
                   ),
                 ),
             ],

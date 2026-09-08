@@ -15,6 +15,7 @@ import '../theme.dart';
 import '../utils/render_log.dart';
 import '../utils/toast.dart';
 import '../widgets/animations.dart';
+import '../widgets/cart_pill.dart';
 import '../widgets/compact_product_card.dart';
 import '../widgets/companion_rail.dart';
 import '../widgets/compare_tray.dart';
@@ -261,7 +262,15 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
             ),
         ],
       ),
-      body: _loading
+      // CMD #1896 — the sticky PTR + MRP + Add-to-cart bar is GONE. It repeated
+      // the price block a thumb's width below the price block, and it took 68px
+      // off every product page to do it. The buy control moved onto the price
+      // row where the number it acts on already is, and the bottom of the page
+      // now carries the SAME floating cart pill the storefront shell carries —
+      // one cart control in the app, drawn from `cart_render().render.pill`.
+      body: Stack(
+        children: [
+          _loading
           ? const _PdpSkeleton()
           : (d == null || !d.ok)
               ? _NotFound(data: d)
@@ -289,14 +298,23 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                       (widget.flagRaise ??
                               (k, t) => MedicineRepository()
                                   .contentFlag(k, t))(kind, target),
+                  subscribed: _subscribed,
+                  notifyRequest: widget.notifyRequest,
                 ),
-      bottomNavigationBar: (!_loading && d != null && d.ok)
-          ? _StickyBar(
-              data: d,
-              subscribed: _subscribed,
-              notifyRequest: widget.notifyRequest,
-            )
-          : null,
+          // The pill shows itself: `render.pill.show` is the backend's answer
+          // to "is there a cart", so an empty cart draws nothing here and this
+          // page never counts the cart to decide.
+          if (!_loading && d != null && d.ok)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: Ds.space.x16,
+              child: RepaintBoundary(
+                child: CartPill(onTap: () => requestOpenCart(context)),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
@@ -319,6 +337,11 @@ class _Body extends StatelessWidget {
   final Future<ReviewWriteResult> Function(String questionId, String body) onAnswer;
   final Future<ReviewWriteResult> Function(String kind, String targetId) onFlag;
 
+  /// CMD #1896 — the buy control moved onto the price row, so the Notify state
+  /// the sticky bar used to hold comes down here with it.
+  final bool subscribed;
+  final NotifyRequest? notifyRequest;
+
   const _Body({
     required this.data,
     required this.reviews,
@@ -331,70 +354,21 @@ class _Body extends StatelessWidget {
     required this.onQuestion,
     required this.onAnswer,
     required this.onFlag,
+    required this.subscribed,
+    required this.notifyRequest,
   });
 
   @override
   Widget build(BuildContext context) {
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      // CMD #1896 — the bottom inset clears the floating cart pill, so the last
+      // row of the page is readable instead of sitting under it.
+      padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x8, Ds.space.x16,
+          Ds.touch.bottomBarGap + Ds.space.x24),
       children: [
         _Gallery(gallery: data.gallery, heroId: data.id),
-        SizedBox(height: Ds.space.x12),
-        if (data.formChip.isNotEmpty) ...[
-          _Chip(
-            text: data.formChip,
-            bg: const Color(0xFFF1F5F9),
-            fg: const Color(0xFF64748B),
-          ),
-          const SizedBox(height: 8),
-        ],
-        // CMD #1825 — the prescription class is a small tag beside the name,
-        // nothing more. mediBO's buyers are licence-verified pharmacies, so
-        // the old full-width red "your licence must be on file" block was a
-        // warning aimed at nobody; the licence RULE itself is unchanged and
-        // still speaks at the cart (rx_licence_gate). Label and tone are
-        // rx_badge()'s; `has:false` draws no tag at all.
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Text(
-                data.name,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 19,
-                  height: 1.28,
-                  fontWeight: FontWeight.w800,
-                  color: Color(0xFF111827),
-                ),
-              ),
-            ),
-            if (data.hasRxTag) ...[
-              SizedBox(width: Ds.space.x8),
-              _RxTag(data: data),
-            ],
-          ],
-        ),
-        if (data.company.isNotEmpty) ...[
-          const SizedBox(height: 5),
-          Text(
-            data.company.toUpperCase(),
-            style: const TextStyle(
-              fontSize: 11,
-              letterSpacing: 0.7,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF9CA3AF),
-            ),
-          ),
-        ],
-        if (data.packLabel.isNotEmpty) ...[
-          const SizedBox(height: 6),
-          Text(
-            data.packLabel,
-            style: const TextStyle(fontSize: 13, color: Color(0xFF4B5563)),
-          ),
-        ],
+        SizedBox(height: Ds.space.x16),
+        _TitleBlock(data: data),
         // CMD #410 — the aggregate rating. `has` is the backend's verdict on
         // whether there is enough evidence to show one at all; below its floor
         // there is no row here, not a 5.0 written by a single customer.
@@ -402,8 +376,12 @@ class _Body extends StatelessWidget {
           SizedBox(height: Ds.space.x8),
           _RatingRow(summary: data.rating),
         ],
-        const SizedBox(height: 14),
-        _PriceRow(data: data),
+        SizedBox(height: Ds.space.x16),
+        _PriceRow(
+          data: data,
+          subscribed: subscribed,
+          notifyRequest: notifyRequest,
+        ),
         // CMD #791 — this pharmacy's own history with the pack, and the one
         // tap that re-orders its usual quantity. `has` is false for an
         // anonymous visitor because the RPC returned nothing, not because this
@@ -551,6 +529,92 @@ class _Body extends StatelessWidget {
           onAnswer: onAnswer,
           onFlag: onFlag,
         ),
+      ],
+    );
+  }
+}
+
+/// CMD #1896 — the title block, tight.
+///
+/// Order: the pack-type pill (pale green — "Strip", "Vial", "Tablet"), then the
+/// product name with the prescription tag on its right, then the company, then
+/// ONE pack line. What went: the lone grey "Vial" line that repeated what the
+/// pill now says, and the second pack string beneath it.
+///
+/// `title` is `product_detail()`'s own block — the pill's word, the pack
+/// sentence ("Strip of 10 tablets") and the tone are all rendered in SQL. A
+/// payload older than this change has no `title`, and the block then reads the
+/// `header` fields it always did, so an app build in a cache still works.
+class _TitleBlock extends StatelessWidget {
+  final ProductDetail data;
+  const _TitleBlock({required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = data.title;
+    // The fallback is per-PAYLOAD, not per-field: `title.has` false means an
+    // app build reading a payload older than CMD #1896, and only then does the
+    // block read `header`. Once the block IS present its answers are final —
+    // a `form_chip.has:false` is the backend saying "no pill", and reaching
+    // past it to header.form_chip would be the page overruling the backend.
+    final chipLabel = t.has ? t.formChip.label : data.formChip;
+    final packLine = t.has ? t.packLine.label : data.packLabel;
+    final name = t.has && t.name.isNotEmpty ? t.name : data.name;
+    final company = t.has && t.company.isNotEmpty ? t.company : data.company;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (chipLabel.isNotEmpty) ...[
+          _Chip(
+            key: const ValueKey('pdp-form-chip'),
+            text: chipLabel,
+            bg: Ds.c.successSoft,
+            fg: Ds.c.success,
+          ),
+          SizedBox(height: Ds.space.x8),
+        ],
+        // CMD #1825 — the prescription class is a small tag beside the name,
+        // nothing more. mediBO's buyers are licence-verified pharmacies, so
+        // the old full-width red "your licence must be on file" block was a
+        // warning aimed at nobody; the licence RULE itself is unchanged and
+        // still speaks at the cart (rx_licence_gate). Label and tone are
+        // rx_badge()'s; `has:false` draws no tag at all.
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Text(
+                name,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Ds.t.title,
+              ),
+            ),
+            if (data.hasRxTag) ...[
+              SizedBox(width: Ds.space.x8),
+              _RxTag(data: data),
+            ],
+          ],
+        ),
+        if (company.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x4),
+          Text(
+            company.toUpperCase(),
+            style: Ds.t.caption.copyWith(
+                color: Ds.c.textSecondary,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.7),
+          ),
+        ],
+        if (packLine.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x4),
+          Text(
+            packLine,
+            key: const ValueKey('pdp-pack-line'),
+            style: Ds.t.caption.copyWith(color: Ds.c.textSecondary),
+          ),
+        ],
       ],
     );
   }
@@ -748,16 +812,17 @@ class _SubstituteTile extends StatelessWidget {
   }
 }
 
-/// CMD #791 — the pack-shot gallery: swipe, a backend-rendered counter, a
-/// thumbnail strip, and tap-to-zoom.
+/// CMD #1896 — ONE hero shot in a bordered card, dots beneath it, tap to zoom.
 ///
-/// The counter is NOT built here. `product_gallery()` ships a `counter_label`
-/// per image ("2 / 5") and this widget prints the one belonging to the page it
-/// is showing — the same rule the rest of the payload follows, applied to a
-/// string that is very easy to assemble locally and therefore very easy to get
-/// wrong in one place and not the other.
+/// What left, and why: a thumbnail strip (five 52px squares that duplicated
+/// the swipe you already have) and a "1 / 5 · Tap to zoom" caption line. The
+/// counter still exists in the payload and the ZOOM viewer still prints it —
+/// it is useful when the image is filling the screen and useless as a caption
+/// on a page you are scrolling past. Nothing about the images is decided here:
+/// how many there are, what each counter says and what the close control is
+/// called all arrive from `product_gallery()`.
 ///
-/// The box is a fixed height whether there are 0, 1 or 5 shots, so nothing
+/// The card is a fixed height whether there are 0, 1 or 5 shots, so nothing
 /// below it moves as the images load.
 class _Gallery extends StatefulWidget {
   final PdGallery gallery;
@@ -773,7 +838,6 @@ class _GalleryState extends State<_Gallery> {
   int _page = 0;
 
   static const double _h = 260;
-  static const double _thumb = 52;
 
   @override
   void dispose() {
@@ -794,108 +858,91 @@ class _GalleryState extends State<_Gallery> {
     ));
   }
 
+  /// The frame every state of the hero sits in — empty, single, or a swipe.
+  Widget _card(Widget child) => Container(
+        height: _h,
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          border: Border.all(color: Ds.c.divider, width: Ds.space.hairline),
+        ),
+        padding: EdgeInsets.all(Ds.space.x12),
+        child: child,
+      );
+
   @override
   Widget build(BuildContext context) {
     final imgs = widget.gallery.images;
 
     if (imgs.isEmpty) {
-      return SizedBox(
-        height: _h,
-        child: Center(
-          child: ProductImage(
-            url: '',
-            width: _h,
-            height: _h,
-            radius: Ds.r.rCard,
-          ),
+      return _card(Center(
+        child: ProductImage(
+          url: '',
+          width: _h,
+          height: _h,
+          radius: Ds.r.rCard,
         ),
-      );
+      ));
     }
 
     final page = _page.clamp(0, imgs.length - 1);
 
     return Column(
       children: [
-        SizedBox(
-          height: _h,
-          child: PageView.builder(
-            controller: _ctrl,
-            itemCount: imgs.length,
-            onPageChanged: (i) => setState(() => _page = i),
-            itemBuilder: (_, i) {
-              final img = ProductImage(
-                url: imgs[i].url,
-                width: _h,
-                height: _h,
-                radius: Ds.r.rCard,
-              );
-              // Only the first image participates in the Hero — it is the one
-              // the card flew from.
-              return Center(
-                child: GestureDetector(
-                  onTap: () => _open(i),
-                  child: i == 0
-                      ? Hero(
-                          tag: CompactProductCard.heroTag(widget.heroId),
-                          child: img,
-                        )
-                      : img,
-                ),
-              );
-            },
-          ),
-        ),
+        _card(PageView.builder(
+          controller: _ctrl,
+          itemCount: imgs.length,
+          onPageChanged: (i) => setState(() => _page = i),
+          itemBuilder: (_, i) {
+            final img = ProductImage(
+              url: imgs[i].url,
+              width: _h,
+              height: _h,
+              radius: Ds.r.rCard,
+            );
+            // Only the first image participates in the Hero — it is the one
+            // the card flew from.
+            return Center(
+              child: GestureDetector(
+                key: ValueKey('pdp-gallery-shot-$i'),
+                onTap: () => _open(i),
+                child: i == 0
+                    ? Hero(
+                        tag: CompactProductCard.heroTag(widget.heroId),
+                        child: img,
+                      )
+                    : img,
+              ),
+            );
+          },
+        )),
+        // Dots, and only when there is more than one shot to move between.
         if (imgs.length > 1) ...[
-          SizedBox(height: Ds.space.x8),
+          SizedBox(height: Ds.space.x12),
           Row(
+            key: const ValueKey('pdp-gallery-dots'),
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // The backend's counter for the page on screen. Empty on a
-              // cached pre-#791 payload, and then nothing is drawn.
-              if (imgs[page].counterLabel.isNotEmpty)
-                Text(imgs[page].counterLabel, style: Ds.t.caption),
-              if (imgs[page].counterLabel.isNotEmpty &&
-                  widget.gallery.zoomHint.isNotEmpty)
-                Text(' · ', style: Ds.t.caption),
-              if (widget.gallery.zoomHint.isNotEmpty)
-                Text(widget.gallery.zoomHint, style: Ds.t.caption),
-            ],
-          ),
-          SizedBox(height: Ds.space.x8),
-          SizedBox(
-            height: _thumb,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              shrinkWrap: true,
-              itemCount: imgs.length,
-              separatorBuilder: (_, __) => SizedBox(width: Ds.space.x8),
-              itemBuilder: (_, i) => GestureDetector(
-                onTap: () {
-                  setState(() => _page = i);
-                  _ctrl.animateToPage(i,
-                      duration: Ds.motion.standard, curve: Ds.motion.curve);
-                },
-                child: Container(
-                  width: _thumb,
-                  height: _thumb,
-                  decoration: BoxDecoration(
-                    borderRadius: Ds.r.rButton,
-                    border: Border.all(
+              for (var i = 0; i < imgs.length; i++)
+                GestureDetector(
+                  onTap: () {
+                    setState(() => _page = i);
+                    _ctrl.animateToPage(i,
+                        duration: Ds.motion.standard, curve: Ds.motion.curve);
+                  },
+                  child: AnimatedContainer(
+                    duration: Ds.motion.standard,
+                    margin: EdgeInsets.symmetric(horizontal: Ds.space.x4),
+                    width: i == page ? Ds.space.x16 : Ds.space.x8,
+                    height: Ds.space.x8,
+                    decoration: BoxDecoration(
                       color: i == page ? Ds.c.brand : Ds.c.divider,
-                      width: i == page ? 2 : 1,
-                    ),
-                  ),
-                  child: ClipRRect(
-                    borderRadius: Ds.r.rButton,
-                    child: ProductImage(
-                      url: imgs[i].url,
-                      width: _thumb,
-                      height: _thumb,
+                      borderRadius: Ds.r.rChip,
                     ),
                   ),
                 ),
-              ),
-            ),
+            ],
           ),
         ],
       ],
@@ -983,58 +1030,39 @@ class _ZoomViewerState extends State<_ZoomViewer> {
   }
 }
 
-/// CMD #791 — the fact table. Same two-column shape as the overview table it
-/// sits under; both halves of every row arrive rendered.
+/// CMD #791 — the fact table. Same card as the Overview above it; both halves
+/// of every row arrive rendered.
 class _FactsTable extends StatelessWidget {
   final List<PdFactRow> rows;
   const _FactsTable({required this.rows});
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Ds.c.surface,
-        borderRadius: Ds.r.rCard,
-        border: Border.all(color: Ds.c.divider),
-      ),
-      padding: EdgeInsets.symmetric(
-          horizontal: Ds.space.x16, vertical: Ds.space.x8),
-      child: Column(
-        children: [
-          for (var i = 0; i < rows.length; i++) ...[
-            if (i > 0) Divider(height: Ds.space.x16, color: Ds.c.divider),
-            Padding(
-              padding: EdgeInsets.symmetric(vertical: Ds.space.x4),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(
-                    width: 130,
-                    child: Text(rows[i].label, style: Ds.t.caption),
-                  ),
-                  SizedBox(width: Ds.space.x12),
-                  Expanded(
-                    child: Text(rows[i].value, style: Ds.t.body),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => _FactCard(
+        rows: [for (final r in rows) (label: r.label, value: r.value)],
+      );
 }
 
-/// CHANGE #638 — ONE price source.
+/// CMD #1896 — the price block, and the one control that acts on it.
 ///
-/// This row used to print `price.mrp_label` big while every card in the app
-/// printed `pricing.price_display`. Same product, two renderings of one
-/// number, and nothing kept them honest — the moment a discount existed they
-/// would have disagreed. The page now reads the card's block.
+/// Reading order is the order a pharmacy reads a pack: the printed ceiling
+/// first, small, struck and grey, then the number they actually pay, large.
+/// Beside the big number, the discount off MRP; under it, the per-unit rate.
+/// All four are strings from `price_lines` — this widget divides nothing,
+/// subtracts nothing and formats nothing.
+///
+/// The buy control sits on the same row, right-aligned, because the price and
+/// the button that acts on it belong together. It used to live in a sticky bar
+/// that reprinted the price to explain itself.
 class _PriceRow extends StatelessWidget {
   final ProductDetail data;
-  const _PriceRow({required this.data});
+  final bool subscribed;
+  final NotifyRequest? notifyRequest;
+
+  const _PriceRow({
+    required this.data,
+    required this.subscribed,
+    required this.notifyRequest,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1043,71 +1071,38 @@ class _PriceRow extends StatelessWidget {
     // CMD #1826 — when the two-line block is present the page prints it and
     // never the legacy single price. Without it (an older backend) has_price
     // is the explicit absence: no MRP at all, so no price rather than ₹0.00.
-    if (!pl.has && (pr == null || !pr.hasPrice)) {
-      return const SizedBox.shrink();
-    }
+    final hasPrice = pl.has || (pr != null && pr.hasPrice);
 
-    // CHANGE #673, revised by #676 — the price block.
-    //
-    // #673 framed this as a PTR with a margin line. #676 withdrew that: the
-    // page quotes MRP and nothing else. Nothing here needed an edit, because
-    // the caption, the struck second price and the margin box are all gated on
-    // backend strings — the backend simply stopped sending them.
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // CMD #1826 — BOTH prices, every time: the sale-price row (what the
-        // buyer pays, or the backend's "On quote") and the MRP row captioned
-        // as the printed ceiling. MRP is never the hero again.
-        if (pl.has)
-          _PriceLines(lines: pl)
-        else if (pr != null)
         Row(
-          crossAxisAlignment: CrossAxisAlignment.baseline,
-          textBaseline: TextBaseline.alphabetic,
+          crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            if (pr.priceCaption.isNotEmpty) ...[
-              Text(pr.priceCaption,
-                  style: AppType.t2.copyWith(
-                      color: Brand.inkMuted,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.6)),
-              const SizedBox(width: 6),
-            ],
-            Text(
-              pr.priceDisplay,
-              style: AppType.h4.copyWith(color: Brand.price),
+            if (hasPrice)
+              Expanded(
+                child: pl.has
+                    ? _PriceLines(lines: pl)
+                    : _LegacyPriceRow(data: data, pricing: pr!),
+              )
+            else
+              const Spacer(),
+            SizedBox(width: Ds.space.x12),
+            _BuyControl(
+              data: data,
+              subscribed: subscribed,
+              notifyRequest: notifyRequest,
             ),
-            // The struck MRP appears only when the backend says there IS a
-            // discount — otherwise it would strike through the same number.
-            if (pr.hasDiscount) ...[
-              const SizedBox(width: 10),
-              Text(
-                '${data.label('pdp_mrp_caption')} ${pr.mrpDisplay}'.trim(),
-                style: AppType.b3.copyWith(
-                  color: Brand.inkFaint,
-                  decoration: TextDecoration.lineThrough,
-                  decorationColor: Brand.inkFaint,
-                ),
-              ),
-            ],
-            if (data.hasGst) ...[
-              const SizedBox(width: 8),
-              _Chip(
-                text: data.gstLabel,
-                bg: Brand.field,
-                fg: Brand.inkSub,
-              ),
-            ],
           ],
         ),
         // The margin line: the whole reason a pharmacy is on this screen.
         // Rendered only when the backend computed one — never derived here
         // from mrp minus price, which would be the app pricing the product.
         if (pr != null && pr.marginLabel.isNotEmpty) ...[
-          const SizedBox(height: 10),
+          SizedBox(height: Ds.space.x12),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x12, vertical: Ds.space.x8),
             decoration: BoxDecoration(
               color: Brand.positiveBg,
               borderRadius: BorderRadius.circular(Rad.chip),
@@ -1118,19 +1113,19 @@ class _PriceRow extends StatelessWidget {
               children: [
                 const Icon(Icons.trending_up_rounded,
                     size: 16, color: Brand.positiveFg),
-                const SizedBox(width: 7),
+                SizedBox(width: Ds.space.x8),
                 Text(
                   data.label('pdp_margin_title'),
                   style: AppType.t2.copyWith(color: Brand.positiveFg),
                 ),
-                const SizedBox(width: 8),
+                SizedBox(width: Ds.space.x8),
                 Text(
                   pr.marginLabel,
                   style: AppType.l4.copyWith(
                       color: Brand.positiveFg, fontWeight: FontWeight.w800),
                 ),
                 if (pr.discountLabel.isNotEmpty) ...[
-                  const SizedBox(width: 8),
+                  SizedBox(width: Ds.space.x8),
                   Text(
                     pr.discountLabel,
                     style: AppType.t2.copyWith(color: Brand.positiveFg),
@@ -1146,10 +1141,144 @@ class _PriceRow extends StatelessWidget {
         // and nothing else. Absent in mrp_only mode, so a product with no
         // captured pricing looks exactly as it did before.
         if (pr != null && (pr.hasPtr || pr.gst != null)) ...[
-          const SizedBox(height: 10),
+          SizedBox(height: Ds.space.x12),
           _TradeBreakdown(pricing: pr),
         ],
       ],
+    );
+  }
+}
+
+/// CHANGE #638's single price, kept for a payload that predates the two-line
+/// block. Same rule as everything else here: the string is the backend's.
+class _LegacyPriceRow extends StatelessWidget {
+  final ProductDetail data;
+  final Pricing pricing;
+  const _LegacyPriceRow({required this.data, required this.pricing});
+
+  @override
+  Widget build(BuildContext context) {
+    final pr = pricing;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.baseline,
+      textBaseline: TextBaseline.alphabetic,
+      children: [
+        if (pr.priceCaption.isNotEmpty) ...[
+          Text(pr.priceCaption,
+              style: AppType.t2.copyWith(
+                  color: Brand.inkMuted,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.6)),
+          SizedBox(width: Ds.space.x4),
+        ],
+        Flexible(
+          child: Text(
+            pr.priceDisplay,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: AppType.h4.copyWith(color: Brand.price),
+          ),
+        ),
+        // The struck MRP appears only when the backend says there IS a
+        // discount — otherwise it would strike through the same number.
+        if (pr.hasDiscount) ...[
+          SizedBox(width: Ds.space.x8),
+          Text(
+            '${data.label('pdp_mrp_caption')} ${pr.mrpDisplay}'.trim(),
+            style: AppType.b3.copyWith(
+              color: Brand.inkFaint,
+              decoration: TextDecoration.lineThrough,
+              decorationColor: Brand.inkFaint,
+            ),
+          ),
+        ],
+        if (data.hasGst) ...[
+          SizedBox(width: Ds.space.x8),
+          _Chip(
+            text: data.gstLabel,
+            bg: Brand.field,
+            fg: Brand.inkSub,
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// CMD #1896 — the buy control, on the price row.
+///
+/// One decision, and it is not this widget's: `data.canAdd` is the payload's
+/// availability verdict. Buyable → the backend's own CTA word, which becomes
+/// the stepper IN PLACE the moment there is a quantity. Not buyable → Notify,
+/// whose two labels are also the payload's.
+class _BuyControl extends StatelessWidget {
+  final ProductDetail data;
+  final bool subscribed;
+  final NotifyRequest? notifyRequest;
+
+  const _BuyControl({
+    required this.data,
+    required this.subscribed,
+    required this.notifyRequest,
+  });
+
+  static const double _w = 148;
+
+  @override
+  Widget build(BuildContext context) {
+    final av = data.availability;
+    // No verdict and not buyable — nothing to offer, so no control at all.
+    if (av == null && !data.buyable) return const SizedBox.shrink();
+
+    final cart = AppState.of(context);
+    final qty = cart.quantityOf(data.id);
+    // CHANGE #640 — the page's ONE add decision, the same one the stock chip
+    // and the Notify probe above read.
+    final canAdd = data.canAdd;
+
+    // CHANGE #638 — an unbuyable product offers Notify instead of a dead
+    // disabled button.
+    // CMD #1812 — and it ALWAYS offers Notify now: the only way to be
+    // unavailable is zone standby 0, which is stock that can come back.
+    if (!canAdd) {
+      return NotifyControl(
+        productId: data.id,
+        initiallySubscribed: subscribed,
+        compact: false,
+        notifyLabel: data.label('card_notify_label'),
+        subscribedLabel: data.label('notify_subscribed_label'),
+        request: notifyRequest,
+      );
+    }
+
+    return SizedBox(
+      width: _w,
+      height: Ds.touch.minTarget,
+      child: qty > 0
+          ? _BarStepper(
+              qty: qty,
+              onMinus: () => cart.decrementId(data.id),
+              onPlus: () => cart.incrementId(data.id),
+            )
+          : FilledButton(
+              onPressed: () {
+                if (cart.isPending(data.id)) return;
+                cart.addId(data.id);
+              },
+              style: FilledButton.styleFrom(
+                backgroundColor: Ds.c.brand,
+                shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+                padding: EdgeInsets.symmetric(horizontal: Ds.space.x8),
+              ),
+              // Verbatim backend label; falls back to the stock label the
+              // payload also carries, never to a word typed here.
+              child: Text(
+                av?.ctaLabel ?? data.label('stock_out_label'),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Ds.t.bodyStrong.copyWith(color: Ds.c.surface),
+              ),
+            ),
     );
   }
 }
@@ -1238,8 +1367,14 @@ Color _toneFg(String tone) => switch (tone) {
       _ => Brand.inkSub,
     };
 
-/// CMD #1826 — the two price lines. Sale price first (the number the buyer
-/// acts on), MRP second as the printed ceiling. Every string is the payload's.
+/// CMD #1896 — MRP first (small, struck, grey, with the ceiling sentence on an
+/// info tooltip), the sale price under it (large, the number the buyer acts
+/// on), the discount beside it and the per-unit rate beneath.
+///
+/// #1826 put the sale price on top and printed the ceiling sentence as a line
+/// of its own. Om's sketch reverses the pair and demotes the sentence: a
+/// pharmacy scans the printed MRP, then the rate — and the sentence explaining
+/// what MRP is does not need to be on screen every time to be available.
 class _PriceLines extends StatelessWidget {
   final PdPriceLines lines;
   const _PriceLines({required this.lines});
@@ -1249,32 +1384,73 @@ class _PriceLines extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _PriceLineRow(
-            key: const ValueKey('pdp-sale-line'), line: lines.sale, hero: true),
-        SizedBox(height: Ds.space.x8),
-        _PriceLineRow(
-            key: const ValueKey('pdp-mrp-line'), line: lines.mrp, hero: false),
+        _MrpLine(key: const ValueKey('pdp-mrp-line'), line: lines.mrp),
+        SizedBox(height: Ds.space.x4),
+        _SaleLine(
+          key: const ValueKey('pdp-sale-line'),
+          line: lines.sale,
+          discount: lines.discount,
+        ),
       ],
     );
   }
 }
 
-class _PriceLineRow extends StatelessWidget {
+/// The printed ceiling: caption, the amount struck through when the backend
+/// says `strike`, and an (i) carrying the backend's sentence about it.
+class _MrpLine extends StatelessWidget {
   final PdPriceLine line;
-  final bool hero;
-  const _PriceLineRow({super.key, required this.line, required this.hero});
+  const _MrpLine({super.key, required this.line});
 
   @override
   Widget build(BuildContext context) {
-    // A rupee amount on the hero row prints big; the backend's words ("On
-    // quote") print in the secondary tone. The MRP row is always small.
-    final TextStyle valueStyle = hero && line.hasAmount
+    final style = Ds.t.caption.copyWith(
+      color: Ds.c.textSecondary,
+      decoration: line.strike ? TextDecoration.lineThrough : null,
+      decorationColor: Ds.c.textSecondary,
+    );
+    return Row(
+      children: [
+        if (line.caption.isNotEmpty) ...[
+          Text(line.caption,
+              style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+          SizedBox(width: Ds.space.x4),
+        ],
+        Flexible(child: Text(line.value, maxLines: 1, style: style)),
+        // CMD #1896 — the sentence that used to be printed here. `has` is the
+        // backend's, and the words are the backend's; the page owns the icon.
+        if (line.info.has) ...[
+          SizedBox(width: Ds.space.x4),
+          Tooltip(
+            key: const ValueKey('pdp-mrp-info'),
+            message: line.info.text,
+            triggerMode: TooltipTriggerMode.tap,
+            child: Semantics(
+              label: line.info.label,
+              child: Icon(Icons.info_outline,
+                  size: Ds.space.x16, color: Ds.c.textSecondary),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// The number the buyer acts on: the backend's rupee string, or the backend's
+/// word ("PTR") when this viewer may not see a trade rate. `hasAmount` decides
+/// the ink — a phrase is never painted as a price.
+class _SaleLine extends StatelessWidget {
+  final PdPriceLine line;
+  final PdChip discount;
+  const _SaleLine({super.key, required this.line, required this.discount});
+
+  @override
+  Widget build(BuildContext context) {
+    final TextStyle valueStyle = line.hasAmount
         ? AppType.h4.copyWith(color: Brand.price)
-        : hero
-            ? AppType.l4.copyWith(
-                color: Brand.inkSub, fontWeight: FontWeight.w600)
-            : AppType.b3.copyWith(
-                color: Brand.inkSub, fontWeight: FontWeight.w600);
+        : AppType.l4.copyWith(
+            color: Brand.inkSub, fontWeight: FontWeight.w600);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1282,17 +1458,28 @@ class _PriceLineRow extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.baseline,
           textBaseline: TextBaseline.alphabetic,
           children: [
-            if (line.caption.isNotEmpty) ...[
-              Text(line.caption,
-                  style: AppType.t2.copyWith(
-                      color: Brand.inkMuted,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.6)),
+            Flexible(
+                child: Text(line.value, maxLines: 1, style: valueStyle)),
+            // The one green thing on the price block, and only when the
+            // backend had a real trade rate to discount from.
+            if (discount.has) ...[
               SizedBox(width: Ds.space.x8),
+              Text(
+                discount.label,
+                key: const ValueKey('pdp-discount'),
+                style: Ds.t.caption.copyWith(
+                    color: Ds.c.success, fontWeight: FontWeight.w700),
+              ),
             ],
-            Flexible(child: Text(line.value, style: valueStyle)),
           ],
         ),
+        // "₹19.91 / tablet" — divided in SQL from the pack sentence.
+        if (line.perUnit.has) ...[
+          SizedBox(height: Ds.space.x4),
+          Text(line.perUnit.label,
+              key: const ValueKey('pdp-per-unit'),
+              style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+        ],
         if (line.hasNote && line.note.isNotEmpty) ...[
           SizedBox(height: Ds.space.x4),
           Text(line.note, style: AppType.t2.copyWith(color: Brand.inkMuted)),
@@ -1349,49 +1536,6 @@ class _SupplyBand extends StatelessWidget {
   }
 }
 
-/// CMD #1826 — the sticky bar's price pair: the sale value as the main line,
-/// its caption and the small MRP beneath. All three are backend strings.
-class _StickyPrice extends StatelessWidget {
-  final PdSticky sticky;
-  const _StickyPrice({required this.sticky});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Text(
-          sticky.main,
-          key: const ValueKey('pdp-sticky-main'),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: sticky.mainTone == 'primary'
-              ? AppType.l4.copyWith(
-                  color: Brand.price, fontWeight: FontWeight.w800)
-              : AppType.b3.copyWith(
-                  color: Brand.inkSub, fontWeight: FontWeight.w600),
-        ),
-        Row(
-          children: [
-            Text(sticky.mainCaption,
-                style: AppType.t2.copyWith(color: Brand.inkMuted)),
-            if (sticky.hasSide) ...[
-              SizedBox(width: Ds.space.x8),
-              Flexible(
-                child: Text(sticky.side,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppType.t2.copyWith(color: Brand.inkMuted)),
-              ),
-            ],
-          ],
-        ),
-      ],
-    );
-  }
-}
-
 class _StockRow extends StatelessWidget {
   final ProductDetail data;
   const _StockRow({required this.data});
@@ -1423,47 +1567,63 @@ class _StockRow extends StatelessWidget {
   }
 }
 
+/// CMD #1896 — the Overview table, same shape as the fact table below it: one
+/// bordered card, a FIXED label column so every value starts on the same
+/// vertical line, and a hairline between rows. It was a `Table` with flex
+/// columns, which meant the label column moved with the longest label and no
+/// two products lined up the same way.
+///
+/// Composition is printed HERE and nowhere else on the page: `product_facts()`
+/// stopped sending its duplicate row in CMD #1896.
 class _OverviewTable extends StatelessWidget {
   final List<PdOverviewRow> rows;
   const _OverviewTable({required this.rows});
 
   @override
+  Widget build(BuildContext context) => _FactCard(
+        rows: [for (final r in rows) (label: r.label, value: r.value)],
+      );
+}
+
+/// The one row-pair card both tables draw. Two columns, a fixed label width and
+/// a hairline between rows — nothing else, on purpose.
+class _FactCard extends StatelessWidget {
+  final List<({String label, String value})> rows;
+  const _FactCard({required this.rows});
+
+  static const double _labelW = 130;
+
+  @override
   Widget build(BuildContext context) {
-    return Table(
-      columnWidths: const {
-        0: FlexColumnWidth(1.0),
-        1: FlexColumnWidth(1.6),
-      },
-      defaultVerticalAlignment: TableCellVerticalAlignment.top,
-      children: [
-        for (final r in rows)
-          TableRow(
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(bottom: 10, right: 12),
-                child: Text(
-                  r.label,
-                  style: const TextStyle(
-                    fontSize: 12.5,
-                    color: Color(0xFF9CA3AF),
+    return Container(
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        border: Border.all(color: Ds.c.divider, width: Ds.space.hairline),
+      ),
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x16, vertical: Ds.space.x8),
+      child: Column(
+        children: [
+          for (var i = 0; i < rows.length; i++) ...[
+            if (i > 0) Divider(height: Ds.space.x16, color: Ds.c.divider),
+            Padding(
+              padding: EdgeInsets.symmetric(vertical: Ds.space.x4),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: _labelW,
+                    child: Text(rows[i].label, style: Ds.t.caption),
                   ),
-                ),
+                  SizedBox(width: Ds.space.x12),
+                  Expanded(child: Text(rows[i].value, style: Ds.t.body)),
+                ],
               ),
-              Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: Text(
-                  r.value,
-                  style: const TextStyle(
-                    fontSize: 12.5,
-                    height: 1.4,
-                    color: Color(0xFF1F2937),
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ),
-            ],
-          ),
-      ],
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
@@ -1652,143 +1812,7 @@ class _SimilarTile extends StatelessWidget {
   }
 }
 
-// ── Sticky bottom bar ────────────────────────────────────────────────────────
-
-class _StickyBar extends StatelessWidget {
-  final ProductDetail data;
-  final bool subscribed;
-  final NotifyRequest? notifyRequest;
-
-  const _StickyBar({
-    required this.data,
-    required this.subscribed,
-    required this.notifyRequest,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final av = data.availability;
-
-    // No verdict and not buyable — nothing to offer, so no bar at all.
-    if (av == null && !data.buyable) return const SizedBox.shrink();
-
-    final cart = AppState.of(context);
-    final qty = cart.quantityOf(data.id);
-    // CHANGE #640 — the page's ONE add decision, the same one the stock chip
-    // and the Notify probe above read.
-    final canAdd = data.canAdd;
-    final pr = data.pricing;
-
-    return SafeArea(
-      top: false,
-      child: Container(
-        height: 68,
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          border: Border(top: BorderSide(color: Color(0xFFEDEFF2))),
-        ),
-        child: Row(
-          children: [
-            // CMD #1826 — the sale price is the bar's main number and MRP is
-            // the small line beside its caption; never MRP alone next to
-            // Add to cart. Both strings are the backend's `sticky` pair.
-            if (data.priceLines.has) ...[
-              Expanded(child: _StickyPrice(sticky: data.priceLines.sticky)),
-              SizedBox(width: Ds.space.x12),
-            ]
-            // Same price source as the row above and as every card.
-            else if (pr != null && pr.hasPrice) ...[
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      pr.priceDisplay,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFF111827),
-                      ),
-                    ),
-                    Text(
-                      // CHANGE #174 — the caption must name the number ABOVE
-                      // it. `mrp_note` is always the word "MRP", so once a
-                      // product had trade pricing this bar printed the NET
-                      // rate under the caption "MRP" — the exact mislabelling
-                      // this change exists to prevent. `price_caption` is the
-                      // backend's own word for whatever price_display holds:
-                      // 'NET' in full mode, 'MRP' in mrp_only, so no branch is
-                      // needed here and the two modes cannot drift apart.
-                      pr.priceCaption.isNotEmpty
-                          ? pr.priceCaption
-                          : data.mrpNote,
-                      style: const TextStyle(
-                        fontSize: 10.5,
-                        color: Color(0xFF9CA3AF),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 12),
-            ],
-            // CHANGE #638 — an unbuyable product offers Notify instead of a
-            // dead disabled button.
-            // CMD #1812 — and it ALWAYS offers Notify now: the only way to be
-            // unavailable is zone standby 0, which is stock that can come back.
-            if (!canAdd)
-              NotifyControl(
-                productId: data.id,
-                initiallySubscribed: subscribed,
-                compact: false,
-                notifyLabel: data.label('card_notify_label'),
-                subscribedLabel: data.label('notify_subscribed_label'),
-                request: notifyRequest,
-              )
-            else
-            SizedBox(
-              width: 170,
-              height: 46,
-              child: qty > 0
-                  ? _BarStepper(
-                      qty: qty,
-                      onMinus: () => cart.decrementId(data.id),
-                      onPlus: () => cart.incrementId(data.id),
-                    )
-                  : FilledButton(
-                      onPressed: canAdd
-                          ? () {
-                              if (cart.isPending(data.id)) return;
-                              cart.addId(data.id);
-                            }
-                          : null,
-                      style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFF1B7A43),
-                        disabledBackgroundColor: const Color(0xFFF3F4F6),
-                        disabledForegroundColor: const Color(0xFF9CA3AF),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                      ),
-                      // Verbatim backend label; falls back to the stock label
-                      // the payload also carries, never to a word typed here.
-                      child: Text(
-                        av?.ctaLabel ?? data.label('stock_out_label'),
-                        style: const TextStyle(
-                          fontSize: 14.5,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
+// ── The stepper the buy control turns into ───────────────────────────────────
 
 class _BarStepper extends StatelessWidget {
   final int qty;
@@ -1934,6 +1958,14 @@ class _PdpSkeleton extends StatelessWidget {
 
 // ── Shared bits ──────────────────────────────────────────────────────────────
 
+/// CMD #1896 — a section header is small, grey and wide-tracked now, not a
+/// near-black 15.5px heading competing with the product name.
+///
+/// The text itself is NOT transformed. Om's sketch says "uppercase", and a
+/// `.toUpperCase()` here would be the app rewriting a backend string — the one
+/// thing this file exists not to do. Uppercase headings are one UPDATE to
+/// storefront_ui_label away, with no deploy; the weight, size, colour and
+/// tracking are what a screen is allowed to decide, and they are what changed.
 class _SectionTitle extends StatelessWidget {
   final String text;
   const _SectionTitle({required this.text});
@@ -1941,10 +1973,10 @@ class _SectionTitle extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Text(
         text,
-        style: const TextStyle(
-          fontSize: 15.5,
-          fontWeight: FontWeight.w800,
-          color: Color(0xFF111827),
+        style: Ds.t.caption.copyWith(
+          color: Ds.c.textSecondary,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.8,
         ),
       );
 }
@@ -1953,7 +1985,8 @@ class _Chip extends StatelessWidget {
   final String text;
   final Color bg;
   final Color fg;
-  const _Chip({required this.text, required this.bg, required this.fg});
+  const _Chip(
+      {super.key, required this.text, required this.bg, required this.fg});
 
   @override
   Widget build(BuildContext context) => Align(

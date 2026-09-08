@@ -38,7 +38,6 @@ import 'admin/admin_customer_screen.dart';
 import 'admin/admin_company_screen.dart';
 import 'admin/admin_dashboard_screen.dart';
 import 'admin/admin_deletion_request_screen.dart';
-import 'admin/admin_ops_queues_screen.dart';
 import 'admin/admin_delivery_partner_screen.dart';
 import 'admin/admin_mr_screen.dart';
 import 'admin/admin_alert_overlay.dart';
@@ -248,6 +247,9 @@ class _HomeShellState extends State<HomeShell> {
     );
   }
 
+  /// CMD #1896 — a screen pushed over the shell asked for the cart.
+  void _onOpenCartRequested() => mounted ? _openCart() : null;
+
   /// CHANGE #559 rule 4: re-read the server cart on entering the cart screen.
   void _openCart() {
     setState(() => _cartOpen = true);
@@ -324,6 +326,9 @@ class _HomeShellState extends State<HomeShell> {
       if (!mounted) return;
       AppState.of(context).cartError.addListener(_showCartError);
     });
+    // CMD #1896 — a page pushed OVER this shell (the PDP) floats the same cart
+    // pill; the panel it opens lives here, so it asks and this shell answers.
+    kOpenCartRequest.addListener(_onOpenCartRequested);
     _initFromUrl();
     listenPopState(_applyPath);
     // CHANGE #298 — FCM. Started after the first frame so a Firebase failure
@@ -1369,6 +1374,7 @@ class _HomeShellState extends State<HomeShell> {
     DeliveryRoleState.instance.removeListener(_onDeliveryRoleChanged); // C629
     Access.instance.removeListener(_onAccessChanged); // C653
     StaffNav.value.removeListener(_onAccessChanged); // CHANGE #1016
+    kOpenCartRequest.removeListener(_onOpenCartRequested); // CMD #1896
     _searchFocus.dispose();
     _searchCtrl.dispose();
     super.dispose();

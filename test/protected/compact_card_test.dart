@@ -151,6 +151,12 @@ Map<String, dynamic> _row({
           'price_display':
               (hasPrice && entitled) ? '₹2,337.30' : 'PTR',
           'price_locked': !(hasPrice && entitled),
+          // #1895b — the caption that sits before the sale badge, and the
+          // badge's own two colours. All three are the payload's; the card
+          // types none of them.
+          'sale_label': 'Sale price:',
+          'sale_bg': '#1B7A43',
+          'sale_fg': '#FFFFFF',
           if (!(hasPrice && entitled)) ...{
             'locked_title': 'Trade price',
             'locked_note': 'Register and get approved to see trade prices',
@@ -350,6 +356,61 @@ void main() {
           .widgetList<Text>(find.text('₹2,597.00'))
           .any((t) => t.style?.decoration == TextDecoration.lineThrough);
       expect(struck2, isFalse);
+    });
+
+    testWidgets('the sale caption and the badge colours are the payload\'s',
+        (tester) async {
+      // CHANGE #1895b. Om's sketch made the sale line a LABELLED row: a grey
+      // caption, then the value on a green plate. Every one of those three
+      // things is a field — reword the caption or repaint the badge with an
+      // UPDATE to storefront_ui_label and the card follows without a deploy.
+      await _pump(tester, _row());
+
+      expect(find.text('Sale price:'), findsOneWidget,
+          reason: 'card_price.sale_label — never typed in Dart');
+
+      final deco = tester
+          .widgetList<Container>(find.ancestor(
+            of: find.text('₹2,337.30'),
+            matching: find.byType(Container),
+          ))
+          .map((c) => c.decoration)
+          .whereType<BoxDecoration>()
+          .firstWhere((d) => d.color != null);
+      expect(deco.color, const Color(0xFF1B7A43),
+          reason: 'card_price.sale_bg, parsed — not a green chosen here');
+      expect(
+          tester.widget<Text>(find.text('₹2,337.30')).style?.color,
+          const Color(0xFFFFFFFF),
+          reason: 'card_price.sale_fg, parsed');
+
+      // Reword it and the card follows. If the caption were a Dart literal
+      // the old words would still be on the screen.
+      final r = _row();
+      ((r['pricing'] as Map<String, dynamic>)['card_price']
+          as Map<String, dynamic>)['sale_label'] = 'Your rate:';
+      await _pump(tester, r);
+      expect(find.text('Your rate:'), findsOneWidget);
+      expect(find.text('Sale price:'), findsNothing);
+    });
+
+    testWidgets('a pre-#1895b payload still paints its sale line',
+        (tester) async {
+      // The three fields are additive. A card served from a cache written
+      // before the change carries none of them, and must still render the
+      // value rather than an empty row or a crash.
+      final r = _row();
+      final cp = (r['pricing'] as Map<String, dynamic>)['card_price']
+          as Map<String, dynamic>;
+      cp.remove('sale_label');
+      cp.remove('sale_bg');
+      cp.remove('sale_fg');
+      await _pump(tester, r);
+
+      expect(find.text('₹2,337.30'), findsOneWidget,
+          reason: 'the value is price_display, with or without a caption');
+      expect(find.text('Sale price:'), findsNothing,
+          reason: 'no caption in the payload means no caption on the card');
     });
 
     testWidgets('a withheld PTR is the WORD, and the sentence is off the card',
@@ -622,9 +683,18 @@ void main() {
           reason: 'the pack type chip is left-aligned, not centred');
       expect(tester.getTopLeft(find.text('MRP')).dx, lessThan(nameLeft + 4),
           reason: 'the MRP line starts on the same edge');
-      expect(tester.getTopLeft(find.text('₹2,337.30')).dx,
-          lessThan(nameLeft + 12),
-          reason: 'and so does the sale line');
+      // #1895b — the sale line is a LABELLED row now, so the thing sitting on
+      // that edge is the CAPTION and the value rides in a badge just after
+      // it. Both halves are pinned: the caption on the name's edge, and the
+      // badge hard against the caption, which is what stops the value drifting
+      // to the middle of the card the way #274's Align once did.
+      expect(tester.getTopLeft(find.text('Sale price:')).dx,
+          lessThan(nameLeft + 4),
+          reason: 'the sale caption starts on the same edge');
+      final capRight = tester.getTopRight(find.text('Sale price:')).dx;
+      expect(tester.getTopLeft(find.text('₹2,337.30')).dx - capRight,
+          lessThan(20.0),
+          reason: 'the badge follows the caption — one gap, not a centred box');
     });
 
     testWidgets('the card never overflows the extent the grid reserves',

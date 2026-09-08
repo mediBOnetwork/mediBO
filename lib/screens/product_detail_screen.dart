@@ -924,22 +924,19 @@ class _GalleryState extends State<_Gallery> {
             key: const ValueKey('pdp-gallery-dots'),
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
+              // Indicators, not controls. An 8px dot cannot be a 44px tap
+              // target and does not need to be: the hero is swiped, and a tap
+              // ON the hero opens the zoom. A tappable dot would be the one
+              // control on this page below the touch minimum.
               for (var i = 0; i < imgs.length; i++)
-                GestureDetector(
-                  onTap: () {
-                    setState(() => _page = i);
-                    _ctrl.animateToPage(i,
-                        duration: Ds.motion.standard, curve: Ds.motion.curve);
-                  },
-                  child: AnimatedContainer(
-                    duration: Ds.motion.standard,
-                    margin: EdgeInsets.symmetric(horizontal: Ds.space.x4),
-                    width: i == page ? Ds.space.x16 : Ds.space.x8,
-                    height: Ds.space.x8,
-                    decoration: BoxDecoration(
-                      color: i == page ? Ds.c.brand : Ds.c.divider,
-                      borderRadius: Ds.r.rChip,
-                    ),
+                AnimatedContainer(
+                  duration: Ds.motion.standard,
+                  margin: EdgeInsets.symmetric(horizontal: Ds.space.x4),
+                  width: i == page ? Ds.space.x16 : Ds.space.x8,
+                  height: Ds.space.x8,
+                  decoration: BoxDecoration(
+                    color: i == page ? Ds.c.brand : Ds.c.divider,
+                    borderRadius: Ds.r.rChip,
                   ),
                 ),
             ],

@@ -12383,10 +12383,19 @@ class _RoutesTabState extends State<_RoutesTab> {
   bool _loading = true;
   String? _loadError;
 
-  // ── D: top-level view — 'builder' (admin) or 'myRoute' (rep) ────────────
-  String _topMode = 'builder';
+  // ── D: top-level view — 'today' (CMD #1872 landing), 'builder' (admin
+  // plan builder) or 'myRoute' (rep check-in). The tab OPENS on 'today'.
+  String _topMode = 'today';
   Map<String, dynamic>? _myRoute; // my_route() response, refetched after check-in
   bool _myRouteLoading = false;
+
+  /// CMD #1872 — routes_today(): the route assigned to the logged-in worker
+  /// for admin_active_date() in admin_active_zone(), or every route for that
+  /// date (with worker names) for an admin. Title, header, count, progress
+  /// line, Navigate caption, empty state and the mode-row captions all arrive
+  /// in this payload and are printed verbatim.
+  Map<String, dynamic>? _today;
+  bool _todayLoading = false;
 
   // ── B1: filter bar — the ONLY inputs that drive the count + build ────────
   String _city = 'Raipur';
@@ -12646,17 +12655,28 @@ class _RoutesTabState extends State<_RoutesTab> {
     setState(() { _loading = true; _loadError = null; });
     try {
       await _loadRouteTaxonomy();
-      final myRoute = Map<String, dynamic>.from(
-          await Supabase.instance.client.rpc('my_route') as Map);
+      // routes_today() raises not_authorized for anyone who is neither an
+      // admin nor a lead worker. That must NOT take the whole tab down with
+      // it — the builder still loads, so the new call is caught on its own.
+      final res = await Future.wait<dynamic>([
+        Supabase.instance.client.rpc('my_route'),
+        Supabase.instance.client.rpc('routes_today').catchError((_) => null),
+      ]);
+      final myRoute = Map<String, dynamic>.from(res[0] as Map);
+      final today = res[1] is Map
+          ? Map<String, dynamic>.from(res[1] as Map)
+          : <String, dynamic>{};
       if (!mounted) return;
       setState(() {
         _myRoute = myRoute;
-        // B2 (#446) — a worker with an assignment today lands on the rep
-        // view; an admin with none (or not a worker at all) lands on the
-        // route builder.
-        _topMode = myRoute['status'] == 'assigned' ? 'myRoute' : 'builder';
+        _today = today;
+        // CMD #1872 — the tab opens on today's assigned route for EVERY role.
+        // 'All plans' (the builder) and 'Check in' are secondary links, and
+        // the payload names them.
+        _topMode = today['ok'] == true ? 'today' : 'builder';
         _loading = false;
       });
+      _logToday(today);
       final myStops = (myRoute['route'] as List?) ?? [];
       if (_topMode == 'myRoute') {
         RenderLog.write('c445_route_stops', myRoute['stops']);
@@ -12669,6 +12689,37 @@ class _RoutesTabState extends State<_RoutesTab> {
       if (!mounted) return;
       setState(() { _loadError = e.toString(); _loading = false; });
     }
+  }
+
+  /// CMD #1872 — one refetch of routes_today(). Used by the mode row, by
+  /// pull-to-retry and after a check-in, so the progress line and the next
+  /// stop the Navigate button opens are always the backend's current answer.
+  Future<void> _refreshToday() async {
+    if (!mounted) return;
+    setState(() => _todayLoading = true);
+    try {
+      final res = await Supabase.instance.client.rpc('routes_today');
+      if (!mounted) return;
+      final today = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      setState(() {
+        _today = today;
+        _todayLoading = false;
+      });
+      _logToday(today);
+    } catch (_) {
+      if (mounted) setState(() => _todayLoading = false);
+    }
+  }
+
+  void _logToday(Map<String, dynamic> today) {
+    final rows = (today['routes'] as List?) ?? const [];
+    RenderLog.write('c1872_today_routes', rows.length);
+    RenderLog.write(
+        'c1872_nav_ready',
+        rows
+            .whereType<Map>()
+            .where((e) => e['can_navigate'] == true)
+            .length);
   }
 
   Future<void> _refreshMyRoute() async {
@@ -13485,23 +13536,152 @@ class _RoutesTabState extends State<_RoutesTab> {
       padding: EdgeInsets.fromLTRB(pad, 20, pad, 32),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         _buildTopModeToggle(),
-        const SizedBox(height: 14),
-        if (_topMode == 'myRoute') _buildMyRouteView() else _buildBuilder(),
+        SizedBox(height: Ds.space.x16),
+        if (_topMode == 'today')
+          _buildTodayView()
+        else if (_topMode == 'myRoute')
+          _buildMyRouteView()
+        else
+          _buildBuilder(),
       ]),
     );
   }
 
+  /// CMD #1872 — the mode row is the payload's own `links[]`: 'today' is the
+  /// landing mode, 'all_plans' opens the builder and 'my_route' the check-in
+  /// view. Every caption is the backend's; no mode name is written here.
+  static const Map<String, String> _kModeForLink = {
+    'today': 'today',
+    'all_plans': 'builder',
+    'my_route': 'myRoute',
+  };
+
   Widget _buildTopModeToggle() {
-    return Row(children: [
-      Expanded(
-        child: _segBtn('My route', _topMode == 'myRoute', () {
-          setState(() => _topMode = 'myRoute');
-          if (_myRoute == null) _refreshMyRoute();
+    final links = ((_today?['links'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .where((e) => _kModeForLink.containsKey(e['key']?.toString()))
+        .toList();
+    if (links.isEmpty) return const SizedBox.shrink();
+    final row = <Widget>[];
+    for (final l in links) {
+      final mode = _kModeForLink[l['key'].toString()]!;
+      if (row.isNotEmpty) row.add(SizedBox(width: Ds.space.x8));
+      row.add(Expanded(
+        child: _segBtn(l['label']?.toString() ?? '', _topMode == mode, () {
+          setState(() => _topMode = mode);
+          if (mode == 'myRoute' && _myRoute == null) _refreshMyRoute();
+          if (mode == 'today') _refreshToday();
         }),
+      ));
+    }
+    return Row(children: row);
+  }
+
+  // ── CMD #1872: the landing view — today's assigned route(s) ─────────────
+
+  Widget _buildTodayView() {
+    if (_todayLoading) {
+      return Padding(
+        padding: EdgeInsets.only(top: Ds.space.x32),
+        child: Center(
+            child: CircularProgressIndicator(color: Ds.c.brand, strokeWidth: 2)),
+      );
+    }
+    final today = _today ?? const <String, dynamic>{};
+    final routes = ((today['routes'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    // The landing view PAINTED. Separate from c1872_today_routes on purpose:
+    // a day with no assigned route is a legitimate render (the backend's own
+    // empty copy), so route count 0 must not read as "the widget never drew".
+    RenderLog.write('c1872_today_view', 1);
+    final children = <Widget>[
+      Text(today['title']?.toString() ?? '', style: Ds.t.title),
+      SizedBox(height: Ds.space.x4),
+      Text(today['header_label']?.toString() ?? '', style: Ds.t.caption),
+      SizedBox(height: Ds.space.x4),
+      Text(today['count_label']?.toString() ?? '', style: Ds.t.caption),
+      SizedBox(height: Ds.space.x16),
+    ];
+    if (routes.isEmpty) {
+      children.add(Container(
+        width: double.infinity,
+        padding: EdgeInsets.all(Ds.space.x24),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          boxShadow: Ds.elevation.e1,
+        ),
+        child: Text(today['empty_label']?.toString() ?? '',
+            style: Ds.t.bodySecondary, textAlign: TextAlign.center),
+      ));
+    } else {
+      for (final r in routes) {
+        children.add(Padding(
+          padding: EdgeInsets.only(bottom: Ds.space.x12),
+          child: _todayRouteCard(r),
+        ));
+      }
+    }
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: children);
+  }
+
+  Widget _todayRouteCard(Map<String, dynamic> r) {
+    final worker = r['worker_label']?.toString();
+    final next = r['next_label']?.toString();
+    final nextSub = r['next_sub']?.toString();
+    final navUri = r['nav_uri']?.toString();
+    final canNav = r['can_navigate'] == true && (navUri ?? '').isNotEmpty;
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(Ds.space.x16),
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        boxShadow: Ds.elevation.e1,
       ),
-      const SizedBox(width: 8),
-      Expanded(child: _segBtn('Builder', _topMode == 'builder', () => setState(() => _topMode = 'builder'))),
-    ]);
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(
+            child: Text(r['title']?.toString() ?? '',
+                style: Ds.t.subtitle, overflow: TextOverflow.ellipsis),
+          ),
+          if (worker != null && worker.isNotEmpty)
+            Container(
+              padding: EdgeInsets.symmetric(
+                  horizontal: Ds.space.x12, vertical: Ds.space.x4),
+              decoration: BoxDecoration(
+                  color: Ds.c.infoSoft, borderRadius: Ds.r.rChip),
+              child: Text(worker, style: Ds.t.caption),
+            ),
+        ]),
+        SizedBox(height: Ds.space.x4),
+        Text(r['subtitle']?.toString() ?? '', style: Ds.t.caption),
+        SizedBox(height: Ds.space.x12),
+        Text(r['progress_label']?.toString() ?? '', style: Ds.t.bodyStrong),
+        if (next != null && next.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x12),
+          Text(next, style: Ds.t.body, overflow: TextOverflow.ellipsis),
+          if (nextSub != null && nextSub.isNotEmpty)
+            Text(nextSub, style: Ds.t.caption, overflow: TextOverflow.ellipsis),
+        ],
+        SizedBox(height: Ds.space.x16),
+        SizedBox(
+          width: double.infinity,
+          height: Ds.touch.minTarget,
+          child: ElevatedButton.icon(
+            onPressed: canNav
+                ? () => launchUrl(Uri.parse(navUri!),
+                    mode: LaunchMode.externalApplication)
+                : null,
+            icon: const Icon(Icons.navigation_rounded),
+            label: Text(r['nav_label']?.toString() ?? ''),
+          ),
+        ),
+      ]),
+    );
   }
 
   // ── D1: Rep view — "My route today" ──────────────────────────────────────
@@ -13562,7 +13742,10 @@ class _RoutesTabState extends State<_RoutesTab> {
       else
         ...stops.map((s) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
-              child: _stopCard(s, assignmentId: assignmentId, onRefresh: _refreshMyRoute),
+              child: _stopCard(s, assignmentId: assignmentId, onRefresh: () async {
+                await _refreshMyRoute();
+                await _refreshToday();
+              }),
             )),
     ]);
   }

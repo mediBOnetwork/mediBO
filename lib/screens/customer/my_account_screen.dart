@@ -23,6 +23,7 @@ import '../../design_tokens.dart';
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
 import '../../widgets/backend_chip.dart';
+import '../../widgets/payout_upi_card.dart';
 import '../kyc/kyc_panel.dart';
 import 'profile_account_menu.dart' show customerMenuScreen;
 
@@ -673,6 +674,10 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
     switch (_s(b['widget'])) {
       case 'kyc_panel':
         return const KycPanel();
+      // CMD #1889 — "where should we send your money?", placed by the Billing
+      // tab only once the backend says a payout is actually waiting.
+      case 'payout_upi':
+        return const PayoutUpiCard();
       // CMD #1834 — 'profile_form' is deliberately NOT here. #1815 embedded
       // the old Edit profile form in this tab; Profile & KYC is the licence
       // page and nothing else lives in it. A payload that still names the

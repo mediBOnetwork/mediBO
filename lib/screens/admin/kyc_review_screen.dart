@@ -41,6 +41,7 @@ class _KycReviewScreenState extends State<KycReviewScreen> {
   String _status = 'pending';
   Map<String, dynamic> _payload = const {};
   Map<String, dynamic> _drive = const {};
+  Map<String, dynamic> _backfill = const {};
 
   @override
   void initState() {
@@ -67,15 +68,21 @@ class _KycReviewScreenState extends State<KycReviewScreen> {
       final q = _asMap(await KycReviewScreen.rpc(
           'kyc_review_queue', {'p_status': _status, 'p_limit': 50, 'p_offset': 0}));
       final d = _asMap(await KycReviewScreen.rpc('kyc_drive_card'));
+      // CMD #1889 — the customers who are approved and trading with no licence
+      // on file. Zone- and date-scoped by the backend; this only draws it.
+      final b = _asMap(await KycReviewScreen.rpc(
+          'kyc_licence_backfill', {'p_limit': 50, 'p_offset': 0}));
       if (!mounted) return;
       setState(() {
         _payload = q ?? const {};
         _drive = d ?? const {};
+        _backfill = b ?? const {};
         _loading = false;
       });
       RenderLog.write('c705_kyc_review', _rows.length);
       RenderLog.write('c706_kyc_review_checks',
           _rows.where((e) => (KycVerifyBlock.of(e)?['has'] ?? false) == true).length);
+      RenderLog.write('c1889_licence_backfill', _backfillRows.length);
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
@@ -260,6 +267,224 @@ class _KycReviewScreenState extends State<KycReviewScreen> {
     }
   }
 
+  String _b(String k) => (_backfill[k] ?? '').toString();
+
+  List<Map<String, dynamic>> get _backfillRows =>
+      ((_backfill['rows'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+
+  /// CMD #1889 — confirm or correct the licence expiry.
+  ///
+  /// The date the machine read is printed above the field, so confirming it is
+  /// one tap. Typing a DIFFERENT date is a manual entry and the backend refuses
+  /// it without a reason (`kyc_expiry.err_no_reason`); this only keeps the save
+  /// button shut until there is something to send, so a reviewer is not sent to
+  /// the server to be told what the form already knows.
+  Future<void> _setExpiry(Map<String, dynamic> row) async {
+    String v(String k) => (row[k] ?? '').toString();
+    final ocr = v('ocr_expiry');
+    DateTime? picked = DateTime.tryParse(ocr.isNotEmpty ? ocr : v('valid_to'));
+    final number = TextEditingController(
+        text: v('number').isNotEmpty ? v('number') : v('ocr_number'));
+    final reason = TextEditingController();
+
+    final go = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x16, Ds.space.x16,
+            MediaQuery.of(ctx).viewInsets.bottom + Ds.space.x16),
+        child: StatefulBuilder(
+          builder: (ctx2, setSheet) {
+            final chosen = picked;
+            final manual = chosen == null ||
+                ocr.isEmpty ||
+                DateTime.tryParse(ocr) == null ||
+                DateTime.parse(ocr) != chosen;
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(v('expiry_title'), style: Ds.t.title),
+                SizedBox(height: Ds.space.x8),
+                Text(v('ocr_read_label'), style: Ds.t.caption),
+                if (ocr.isNotEmpty) Text(ocr, style: Ds.t.body),
+                SizedBox(height: Ds.space.x16),
+                SizedBox(
+                  width: double.infinity,
+                  height: Ds.touch.minTarget,
+                  child: OutlinedButton(
+                    onPressed: () async {
+                      final now = DateTime.now();
+                      final d = await showDatePicker(
+                        context: ctx2,
+                        initialDate: chosen ?? now,
+                        firstDate: DateTime(now.year - 10),
+                        lastDate: DateTime(now.year + 30),
+                      );
+                      if (d != null) setSheet(() => picked = d);
+                    },
+                    child: Text(chosen == null
+                        ? v('expiry_field_label')
+                        : '${v('expiry_field_label')}: '
+                            '${chosen.toIso8601String().substring(0, 10)}'),
+                  ),
+                ),
+                SizedBox(height: Ds.space.x12),
+                TextField(
+                  controller: number,
+                  decoration:
+                      InputDecoration(labelText: v('expiry_number_label')),
+                  onChanged: (_) => setSheet(() {}),
+                ),
+                if (manual) ...[
+                  SizedBox(height: Ds.space.x12),
+                  Text(v('expiry_reason_hint'), style: Ds.t.caption),
+                  SizedBox(height: Ds.space.x8),
+                  TextField(
+                    controller: reason,
+                    maxLines: 2,
+                    decoration:
+                        InputDecoration(labelText: v('expiry_reason_label')),
+                    onChanged: (_) => setSheet(() {}),
+                  ),
+                ],
+                SizedBox(height: Ds.space.x24),
+                SizedBox(
+                  width: double.infinity,
+                  height: Ds.touch.minTarget,
+                  child: FilledButton(
+                    onPressed: chosen == null ||
+                            (manual && reason.text.trim().isEmpty)
+                        ? null
+                        : () => Navigator.of(ctx2).pop(true),
+                    child: Text(v('expiry_save_label')),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+
+    final chosen = picked;
+    final num0 = number.text.trim();
+    final why = reason.text.trim();
+    number.dispose();
+    reason.dispose();
+    if (go != true || chosen == null) return;
+
+    setState(() => _busy = true);
+    try {
+      final res = _asMap(await KycReviewScreen.rpc('kyc_doc_expiry_set', {
+        'p_doc_id': row['doc_id'],
+        'p_expiry': chosen.toIso8601String().substring(0, 10),
+        'p_number': num0.isEmpty ? null : num0,
+        'p_reason': why.isEmpty ? null : why,
+      }));
+      if (!mounted) return;
+      setState(() => _busy = false);
+      final msg = (res?['message'] ?? '').toString();
+      if (msg.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      }
+      await _load();
+    } catch (_) {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _askLicence(Map<String, dynamic> row) async {
+    setState(() => _busy = true);
+    try {
+      final res = _asMap(await KycReviewScreen.rpc(
+          'kyc_licence_ask', {'p_customer_id': row['customer_id']}));
+      if (!mounted) return;
+      setState(() => _busy = false);
+      final msg = (res?['message'] ?? '').toString();
+      if (msg.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      }
+      await _load();
+    } catch (_) {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// CMD #1889 — approved customers with no verified drug licence. They cannot
+  /// order until one is on file, and that refusal is the backend's; this list
+  /// is how a reviewer finds them and asks.
+  Widget _backfillCard() {
+    final rows = _backfillRows;
+    return Container(
+      margin: EdgeInsets.only(bottom: Ds.space.x24),
+      padding: EdgeInsets.all(Ds.space.x16),
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        boxShadow: Ds.elevation.e1,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(child: Text(_b('title'), style: Ds.t.subtitle)),
+              Text(_b('count_label'), style: Ds.t.caption),
+            ],
+          ),
+          SizedBox(height: Ds.space.x4),
+          Text(_b('subtitle'), style: Ds.t.caption),
+          SizedBox(height: Ds.space.x12),
+          if (rows.isEmpty)
+            Text(_b('empty'), style: Ds.t.bodySecondary)
+          else
+            for (final r in rows) ...[
+              Padding(
+                padding: EdgeInsets.only(bottom: Ds.space.x12),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text((r['name'] ?? '').toString(), style: Ds.t.body),
+                          Text(
+                            (r['city'] ?? '').toString().isEmpty
+                                ? (r['state_label'] ?? '').toString()
+                                : '${r['city']} · ${r['state_label']}',
+                            style: Ds.t.caption.copyWith(
+                                color: _tone((r['state_tone'] ?? '').toString())),
+                          ),
+                          if ((r['asked_label'] ?? '').toString().isNotEmpty)
+                            Text((r['asked_label']).toString(),
+                                style: Ds.t.caption),
+                        ],
+                      ),
+                    ),
+                    if (_backfill['can_write'] == true) ...[
+                      SizedBox(width: Ds.space.x8),
+                      SizedBox(
+                        height: Ds.touch.minTarget,
+                        child: OutlinedButton(
+                          onPressed: _busy ? null : () => _askLicence(r),
+                          child: Text((r['ask_label'] ?? '').toString()),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+        ],
+      ),
+    );
+  }
+
   /// How many pending documents the checks flagged. The sentence is the
   /// backend's; a count of zero sends no string at all, so nothing draws.
   Widget _flaggedStrip() => Container(
@@ -319,6 +544,7 @@ class _KycReviewScreenState extends State<KycReviewScreen> {
                     padding: EdgeInsets.all(Ds.space.x16),
                     children: [
                       if (_drive['ok'] == true) _driveCard(),
+                      if (_backfill['ok'] == true) _backfillCard(),
                       if (_s('flagged_label').isNotEmpty) _flaggedStrip(),
                       _tabs(),
                       SizedBox(height: Ds.space.x16),
@@ -430,7 +656,19 @@ class _KycReviewScreenState extends State<KycReviewScreen> {
             Text('${v('number_label')}: ${v('number')}', style: Ds.t.caption),
           ],
           SizedBox(height: Ds.space.x4),
-          Text(v('expiry_label'), style: Ds.t.caption),
+          Row(
+            children: [
+              Expanded(child: Text(v('expiry_label'), style: Ds.t.caption)),
+              if (r['can_set_expiry'] == true && _payload['can_write'] == true)
+                SizedBox(
+                  height: Ds.touch.minTarget,
+                  child: TextButton(
+                    onPressed: _busy ? null : () => _setExpiry(r),
+                    child: Text(v('expiry_edit_label')),
+                  ),
+                ),
+            ],
+          ),
           SizedBox(height: Ds.space.x4),
           Text(v('submitted_label'), style: Ds.t.caption),
           if (v('reason').isNotEmpty) ...[

@@ -168,25 +168,20 @@ void shellOpenStaffTile(BuildContext context, Map<String, dynamic> tile,
 /// (`dashboard_home()`, six named sections), so drawing it here as well would
 /// be the second surface this change removes — and a chip strip you have to
 /// scroll sideways was the reason those doors went unfound.
+/// CMD #1893 — and now it is gone for EVERY layout, not only v2. #1891 left
+/// the strip mounted under the legacy flag; the spec's line is that these three
+/// screens keep only their own tab bar, so the flag no longer buys it back.
+/// Every door the strip carried is a Dashboard tile — nav_dashboard_orphan_check()
+/// is the migration-time gate that keeps it that way, and
+/// scripts/check_nav_orphans.sh runs it before every deploy.
 ///
 /// The page is returned untouched. The signature stays so the shell needs no
 /// edit, and [StaffHomeStrip] stays in staff_home_screen.dart with its own
-/// protected test: the strip is still what the LEGACY (staff_layout_v1)
-/// layout draws, and re-mounting it is one line here.
+/// protected test: it is still what the Money / More home draws.
 Widget shellWithStaffStrip(String tab, Widget page,
     void Function(String route, [String? seed]) navigate) {
-  if (!StaffNav.value.value.isLegacy) {
-    RenderLog.write('c1891_strip_retired', tab);
-    return page;
-  }
-  return Column(children: [
-    Builder(builder: (ctx) => StaffHomeStrip(
-          tabKey: tab,
-          load: shellStaffHomeLoad,
-          onOpen: (t) => shellOpenStaffTile(ctx, t, navigate),
-        )),
-    Expanded(child: page),
-  ]);
+  RenderLog.write('c1891_strip_retired', tab);
+  return page;
 }
 
 /// The Money / More page.

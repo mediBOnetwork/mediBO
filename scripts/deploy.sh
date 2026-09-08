@@ -208,6 +208,21 @@ if [ "$SELFTEST_STATUS" -ne 0 ]; then
   exit 1
 fi
 echo "✅ [gate] self-test GREEN — proceeding to build."
+
+# ── CMD #1893: NAV-ORPHAN GATE ──────────────────────────────────────────────
+# The "Also here" strip above Customers, Suppliers and Fulfill is gone. This
+# asks the backend whether any door it carried has been left unreachable, and
+# stops the deploy before a change number is burned if one has. No database
+# credentials on the box => it reports that and passes.
+NAV_ORPHAN_STATUS=0
+bash scripts/check_nav_orphans.sh || NAV_ORPHAN_STATUS=$?
+if [ "$NAV_ORPHAN_STATUS" -ne 0 ]; then
+  echo ""
+  echo "❌  DEPLOY ABORTED — nav-orphan gate is RED (exit $NAV_ORPHAN_STATUS)."
+  echo "    Give each feature above a feature_registry.dashboard_section and"
+  echo "    re-run. Nothing was built and nothing was uploaded."
+  exit 1
+fi
 echo ""
 
 # ── CHANGE #424: dynamic CHANGE #N — kills the hardcoded/stale-label trap.

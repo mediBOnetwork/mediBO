@@ -195,6 +195,11 @@ class Pricing {
   /// that predates the block; every storefront RPC sends one.
   final CardPrice? cardPrice;
 
+  /// CHANGE #1895 — true while [priceDisplay] is the literal word "PTR"
+  /// instead of an amount. The backend decides it; every surface that prints
+  /// [priceDisplay] reads this to know whether the string is tappable.
+  final bool priceLocked;
+
   /// Raw numbers, for anything that must sort or compare. Never for display.
   final double salePrice;
   final double mrp;
@@ -225,6 +230,7 @@ class Pricing {
     this.marginChip,
     this.gst,
     this.cardPrice,
+    this.priceLocked = false,
   });
 
   /// True when the backend has real trade pricing for this product.
@@ -277,6 +283,7 @@ class Pricing {
             ptrDisplay: (m['ptr_display'] ?? '').toString(),
             ptrCaption: (m['ptr_caption'] ?? '').toString(),
           ),
+      priceLocked: m['price_locked'] == true,
     );
   }
 
@@ -306,6 +313,7 @@ class Pricing {
         'margin_chip': marginChip?.toJson(),
         'gst': gst?.toJson(),
         'card_price': cardPrice?.toJson(),
+        'price_locked': priceLocked,
       };
 }
 
@@ -438,6 +446,24 @@ class CardPrice {
   final bool hasNote;
   final String note;
 
+  /// CHANGE #1895 — the sale line, as ONE backend string: the formatted trade
+  /// amount when the viewer is approved and a trade price exists, and the
+  /// literal word "PTR" otherwise. The card prints it and asks nothing.
+  final String priceDisplay;
+
+  /// True while [priceDisplay] is that word rather than an amount. It is the
+  /// BACKEND's verdict on entitlement — the app never checks approval — and it
+  /// is the only thing that makes the sale line tappable.
+  final bool priceLocked;
+
+  /// The sheet the locked word opens. Every string is the backend's, including
+  /// the route, so "register and get approved" can be reworded — or pointed
+  /// somewhere else — with an UPDATE.
+  final String lockedTitle;
+  final String lockedNote;
+  final String lockedCta;
+  final String lockedRoute;
+
   const CardPrice({
     required this.hasMrp,
     required this.mrpLabel,
@@ -450,6 +476,12 @@ class CardPrice {
     this.ptrFg,
     this.hasNote = false,
     this.note = '',
+    this.priceDisplay = '',
+    this.priceLocked = false,
+    this.lockedTitle = '',
+    this.lockedNote = '',
+    this.lockedCta = '',
+    this.lockedRoute = '',
   });
 
   /// CHANGE #274 — the block for a payload that predates `card_price`.
@@ -483,6 +515,10 @@ class CardPrice {
         mrpDisplay: priceDisplay,
         strikeMrp: false,
         hasPtr: false,
+        // A pre-#1895 payload carries no sale line of its own. Leaving it empty
+        // renders nothing, which is honest; inventing the word "PTR" here would
+        // be the app claiming an entitlement rule it does not own.
+        priceDisplay: '',
       );
     }
     // `full`: the MRP is the struck ceiling and the trade rate sits under it.
@@ -494,6 +530,7 @@ class CardPrice {
       hasPtr: hasPtr && ptrDisplay.isNotEmpty,
       ptrLabel: ptrCaption,
       ptrDisplay: ptrDisplay,
+      priceDisplay: (hasPtr && ptrDisplay.isNotEmpty) ? ptrDisplay : '',
     );
   }
 
@@ -513,6 +550,14 @@ class CardPrice {
       ptrFg: Availability._argb(m['ptr_fg']),
       hasNote: m['has_note'] == true && (m['note'] ?? '').toString().isNotEmpty,
       note: (m['note'] ?? '').toString(),
+      // #1895. Absent on a payload built before this change — the fallbacks
+      // above fill it there, and an empty string simply prints no sale line.
+      priceDisplay: (m['price_display'] ?? '').toString(),
+      priceLocked: m['price_locked'] == true,
+      lockedTitle: (m['locked_title'] ?? '').toString(),
+      lockedNote: (m['locked_note'] ?? '').toString(),
+      lockedCta: (m['locked_cta'] ?? '').toString(),
+      lockedRoute: (m['locked_route'] ?? '').toString(),
     );
   }
 
@@ -526,6 +571,12 @@ class CardPrice {
         if (hasPtr) 'ptr_display': ptrDisplay,
         'has_note': hasNote,
         'note': note,
+        'price_display': priceDisplay,
+        'price_locked': priceLocked,
+        if (priceLocked) 'locked_title': lockedTitle,
+        if (priceLocked) 'locked_note': lockedNote,
+        if (priceLocked) 'locked_cta': lockedCta,
+        if (priceLocked) 'locked_route': lockedRoute,
       };
 }
 

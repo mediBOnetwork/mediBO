@@ -5,6 +5,7 @@ import '../app_state.dart';
 import '../design_tokens.dart';
 import '../models/catalogue.dart';
 import '../models/product.dart';
+import 'compact_product_card.dart' show CardPriceLines;
 import 'product_image.dart';
 
 /// CHANGE #799 — the Catalogue tab's card.
@@ -22,9 +23,15 @@ import 'product_image.dart';
 /// What survived the cut and why:
 ///  * The TRADE RATE stays. It is the only number a pharmacy buys on
 ///    (`legal_get_page('about')`: MRP is the printed ceiling, never the selling
-///    price), and it is the payload's own `pricing.ptr_display` string. What
-///    went is the MRP row above it, the margin chip and the compare affordance
-///    — the three consumer-shop devices Om named.
+///    price). What went is the margin chip and the compare affordance — two of
+///    the three consumer-shop devices Om named.
+///  * CMD #1895 PUT THE MRP ROW BACK, struck, on this card and every other.
+///    #799 cut it because a struck ceiling beside a rate reads as a consumer
+///    discount; Om's 08-Sep sketch answers that differently — the ceiling is
+///    shown to EVERYONE, including a visitor who is not approved and therefore
+///    sees the word "PTR" under it rather than a number. Both lines are the
+///    shared [CardPriceLines], reading the same `pricing.card_price` the
+///    storefront card reads, so the two tabs cannot drift apart.
 ///  * Variant chips arrive from `catalogue_variants()` AFTER the grid paints,
 ///    so a card with no chips yet is a card that is still correct. The row is
 ///    reserved either way, so chips landing never reflows the grid.
@@ -67,12 +74,23 @@ class CatalogueProductCard extends StatefulWidget {
 
   // ── Fixed geometry, on the 4-point rhythm ────────────────────────────────
   static const double plateH = 132;
+
+  /// The strip along the bottom of the plate, holding the pack sentence
+  /// ("10 capsules in 1 strip") clear of the artwork (#1895).
+  static const double _footerH = 26;
+
+  /// The pack-type + ADD row under the plate (#1895).
+  static const double _addH = 36;
+
+  /// The add control's width in that row. Wide enough for −/qty/+ at the
+  /// row's own height, so the box does not move when the first tap lands.
+  static const double _addW = 108;
+
   static const double _chipsH = 26; // the variant chip row, always reserved
   static const double _nameH = 36; // exactly two lines
   static const double _metaH = 16; // company, one line
-  static const double _packH = 16; // pack, one line
-  static const double _priceH = 20;
-  static const double _addH = 40;
+  static const double _mrpH = 16; // "MRP ₹174.38", struck (#1895)
+  static const double _priceH = 20; // the sale line: the amount, or "PTR"
 
   static const double _gapS = 4;
   static const double _gapM = 8;
@@ -81,17 +99,18 @@ class CatalogueProductCard extends StatefulWidget {
   /// The grid's mainAxisExtent, summed from the parts below it.
   static const double extent = plateH +
       _gapM +
+      _addH + // pack type left, ADD right (#1895)
+      _gapM +
       _chipsH +
       _gapS +
       _nameH +
       _gapS +
       _metaH +
-      _packH +
+      _gapS +
+      _mrpH +
       _gapS +
       _priceH +
-      _gapM +
-      _addH +
-      _pad * 2;
+      _pad * 2; // 330 — the same number #799 reserved, so the grid did not move
 
   @override
   State<CatalogueProductCard> createState() => _CatalogueProductCardState();
@@ -161,6 +180,42 @@ class _CatalogueProductCardState extends State<CatalogueProductCard> {
             children: [
               _Plate(product: p),
               const SizedBox(height: CatalogueProductCard._gapM),
+              // #1895 — the pack TYPE hard left, the add control hard right.
+              // The same row the storefront card has, in the same order, so a
+              // pharmacy meets one card on both tabs.
+              SizedBox(
+                height: CatalogueProductCard._addH,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: p.packTypeLabel.isEmpty
+                          ? const SizedBox.shrink()
+                          : Align(
+                              alignment: Alignment.centerLeft,
+                              child: _TypeChip(text: p.packTypeLabel),
+                            ),
+                    ),
+                    const SizedBox(width: CatalogueProductCard._gapM),
+                    SizedBox(
+                      width: CatalogueProductCard._addW,
+                      child: qty > 0
+                          ? _QtyBar(
+                              qty: qty,
+                              onMinus: () => cart.decrementId(p.id),
+                              onPlus: () => cart.incrementId(p.id),
+                            )
+                          : _AddButton(
+                              // One green Add, and its word is the backend's.
+                              label: _addLabel(p),
+                              enabled: canAdd,
+                              ticked: _ticked,
+                              onTap: () => _add(context),
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: CatalogueProductCard._gapM),
               SizedBox(
                 height: CatalogueProductCard._chipsH,
                 child: _VariantChips(
@@ -188,64 +243,24 @@ class _CatalogueProductCardState extends State<CatalogueProductCard> {
                   style: Ds.t.caption.copyWith(color: Ds.c.textSecondary),
                 ),
               ),
-              SizedBox(
-                height: CatalogueProductCard._packH,
-                child: Text(
-                  // The pack sentence the backend stored, verbatim, with its
-                  // one-word form as the fallback. Nothing is shortened here.
-                  p.packQtyLabel.isNotEmpty ? p.packQtyLabel : p.packTypeLabel,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Ds.t.caption.copyWith(color: Ds.c.textSecondary),
-                ),
-              ),
               const SizedBox(height: CatalogueProductCard._gapS),
-              SizedBox(
-                height: CatalogueProductCard._priceH,
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    // The TRADE rate, already rendered. No MRP row above it, no
-                    // margin chip beside it — Om's cut, kept here.
-                    _rate(p),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Ds.t.bodyStrong.copyWith(color: Ds.c.text),
-                  ),
-                ),
-              ),
-              const SizedBox(height: CatalogueProductCard._gapM),
-              SizedBox(
-                height: CatalogueProductCard._addH,
-                child: qty > 0
-                    ? _QtyBar(
-                        qty: qty,
-                        onMinus: () => cart.decrementId(p.id),
-                        onPlus: () => cart.incrementId(p.id),
-                      )
-                    : _AddButton(
-                        // One green Add, and its word is the backend's.
-                        label: _addLabel(p),
-                        enabled: canAdd,
-                        ticked: _ticked,
-                        onTap: () => _add(context),
-                      ),
+              // #1895 — the SAME widget the storefront card prints, reading the
+              // same `pricing.card_price`: the struck MRP, then the sale line
+              // (the trade amount, or the word "PTR" that opens the prompt).
+              // #799 cut the MRP row from this card; Om's 08-Sep sketch puts it
+              // back on every card, because it is the printed ceiling and a
+              // visitor who cannot see a rate should still see that.
+              CardPriceLines(
+                price: p.pricing?.cardPrice,
+                mrpHeight: CatalogueProductCard._mrpH,
+                priceHeight: CatalogueProductCard._priceH,
+                gap: CatalogueProductCard._gapS,
               ),
             ],
           ),
         ),
       ),
     );
-  }
-
-  /// The rate the pharmacy pays, taken from the payload's own rendered string.
-  /// Absent is absent: no dash, no zero, no "Price on request" written here.
-  static String _rate(Product p) {
-    final pr = p.pricing;
-    if (pr == null) return '';
-    if (pr.hasPtr && pr.ptrDisplay.isNotEmpty) return pr.ptrDisplay;
-    if (pr.hasPrice && pr.priceDisplay.isNotEmpty) return pr.priceDisplay;
-    return '';
   }
 
   static String _addLabel(Product p) {
@@ -258,30 +273,115 @@ class _CatalogueProductCardState extends State<CatalogueProductCard> {
 /// A square white plate: same crop, white pad, never stretched. An absent image
 /// is an absence the backend declared (empty string), so the placeholder is a
 /// state of the card and not an error in it.
+///
+/// #1895 put two things ON it, both where Om drew them and both because the
+/// grid's extent is a SUM of this card's constants — a new row below would
+/// silently overflow every grid that reserves it:
+///  * the pack SENTENCE, in a full-width strip along the bottom,
+///  * the Rx / OTC badge, top-right, in the backend's own tone.
 class _Plate extends StatelessWidget {
   final Product product;
   const _Plate({required this.product});
 
   @override
-  Widget build(BuildContext context) => Container(
-        height: CatalogueProductCard.plateH,
-        width: double.infinity,
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          color: Ds.c.surface,
-          borderRadius: Ds.r.rCard,
-          border: Border.all(color: Ds.c.divider),
-        ),
-        alignment: Alignment.center,
-        child: Padding(
-          padding: const EdgeInsets.all(CatalogueProductCard._gapM),
-          child: ProductImage(
-            url: product.imageUrl,
-            width: CatalogueProductCard.plateH,
-            height: CatalogueProductCard.plateH - CatalogueProductCard._gapM * 2,
-            fit: BoxFit.contain,
-            radius: Ds.r.rChip,
+  Widget build(BuildContext context) {
+    final tone = product.rxTone;
+    return Container(
+      height: CatalogueProductCard.plateH,
+      width: double.infinity,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        border: Border.all(color: Ds.c.divider),
+      ),
+      child: Stack(
+        children: [
+          Positioned(
+            left: 0,
+            right: 0,
+            top: 0,
+            bottom: CatalogueProductCard._footerH,
+            child: Padding(
+              padding: const EdgeInsets.all(CatalogueProductCard._gapM),
+              child: Center(
+                child: ProductImage(
+                  url: product.imageUrl,
+                  width: CatalogueProductCard.plateH,
+                  height: CatalogueProductCard.plateH -
+                      CatalogueProductCard._footerH -
+                      CatalogueProductCard._gapM * 2,
+                  fit: BoxFit.contain,
+                  radius: Ds.r.rChip,
+                ),
+              ),
+            ),
           ),
+          // The class the BACKEND decided, in the tone it sent. No schedule is
+          // mapped, inferred or coloured here.
+          if (product.hasRxBadge && product.rxLabel.isNotEmpty)
+            Positioned(
+              right: CatalogueProductCard._gapS,
+              top: CatalogueProductCard._gapS,
+              child: Container(
+                padding: EdgeInsets.symmetric(
+                  horizontal: Ds.space.x8,
+                  vertical: Ds.space.x4,
+                ),
+                decoration: BoxDecoration(
+                  color: Ds.hex(tone?['bg'], Ds.c.infoSoft),
+                  borderRadius: Ds.r.rChip,
+                ),
+                child: Text(
+                  product.rxLabel,
+                  maxLines: 1,
+                  style: Ds.t.caption
+                      .copyWith(color: Ds.hex(tone?['fg'], Ds.c.text)),
+                ),
+              ),
+            ),
+          // The pack sentence, full width, verbatim. Empty draws an empty
+          // strip rather than shortening the plate — the extent is a constant.
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: CatalogueProductCard._footerH,
+            child: Container(
+              color: Ds.c.bg,
+              padding: EdgeInsets.symmetric(horizontal: Ds.space.x8),
+              alignment: Alignment.centerLeft,
+              child: Text(
+                product.packQtyLabel,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Ds.t.caption.copyWith(color: Ds.c.textSecondary),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The pack TYPE — one word ("Strip", "Vial"), the chip beside the add control.
+class _TypeChip extends StatelessWidget {
+  final String text;
+  const _TypeChip({required this.text});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: EdgeInsets.symmetric(horizontal: Ds.space.x8),
+        decoration: BoxDecoration(
+          color: Ds.c.bg,
+          borderRadius: Ds.r.rChip,
+        ),
+        child: Text(
+          text,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Ds.t.caption.copyWith(color: Ds.c.textSecondary),
         ),
       );
 }

@@ -1,114 +1,128 @@
--- CMD #1914 — the document upload screen stops reading like a debug log.
+-- CMD #1914b — the live repair. #1914's own migration never finished on
+-- production and the screen it shipped was therefore half-wired.
 --
--- Before this, the applicant's panel printed the machine's worksheet: raw check
--- names ("GSTIN format", "Document readable"), a red paragraph composed from
--- them, "Decided 10m ago · Automatic", and no sight of the file that had
--- actually been uploaded. Every one of those strings was correct and none of
--- them told a pharmacist what to do next.
+-- WHAT HAPPENED. #1914 needed a per-customer lifecycle ledger to read, so it
+-- created `public.customer_event(owner_kind, owner_id, kind, event_label, …)`.
+-- Production ALREADY had a table of that name — #1915's sender ledger,
+-- `customer_event(customer_id, event_key, payload, sent_at, skip_reason,
+-- attempts)`, written by the `_customer_event_log` trigger on
+-- `pharmacy_profiles`. `create table if not exists` was therefore a no-op on
+-- live, the very next statement (`create index … (owner_kind, …)`) raised
+-- `column "owner_kind" does not exist`, and migration_replay.sh runs each file
+-- with ON_ERROR_STOP and no surrounding transaction: everything BEFORE the
+-- index landed (all the copy, the kyc_help setting) and everything AFTER it —
+-- `_cus_wa_timeline`, `kyc_my_panel` v2, `admin_customer_tab_profile` — did
+-- not. The deploy was green, the screen booted, and `c1914_kyc_chips` read 0
+-- because live's `kyc_my_panel` was still the pre-#1914 one.
 --
--- What the panel says now is decided HERE, not in Dart:
---   * one chip per document — Uploaded / Checking / Verified / Rejected — with
---     `chip_busy` saying whether the spinner spins;
---   * ONE plain sentence for a rejection (`plain_reason`), chosen from the
---     failing check, never the composed check list;
---   * the raw checks move behind a link whose caption is also copy;
---   * a preview descriptor (bucket, path, mime) so the screen can show the
---     file that was uploaded and open it full;
---   * a troubleshooting block with a tel: URL and a wa.me URL that is already
---     built, already url-encoded and already carries the customer code and the
---     document type — one tap, nothing composed client-side.
+-- THE FIX IS THE READER, NOT THE TABLE. The lifecycle ledger belongs to #1915
+-- and is already being written; renaming or dropping it to suit #1914 would
+-- break the sender for a screen that only ever READS. So `_cus_wa_timeline`
+-- now reads the live shape — `customer_id`, `event_key`, `sent_at`,
+-- `skip_reason` — and takes its label from `wa_event_routes`, exactly as
+-- live's own `customer_event_timeline()` does, so the two surfaces can never
+-- disagree about what went out. Tone comes from the same three facts: sent,
+-- skipped (a reason was recorded), queued (neither yet).
 --
--- Plus the read-only WhatsApp timeline row (the frontend half of #1915): a
--- `customer_event` ledger that the lifecycle sender writes to, and one builder
--- that renders it for BOTH the applicant's upload screen and the admin
--- customer page, so the two can never disagree about what went out.
---
--- Idempotent: copy inserts are `on conflict do nothing` (wording is Om's to
--- edit, never a redeploy's to overwrite), the table is `if not exists`, the
--- functions are `create or replace`.
+-- Idempotent, and safe on a build branch that still carries the #1914 shape:
+-- the columns are added `if not exists` (a no-op on live, and on the branch
+-- they make the reader compile and return an empty timeline), the copy insert
+-- is `on conflict do nothing`, and every function is `create or replace`.
+-- Sections 3 and 4 are verbatim re-runs of the two functions that never
+-- reached production.
 
--- ── 1. Copy ───────────────────────────────────────────────────────────────
+-- ── 1. One missing word: an event that is neither sent nor skipped yet ─────
 insert into ui_copy(key, value) values
-  -- the one chip
-  ('kyc.chip.missing',      '"Not uploaded"'::jsonb),
-  ('kyc.chip.checking',     '"Checking"'::jsonb),
-  ('kyc.chip.uploaded',     '"Uploaded"'::jsonb),
-  ('kyc.chip.verified',     '"Verified"'::jsonb),
-  ('kyc.chip.rejected',     '"Rejected"'::jsonb),
-  ('kyc.chip.expired',      '"Expired"'::jsonb),
-
-  -- the checks, folded away
-  ('kyc.checks_show',       '"See checks"'::jsonb),
-  ('kyc.checks_hide',       '"Hide checks"'::jsonb),
-
-  -- the file itself
-  ('kyc.preview_view',      '"View"'::jsonb),
-  ('kyc.preview_open',      '"Open file"'::jsonb),
-  ('kyc.preview_error',     '"Preview unavailable"'::jsonb),
-  ('kyc.preview_pdf',       '"PDF"'::jsonb),
-  ('kyc.preview_none',      '"No file yet"'::jsonb),
-
-  -- ONE sentence per rejection, keyed by the check that failed. These are the
-  -- only rejection words an applicant sees; the worksheet lives behind the
-  -- link. Each one names the fix, because a reason without a next step is the
-  -- same dead end as the red paragraph this change removes.
-  ('kyc.plain.default',        '"We could not verify this document — upload a clearer photo of the whole page."'::jsonb),
-  ('kyc.plain.ocr_read',       '"We could not read the document — upload a clearer photo of the whole page."'::jsonb),
-  ('kyc.plain.gstin_format',   '"GSTIN could not be read — upload a clearer photo."'::jsonb),
-  ('kyc.plain.gstin_checksum', '"The GSTIN on this certificate is not a valid number — upload the correct certificate."'::jsonb),
-  ('kyc.plain.gstin_state',    '"This GSTIN belongs to another state — upload the certificate for this shop."'::jsonb),
-  ('kyc.plain.gstin_name',     '"The name on the certificate is not your business name — upload the certificate in your own name."'::jsonb),
-  ('kyc.plain.gstin_pan',      '"The PAN on this certificate does not match your PAN card — upload the matching documents."'::jsonb),
-  ('kyc.plain.pan_format',     '"The PAN could not be read — upload a clearer photo of the PAN card."'::jsonb),
-  ('kyc.plain.expiry',         '"This document has expired — upload the renewed one."'::jsonb),
-  ('kyc.plain.ocr_expiry',     '"The validity date on the document does not match what you entered — check the date and upload again."'::jsonb),
-  ('kyc.plain.ocr_number',     '"The number on the document does not match what you entered — check it and upload again."'::jsonb),
-  ('kyc.plain.ocr_name',       '"The document is not in your business name — upload the one for this shop."'::jsonb),
-  ('kyc.plain.dup_dl',         '"This licence number is already registered to another account — call us and we will sort it out."'::jsonb),
-  ('kyc.plain.dup_gstin',      '"This GSTIN is already registered to another account — call us and we will sort it out."'::jsonb),
-  ('kyc.plain.geo',            '"The address on the document is far from your shop location — call us and we will sort it out."'::jsonb),
-
-  -- troubleshooting
-  ('kyc.help_title',        '"Stuck? We will do it for you"'::jsonb),
-  ('kyc.help_note',         '"Call us, or send the photo on WhatsApp and we will upload it."'::jsonb),
-  ('kyc.help_call',         '"Call {phone}"'::jsonb),
-  ('kyc.help_wa',           '"WhatsApp"'::jsonb),
-  ('kyc.help_wa_message',   '"Hi mediBO, I need help with my {doc}. Customer code: {code}."'::jsonb),
-  ('kyc.help_wa_message_nocode', '"Hi mediBO, I need help with my {doc}."'::jsonb),
-
-  -- the WhatsApp timeline row (frontend half of the #1915 lifecycle work)
-  ('cust_wa.title',         '"WhatsApp"'::jsonb),
-  ('cust_wa.empty',         '"No WhatsApp message has gone out yet."'::jsonb),
-  ('cust_wa.sent',          '"WhatsApp sent: {label}"'::jsonb),
-  ('cust_wa.skipped',       '"WhatsApp not sent: {label}"'::jsonb),
-  ('cust_wa.failed',        '"WhatsApp failed: {label}"'::jsonb),
-  ('cust_wa.reason_none',   '"No reason recorded."'::jsonb)
+  ('cust_wa.queued', '"WhatsApp queued: {label}"'::jsonb)
 on conflict (key) do nothing;
 
--- ── 2. The help number is a setting, not a literal ────────────────────────
--- Changing who answers the phone must be an UPDATE, never a deploy.
-insert into app_settings(key, value)
-values ('kyc_help', '{"phone":"9329252090","display":"93292 52090","cc":"91"}'::jsonb)
-on conflict (key) do nothing;
+-- ── 2. Converge on the live ledger ────────────────────────────────────────
+-- On production every one of these already exists and this is a no-op. On a
+-- build branch that carries #1914's original shape they are added so the
+-- reader below compiles there too; nothing is dropped and nothing is renamed,
+-- because the columns that are already there belong to the sender.
+-- A database that has never seen the sender at all (a brand-new build branch)
+-- gets the ledger in the shape the sender writes, so the reader below is the
+-- same function everywhere. Where the table already exists — production, and
+-- any branch carrying #1914's first shape — this is a no-op and the columns
+-- are added one at a time instead.
+create table if not exists public.customer_event (
+  id          bigserial primary key,
+  customer_id uuid,
+  event_key   text,
+  payload     jsonb       not null default '{}'::jsonb,
+  created_at  timestamptz not null default now(),
+  sent_at     timestamptz,
+  skip_reason text,
+  attempts    integer     not null default 0
+);
+alter table public.customer_event enable row level security;
 
--- ── 3. The ledger and its reader moved to 20260909140000_c1914b ───────────
--- This file originally created `public.customer_event(owner_kind, owner_id,
--- kind, event_label, …)` here. Production already had a table of that name —
--- #1915's sender ledger, `customer_event(customer_id, event_key, payload,
--- sent_at, skip_reason, attempts)` — so `create table if not exists` was a
--- no-op on live and the index on `owner_kind` that followed raised
--- `column "owner_kind" does not exist`. migration_replay.sh runs a file with
--- ON_ERROR_STOP and no surrounding transaction, so the copy above landed and
--- EVERY function below did not: the deploy was green and live still served
--- the pre-#1914 `kyc_my_panel`.
---
--- The ledger belongs to the sender, so the READER moved instead. Section 3
--- and the `_cus_wa_timeline` that stood in section 4 now live in
--- 20260909140000_c1914b_live_ledger_repair.sql, reading the live shape. The
--- two functions below are plpgsql and bind late, so they still create here
--- whichever file runs first.
+alter table if exists public.customer_event add column if not exists customer_id uuid;
+alter table if exists public.customer_event add column if not exists event_key   text;
+alter table if exists public.customer_event add column if not exists sent_at     timestamptz;
+alter table if exists public.customer_event add column if not exists skip_reason text;
 
--- ── 5. The panel ──────────────────────────────────────────────────────────
+create index if not exists customer_event_customer_idx
+  on public.customer_event(customer_id, created_at desc);
+
+comment on table public.customer_event is
+  'Per-customer lifecycle ledger. WRITTEN by the #1915 sender path '
+  '(_customer_event_log on pharmacy_profiles; sent_at / skip_reason record the '
+  'outcome). READ by customer_event_timeline() and, for the document upload '
+  'screen and the admin customer page, by _cus_wa_timeline() (CMD #1914b).';
+
+-- ── 3. The one builder both screens read ──────────────────────────────────
+-- `line` is the whole row pre-composed ("WhatsApp sent: Approved · 2 Sep
+-- 4:12 PM") for the single-line surface; title/subtitle/when are the same
+-- facts split for the timeline block the customer page already draws. Every
+-- string here is copy; Dart composes none of it.
+create or replace function public._cus_wa_timeline(
+  p_owner_kind text, p_owner_id uuid, p_limit int default 5)
+returns jsonb
+language sql
+stable
+security definer
+set search_path to 'public'
+as $$
+  select jsonb_build_object(
+    'kind',    'timeline',
+    'section', 'whatsapp',
+    'title',   _c('cust_wa.title'),
+    'empty',   _c('cust_wa.empty'),
+    'items',   coalesce(jsonb_agg(x.item order by x.created_at desc), '[]'::jsonb))
+  from (
+    select e.created_at,
+           jsonb_build_object(
+             'title', t.title,
+             'subtitle', case when e.sent_at is not null then ''
+                              when e.skip_reason is null then ''
+                              when btrim(e.skip_reason) = '' then _c('cust_wa.reason_none')
+                              else e.skip_reason end,
+             'when', t.when_label,
+             'line', t.title || ' · ' || t.when_label,
+             'tone', case when e.sent_at is not null then 'success'
+                          when e.skip_reason is not null then 'warning'
+                          else 'info' end) as item
+      from public.customer_event e
+      left join public.wa_event_routes r on r.event_key = e.event_key
+      cross join lateral (
+        select _cf(case when e.sent_at is not null     then 'cust_wa.sent'
+                        when e.skip_reason is not null then 'cust_wa.skipped'
+                        else 'cust_wa.queued' end,
+                   jsonb_build_object('label',
+                     coalesce(nullif(btrim(r.label), ''), e.event_key))) as title,
+               to_char(e.created_at at time zone 'Asia/Kolkata',
+                       'FMDD Mon FMHH12:MI AM') as when_label) t
+     where e.customer_id = p_owner_id
+       and p_owner_kind = 'pharmacy'
+     order by e.created_at desc
+     limit greatest(p_limit, 1)) x;
+$$;
+
+grant execute on function public._cus_wa_timeline(text, uuid, int) to authenticated, service_role;
+
+-- ── 4. The panel — verbatim re-run; this never reached production ────────
 create or replace function public.kyc_my_panel()
 returns jsonb
 language plpgsql
@@ -337,7 +351,10 @@ begin
     'items', v_rows);
 end $function$;
 
--- ── 6. The same row on the customer page ──────────────────────────────────
+
+-- ── 5. The same row on the customer page — verbatim, production-only ─────
+-- Last on purpose: pharmacy_profiles does not exist on the dev-queue
+-- control plane, so this is the one statement the replayer skips there.
 create or replace function public.admin_customer_tab_profile(p_customer_id uuid)
 returns jsonb
 language plpgsql
@@ -439,4 +456,3 @@ begin
     public._cus_wa_timeline('pharmacy', pp.id, 10)));
 end $function$;
 
--- (the grant for _cus_wa_timeline lives with the function, in c1914b)

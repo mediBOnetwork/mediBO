@@ -127,6 +127,7 @@ import 'profile_screen.dart';
 import 'storefront_screen.dart';
 import 'supplier/supplier_shell.dart';
 // #745 — drawn by this library's `part` files (mobile + desktop chrome).
+import '../services/customer_surfaces.dart';
 import '../widgets/customer_surface_widgets.dart';
 
 // CHANGE #327 · LAYER 1 — the shell is sharded.
@@ -599,7 +600,13 @@ class _HomeShellState extends State<HomeShell> {
     if (_pushStarted || !mounted) return;
     _pushStarted = true;
     final push = PushService.instance;
-    push.onForeground = (_) => _bellKey.currentState?.refresh();
+    // CMD #1914 — refresh the COUNT, not whichever widget happens to be
+    // mounted. The mobile header no longer carries a bell, so a foreground
+    // push that only poked `_bellKey` left the avatar's dot stale.
+    push.onForeground = (_) {
+      NotifUnread.refresh();
+      _bellKey.currentState?.refresh();
+    };
     await push.start(onOpen: _openDeepLink);
     if (!mounted) return;
     _pushBoundUid = Supabase.instance.client.auth.currentUser?.id;

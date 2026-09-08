@@ -110,6 +110,29 @@ Map<String, dynamic> _profileTab() => {
             },
           ],
         },
+        // CMD #1914 — the read-only WhatsApp row. Same builder as the
+        // applicant's own upload screen (_cus_wa_timeline), so the customer
+        // page and the customer can never be told different things about what
+        // went out.
+        {
+          'kind': 'timeline',
+          'title': 'WhatsApp',
+          'empty': 'No WhatsApp message has gone out yet.',
+          'items': [
+            {
+              'title': 'WhatsApp sent: Approved',
+              'subtitle': '',
+              'when': '2 Sep 4:12 PM',
+              'tone': 'success',
+            },
+            {
+              'title': 'WhatsApp not sent: Licence rejected',
+              'subtitle': 'No WhatsApp number on file.',
+              'when': '8 Sep 9:40 PM',
+              'tone': 'warning',
+            },
+          ],
+        },
       ],
     };
 
@@ -145,6 +168,13 @@ void main() {
     expect(find.text('Verified'), findsOneWidget);
     expect(find.text('Verify'), findsOneWidget);
     expect(find.text('Reject'), findsOneWidget);
+
+    // CMD #1914 — what WhatsApp actually went out, and the skip reason when it
+    // did not. Read-only: the row carries no action of its own.
+    expect(find.text('WhatsApp sent: Approved'), findsOneWidget);
+    expect(find.text('2 Sep 4:12 PM'), findsOneWidget);
+    expect(find.text('WhatsApp not sent: Licence rejected'), findsOneWidget);
+    expect(find.text('No WhatsApp number on file.'), findsOneWidget);
   });
 
   testWidgets('Reject collects the reason and sends it as the argument the '

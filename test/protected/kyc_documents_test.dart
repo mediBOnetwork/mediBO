@@ -28,6 +28,13 @@ Map<String, dynamic> _panelPayload({
   String licenceStatus = 'pending',
   String licenceStatusLabel = 'Awaiting verification',
   String reasonLine = '',
+  // CMD #1914 — the chip, the ONE plain sentence and the folded worksheet.
+  String chipLabel = 'Uploaded',
+  bool chipBusy = false,
+  String plainReason = '',
+  String checksShowLabel = '',
+  Map<String, dynamic>? help,
+  Map<String, dynamic>? waTimeline,
 }) =>
     {
       'ok': true,
@@ -41,6 +48,8 @@ Map<String, dynamic> _panelPayload({
       // signed-in USER's, and the payload is the only place that knows it.
       'upload_prefix': 'auth-user-9',
       'state': {'state': 'pending', 'grace_until': '2026-09-17'},
+      if (help != null) 'help': help,
+      if (waTimeline != null) 'wa_timeline': waTimeline,
       // Deliberately NOT alphabetical: payload order is the render order.
       'items': [
         {
@@ -56,7 +65,15 @@ Map<String, dynamic> _panelPayload({
           'status': licenceStatus,
           'status_label': licenceStatusLabel,
           'status_tone': licenceStatus == 'rejected' ? 'danger' : 'info',
+          'chip_label': chipLabel,
+          'chip_tone': licenceStatus == 'rejected' ? 'danger' : 'info',
+          'chip_busy': chipBusy,
+          'plain_reason': plainReason,
+          'checks_show_label': checksShowLabel,
+          'checks_hide_label': 'Hide checks',
           'reason_line': reasonLine,
+          'meta_line': 'Required  ·  Number: DL-CG-777  ·  Valid till 12 Jan 2028',
+          'preview_empty_label': 'No file yet',
           'button_label': 'Replace',
         },
         {
@@ -71,7 +88,15 @@ Map<String, dynamic> _panelPayload({
           'status': 'missing',
           'status_label': 'Not uploaded',
           'status_tone': 'warning',
+          'chip_label': 'Not uploaded',
+          'chip_tone': 'warning',
+          'chip_busy': false,
+          'plain_reason': '',
+          'checks_show_label': '',
+          'checks_hide_label': 'Hide checks',
           'reason_line': '',
+          'meta_line': 'Optional  ·  No file yet',
+          'preview_empty_label': 'No file yet',
           'button_label': 'Upload',
         },
       ],
@@ -147,6 +172,7 @@ void main() {
   tearDown(() {
     KycPanel.rpcTransport = null;
     KycPanel.uploadTransport = null;
+    KycPanel.launchTransport = null;
     KycUploadFormScreen.rpcTransport = null;
     KycUploadFormScreen.uploadTransport = null;
     KycReviewScreen.rpcTransport = null;
@@ -164,12 +190,16 @@ void main() {
 
       expect(find.text('Licence & documents'), findsOneWidget);
       expect(find.text('Drug licence'), findsOneWidget);
-      expect(find.text('Required'), findsOneWidget);
-      expect(find.text('Optional'), findsOneWidget);
-      expect(find.text('Awaiting verification'), findsOneWidget);
+      // CMD #1914 — Required/Optional now live inside the card's ONE meta line,
+      // joined by the backend (`meta_line`) rather than by this file.
+      expect(find.text('Required  ·  Number: DL-CG-777  ·  Valid till 12 Jan 2028'),
+          findsOneWidget);
+      expect(find.text('Optional  ·  No file yet'), findsOneWidget);
+      // CMD #1914 — the chip is ONE word off the payload. `status_label` is
+      // still what a payload without a chip falls back to (see below), so both
+      // fields stay under test.
+      expect(find.text('Uploaded'), findsOneWidget);
       expect(find.text('Not uploaded'), findsOneWidget);
-      expect(find.text('Valid till 12 Jan 2028'), findsOneWidget);
-      expect(find.text('Number: DL-CG-777'), findsOneWidget);
       // The two button captions are the payload's, not 'Upload' twice.
       expect(find.text('Replace'), findsOneWidget);
       expect(find.text('Upload'), findsOneWidget);
@@ -189,16 +219,26 @@ void main() {
       expect(labels, ['Drug licence', 'GST certificate']);
     });
 
-    testWidgets('a rejection line is printed verbatim, never re-worded',
-        (t) async {
+    testWidgets(
+        'CMD #1914 — the rejection is the backend\'s ONE plain sentence, and '
+        'the composed machine line never reaches the surface', (t) async {
       KycPanel.rpcTransport = (fn, p) async => _panelPayload(
             licenceStatus: 'rejected',
             licenceStatusLabel: 'Rejected',
-            reasonLine: 'Rejected: The photo is cut off.',
+            chipLabel: 'Rejected',
+            plainReason: 'GSTIN could not be read — upload a clearer photo.',
+            // The old red paragraph is still in the payload. It must NOT print:
+            // choosing the sentence is the backend's job, and it chose the one
+            // above.
+            reasonLine: 'Rejected: Automatically rejected: the GSTIN check '
+                'digit is wrong. Upload a corrected document to try again.',
           );
       await t.pumpWidget(const MaterialApp(home: Scaffold(body: KycPanel())));
       await t.pumpAndSettle();
-      expect(find.text('Rejected: The photo is cut off.'), findsOneWidget);
+      expect(find.text('GSTIN could not be read — upload a clearer photo.'),
+          findsOneWidget);
+      expect(
+          find.textContaining('Automatically rejected:'), findsNothing);
     });
 
     testWidgets('ok:false renders the backend page instead of throwing',
@@ -246,6 +286,139 @@ void main() {
       // the PAYLOAD's prefix, never owner_id and never a client-built folder
       expect(seenPath, 'auth-user-9/drug_licence_1.jpg');
       expect(seenArgs, isNull); // no write happened without a real pick
+    });
+
+    // ── CMD #1914 ────────────────────────────────────────────────────────
+    // The upload screen stopped reading like a debug log. What is held down
+    // here is that every one of those decisions stayed in the backend.
+    testWidgets('the chip is the backend\'s word, and the spinner spins only '
+        'when the backend says the checks are running', (t) async {
+      KycPanel.rpcTransport = (fn, p) async => _panelPayload(
+          chipLabel: 'Checking', chipBusy: true);
+      await t.pumpWidget(const MaterialApp(home: Scaffold(body: KycPanel())));
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 50));
+      expect(find.text('Checking'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsWidgets);
+    });
+
+    testWidgets('chip_busy:false leaves no spinner on the card', (t) async {
+      KycPanel.rpcTransport = (fn, p) async =>
+          _panelPayload(chipLabel: 'Verified', chipBusy: false);
+      await t.pumpWidget(const MaterialApp(home: Scaffold(body: KycPanel())));
+      await t.pumpAndSettle();
+      expect(find.text('Verified'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+    });
+
+    testWidgets('a payload with no chip falls back to status_label, so an '
+        'older backend still renders', (t) async {
+      KycPanel.rpcTransport = (fn, p) async {
+        final payload = _panelPayload();
+        for (final it in (payload['items'] as List)) {
+          (it as Map).remove('chip_label');
+          it.remove('chip_tone');
+          it.remove('chip_busy');
+        }
+        return payload;
+      };
+      await t.pumpWidget(const MaterialApp(home: Scaffold(body: KycPanel())));
+      await t.pumpAndSettle();
+      expect(find.text('Awaiting verification'), findsOneWidget);
+      expect(find.text('Not uploaded'), findsOneWidget);
+    });
+
+    testWidgets('the help row launches the URL the BACKEND built — this file '
+        'never composes a phone number or a WhatsApp message', (t) async {
+      final launched = <String>[];
+      KycPanel.launchTransport = (url) async {
+        launched.add(url);
+        return true;
+      };
+      KycPanel.rpcTransport = (fn, p) async => _panelPayload(help: {
+            'title': 'Stuck? We will do it for you',
+            'note': 'Call us, or send the photo on WhatsApp.',
+            'call_label': 'Call 93292 52090',
+            'call_url': 'tel:+919329252090',
+            'wa_label': 'WhatsApp',
+            'wa_url': 'https://wa.me/919329252090?text=Hi%20mediBO%2C%20I%20'
+                'need%20help%20with%20my%20Drug%20licence.%20Customer%20code'
+                '%3A%20SMS100.',
+          });
+      await t.pumpWidget(const MaterialApp(home: Scaffold(body: KycPanel())));
+      await t.pumpAndSettle();
+
+      expect(find.text('Stuck? We will do it for you'), findsOneWidget);
+      await t.tap(find.text('Call 93292 52090'));
+      await t.tap(find.text('WhatsApp'));
+      await t.pumpAndSettle();
+
+      // ONE tap each, and the strings go out byte for byte: the customer code
+      // and the document type are already inside the wa.me text.
+      expect(launched.length, 2);
+      expect(launched.first, 'tel:+919329252090');
+      expect(launched.last, contains('wa.me/919329252090?text='));
+      expect(launched.last, contains('Customer%20code%3A%20SMS100'));
+    });
+
+    testWidgets('no help block in the payload draws no troubleshooting row',
+        (t) async {
+      KycPanel.rpcTransport = (fn, p) async => _panelPayload();
+      await t.pumpWidget(const MaterialApp(home: Scaffold(body: KycPanel())));
+      await t.pumpAndSettle();
+      expect(find.text('WhatsApp'), findsNothing);
+    });
+
+    testWidgets('the WhatsApp timeline row prints the backend line, or the '
+        'backend\'s empty sentence', (t) async {
+      KycPanel.rpcTransport = (fn, p) async => _panelPayload(waTimeline: {
+            'kind': 'timeline',
+            'title': 'WhatsApp',
+            'empty': 'No WhatsApp message has gone out yet.',
+            'items': [
+              {
+                'line': 'WhatsApp sent: Approved · 2 Sep 4:12 PM',
+                'title': 'WhatsApp sent: Approved',
+                'subtitle': '',
+                'when': '2 Sep 4:12 PM',
+                'tone': 'success',
+              },
+              {
+                'line': 'WhatsApp not sent: Licence rejected · 8 Sep 9:40 PM',
+                'title': 'WhatsApp not sent: Licence rejected',
+                'subtitle': 'No WhatsApp number on file.',
+                'when': '8 Sep 9:40 PM',
+                'tone': 'warning',
+              },
+            ],
+          });
+      await t.pumpWidget(const MaterialApp(home: Scaffold(body: KycPanel())));
+      await t.pumpAndSettle();
+      expect(find.text('WhatsApp sent: Approved · 2 Sep 4:12 PM'),
+          findsOneWidget);
+      expect(find.text('No WhatsApp number on file.'), findsOneWidget);
+    });
+
+    testWidgets('an empty timeline prints the backend empty sentence',
+        (t) async {
+      KycPanel.rpcTransport = (fn, p) async => _panelPayload(waTimeline: {
+            'kind': 'timeline',
+            'title': 'WhatsApp',
+            'empty': 'No WhatsApp message has gone out yet.',
+            'items': const [],
+          });
+      await t.pumpWidget(const MaterialApp(home: Scaffold(body: KycPanel())));
+      await t.pumpAndSettle();
+      expect(
+          find.text('No WhatsApp message has gone out yet.'), findsOneWidget);
+    });
+
+    testWidgets('no upload yet says so in the backend\'s words, and the card '
+        'still draws', (t) async {
+      KycPanel.rpcTransport = (fn, p) async => _panelPayload();
+      await t.pumpWidget(const MaterialApp(home: Scaffold(body: KycPanel())));
+      await t.pumpAndSettle();
+      expect(find.text('Optional  ·  No file yet'), findsOneWidget);
     });
 
     test('no upload_prefix means no upload, never a guessed folder', () {

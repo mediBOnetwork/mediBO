@@ -24,6 +24,7 @@ import 'customer_pipeline_screen.dart';
 import '../../user_state.dart'; // CMD #633 — the session gate below
 import '../../design_tokens.dart'; // CHANGE #238 — Ds tokens for the new panel chrome
 import 'sleads_filter_bar.dart'; // CMD #1868 — the S Leads filter row
+import 'route_stop_checkin_sheet.dart'; // CMD #1873 — the route stop check-in sheet
 import 'sleads_bulk.dart'; // CMD #1869 — the bulk lane's pure decisions
 import 'scrape_run.dart'; // CMD #1870 — the scrape run's pure decisions
 import '../../services/sleads_filter_service.dart'; // CMD #1868
@@ -12397,6 +12398,12 @@ class _RoutesTabState extends State<_RoutesTab> {
   Map<String, dynamic>? _today;
   bool _todayLoading = false;
 
+  /// CMD #1873 — route_stops_today(route_id) per today-route card: the stop
+  /// rows, their outcome chips, the "Closed at ETA" warning and the actions
+  /// (Check in / Skip). Cached by route id; refetched after every check-in.
+  final Map<String, Map<String, dynamic>> _routeStops = {};
+  final Set<String> _routeStopsInFlight = {};
+
   // ── B1: filter bar — the ONLY inputs that drive the count + build ────────
   String _city = 'Raipur';
 
@@ -13680,6 +13687,210 @@ class _RoutesTabState extends State<_RoutesTab> {
             label: Text(r['nav_label']?.toString() ?? ''),
           ),
         ),
+        // CMD #1873 — the route's stops, each with its outcome and its
+        // check-in button. This is the only surface that closes a stop.
+        if ((r['route_id']?.toString() ?? '').isNotEmpty)
+          _todayStopList(r['route_id'].toString()),
+      ]),
+    );
+  }
+
+  /// CMD #1873 — one route_stops_today() call per route card. The payload is
+  /// rendered verbatim: this method decides nothing about a stop.
+  Future<void> _loadRouteStops(String routeId, {bool force = false}) async {
+    if (!force &&
+        (_routeStops.containsKey(routeId) ||
+            _routeStopsInFlight.contains(routeId))) {
+      return;
+    }
+    _routeStopsInFlight.add(routeId);
+    try {
+      final res = await Supabase.instance.client
+          .rpc('route_stops_today', params: {'p_route_id': routeId});
+      if (!mounted) return;
+      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      setState(() => _routeStops[routeId] = m);
+      RenderLog.write('c1873_stop_rows', (m['stops'] as List?)?.length ?? 0);
+    } catch (_) {
+      // The card keeps its progress line; the stop list simply stays absent
+      // until the next refresh.
+    } finally {
+      _routeStopsInFlight.remove(routeId);
+    }
+  }
+
+  /// Open the check-in sheet for one stop, then refetch BOTH the stop list and
+  /// routes_today() so the outcome chip and the progress line are the
+  /// backend's new answer, never a patched local row.
+  Future<void> _openStopCheckIn(String routeId, String stopId) async {
+    final saved = await RouteStopCheckInSheet.open(context, stopId);
+    if (!saved || !mounted) return;
+    await _loadRouteStops(routeId, force: true);
+    await _refreshToday();
+  }
+
+  /// The one-tap Skip on a stop the backend flagged as shut at its ETA. The
+  /// status posted is the one the ACTION carried — Dart never decides what
+  /// skipping a stop writes.
+  Future<void> _skipStop(
+      String routeId, String stopId, Map<String, dynamic> action) async {
+    final params = RouteStopCheckInPlan.skipParams(stopId, action);
+    if (params == null) return;
+    try {
+      final res =
+          await Supabase.instance.client.rpc('route_stop_checkin', params: params);
+      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      if (!mounted) return;
+      showToast(context, m['message']?.toString() ?? '', isError: m['ok'] != true);
+      if (m['ok'] == true) {
+        RenderLog.write('c1873_stop_skipped', m['status']?.toString() ?? '');
+        await _loadRouteStops(routeId, force: true);
+        await _refreshToday();
+      }
+    } catch (e) {
+      if (mounted) showToast(context, '$e', isError: true);
+    }
+  }
+
+  /// The stop list under a today-route card. Title, count, empty copy, chips
+  /// and every action label come from route_stops_today().
+  Widget _todayStopList(String routeId) {
+    final data = _routeStops[routeId];
+    if (data == null) {
+      _loadRouteStops(routeId);
+      return Padding(
+        padding: EdgeInsets.only(top: Ds.space.x16),
+        child: Center(
+            child: SizedBox(
+          width: Ds.space.x24,
+          height: Ds.space.x24,
+          child: CircularProgressIndicator(
+              color: Ds.c.brand, strokeWidth: Ds.space.hairline * 2),
+        )),
+      );
+    }
+    final stops = ((data['stops'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    final empty = data['empty_label']?.toString();
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      SizedBox(height: Ds.space.x24),
+      Row(children: [
+        Expanded(
+            child: Text(data['title']?.toString() ?? '', style: Ds.t.subtitle)),
+        Text(data['count_label']?.toString() ?? '', style: Ds.t.caption),
+      ]),
+      if (stops.isEmpty && (empty ?? '').isNotEmpty) ...[
+        SizedBox(height: Ds.space.x12),
+        Text(empty!, style: Ds.t.bodySecondary),
+      ],
+      for (final st in stops) ...[
+        SizedBox(height: Ds.space.x12),
+        _todayStopRow(routeId, st),
+      ],
+    ]);
+  }
+
+  Widget _todayStopRow(String routeId, Map<String, dynamic> st) {
+    final stopId = st['stop_id']?.toString() ?? '';
+    final tone = st['status_tone']?.toString();
+    final closed = st['closed_label']?.toString();
+    final eta = st['eta_label']?.toString();
+    final noteLine = st['note_label']?.toString();
+    final photoUrl = st['photo_url']?.toString();
+    final photoLabel = st['photo_label']?.toString();
+    final actions = ((st['actions'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(Ds.space.x12),
+      decoration: BoxDecoration(
+        color: Ds.c.bg,
+        borderRadius: Ds.r.rCard,
+        border: Border.all(color: Ds.c.divider, width: Ds.space.hairline),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Container(
+            width: Ds.space.x24,
+            height: Ds.space.x24,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+                color: Ds.c.brandSoft, borderRadius: Ds.r.rChip),
+            child: Text('${st['seq'] ?? ''}', style: Ds.t.caption),
+          ),
+          SizedBox(width: Ds.space.x12),
+          Expanded(
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(st['name']?.toString() ?? '',
+                      style: Ds.t.bodyStrong, overflow: TextOverflow.ellipsis),
+                  if ((st['address']?.toString() ?? '').isNotEmpty)
+                    Text(st['address'].toString(),
+                        style: Ds.t.caption, overflow: TextOverflow.ellipsis),
+                ]),
+          ),
+          if ((eta ?? '').isNotEmpty) Text(eta!, style: Ds.t.caption),
+        ]),
+        SizedBox(height: Ds.space.x8),
+        Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x8, children: [
+          Container(
+            padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x12, vertical: Ds.space.x4),
+            decoration: BoxDecoration(
+                color: routeStopToneSoft(tone), borderRadius: Ds.r.rChip),
+            child: Text(st['status_label']?.toString() ?? '',
+                style: Ds.t.caption),
+          ),
+          if ((closed ?? '').isNotEmpty)
+            Container(
+              padding: EdgeInsets.symmetric(
+                  horizontal: Ds.space.x12, vertical: Ds.space.x4),
+              decoration: BoxDecoration(
+                  color: Ds.c.warningSoft, borderRadius: Ds.r.rChip),
+              child: Text(closed!, style: Ds.t.caption),
+            ),
+        ]),
+        if ((noteLine ?? '').isNotEmpty) ...[
+          SizedBox(height: Ds.space.x8),
+          Text(noteLine!, style: Ds.t.caption),
+        ],
+        SizedBox(height: Ds.space.x12),
+        Row(children: [
+          for (final a in actions) ...[
+            Expanded(
+              child: SizedBox(
+                height: Ds.touch.minTarget,
+                child: RouteStopCheckInPlan.isSkip(a)
+                    ? OutlinedButton(
+                        onPressed: () => _skipStop(routeId, stopId, a),
+                        child: Text(a['label']?.toString() ?? ''),
+                      )
+                    : ElevatedButton(
+                        onPressed: () => _openStopCheckIn(routeId, stopId),
+                        child: Text(a['label']?.toString() ?? ''),
+                      ),
+              ),
+            ),
+            SizedBox(width: Ds.space.x8),
+          ],
+          if ((photoUrl ?? '').isNotEmpty)
+            SizedBox(
+              height: Ds.touch.minTarget,
+              child: TextButton.icon(
+                onPressed: () => launchUrl(Uri.parse(photoUrl!),
+                    mode: LaunchMode.externalApplication),
+                icon: const Icon(Icons.photo_outlined),
+                label: Text(photoLabel ?? ''),
+              ),
+            ),
+        ]),
       ]),
     );
   }

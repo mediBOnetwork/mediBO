@@ -555,10 +555,12 @@ class _Body extends StatelessWidget {
 /// `header` fields it always did, so an app build in a cache still works.
 /// CMD #1903 — "Other packs": the strip under the price.
 ///
-/// One chip per pack, in the backend's order, with the pack being viewed
-/// already selected. Tapping a chip REPLACES this page with that pack's own
-/// page, so the back stack does not fill up with a walk around one family.
-/// Every word is `pdp_other_packs()`'s — the heading and each label.
+/// One chip per OTHER pack, in the backend's order. The pack being viewed is
+/// not in the row — the page's own title already says which one it is — so
+/// every chip is the same outlined pill and none of them is highlighted.
+/// Tapping one REPLACES this page with that pack's own page, so the back stack
+/// does not fill up with a walk around one family. Every word is
+/// `pdp_other_packs()`'s — the heading and each label.
 class _OtherPacks extends StatelessWidget {
   final PdOtherPacks packs;
   const _OtherPacks({required this.packs});
@@ -566,6 +568,13 @@ class _OtherPacks extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     RenderLog.write('c1903_other_packs', 'n=${packs.items.length}');
+    // CMD #1903 (Om, live) — ONE sideways-scrolling row, never a stack. A
+    // Wrap gave each pack its own full-width line as soon as three labels no
+    // longer fitted across, which read as three buttons to press rather than
+    // as a list of the other packs. The row scrolls instead: the packs stay
+    // side by side however many there are, and a long family runs off the
+    // right edge rather than down the page.
+    RenderLog.write('c1903_packs_hscroll', '${packs.items.length}');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -574,32 +583,35 @@ class _OtherPacks extends StatelessWidget {
               style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
           SizedBox(height: Ds.space.x8),
         ],
-        Wrap(
-          spacing: Ds.space.x8,
-          runSpacing: Ds.space.x8,
-          children: [
-            for (final p in packs.items)
-              _PackChip(
-                label: p.label,
-                selected: p.selected,
-                onTap: p.selected
-                    ? null
-                    : () => Navigator.of(context)
-                        .pushReplacementNamed('/product/${p.productId}'),
-              ),
-          ],
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          clipBehavior: Clip.none,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var i = 0; i < packs.items.length; i++) ...[
+                if (i > 0) SizedBox(width: Ds.space.x8),
+                _PackChip(
+                  label: packs.items[i].label,
+                  onTap: () => Navigator.of(context).pushReplacementNamed(
+                      '/product/${packs.items[i].productId}'),
+                ),
+              ],
+            ],
+          ),
         ),
       ],
     );
   }
 }
 
+/// CMD #1903 (Om, live) — every pack in the row is the SAME chip: a small
+/// outlined pill the height of the form chip above the title. There is no
+/// selected state, because the pack being viewed is not in the row at all.
 class _PackChip extends StatelessWidget {
   final String label;
-  final bool selected;
-  final VoidCallback? onTap;
-  const _PackChip(
-      {required this.label, required this.selected, required this.onTap});
+  final VoidCallback onTap;
+  const _PackChip({required this.label, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -607,21 +619,19 @@ class _PackChip extends StatelessWidget {
       onTap: onTap,
       borderRadius: Ds.r.rChip,
       child: Container(
-        constraints: BoxConstraints(minHeight: Ds.space.x32),
         alignment: Alignment.center,
         padding: EdgeInsets.symmetric(
-            horizontal: Ds.space.x12, vertical: Ds.space.x8),
+            horizontal: Ds.space.x12, vertical: Ds.space.x4),
         decoration: BoxDecoration(
-          color: selected ? Ds.c.brand : Ds.c.bg,
+          color: Ds.c.surface,
           borderRadius: Ds.r.rChip,
-          border: Border.all(color: selected ? Ds.c.brand : Ds.c.divider),
+          border: Border.all(color: Ds.c.divider),
         ),
         child: Text(
           label,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: Ds.t.caption.copyWith(
-              color: selected ? Ds.c.surface : Ds.c.text),
+          style: Ds.t.caption.copyWith(color: Ds.c.text),
         ),
       ),
     );

@@ -23,14 +23,19 @@
 //      state: `ProductRowCard` has no variants parameter to give it one. The
 //      family arrives only through `product_detail().other_packs`.
 //
-//   5. **The "Other packs" block is the backend's, and it is a SWITCH.** Its
-//      title and every label are payload strings, the pack being viewed is
-//      `selected`, and a family of one is `has:false` — a strip with a single
-//      chip in it is never drawn.
+//   5. **The "Other packs" block is the backend's, and it lists the OTHER
+//      packs.** Its title and every label are payload strings; the pack being
+//      viewed is NOT in the list and nothing is marked selected (Om, live on
+//      #1903); `has:false` when the pack has no siblings at all. It draws as
+//      one sideways-scrolling row of identical outlined pills — never a stack
+//      of full-width buttons.
 //
 // No network, no Supabase: fabricated payloads only.
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pharma_b2b/app_state.dart';
@@ -144,15 +149,17 @@ Future<void> _pumpList(WidgetTester tester, List<Map<String, dynamic>> rows) asy
   );
 }
 
+// CMD #1903 (Om, live) — `items` is the OTHER packs. The pack being viewed is
+// not one of them and nothing carries a `selected` key, so `has` is simply
+// "there is at least one other pack".
 Map<String, dynamic> _packs({int n = 3}) => {
-      'has': n > 1,
+      'has': n > 0,
       'title': 'Other packs',
       'items': [
         for (var i = 0; i < n; i++)
           {
             'product_id': 900101 + i,
             'label': const ['Tablet', 'A Tablet SR', 'Suspension'][i % 3],
-            'selected': i == 0,
           },
       ],
     };
@@ -257,10 +264,15 @@ void main() {
   });
 
   group('other packs is the backend block', () {
-    test('a family of one is has:false — no strip is ever drawn', () {
+    test('no other pack means no strip — one other pack is enough to draw it',
+        () {
       expect(PdOtherPacks.fromMap({'has': false}).has, isFalse);
-      expect(PdOtherPacks.fromMap(_packs(n: 1)).has, isFalse);
+      expect(PdOtherPacks.fromMap(_packs(n: 0)).has, isFalse);
       expect(PdOtherPacks.fromMap(null).has, isFalse);
+      // The old floor of two counted the pack being viewed. It is not in the
+      // list any more, so a single sibling is a real row.
+      expect(PdOtherPacks.fromMap(_packs(n: 1)).has, isTrue);
+      expect(PdOtherPacks.fromMap(_packs(n: 1)).items.length, 1);
     });
 
     test('labels and title are payload strings, in payload order', () {
@@ -271,10 +283,50 @@ void main() {
           ['Tablet', 'A Tablet SR', 'Suspension']);
     });
 
-    test('the pack being viewed is the backend\'s selected one', () {
-      final p = PdOtherPacks.fromMap(_packs());
-      expect(p.items.where((e) => e.selected).map((e) => e.productId).toList(),
-          ['900101']);
+    test('nothing in the row is selected, and the row is drawn all one way',
+        () {
+      // There is no selected state to read: the model has no such field, and
+      // the chip has no branch that could colour one entry differently.
+      final src =
+          File('lib/screens/product_detail_screen.dart').readAsStringSync();
+      final chip = src.substring(
+          src.indexOf('class _PackChip'), src.indexOf('class _TitleBlock'));
+      expect(chip.contains('selected'), isFalse,
+          reason: 'every pack chip is the same outlined pill');
+      expect(chip.contains('Ds.c.brand'), isFalse,
+          reason: 'no green fill in the Other packs row');
+      // A payload that still carries the old key is parsed, and ignored.
+      final p = PdOtherPacks.fromMap({
+        'has': true,
+        'title': 'Other packs',
+        'items': [
+          {'product_id': 900102, 'label': 'Suspension', 'selected': true},
+        ],
+      });
+      expect(p.items.single.label, 'Suspension');
+    });
+
+    // CMD #1903 (Om, live) — the strip is ONE SIDEWAYS ROW. A Wrap put each
+    // pack on its own full-width line the moment three labels stopped fitting
+    // across, and three full-width green/grey bars read as three buttons to
+    // press rather than as one switch showing where you are. _OtherPacks is a
+    // private widget on a screen that needs a live Supabase client to pump, so
+    // the shape is held down at the source: no Wrap in the block, a horizontal
+    // SingleChildScrollView instead, and a chip that is padded like the form
+    // pill above the title rather than sized like a button.
+    test('the strip scrolls sideways — it is never a stack of full-width rows',
+        () {
+      final src = File('lib/screens/product_detail_screen.dart')
+          .readAsStringSync();
+      final block = src.substring(
+          src.indexOf('class _OtherPacks'), src.indexOf('class _TitleBlock'));
+      expect(block.contains('Wrap('), isFalse,
+          reason: 'a Wrap stacks the packs as soon as they stop fitting');
+      expect(block.contains('scrollDirection: Axis.horizontal'), isTrue);
+      expect(block.contains('BoxConstraints(minHeight: Ds.space.x32)'), isFalse,
+          reason: 'a pack chip is a pill, not a button');
+      expect(block.contains('vertical: Ds.space.x4'), isTrue,
+          reason: 'the chip matches the form pill above the title');
     });
 
     test('the whole page still parses it as part of ONE payload', () {

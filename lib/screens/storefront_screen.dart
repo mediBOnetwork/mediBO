@@ -19,7 +19,7 @@ import '../util.dart';
 import '../utils/render_log.dart';
 import '../widgets/animations.dart';
 import '../widgets/compact_product_card.dart';
-import '../widgets/search_family_card.dart';
+import '../widgets/product_row_card.dart';
 import '../widgets/recently_viewed_rail.dart';
 import '../widgets/home_sections_view.dart'; // C637
 
@@ -132,11 +132,6 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   /// which is only ever a key the backend itself put on a chip.
   List<Map<String, dynamic>> _sortOptions = const [];
 
-  /// CHANGE #790 — the SEARCH grid's render order, already folded into brand
-  /// families by `storefront_search_page()`. Empty on browse, and empty on
-  /// the outage path, and then the grid falls back to the flat item list —
-  /// so a page that never sent blocks looks exactly as it always did.
-  List<Map<String, dynamic>> _blocks = const [];
   String _sort = 'default';
   String? _emptyLabel;
 
@@ -411,7 +406,6 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       _showingLabel = null;
       _emptyLabel = null;
       _sortOptions = const [];
-      _blocks = const [];
       _moreLabel = '';
       _endLabel = '';
     });
@@ -541,7 +535,6 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         _moreLabel = pageResult.moreLabel ?? '';
         _endLabel = pageResult.endLabel ?? '';
         _sortOptions = pageResult.sortOptions;
-        _blocks = pageResult.blocks;
         _loadingFirst = false;
         // #677 — end-of-feed is the backend's word, not a short page. A
         // fallback response carries no plan, and then hasMore is false only
@@ -643,9 +636,6 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         if (pageResult.moreLabel != null) _moreLabel = pageResult.moreLabel!;
         if (pageResult.endLabel != null) _endLabel = pageResult.endLabel!;
         if (pageResult.sortOptions.isNotEmpty) _sortOptions = pageResult.sortOptions;
-        if (pageResult.blocks.isNotEmpty) {
-          _blocks = [..._blocks, ...pageResult.blocks];
-        }
         _loadingMore = false;
         _hasMore = pageResult.hasMore;
         _nextOffset = pageResult.nextOffset ?? (offset + page.length);
@@ -772,7 +762,6 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
                 showingLabel: _showingLabel,
                 emptyLabel: _emptyLabel,
                 sortOptions: _sortOptions,
-                blocks: _blocks,
                 onSortSelected: _onSortSelected,
                 query: widget.query,
                 category: widget.category,
@@ -902,6 +891,28 @@ class _SortChip extends StatelessWidget {
                 : Ds.t.body.copyWith(color: Ds.c.text),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// CMD #1903 — the whole header of a search page: one small grey line, the
+/// backend's `showing_label` ("126 results for monticope"), and nothing else.
+/// The plural is the backend's too — this widget prints the string it is given.
+class _SearchCountLine extends StatelessWidget {
+  final String label;
+  const _SearchCountLine({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    if (label.isEmpty) return const SizedBox.shrink();
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Ds.t.caption.copyWith(color: Ds.c.textSecondary),
       ),
     );
   }
@@ -1155,10 +1166,6 @@ class _ProductsSection extends StatelessWidget {
   /// did before #174 shipped.
   final List<Map<String, dynamic>> sortOptions;
 
-  /// CHANGE #790 — the backend's own render order for a SEARCH page, one
-  /// entry per card with families already folded. Empty means "no blocks in
-  /// this payload", and the grid draws the flat [items] list instead.
-  final List<Map<String, dynamic>> blocks;
   final ValueChanged<String> onSortSelected;
   final String query;
   final String category;
@@ -1188,7 +1195,6 @@ class _ProductsSection extends StatelessWidget {
     required this.showingLabel,
     required this.emptyLabel,
     required this.sortOptions,
-    this.blocks = const [],
     required this.onSortSelected,
     required this.query,
     required this.category,
@@ -1222,7 +1228,12 @@ class _ProductsSection extends StatelessWidget {
   Widget build(BuildContext context) {
     RenderLog.write('c195_grid_manual_mode', 'category=$category');
     final searching = query.trim().isNotEmpty;
-    final title = searching ? 'Search Results' : (category == 'All' ? 'Best Sellers' : prettyCategory(category));
+    // CMD #1903 — a search has no title any more. The "Search Results" heading
+    // was a Dart literal shouting a word the query already said; what a buyer
+    // needs above the list is how many rows there are, and that is the
+    // backend's own `showing_label` ("126 results for monticope"), small and
+    // grey. Browse keeps its heading.
+    final title = category == 'All' ? 'Best Sellers' : prettyCategory(category);
 
     // CHANGE #454 D — chip/cart counts, aggregated here (once per grid build)
     // rather than per-card, since RenderLog.write overwrites: a per-card write
@@ -1259,7 +1270,10 @@ class _ProductsSection extends StatelessWidget {
               ),
             ),
           ),
-        _SectionHeader(title: title, subtitle: _buildSubtitle()),
+        if (searching)
+          _SearchCountLine(label: _buildSubtitle())
+        else
+          _SectionHeader(title: title, subtitle: _buildSubtitle()),
         if (sortOptions.isNotEmpty) ...[
           SizedBox(height: Ds.space.x12),
           _SortChips(options: sortOptions, onSelected: onSortSelected),
@@ -1413,6 +1427,24 @@ class _ProductsSection extends StatelessWidget {
         ],
       );
     }
+    // CMD #1903 — SEARCH is a flat list of rows, one per product, in the
+    // backend's own rank order: the closest match first, then the other packs
+    // of the same brand, then similar brands. Browse keeps the grid.
+    if (query.trim().isNotEmpty) {
+      return ListView.separated(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        padding: EdgeInsets.zero,
+        itemCount: items.length,
+        separatorBuilder: (_, __) => SizedBox(height: Ds.space.x12),
+        itemBuilder: (context, i) => ProductRowCard(
+          key: ValueKey(items[i].id),
+          product: items[i],
+          onTap: () =>
+              Navigator.of(context).pushNamed('/product/${items[i].id}'),
+        ),
+      );
+    }
     return LayoutBuilder(
       builder: (context, c) {
         final count = c.maxWidth >= 900 ? 4 : c.maxWidth >= 600 ? 3 : 2;
@@ -1430,10 +1462,7 @@ class _ProductsSection extends StatelessWidget {
             crossAxisSpacing: 12,
             mainAxisSpacing: 14,
           ),
-          // CHANGE #790 — when the payload sent blocks, the grid draws THEM:
-          // one card per block, families already folded by the backend. The
-          // flat item list stays the browse path and the outage path.
-          itemCount: blocks.isNotEmpty ? blocks.length : items.length,
+          itemCount: items.length,
           // CHANGE #678a — no entrance animation.
           //
           // The first page used to fade-and-slide in on a 30ms-per-card
@@ -1443,20 +1472,12 @@ class _ProductsSection extends StatelessWidget {
           // CHANGE #746 — the card, and nothing on top of it. CMD #410's
           // compare tick used to ride here in a Stack; a grid of 250 cards is
           // not where a comparison starts.
-          itemBuilder: (context, i) => blocks.isNotEmpty
-              ? SearchResultBlock(
-                  key: ValueKey(
-                      'b${blocks[i]['family_key'] ?? blocks[i]['kind']}$i'),
-                  block: blocks[i],
-                  onOpenProduct: (id) =>
-                      Navigator.of(context).pushNamed('/product/$id'),
-                )
-              : CompactProductCard(
-                  key: ValueKey(items[i].id),
-                  product: items[i],
-                  onTap: () =>
-                      Navigator.of(context).pushNamed('/product/${items[i].id}'),
-                ),
+          itemBuilder: (context, i) => CompactProductCard(
+            key: ValueKey(items[i].id),
+            product: items[i],
+            onTap: () =>
+                Navigator.of(context).pushNamed('/product/${items[i].id}'),
+          ),
         );
       },
     );

@@ -33,6 +33,7 @@ import '../url_sync.dart';
 import '../utils/render_log.dart';
 import '../widgets/catalogue_alphabet_rail.dart';
 import '../widgets/catalogue_product_card.dart';
+import '../widgets/product_row_card.dart';
 import '../widgets/product_image.dart';
 import '../widgets/search_typeahead.dart';
 import 'admin/nav_registry_view.dart' show NavGlyph;
@@ -178,11 +179,6 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
   // owns the debounce and the last payload; the panel renders it verbatim.
   final _suggest = SearchSuggestController();
 
-  /// Pack families for the ids currently on screen. Asked for AFTER the grid
-  /// paints (`catalogue_variants`), so first paint never waits on it.
-  CatVariantMap _variants = CatVariantMap.empty;
-  final Set<String> _variantsAsked = <String>{};
-
   final List<CatRow> _rows = [];
   int _nextOffset = 0;
   bool _rowsHaveMore = false;
@@ -276,7 +272,6 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         RenderLog.write('c747_catalogue_list',
             '${_route.listKind}:${_route.listKey ?? _route.path.join('/')};'
             'items=${list.items.length};more=${list.hasMore};filters=${list.filtersActive}');
-        unawaited(_loadVariants(list.items));
       } else {
         final fn = switch (_route.tab) {
           'companies' => 'catalogue_companies',
@@ -318,28 +313,10 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
 
   void _onSuggest() { if (mounted) setState(() {}); }
 
-  /// CHANGE #799 — the pack families for a page of cards, asked for once the
-  /// cards are already on screen. `catalogue_list` is 190 ms on a warm scope
-  /// and the variant join adds 170 ms to it; a buyer should not wait 170 ms
-  /// longer for a grid so that a chip row can arrive at the same instant.
-  Future<void> _loadVariants(List<Product> items) async {
-    final ids = <int>[];
-    for (final p in items) {
-      if (_variantsAsked.contains(p.id)) continue;
-      final n = int.tryParse(p.id);
-      if (n != null) { ids.add(n); _variantsAsked.add(p.id); }
-    }
-    if (ids.isEmpty) return;
-    try {
-      final v = CatVariantMap.fromMap(await _call('catalogue_variants', {'p_ids': ids}));
-      if (!mounted || v.byId.isEmpty) return;
-      setState(() => _variants = _variants.merge(v));
-      RenderLog.write('c799_catalogue_variants', 'families=${v.byId.length}');
-    } catch (_) {
-      // A family that never arrives is a card with no chip row — which is
-      // exactly what a one-pack product looks like. Never an error line.
-    }
-  }
+  // CMD #1903 — `catalogue_variants` is no longer called from here. The pack
+  // family was a chip row on every card in every list; it is now the "Other
+  // packs" strip on the PRODUCT PAGE, which is the one place a buyer is
+  // choosing between packs rather than scanning for one.
 
   /// The typeahead's own answer: the BACKEND's query for the tapped
   /// suggestion, which for a Hindi word is the salt and not the word.
@@ -410,7 +387,6 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         );
         _cursor = p.nextCursor;
       });
-      unawaited(_loadVariants(p.items));
     } catch (_) {
       if (mounted) setState(() => _loadingMore = false);
     }
@@ -594,16 +570,11 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
       shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
       builder: (_) => CataloguePeekSheet(
         product: p,
-        variants: _variants.of(p.id),
         title: _peek('title'),
         openLabel: _peek('open_label'),
         onOpen: () {
           Navigator.of(context).pop();
           Navigator.of(context).pushNamed('/product/${p.id}');
-        },
-        onVariant: (id) {
-          Navigator.of(context).pop();
-          Navigator.of(context).pushNamed('/product/$id');
         },
       ),
     );
@@ -790,12 +761,12 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         ),
       ]);
     }
-    return LayoutBuilder(builder: (context, c) {
-      final cross = c.maxWidth >= 900 ? 4 : c.maxWidth >= 600 ? 3 : 2;
-      return CustomScrollView(
+    // CMD #1903 — a product LIST, one row per product, and the same
+    // [ProductRowCard] the search results draw. It is a sliver list, so only
+    // the rows on screen are built and a 5.6-lakh scope costs the same as a
+    // 24-row one on a low-end phone.
+    return CustomScrollView(
         controller: _scroll,
-        // The grid is a sliver list: only the cards on screen are built, so a
-        // 5.6-lakh scope costs the same as a 24-row one on a low-end phone.
         slivers: [
           SliverToBoxAdapter(
             child: Padding(
@@ -816,22 +787,18 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
           ),
           SliverPadding(
             padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-            sliver: SliverGrid(
-              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: cross,
-                mainAxisExtent: CatalogueProductCard.extent,
-                crossAxisSpacing: Ds.space.x12,
-                mainAxisSpacing: Ds.space.x12,
-              ),
+            sliver: SliverList(
               delegate: SliverChildBuilderDelegate(
-                (context, i) => CatalogueProductCard(
-                  product: l.items[i],
-                  variants: _variants.of(l.items[i].id),
-                  addedLabel: _addedLabel,
-                  undoLabel: _undoLabel,
-                  onTap: () => Navigator.of(context).pushNamed('/product/${l.items[i].id}'),
-                  onPeek: () => _openPeek(l.items[i]),
-                  onVariant: (id) => Navigator.of(context).pushNamed('/product/$id'),
+                (context, i) => Padding(
+                  padding: EdgeInsets.only(bottom: Ds.space.x12),
+                  child: ProductRowCard(
+                    product: l.items[i],
+                    addedLabel: _addedLabel,
+                    undoLabel: _undoLabel,
+                    onTap: () =>
+                        Navigator.of(context).pushNamed('/product/${l.items[i].id}'),
+                    onPeek: () => _openPeek(l.items[i]),
+                  ),
                 ),
                 childCount: l.items.length,
               ),
@@ -848,8 +815,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
             ),
           ),
         ],
-      );
-    });
+    );
   }
 
   /// The add toast and its undo word, from the payload the extras call
@@ -1433,15 +1399,8 @@ class _MoreSkeleton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => SizedBox(
-        height: CatalogueProductCard.extent,
-        child: Row(
-          children: [
-            for (var i = 0; i < 2; i++) ...[
-              if (i > 0) SizedBox(width: Ds.space.x12),
-              const Expanded(child: CatalogueCardSkeleton()),
-            ],
-          ],
-        ),
+        height: ProductRowCard.extent,
+        child: const CatalogueCardSkeleton(),
       );
 }
 

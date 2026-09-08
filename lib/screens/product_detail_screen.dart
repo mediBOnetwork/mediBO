@@ -382,6 +382,14 @@ class _Body extends StatelessWidget {
           subscribed: subscribed,
           notifyRequest: notifyRequest,
         ),
+        // CMD #1903 — the pack family, and the ONLY place it appears in the
+        // app. Every list is one row per product now; a buyer who wants the
+        // syrup instead of the tablet chooses it here, on the page where they
+        // are already deciding, rather than from a chip on a card in a list.
+        if (data.otherPacks.has) ...[
+          SizedBox(height: Ds.space.x12),
+          _OtherPacks(packs: data.otherPacks),
+        ],
         // CMD #791 — this pharmacy's own history with the pack, and the one
         // tap that re-orders its usual quantity. `has` is false for an
         // anonymous visitor because the RPC returned nothing, not because this
@@ -545,6 +553,81 @@ class _Body extends StatelessWidget {
 /// sentence ("Strip of 10 tablets") and the tone are all rendered in SQL. A
 /// payload older than this change has no `title`, and the block then reads the
 /// `header` fields it always did, so an app build in a cache still works.
+/// CMD #1903 — "Other packs": the strip under the price.
+///
+/// One chip per pack, in the backend's order, with the pack being viewed
+/// already selected. Tapping a chip REPLACES this page with that pack's own
+/// page, so the back stack does not fill up with a walk around one family.
+/// Every word is `pdp_other_packs()`'s — the heading and each label.
+class _OtherPacks extends StatelessWidget {
+  final PdOtherPacks packs;
+  const _OtherPacks({required this.packs});
+
+  @override
+  Widget build(BuildContext context) {
+    RenderLog.write('c1903_other_packs', 'n=${packs.items.length}');
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (packs.title.isNotEmpty) ...[
+          Text(packs.title,
+              style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+          SizedBox(height: Ds.space.x8),
+        ],
+        Wrap(
+          spacing: Ds.space.x8,
+          runSpacing: Ds.space.x8,
+          children: [
+            for (final p in packs.items)
+              _PackChip(
+                label: p.label,
+                selected: p.selected,
+                onTap: p.selected
+                    ? null
+                    : () => Navigator.of(context)
+                        .pushReplacementNamed('/product/${p.productId}'),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _PackChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback? onTap;
+  const _PackChip(
+      {required this.label, required this.selected, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: Ds.r.rChip,
+      child: Container(
+        constraints: BoxConstraints(minHeight: Ds.space.x32),
+        alignment: Alignment.center,
+        padding: EdgeInsets.symmetric(
+            horizontal: Ds.space.x12, vertical: Ds.space.x8),
+        decoration: BoxDecoration(
+          color: selected ? Ds.c.brand : Ds.c.bg,
+          borderRadius: Ds.r.rChip,
+          border: Border.all(color: selected ? Ds.c.brand : Ds.c.divider),
+        ),
+        child: Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Ds.t.caption.copyWith(
+              color: selected ? Ds.c.surface : Ds.c.text),
+        ),
+      ),
+    );
+  }
+}
+
 class _TitleBlock extends StatelessWidget {
   final ProductDetail data;
   const _TitleBlock({required this.data});

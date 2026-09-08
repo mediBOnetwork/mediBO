@@ -123,6 +123,101 @@ class RouteStopCheckInPlan {
 
   static bool isSkip(Map<String, dynamic> action) =>
       action['key']?.toString() == 'skip';
+
+  // ── CMD #1874 — skip / restore / re-order ───────────────────────────────
+  // These read the payload and nothing else. What Skip means, whether a stop
+  // may be dragged, and which order is sent are all the backend's answers.
+
+  /// The long-press menu the backend sent for one stop. Empty means the row
+  /// has no menu, and the long-press does nothing rather than inventing one.
+  static List<Map<String, dynamic>> menu(Map<String, dynamic> stop) =>
+      ((stop['menu'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+
+  /// route_stop_skip params for one menu entry. The entry carries the new
+  /// state (`skipped`), so Skip and Restore are the SAME call with the
+  /// backend's own boolean — Dart never toggles anything itself.
+  static Map<String, dynamic>? skipStopParams(
+      String stopId, Map<String, dynamic> entry) {
+    final v = entry['skipped'];
+    if (v is! bool) return null;
+    return {'p_stop_id': stopId, 'p_skipped': v};
+  }
+
+  /// A stop is a restore-only row when the backend says it is skipped.
+  static bool isSkipped(Map<String, dynamic> stop) => stop['skipped'] == true;
+
+  /// The action a skipped row offers instead of Check in.
+  static bool isUnskip(Map<String, dynamic> action) =>
+      action['key']?.toString() == 'unskip';
+
+  /// The draggable stops, in the BACKEND's order. A skipped stop holds no
+  /// place in the day and cannot be dragged, so it is not in this list.
+  static List<Map<String, dynamic>> draggable(Map<String, dynamic>? payload) =>
+      ((payload?['stops'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .where((e) => e['can_drag'] == true)
+          .toList();
+
+  /// The stops the backend left out of the day, in payload order.
+  static List<Map<String, dynamic>> skipped(Map<String, dynamic>? payload) =>
+      ((payload?['stops'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .where((e) => e['can_drag'] != true)
+          .toList();
+
+  /// True only when the backend says this route can be re-ordered at all.
+  static bool canReorder(Map<String, dynamic>? payload) =>
+      payload?['can_reorder'] == true;
+
+  /// The pure list move behind a drag. ReorderableListView reports newIndex
+  /// as the slot BEFORE the removal is applied, which is the one thing about
+  /// a drag that is arithmetic rather than a decision.
+  static List<T> move<T>(List<T> items, int oldIndex, int newIndex) {
+    if (oldIndex < 0 || oldIndex >= items.length) return List<T>.from(items);
+    final out = List<T>.from(items);
+    var to = newIndex;
+    if (to > oldIndex) to -= 1;
+    if (to < 0) to = 0;
+    if (to > out.length - 1) to = out.length - 1;
+    out.insert(to, out.removeAt(oldIndex));
+    return out;
+  }
+
+  /// route_reorder params for the order now on screen. Null when there is
+  /// nothing to send, so a no-op drag never posts.
+  static Map<String, dynamic>? reorderParams(
+      String routeId, List<Map<String, dynamic>> ordered) {
+    final ids = ordered
+        .map((e) => e['stop_id']?.toString() ?? '')
+        .where((e) => e.isNotEmpty)
+        .toList();
+    if (routeId.isEmpty || ids.isEmpty) return null;
+    return {'p_route_id': routeId, 'p_stop_ids': ids};
+  }
+
+  /// The follow-on the backend asked for after a check-in — today that is
+  /// Converted opening the registration form. Absent means do nothing; Dart
+  /// never decides that a conversion needs a customer.
+  static Map<String, dynamic>? nextAction(Map<String, dynamic>? result) {
+    final n = result?['next_action'];
+    if (n is! Map) return null;
+    final m = Map<String, dynamic>.from(n);
+    return (m['key']?.toString() ?? '').isEmpty ? null : m;
+  }
+
+  static bool isAddCustomer(Map<String, dynamic>? action) =>
+      action?['key']?.toString() == 'add_customer';
+
+  static int? leadIdOf(Map<String, dynamic>? action) {
+    final v = action?['lead_id'];
+    if (v is int) return v;
+    return int.tryParse(v?.toString() ?? '');
+  }
 }
 
 class RouteStopCheckInSheet extends StatefulWidget {
@@ -130,10 +225,12 @@ class RouteStopCheckInSheet extends StatefulWidget {
 
   const RouteStopCheckInSheet({super.key, required this.stopId});
 
-  /// Opens the sheet. Resolves true when a check-in was saved, so the caller
-  /// can refetch — it never patches a row in Dart.
-  static Future<bool> open(BuildContext context, String stopId) async {
-    final saved = await showModalBottomSheet<bool>(
+  /// Opens the sheet. Resolves with route_stop_checkin()'s OWN payload when a
+  /// check-in was saved (null when it was cancelled), so the caller can both
+  /// refetch and obey `next_action` — CMD #1874. It never patches a row.
+  static Future<Map<String, dynamic>?> open(
+      BuildContext context, String stopId) async {
+    final saved = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Ds.c.surface,
@@ -142,7 +239,7 @@ class RouteStopCheckInSheet extends StatefulWidget {
       ),
       builder: (_) => RouteStopCheckInSheet(stopId: stopId),
     );
-    return saved == true;
+    return saved;
   }
 
   @override
@@ -267,7 +364,7 @@ class _RouteStopCheckInSheetState extends State<RouteStopCheckInSheet> {
         // this context, and a popped sheet's context is already deactivated.
         showToast(context, m['message']?.toString() ?? '');
         if (!mounted) return;
-        Navigator.of(context).pop(true);
+        Navigator.of(context).pop(m);
       } else {
         setState(() {
           _submitting = false;
@@ -426,7 +523,7 @@ class _RouteStopCheckInSheetState extends State<RouteStopCheckInSheet> {
         width: double.infinity,
         height: Ds.touch.minTarget,
         child: TextButton(
-          onPressed: _submitting ? null : () => Navigator.of(context).pop(false),
+          onPressed: _submitting ? null : () => Navigator.of(context).pop(),
           child: Text(_sheet?['cancel_label']?.toString() ??
               _sheet?['close_label']?.toString() ??
               ''),
@@ -471,6 +568,69 @@ class _RouteStopCheckInSheetState extends State<RouteStopCheckInSheet> {
             ),
           ),
         ]),
+      ),
+    );
+  }
+}
+
+/// ── CMD #1874 — the long-press menu on a route stop ────────────────────────
+/// A stop's menu is a payload, not a widget decision: `menu[]` carries every
+/// entry (Skip, or Restore on a stop already out of the day) with its own
+/// label and tone, and `menu_title` / `menu_hint` / `menu_cancel` carry the
+/// sheet's copy. This draws them and returns the entry the rep picked.
+class RouteStopMenuSheet {
+  const RouteStopMenuSheet._();
+
+  static Future<Map<String, dynamic>?> open(
+      BuildContext context, Map<String, dynamic> stop) {
+    final entries = RouteStopCheckInPlan.menu(stop);
+    if (entries.isEmpty) return Future<Map<String, dynamic>?>.value();
+    final hint = stop['menu_hint']?.toString() ?? '';
+    return showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.all(Ds.space.x24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(stop['menu_title']?.toString() ?? '', style: Ds.t.subtitle),
+              if (hint.isNotEmpty) ...[
+                SizedBox(height: Ds.space.x8),
+                Text(hint, style: Ds.t.caption),
+              ],
+              SizedBox(height: Ds.space.x24),
+              for (final e in entries) ...[
+                SizedBox(
+                  width: double.infinity,
+                  height: Ds.touch.minTarget,
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.of(ctx).pop(e),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor:
+                          routeStopToneColor(e['tone']?.toString()),
+                    ),
+                    child: Text(e['label']?.toString() ?? ''),
+                  ),
+                ),
+                SizedBox(height: Ds.space.x12),
+              ],
+              SizedBox(
+                width: double.infinity,
+                height: Ds.touch.minTarget,
+                child: TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: Text(stop['menu_cancel']?.toString() ?? ''),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

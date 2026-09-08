@@ -553,6 +553,16 @@ class _HomeShellState extends State<HomeShell> {
       AdminCustomerScreen.openFromLink(initialSearch()); // #1876 tab|route
       return;
     }
+    // #1892 — /admin/dashboard. The dashboard lives in the shell's
+    // IndexedStack (index 3), so it is BUILT on every admin boot but only
+    // VISIBLE once the tab is selected. Without a path there was no way to
+    // land on it directly — a screenshot of the home screen could only ever
+    // catch the storefront. This is the /admin/customers pattern, one index
+    // along.
+    if (path == '/admin/dashboard') {
+      _index = 3;
+      return;
+    }
     if (path.startsWith('/c/')) {
       _category = _slugToCat(path.substring(3));
     } else if (path == '/orders') {
@@ -678,6 +688,9 @@ class _HomeShellState extends State<HomeShell> {
         _cartOpen = false;
       } else if (path == '/bulk-upload') {
         _index = 2;
+        _cartOpen = false;
+      } else if (path == '/admin/dashboard') {
+        _index = 3;
         _cartOpen = false;
       } else {
         _category = 'All';

@@ -180,8 +180,18 @@ const Map<String, dynamic> _pricedLines = {
     'caption': 'MRP',
     'value': '₹69.96',
     'has_amount': true,
-    'has_note': true,
+    // CMD #1896 — the ceiling sentence is no longer a printed line. The
+    // backend sends has_note:false and puts the same words on `info`, which
+    // the page hangs off an (i). The note key is left here deliberately: a
+    // page that still printed `note` would be caught by the assertion below.
+    'has_note': false,
     'note': 'Printed pack ceiling — not the selling price',
+    'strike': true,
+    'info': {
+      'has': true,
+      'label': 'About MRP',
+      'text': 'Printed pack ceiling — not the selling price',
+    },
     'tone': 'secondary',
   },
   'sale': {
@@ -190,8 +200,10 @@ const Map<String, dynamic> _pricedLines = {
     'has_amount': true,
     'has_note': true,
     'note': 'PTR ₹55.43 · GST 5%',
+    'per_unit': {'has': true, 'label': '₹5.82 / tablet'},
     'tone': 'primary',
   },
+  'discount': {'has': true, 'label': '17% off', 'tone': 'success'},
   'sticky': {
     'main': '₹58.20',
     'main_caption': 'Sale price',
@@ -209,8 +221,14 @@ const Map<String, dynamic> _quoteLines = {
     'caption': 'MRP',
     'value': '₹69.96',
     'has_amount': true,
-    'has_note': true,
+    'has_note': false,
     'note': 'Printed pack ceiling — not the selling price',
+    'strike': true,
+    'info': {
+      'has': true,
+      'label': 'About MRP',
+      'text': 'Printed pack ceiling — not the selling price',
+    },
     'tone': 'secondary',
   },
   'sale': {
@@ -219,8 +237,12 @@ const Map<String, dynamic> _quoteLines = {
     'has_amount': false,
     'has_note': false,
     'note': '',
+    // CMD #1896 — an unapproved viewer gets no per-unit rate and no discount:
+    // both are derived from a trade price this payload does not carry.
+    'per_unit': {'has': false, 'label': ''},
     'tone': 'secondary',
   },
+  'discount': {'has': false, 'label': '', 'tone': 'success'},
   'sticky': {
     'main': 'PTR',
     'main_caption': 'Sale price',
@@ -324,13 +346,13 @@ void main() {
         (tester) async {
       await _pump(tester, _payload());
 
-      // CHANGE #638 — the price row and the sticky buy bar both read
-      // pricing.price_display, the SAME block the cards read. One price
-      // source everywhere.
-      expect(find.text('₹2,597.00'), findsNWidgets(2),
-          reason: 'price_display verbatim, in the price row and the sticky bar');
-      expect(find.text('MRP'), findsOneWidget,
-          reason: 'mrp_note survives only under the sticky bar price');
+      // CHANGE #638 — the price row reads pricing.price_display, the SAME
+      // block the cards read. One price source everywhere.
+      // CMD #1896 — and it is printed ONCE. The sticky bar that reprinted it a
+      // thumb's width below is gone, so a second copy of this string on the
+      // page means something started duplicating the price again.
+      expect(find.text('₹2,597.00'), findsOneWidget,
+          reason: 'price_display verbatim, exactly once on the page');
       expect(find.text('GST 12%'), findsOneWidget, reason: 'gst_label verbatim');
     });
 
@@ -787,61 +809,93 @@ void main() {
     });
   });
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // CMD #1896 — the price block Om sketched on 08-Sep: MRP small, struck and
+  // grey ON TOP; the sale price large below it; the discount beside that; the
+  // per-unit rate under it; and NO sticky bar reprinting any of them.
+  //
+  // The group name still says #1826 because the contract it defends is the
+  // same one: every number and every word on this block is a string the
+  // backend rendered. #1896 changed which of them are on screen and where.
+  // ───────────────────────────────────────────────────────────────────────────
   group('two price lines, the sale price as hero (CMD #1826)', () {
-    testWidgets('with a trade rate the hero and the sticky bar print the sale '
-        'value and MRP is the captioned ceiling', (tester) async {
+    testWidgets('with a trade rate the page prints each backend string exactly '
+        'once and MRP is the struck ceiling', (tester) async {
       await _pump(tester, _payload(priceLines: _pricedLines));
 
-      // Hero row + sticky bar: the sale value appears exactly twice.
-      expect(find.text('₹58.20'), findsNWidgets(2));
-      expect(
-          tester
-              .widget<Text>(find.byKey(const ValueKey('pdp-sticky-main')))
-              .data,
-          '₹58.20');
-      expect(find.text('Sale price (PTR)'), findsOneWidget);
+      // CMD #1896 — ONCE. The sticky bar that printed the sale value a second
+      // time is gone; a second copy means the price is being duplicated again.
+      expect(find.text('₹58.20'), findsOneWidget);
+      expect(find.text('Sale price (PTR)'), findsNothing,
+          reason: 'the sale caption left the block — the big number IS the '
+              'sale price, and the MRP above it is captioned');
       expect(find.text('PTR ₹55.43 · GST 5%'), findsOneWidget,
           reason: 'the sub-line is the backend sentence, not a Dart join');
       expect(find.text('₹69.96'), findsOneWidget,
           reason: 'the MRP row prints the backend rupee string');
+      expect(find.text('MRP'), findsOneWidget,
+          reason: 'the MRP caption, once, on the line above the sale price');
+
+      // The ceiling sentence is NOT printed any more — it is the tooltip.
       expect(find.text('Printed pack ceiling — not the selling price'),
-          findsOneWidget);
-      expect(find.text('MRP ₹69.96'), findsOneWidget,
-          reason: 'the sticky side line is one backend string');
-      expect(find.text('Sale price'), findsOneWidget,
-          reason: 'sticky caption comes from the block');
+          findsNothing,
+          reason: 'has_note:false — the words moved onto the (i)');
+      expect(find.byKey(const ValueKey('pdp-mrp-info')), findsOneWidget);
+      expect(
+          tester
+              .widget<Tooltip>(find.byKey(const ValueKey('pdp-mrp-info')))
+              .message,
+          'Printed pack ceiling — not the selling price',
+          reason: 'the tooltip carries the backend sentence verbatim');
+
+      // MRP is struck because the BACKEND said strike, not because the page
+      // compared two numbers it was handed.
+      final mrp = tester.widget<Text>(find.descendant(
+          of: find.byKey(const ValueKey('pdp-mrp-line')),
+          matching: find.text('₹69.96')));
+      expect(mrp.style?.decoration, TextDecoration.lineThrough);
+
+      // The two derived lines, both printed verbatim, neither computed here.
+      expect(find.text('17% off'), findsOneWidget);
+      expect(find.text('₹5.82 / tablet'), findsOneWidget);
+
+      // The sticky bar and everything it printed are gone.
+      expect(find.byKey(const ValueKey('pdp-sticky-main')), findsNothing);
+      expect(find.text('MRP ₹69.96'), findsNothing,
+          reason: 'the sticky side line went with the bar');
       // The CHANGE #638 single price is deliberately a different number in
       // this fixture: if the page still printed it as the hero, this fails.
       expect(find.text('₹2,597.00'), findsNothing);
     });
 
-    testWidgets('with no trade rate the sale row prints the on-quote copy, '
-        'MRP stays a captioned reference and Add to cart stays enabled',
+    testWidgets('with no trade rate the sale row prints the literal PTR, MRP '
+        'stays the struck ceiling and Add to cart stays enabled',
         (tester) async {
       await _pump(tester, _payload(priceLines: _quoteLines));
 
-      // Om amendment 3: the caption stays "Sale price" and the VALUE is the
-      // literal "PTR" — a backend string, printed twice, never re-worded.
-      expect(find.text('PTR'), findsNWidgets(2),
-          reason: 'hero row + sticky main, both the backend value');
-      expect(find.text('Sale price'), findsNWidgets(2),
-          reason: 'hero caption + sticky caption, both from ui copy');
-      expect(
-          tester
-              .widget<Text>(find.byKey(const ValueKey('pdp-sticky-main')))
-              .data,
-          'PTR');
+      // Om amendment 3: the VALUE is the literal "PTR" — a backend string,
+      // printed once now that the sticky bar is gone, never re-worded.
+      expect(find.text('PTR'), findsOneWidget);
+      expect(find.text('Sale price'), findsNothing,
+          reason: 'no caption competes with the value on the sale row');
       // has_note:false — no on-quote sentence, no dash, no zero, no blank.
       expect(find.text('Trade rate is confirmed when suppliers quote'),
           findsNothing);
       expect(find.text('On quote'), findsNothing);
       expect(find.text('—'), findsNothing);
       expect(find.text('₹69.96'), findsOneWidget);
-      expect(find.text('MRP ₹69.96'), findsOneWidget);
+      expect(find.text('MRP ₹69.96'), findsNothing);
       expect(find.text('Printed pack ceiling — not the selling price'),
-          findsOneWidget);
+          findsNothing);
       expect(find.text('₹2,597.00'), findsNothing,
           reason: 'MRP is never presented as the price any more');
+
+      // CMD #1896 — nothing derived from a trade rate this viewer cannot see.
+      expect(find.byKey(const ValueKey('pdp-discount')), findsNothing);
+      expect(find.byKey(const ValueKey('pdp-per-unit')), findsNothing);
+      expect(find.textContaining('% off'), findsNothing);
+      expect(find.textContaining('/ tablet'), findsNothing);
+
       expect(find.text('Add to cart'), findsOneWidget,
           reason: 'a quote-driven B2B buyer orders before the rate is fixed');
       expect(find.text('Unavailable'), findsNothing);
@@ -869,6 +923,100 @@ void main() {
       expect(find.text('₹2,597.00'), findsWidgets);
       expect(find.text('On quote'), findsNothing);
       expect(find.byKey(const ValueKey('pdp-sale-line')), findsNothing);
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // CMD #1896 — the rest of the redesign, pinned the same way: every visible
+  // string is the payload's, and every "is it there?" is a backend boolean.
+  // ───────────────────────────────────────────────────────────────────────────
+  group('the title block is the backend\'s (CMD #1896)', () {
+    Map<String, dynamic> withTitle(Map<String, dynamic> title) =>
+        _payload()..['title'] = title;
+
+    testWidgets('the pill, the name, the company and ONE pack line, all from '
+        'the title block', (tester) async {
+      await _pump(
+          tester,
+          withTitle({
+            'has': true,
+            'name': 'Azithral 500 Tablet',
+            'company': 'Alembic Ltd',
+            'form_chip': {'has': true, 'label': 'Strip', 'tone': 'success'},
+            'pack_line': {'has': true, 'label': 'Strip of 5 tablets'},
+          }));
+
+      expect(find.text('Azithral 500 Tablet'), findsOneWidget);
+      expect(find.text('ALEMBIC LTD'), findsOneWidget);
+      expect(find.byKey(const ValueKey('pdp-form-chip')), findsOneWidget);
+      expect(find.text('Strip'), findsOneWidget);
+      expect(find.text('Strip of 5 tablets'), findsOneWidget);
+
+      // The header's own strings lost the argument — one pack line, not two.
+      expect(find.text('Vial'), findsNothing);
+      expect(find.text('Vial of 1 Injection'), findsNothing);
+      expect(find.text('Alkacel 100mg Injection'), findsNothing);
+    });
+
+    testWidgets('an absent title block falls back to header, so a cached '
+        'payload still renders', (tester) async {
+      await _pump(tester, _payload());
+
+      expect(find.text('Alkacel 100mg Injection'), findsOneWidget);
+      expect(find.text('Vial'), findsOneWidget);
+      expect(find.text('Vial of 1 Injection'), findsOneWidget);
+    });
+
+    testWidgets('form_chip has:false draws no pill at all', (tester) async {
+      await _pump(
+          tester,
+          withTitle({
+            'has': true,
+            'name': 'Azithral 500 Tablet',
+            'company': 'Alembic Ltd',
+            'form_chip': {'has': false, 'label': '', 'tone': 'success'},
+            'pack_line': {'has': false, 'label': ''},
+          }));
+
+      expect(find.byKey(const ValueKey('pdp-form-chip')), findsNothing);
+      expect(find.byKey(const ValueKey('pdp-pack-line')), findsNothing);
+      expect(find.text('Azithral 500 Tablet'), findsOneWidget);
+    });
+  });
+
+  group('the gallery is one hero shot (CMD #1896)', () {
+    Map<String, dynamic> withGallery(int n) => _payload()
+      ..['gallery'] = {
+        'has': n > 0,
+        'count': n,
+        'zoom_hint': 'Tap to zoom',
+        'close_label': 'Close',
+        'images': [
+          for (var i = 1; i <= n; i++)
+            {'url': 'https://img/$i.jpg', 'counter_label': '$i / $n'},
+        ],
+      };
+
+    testWidgets('no thumbnail strip and no counter caption under the hero',
+        (tester) async {
+      await _pump(tester, withGallery(5));
+
+      // The counter still exists in the payload — the ZOOM viewer prints it.
+      // It is not page furniture any more.
+      expect(find.text('1 / 5'), findsNothing);
+      expect(find.text('Tap to zoom'), findsNothing);
+      expect(find.byKey(const ValueKey('pdp-gallery-dots')), findsOneWidget);
+    });
+
+    testWidgets('one image draws no dots at all', (tester) async {
+      await _pump(tester, withGallery(1));
+      expect(find.byKey(const ValueKey('pdp-gallery-dots')), findsNothing);
+    });
+
+    testWidgets('no images is still a page, not a crash', (tester) async {
+      await _pump(tester, withGallery(0));
+      expect(find.byKey(const ValueKey('pdp-gallery-dots')), findsNothing);
+      expect(find.text('Alkacel 100mg Injection'), findsOneWidget);
     });
   });
 

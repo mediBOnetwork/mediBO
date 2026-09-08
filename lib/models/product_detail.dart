@@ -148,6 +148,11 @@ class ProductDetail {
   /// formatted or chosen in Dart.
   final PdPriceLines priceLines;
 
+  /// CMD #1896 — the title block: pack-type pill, name, company and the
+  /// rendered pack sentence. `has:false` is a payload older than this change,
+  /// and the page then reads the `header` fields it always did.
+  final PdTitle title;
+
   final bool hasHistory;
   final String historyLabel;
 
@@ -201,6 +206,7 @@ class ProductDetail {
     this.companions = const PdCompanions.empty(),
     this.supply = const PdSupply.empty(),
     this.priceLines = const PdPriceLines.empty(),
+    this.title = const PdTitle.empty(),
     required this.hasHistory,
     required this.historyLabel,
     required this.showWishlist,
@@ -305,6 +311,7 @@ class ProductDetail {
       companions: PdCompanions.fromMap(m['companions']),
       supply: PdSupply.fromMap(m['supply']),
       priceLines: PdPriceLines.fromMap(m['price_lines']),
+      title: PdTitle.fromMap(m['title']),
       hasHistory: hist['has'] == true,
       historyLabel: _s(hist['label']),
       showWishlist: m['show_wishlist'] == true,
@@ -798,6 +805,22 @@ class PdPriceLine {
   final bool hasNote;
   final String note;
   final String tone;
+
+  /// CMD #1896 — the MRP is struck when the backend says so. It is not "strike
+  /// whenever there is a discount", because whether the printed ceiling is a
+  /// ceiling is the backend's statement about the pack, not a conclusion the
+  /// page reaches by comparing two numbers it was handed.
+  final bool strike;
+
+  /// CMD #1896 — the (i) beside the MRP. `text` is the sentence that used to be
+  /// printed under the price; it is a tooltip now, and it is still the
+  /// backend's sentence.
+  final PdInfoNote info;
+
+  /// CMD #1896 — "₹19.91 / tablet", divided and worded in SQL from the pack
+  /// sentence. Absent for a one-unit pack and for a viewer with no trade rate.
+  final PdChip perUnit;
+
   const PdPriceLine({
     required this.caption,
     required this.value,
@@ -805,6 +828,9 @@ class PdPriceLine {
     required this.hasNote,
     required this.note,
     required this.tone,
+    this.strike = false,
+    this.info = const PdInfoNote.empty(),
+    this.perUnit = const PdChip.empty(),
   });
   const PdPriceLine.empty()
       : caption = '',
@@ -812,7 +838,10 @@ class PdPriceLine {
         hasAmount = false,
         hasNote = false,
         note = '',
-        tone = '';
+        tone = '',
+        strike = false,
+        info = const PdInfoNote.empty(),
+        perUnit = const PdChip.empty();
 
   factory PdPriceLine.fromMap(Object? raw) {
     if (raw is! Map) return const PdPriceLine.empty();
@@ -823,6 +852,96 @@ class PdPriceLine {
       hasNote: raw['has_note'] == true,
       note: raw['note']?.toString() ?? '',
       tone: raw['tone']?.toString() ?? '',
+      strike: raw['strike'] == true,
+      info: PdInfoNote.fromMap(raw['info']),
+      perUnit: PdChip.fromMap(raw['per_unit']),
+    );
+  }
+}
+
+/// CMD #1896 — a short backend string that may or may not have been sent, with
+/// the tone word the page maps to a colour. Used for the pack-type pill, the
+/// per-unit line and the discount chip: three places that all had to answer
+/// "did the backend send one?" before they answered "what does it say?".
+class PdChip {
+  final bool has;
+  final String label;
+  final String tone;
+  const PdChip({required this.has, required this.label, required this.tone});
+  const PdChip.empty()
+      : has = false,
+        label = '',
+        tone = '';
+
+  factory PdChip.fromMap(Object? raw) {
+    if (raw is! Map || raw['has'] != true) return const PdChip.empty();
+    final label = raw['label']?.toString() ?? '';
+    // `has:true` with nothing to print is still nothing to print.
+    if (label.isEmpty) return const PdChip.empty();
+    return PdChip(has: true, label: label, tone: raw['tone']?.toString() ?? '');
+  }
+}
+
+/// CMD #1896 — the words behind an (i): an accessible label and the sentence.
+class PdInfoNote {
+  final bool has;
+  final String label;
+  final String text;
+  const PdInfoNote({
+    required this.has,
+    required this.label,
+    required this.text,
+  });
+  const PdInfoNote.empty()
+      : has = false,
+        label = '',
+        text = '';
+
+  factory PdInfoNote.fromMap(Object? raw) {
+    if (raw is! Map || raw['has'] != true) return const PdInfoNote.empty();
+    final text = raw['text']?.toString() ?? '';
+    if (text.isEmpty) return const PdInfoNote.empty();
+    return PdInfoNote(
+      has: true,
+      label: raw['label']?.toString() ?? '',
+      text: text,
+    );
+  }
+}
+
+/// CMD #1896 — the title block: the pack-type pill, the name, the company and
+/// the pack sentence, all rendered by `product_detail`. `has:false` is an app
+/// build reading a payload older than this change, and the page then falls back
+/// to the `header` fields it always used.
+class PdTitle {
+  final bool has;
+  final String name;
+  final String company;
+  final PdChip formChip;
+  final PdChip packLine;
+
+  const PdTitle({
+    required this.has,
+    required this.name,
+    required this.company,
+    required this.formChip,
+    required this.packLine,
+  });
+  const PdTitle.empty()
+      : has = false,
+        name = '',
+        company = '',
+        formChip = const PdChip.empty(),
+        packLine = const PdChip.empty();
+
+  factory PdTitle.fromMap(Object? raw) {
+    if (raw is! Map || raw['has'] != true) return const PdTitle.empty();
+    return PdTitle(
+      has: true,
+      name: raw['name']?.toString() ?? '',
+      company: raw['company']?.toString() ?? '',
+      formChip: PdChip.fromMap(raw['form_chip']),
+      packLine: PdChip.fromMap(raw['pack_line']),
     );
   }
 }
@@ -869,17 +988,24 @@ class PdPriceLines {
   final PdPriceLine mrp;
   final PdPriceLine sale;
   final PdSticky sticky;
+
+  /// CMD #1896 — "24% off", sent only when a real trade rate exists to
+  /// discount from. The page never subtracts one price from another.
+  final PdChip discount;
+
   const PdPriceLines({
     required this.has,
     required this.mrp,
     required this.sale,
     required this.sticky,
+    this.discount = const PdChip.empty(),
   });
   const PdPriceLines.empty()
       : has = false,
         mrp = const PdPriceLine.empty(),
         sale = const PdPriceLine.empty(),
-        sticky = const PdSticky.empty();
+        sticky = const PdSticky.empty(),
+        discount = const PdChip.empty();
 
   factory PdPriceLines.fromMap(Object? raw) {
     if (raw is! Map || raw['has'] != true) return const PdPriceLines.empty();
@@ -888,6 +1014,7 @@ class PdPriceLines {
       mrp: PdPriceLine.fromMap(raw['mrp']),
       sale: PdPriceLine.fromMap(raw['sale']),
       sticky: PdSticky.fromMap(raw['sticky']),
+      discount: PdChip.fromMap(raw['discount']),
     );
   }
 }

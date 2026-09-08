@@ -59,6 +59,7 @@ import '../../widgets/customer_payment_term_sheet.dart'; // CHANGE #1888
 import '../../widgets/customer_autofill_strip.dart'; // CHANGE #1888
 import '../../url_sync.dart' show initialSearch; // CHANGE #1888
 import '../../models/route_cost_chips.dart'; // CMD #1875 — ₹ chip decisions
+import '../../models/route_day_summary.dart'; // CMD #1877 — day summary parse
 
 // CHANGE #242: payment-image sharing now goes through the platform-conditional
 // download_bytes wrapper (Web Share API on web / share_plus on Android), so no
@@ -8967,6 +8968,12 @@ class _SLeadsTabState extends State<_SLeadsTab> {
 
   // ── Bootstrap ──────────────────────────────────────────────────────────
 
+  /// CMD #1877 — the `strip` block of route_day_summary(): the SAME payload
+  /// the Routes tab's day-summary card draws, rendered here as one line. Leads
+  /// are what the field team works, so the tab that lists them says what today
+  /// did to them. Nothing is recomputed — the strip is printed verbatim.
+  RouteDayStrip? _fieldStrip;
+
   Future<void> _bootstrap() async {
     setState(() {
       _initialLoading = true;
@@ -8985,6 +8992,9 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         client.rpc('lead_enrich_status', params: {'p_run_id': null}),
         // CHANGE #447 — warehouse (hub) card
         client.rpc('lead_get_hub'),
+        // CMD #1877 — the field day, same RPC as the Routes tab. Caught on its
+        // own: a caller it does not serve loses the strip, never the tab.
+        client.rpc('route_day_summary').catchError((_) => null),
       ]);
 
       // #593 — admin_lead_type_map() returns {rows, count}; rows are already
@@ -9000,6 +9010,11 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           .toList();
       final enrichStatus = Map<String, dynamic>.from(results[4] as Map);
       final hub = Map<String, dynamic>.from(results[5] as Map);
+      final field = results[6] is Map
+          ? RouteDaySummary.from(Map<String, dynamic>.from(results[6] as Map)).strip
+          : null;
+      _fieldStrip = field;
+      RenderLog.write('c1877_leads_strip', field?.has == true ? 1 : 0);
 
       RenderLog.write('c443_types_loaded', types.length);
       RenderLog.write('c443_summary_total', (summary['total'] as num?)?.toInt() ?? 0);
@@ -9818,6 +9833,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
                 style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13)),
             const SizedBox(height: 12),
           ],
+          _buildFieldStrip(),
           _buildWarehouseCard(),
           const SizedBox(height: 20),
           _buildScrapeForm(),
@@ -9831,6 +9847,91 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           _buildPastRunsSection(),
         ],
       ),
+    );
+  }
+
+  // ── CMD #1877: the "Field" strip — the day summary, one line ────────────
+
+  /// The Routes tab's card and this strip are the same three numbers from the
+  /// same call. `has` is the backend's flag: on a day with no field work the
+  /// strip is absent, never a row of zeroes.
+  Widget _buildFieldStrip() {
+    final strip = _fieldStrip;
+    if (strip == null || !strip.has) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x16),
+      child: Container(
+        width: double.infinity,
+        padding: EdgeInsets.all(Ds.space.x16),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          boxShadow: Ds.elevation.e1,
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(
+                child: Text(strip.title,
+                    style: Ds.t.subtitle, overflow: TextOverflow.ellipsis)),
+            if (strip.headerLabel != null)
+              Text(strip.headerLabel!, style: Ds.t.caption),
+          ]),
+          if (strip.summaryLabel != null) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(strip.summaryLabel!, style: Ds.t.body),
+          ],
+          if (strip.conversionLabel != null || strip.costLabel != null) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(
+                [strip.conversionLabel, strip.costLabel]
+                    .whereType<String>()
+                    .join(' · '),
+                style: Ds.t.caption),
+          ],
+          if (strip.chips.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x12),
+            Wrap(
+              spacing: Ds.space.x8,
+              runSpacing: Ds.space.x8,
+              children: strip.chips.map(_fieldChip).toList(),
+            ),
+          ],
+        ]),
+      ),
+    );
+  }
+
+  /// The one place a tone NAME becomes a colour on this tab. Same vocabulary
+  /// as the Routes tab's chips, same tokens.
+  Widget _fieldChip(RouteCostChip chip) {
+    late final Color bg;
+    late final Color fg;
+    switch (chip.tone) {
+      case RouteChipTone.brand:
+        bg = Ds.c.brandSoft;
+        fg = Ds.c.brand;
+      case RouteChipTone.success:
+        bg = Ds.c.successSoft;
+        fg = Ds.c.success;
+      case RouteChipTone.warning:
+        bg = Ds.c.warningSoft;
+        fg = Ds.c.warning;
+      case RouteChipTone.danger:
+        bg = Ds.c.dangerSoft;
+        fg = Ds.c.danger;
+      case RouteChipTone.info:
+        bg = Ds.c.infoSoft;
+        fg = Ds.c.info;
+      case RouteChipTone.muted:
+        bg = Ds.c.bg;
+        fg = Ds.c.textSecondary;
+    }
+    return Container(
+      padding:
+          EdgeInsets.symmetric(horizontal: Ds.space.x8, vertical: Ds.space.x4),
+      decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rChip),
+      child: Text(chip.label,
+          style: Ds.t.caption.copyWith(color: fg, fontWeight: FontWeight.w600)),
     );
   }
 
@@ -12473,6 +12574,12 @@ class _RoutesTabState extends State<_RoutesTab> {
   Map<String, dynamic>? _today;
   bool _todayLoading = false;
 
+  /// CMD #1877 — route_day_summary(): what the field team actually did for
+  /// admin_active_date() in admin_active_zone(). Drawn as the card at the top
+  /// of this tab and, from the same payload's `strip`, on the Leads tab. Every
+  /// count, km figure, ₹ string and percentage is the backend's own wording.
+  RouteDaySummary? _daySummary;
+
   /// CMD #1873 — route_stops_today(route_id) per today-route card: the stop
   /// rows, their outcome chips, the "Closed at ETA" warning and the actions
   /// (Check in / Skip). Cached by route id; refetched after every check-in.
@@ -12773,15 +12880,23 @@ class _RoutesTabState extends State<_RoutesTab> {
       final res = await Future.wait<dynamic>([
         Supabase.instance.client.rpc('my_route'),
         Supabase.instance.client.rpc('routes_today').catchError((_) => null),
+        // CMD #1877 — the day summary is answered for the same date and zone.
+        // Caught on its own for the same reason as routes_today(): a caller it
+        // does not serve must lose the card, never the tab.
+        Supabase.instance.client.rpc('route_day_summary').catchError((_) => null),
       ]);
       final myRoute = Map<String, dynamic>.from(res[0] as Map);
       final today = res[1] is Map
           ? Map<String, dynamic>.from(res[1] as Map)
           : <String, dynamic>{};
+      final day = res[2] is Map
+          ? RouteDaySummary.from(Map<String, dynamic>.from(res[2] as Map))
+          : null;
       if (!mounted) return;
       setState(() {
         _myRoute = myRoute;
         _today = today;
+        _daySummary = day;
         // CMD #1872 — the tab opens on today's assigned route for EVERY role.
         // 'All plans' (the builder) and 'Check in' are secondary links, and
         // the payload names them.
@@ -12793,6 +12908,7 @@ class _RoutesTabState extends State<_RoutesTab> {
         _loading = false;
       });
       _logToday(today);
+      _logDaySummary(day);
       final myStops = (myRoute['route'] as List?) ?? [];
       if (_topMode == 'myRoute') {
         RenderLog.write('c445_route_stops', myRoute['stops']);
@@ -12814,14 +12930,26 @@ class _RoutesTabState extends State<_RoutesTab> {
     if (!mounted) return;
     setState(() => _todayLoading = true);
     try {
-      final res = await Supabase.instance.client.rpc('routes_today');
+      // CMD #1877 — a check-in changes BOTH the route progress line and the
+      // day summary, so the two are refetched together and never disagree on
+      // screen.
+      final res = await Future.wait<dynamic>([
+        Supabase.instance.client.rpc('routes_today'),
+        Supabase.instance.client.rpc('route_day_summary').catchError((_) => null),
+      ]);
       if (!mounted) return;
-      final today = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      final today =
+          res[0] is Map ? Map<String, dynamic>.from(res[0] as Map) : <String, dynamic>{};
+      final day = res[1] is Map
+          ? RouteDaySummary.from(Map<String, dynamic>.from(res[1] as Map))
+          : null;
       setState(() {
         _today = today;
+        if (day != null) _daySummary = day;
         _todayLoading = false;
       });
       _logToday(today);
+      _logDaySummary(day);
     } catch (_) {
       if (mounted) setState(() => _todayLoading = false);
     }
@@ -12836,6 +12964,15 @@ class _RoutesTabState extends State<_RoutesTab> {
             .whereType<Map>()
             .where((e) => e['can_navigate'] == true)
             .length);
+  }
+
+  /// CMD #1877 — the card PAINTED. worker rows and converted are reported
+  /// separately: a day with no field work is a legitimate render of the
+  /// backend's own empty copy, so a count of 0 must not read as "never drew".
+  void _logDaySummary(RouteDaySummary? day) {
+    if (day == null) return;
+    RenderLog.write('c1877_day_card', day.showCard ? 1 : 0);
+    RenderLog.write('c1877_day_workers', day.workers.length);
   }
 
   Future<void> _refreshMyRoute() async {
@@ -12980,6 +13117,8 @@ class _RoutesTabState extends State<_RoutesTab> {
         return _tokenChip(chip.label, Ds.c.infoSoft, Ds.c.info);
       case RouteChipTone.warning:
         return _tokenChip(chip.label, Ds.c.warningSoft, Ds.c.warning);
+      case RouteChipTone.danger:
+        return _tokenChip(chip.label, Ds.c.dangerSoft, Ds.c.danger);
       case RouteChipTone.muted:
         return _tokenChip(chip.label, Ds.c.bg, Ds.c.textSecondary);
     }
@@ -14047,6 +14186,10 @@ class _RoutesTabState extends State<_RoutesTab> {
     return Padding(
       padding: EdgeInsets.fromLTRB(pad, 20, pad, 32),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // CMD #1877 — the day summary sits above the mode row, so it reads the
+        // same in every mode: it answers "what did the field team do today",
+        // not "what is on this screen".
+        _buildDaySummaryCard(),
         _buildTopModeToggle(),
         SizedBox(height: Ds.space.x16),
         if (_topMode == 'today')
@@ -14057,6 +14200,94 @@ class _RoutesTabState extends State<_RoutesTab> {
           _buildBuilder(),
       ]),
     );
+  }
+
+  // ── CMD #1877: the day summary card ─────────────────────────────────────
+
+  /// One card, one RPC, zero arithmetic. Each worker's line, the team totals
+  /// and every chip are printed exactly as `route_day_summary()` worded them.
+  /// A payload this caller is not served (`ok:false` — partner staff) draws
+  /// nothing: the tab below it is unaffected.
+  Widget _buildDaySummaryCard() {
+    final day = _daySummary;
+    if (day == null || !day.showCard) return const SizedBox.shrink();
+    final children = <Widget>[
+      Text(day.title, style: Ds.t.subtitle),
+      SizedBox(height: Ds.space.x4),
+      if (day.headerLabel != null) Text(day.headerLabel!, style: Ds.t.caption),
+      if (day.countLabel != null) Text(day.countLabel!, style: Ds.t.caption),
+    ];
+
+    if (!day.has) {
+      children
+        ..add(SizedBox(height: Ds.space.x12))
+        ..add(Text(day.emptyLabel ?? '', style: Ds.t.bodySecondary));
+    } else {
+      if (day.showTotals) {
+        children
+          ..add(SizedBox(height: Ds.space.x16))
+          ..add(_daySummaryLine(day.totals!, strong: true))
+          ..add(Divider(height: Ds.space.x24, color: Ds.c.divider));
+      } else {
+        children.add(SizedBox(height: Ds.space.x16));
+      }
+      for (var i = 0; i < day.workers.length; i++) {
+        if (i > 0) children.add(SizedBox(height: Ds.space.x16));
+        children.add(_daySummaryLine(day.workers[i]));
+      }
+    }
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x16),
+      child: Container(
+        width: double.infinity,
+        padding: EdgeInsets.all(Ds.space.x16),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          boxShadow: Ds.elevation.e1,
+        ),
+        child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start, children: children),
+      ),
+    );
+  }
+
+  /// One worker's day — or, with [strong], the team's. The row name is empty
+  /// for the totals line, which is how the backend says "this is everyone".
+  Widget _daySummaryLine(RouteDayRow row, {bool strong = false}) {
+    final head = <Widget>[];
+    if (row.label.isNotEmpty) {
+      head
+        ..add(Expanded(
+            child: Text(row.label,
+                style: strong ? Ds.t.subtitle : Ds.t.bodyStrong,
+                overflow: TextOverflow.ellipsis)))
+        ..add(SizedBox(width: Ds.space.x8));
+    } else if (row.progressLabel != null) {
+      head.add(Expanded(
+          child: Text(row.progressLabel!,
+              style: Ds.t.bodyStrong, overflow: TextOverflow.ellipsis)));
+    }
+    if (row.conversionLabel != null) {
+      head.add(Text(row.conversionLabel!, style: Ds.t.caption));
+    }
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      if (head.isNotEmpty) Row(children: head),
+      if (row.label.isNotEmpty && row.progressLabel != null) ...[
+        SizedBox(height: Ds.space.x4),
+        Text(row.progressLabel!, style: Ds.t.caption),
+      ],
+      if (row.chips.isNotEmpty) ...[
+        SizedBox(height: Ds.space.x8),
+        Wrap(
+          spacing: Ds.space.x8,
+          runSpacing: Ds.space.x8,
+          children: row.chips.map(_toneChip).toList(),
+        ),
+      ],
+    ]);
   }
 
   /// CMD #1872 — the mode row is the payload's own `links[]`: 'today' is the

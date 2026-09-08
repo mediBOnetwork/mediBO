@@ -19,6 +19,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../design_tokens.dart';
+import '../../services/route_offline_queue.dart'; // CMD #1878 — the offline queue
 import '../../utils/file_pick_io.dart' as filepick;
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
@@ -102,6 +103,7 @@ class RouteStopCheckInPlan {
     required String? status,
     String note = '',
     String? photoPath,
+    String? clientTs,
   }) {
     if (status == null || status.isEmpty) return null;
     return {
@@ -109,6 +111,11 @@ class RouteStopCheckInPlan {
       'p_status': status,
       if (note.trim().isNotEmpty) 'p_note': note.trim(),
       if (photoPath != null && photoPath.isNotEmpty) 'p_photo': photoPath,
+      // CMD #1878 — the DEVICE's own clock reading, stamped when the rep
+      // tapped Save. route_stop_checkin() is idempotent on (stop_id,
+      // client_ts), so this same call replayed after airplane mode lands the
+      // check-in exactly once.
+      if (clientTs != null && clientTs.isNotEmpty) 'p_client_ts': clientTs,
     };
   }
 
@@ -223,13 +230,32 @@ class RouteStopCheckInPlan {
 class RouteStopCheckInSheet extends StatefulWidget {
   final String stopId;
 
-  const RouteStopCheckInSheet({super.key, required this.stopId});
+  /// CMD #1878 — route_offline_bundle()'s cached copy of route_stop_sheet()
+  /// for THIS stop. Used only when the live call fails, so a rep in airplane
+  /// mode still opens the sheet he cached when the tab loaded.
+  final Map<String, dynamic>? cachedSheet;
+
+  /// The bundle's `sync` block. Its `queued_message` is what a rep reads when
+  /// a check-in is held on the device — the backend's wording, not this
+  /// file's.
+  final Map<String, dynamic>? sync;
+
+  const RouteStopCheckInSheet({
+    super.key,
+    required this.stopId,
+    this.cachedSheet,
+    this.sync,
+  });
 
   /// Opens the sheet. Resolves with route_stop_checkin()'s OWN payload when a
   /// check-in was saved (null when it was cancelled), so the caller can both
   /// refetch and obey `next_action` — CMD #1874. It never patches a row.
   static Future<Map<String, dynamic>?> open(
-      BuildContext context, String stopId) async {
+    BuildContext context,
+    String stopId, {
+    Map<String, dynamic>? cachedSheet,
+    Map<String, dynamic>? sync,
+  }) async {
     final saved = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
       isScrollControlled: true,
@@ -237,7 +263,8 @@ class RouteStopCheckInSheet extends StatefulWidget {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet)),
       ),
-      builder: (_) => RouteStopCheckInSheet(stopId: stopId),
+      builder: (_) => RouteStopCheckInSheet(
+          stopId: stopId, cachedSheet: cachedSheet, sync: sync),
     );
     return saved;
   }
@@ -294,6 +321,19 @@ class _RouteStopCheckInSheetState extends State<RouteStopCheckInSheet> {
           (m['options'] as List?)?.length ?? 0);
     } catch (e) {
       if (!mounted) return;
+      // CMD #1878 — no network: open on the copy cached when the tab loaded.
+      // The sheet a rep saw with signal is the sheet he gets without one.
+      final cached = widget.cachedSheet;
+      if (cached != null && cached.isNotEmpty) {
+        setState(() {
+          _sheet = cached;
+          _loading = false;
+          _status = RouteStopCheckInPlan.initialStatus(cached);
+          _noteCtrl.text = RouteStopCheckInPlan.initialNote(cached);
+        });
+        RenderLog.write('c1878_sheet_from_cache', 1);
+        return;
+      }
       setState(() {
         _loading = false;
         _error = e.toString();
@@ -349,13 +389,20 @@ class _RouteStopCheckInSheetState extends State<RouteStopCheckInSheet> {
       }
     }
 
+    // CMD #1878 — stamped ONCE, here, before anything is attempted. The same
+    // reading travels with the live call and with every later replay, so the
+    // server sees one check-in however many times it is sent.
+    final clientTs = DateTime.now().toIso8601String();
+    final params = RouteStopCheckInPlan.submitParams(
+        stopId: widget.stopId,
+        status: _status,
+        note: _noteCtrl.text,
+        photoPath: photoPath,
+        clientTs: clientTs)!;
+
     try {
-      final res = await Supabase.instance.client.rpc('route_stop_checkin',
-          params: RouteStopCheckInPlan.submitParams(
-              stopId: widget.stopId,
-              status: _status,
-              note: _noteCtrl.text,
-              photoPath: photoPath)!);
+      final res = await Supabase.instance.client
+          .rpc('route_stop_checkin', params: params);
       if (!mounted) return;
       final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
       if (m['ok'] == true) {
@@ -373,9 +420,29 @@ class _RouteStopCheckInSheetState extends State<RouteStopCheckInSheet> {
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _submitting = false;
-        _error = e.toString();
+      // CMD #1878 — the network is gone. The check-in is HELD on the device,
+      // in the order it was made, and replayed through the same RPC with the
+      // same client_ts when the phone comes back. The rep reads the backend's
+      // own "saved on this device" line and carries on to the next shop.
+      await RouteOfflineQueue.instance.enqueue(PendingCheckIn(
+        stopId: widget.stopId,
+        routeId: _sheet?['route_id']?.toString() ?? '',
+        status: _status ?? '',
+        note: _noteCtrl.text,
+        clientTs: clientTs,
+      ));
+      if (!mounted) return;
+      RenderLog.write(
+          'c1878_checkin_queued', RouteOfflineQueue.instance.pendingCount);
+      final queued = widget.sync?['queued_message']?.toString() ?? '';
+      if (queued.isNotEmpty) showToast(context, queued);
+      if (!mounted) return;
+      Navigator.of(context).pop(<String, dynamic>{
+        'ok': true,
+        'queued': true,
+        'stop_id': widget.stopId,
+        'status': _status,
+        'message': queued,
       });
     }
   }

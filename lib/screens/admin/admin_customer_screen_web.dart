@@ -60,6 +60,9 @@ import '../../widgets/customer_autofill_strip.dart'; // CHANGE #1888
 import '../../url_sync.dart' show initialSearch; // CHANGE #1888
 import '../../models/route_cost_chips.dart'; // CMD #1875 — ₹ chip decisions
 import '../../models/route_day_summary.dart'; // CMD #1877 — day summary parse
+import '../../widgets/route_live_workers_map.dart'; // CMD #1878 — live worker dots
+import '../../services/route_offline_queue.dart'; // CMD #1878 — offline cache + queue
+import '../../services/worker_live_ping.dart'; // CMD #1878 — the worker's own dot
 
 // CHANGE #242: payment-image sharing now goes through the platform-conditional
 // download_bytes wrapper (Web Share API on web / share_plus on Android), so no
@@ -12728,12 +12731,43 @@ class _RoutesTabState extends State<_RoutesTab> {
   /// screen-load default below cannot drop the view back onto 'today'.
   String? _openingRouteId;
 
+  // ── CMD #1878: the live dot, the offline cache and the sync queue ───────
+  //
+  // route_offline_bundle() is ONE call made on open. Its payload is cached on
+  // the device verbatim; when the next load cannot reach the server the SAME
+  // payload is re-rendered with the backend's own offline banner, and any
+  // check-in made meanwhile is held in RouteOfflineQueue and replayed in
+  // order through route_stop_checkin(p_client_ts).
+
+  /// route_worker_dots() verbatim — who is on the road, where, how stale.
+  Map<String, dynamic>? _live;
+
+  /// The bundle's `sync` block: the pre-worded pending ladder, the offline
+  /// banner and the "saved on this device" line. Cached, because the screen
+  /// needs these strings precisely when it cannot ask for them.
+  Map<String, dynamic>? _sync;
+
+  /// route_stop_sheet() per stop, as cached by the bundle.
+  Map<String, dynamic> _cachedSheets = const {};
+
+  /// True while this screen is drawing the cached bundle instead of a live one.
+  bool _offline = false;
+
+  Timer? _liveTimer;
+  LiveFeedHandle? _liveChannel;
+
   @override
   void initState() {
     super.initState();
     _openingRouteId = _RoutesTab.takePendingRoute();
     _loadScreen();
     _subscribePlanRealtime();
+    // CMD #1878 — anything held from a previous offline session is replayed
+    // the moment the tab opens, before the rep touches anything.
+    RouteOfflineQueue.instance.addListener(_onQueueChanged);
+    RouteOfflineQueue.instance.load().then((_) => _flushQueue());
+    WorkerLivePing.instance.sharing.addListener(_onQueueChanged);
+    WorkerLivePing.instance.denied.addListener(_onQueueChanged);
     final pending = _openingRouteId;
     if (pending != null) {
       WidgetsBinding.instance
@@ -12747,6 +12781,16 @@ class _RoutesTabState extends State<_RoutesTab> {
     _plansCtrl.dispose();
     _planRealtimeChannel?.unsubscribe();
     _planRealtimeChannel = null;
+    // CMD #1878 — the dot stops sharing with the screen; a background tab must
+    // never keep a rep's GPS on.
+    _liveTimer?.cancel();
+    _liveTimer = null;
+    _liveChannel?.unsubscribe();
+    _liveChannel = null;
+    WorkerLivePing.instance.stop();
+    WorkerLivePing.instance.sharing.removeListener(_onQueueChanged);
+    WorkerLivePing.instance.denied.removeListener(_onQueueChanged);
+    RouteOfflineQueue.instance.removeListener(_onQueueChanged);
     super.dispose();
   }
 
@@ -12870,6 +12914,144 @@ class _RoutesTabState extends State<_RoutesTab> {
     } catch (_) {}
   }
 
+  // ── CMD #1878 — the live/offline lane ───────────────────────────────────
+
+  void _onQueueChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// Replay everything the device is holding, oldest first. Called on open,
+  /// after every successful load, and from the payload's own Sync button.
+  Future<void> _flushQueue() async {
+    final landed = await RouteOfflineQueue.instance.flush((params) =>
+        Supabase.instance.client.rpc('route_stop_checkin', params: params));
+    if (landed > 0 && mounted) {
+      RenderLog.write('c1878_queue_synced', landed);
+      // The server has changed: the stop rows, the progress line and the day
+      // summary are all re-asked rather than patched here.
+      _routeStops.clear();
+      await _refreshToday();
+    }
+  }
+
+  /// ONE call, cached verbatim. A failure falls back to the last good bundle
+  /// and raises the backend's own offline banner — never an error page.
+  Future<void> _loadOfflineBundle() async {
+    try {
+      final res =
+          await Supabase.instance.client.rpc('route_offline_bundle');
+      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      if (m['ok'] == true) {
+        await RouteOfflineQueue.instance.cacheBundle(m);
+        if (!mounted) return;
+        _applyBundle(m, offline: false);
+        RenderLog.write('c1878_bundle_live', 1);
+        _startLiveWatch();
+        return;
+      }
+    } catch (_) {
+      // fall through to the cache
+    }
+    final cached = await RouteOfflineQueue.instance.cachedBundle();
+    if (!mounted || cached == null) return;
+    _applyBundle(cached, offline: true);
+    RenderLog.write('c1878_bundle_cached', 1);
+  }
+
+  void _applyBundle(Map<String, dynamic> m, {required bool offline}) {
+    final today = m['today'];
+    final stops = m['stops'];
+    final sheets = m['sheets'];
+    setState(() {
+      _offline = offline;
+      _sync = m['sync'] is Map ? Map<String, dynamic>.from(m['sync'] as Map) : null;
+      _live = m['live'] is Map ? Map<String, dynamic>.from(m['live'] as Map) : null;
+      _cachedSheets =
+          sheets is Map ? Map<String, dynamic>.from(sheets) : const {};
+      if (offline) {
+        // Offline the cached payload IS the screen. Online it is only the
+        // cache — routes_today() has already answered for itself.
+        if (today is Map) _today = Map<String, dynamic>.from(today);
+        if (stops is Map) {
+          for (final e in stops.entries) {
+            if (e.value is Map) {
+              _routeStops[e.key.toString()] =
+                  Map<String, dynamic>.from(e.value as Map);
+            }
+          }
+        }
+        _topMode = 'today';
+        _loading = false;
+      }
+    });
+  }
+
+  /// The dot moves on its own: a realtime subscription where the socket is up,
+  /// and the backend's own poll interval as the floor.
+  void _startLiveWatch() {
+    final ms = RouteLivePlan.pollMs(_live);
+    _liveTimer?.cancel();
+    _liveTimer = Timer.periodic(Duration(milliseconds: ms), (_) => _refreshLive());
+    if (_liveChannel != null) return;
+    final table = RouteLivePlan.channel(_live);
+    if (table.isEmpty) return;
+    LiveFeed.instance
+        .watch(
+          channelPrefix: 'c1878_worker_dots',
+          tables: [table],
+          onChange: (_) => _refreshLive(),
+        )
+        .then((h) {
+      if (!mounted) {
+        h.dispose();
+        return;
+      }
+      _liveChannel = h;
+      RenderLog.write('c1878_live_realtime', 1);
+    });
+  }
+
+  Future<void> _refreshLive() async {
+    if (!mounted) return;
+    try {
+      final res = await Supabase.instance.client.rpc('route_worker_dots');
+      if (!mounted) return;
+      if (res is Map) {
+        setState(() {
+          _live = Map<String, dynamic>.from(res);
+          _offline = false;
+        });
+      }
+    } catch (_) {
+      // The dot simply ages; the backend words that age on the next answer.
+    }
+  }
+
+  /// The rep turns his own dot on or off. WHETHER he may is can_share, and
+  /// how often he pings is ping_ms — both the payload's.
+  void _toggleShare() {
+    if (WorkerLivePing.instance.sharing.value) {
+      WorkerLivePing.instance.stop();
+      return;
+    }
+    WorkerLivePing.instance.start(
+      everyMs: RouteLivePlan.pingMs(_live),
+      deniedLabel: _live?['denied_label']?.toString() ?? '',
+      send: (lat, lng, acc, heading) async {
+        final out = await Supabase.instance.client.rpc('route_worker_ping',
+            params: {
+              'p_lat': lat,
+              'p_lng': lng,
+              if (acc != null) 'p_accuracy': acc,
+              if (heading != null) 'p_heading': heading,
+            });
+        RenderLog.write('c1878_ping', 1);
+        await _refreshLive();
+        return out;
+      },
+    );
+  }
+
   Future<void> _loadScreen() async {
     setState(() { _loading = true; _loadError = null; });
     try {
@@ -12917,8 +13099,20 @@ class _RoutesTabState extends State<_RoutesTab> {
             : '');
       }
       _fetchLeadCount(); // populates c452_count / c452_suggested_k on first load
+      // CMD #1878 — the offline bundle is cached AFTER the live load, so a
+      // good session always leaves a good cache behind for the next one.
+      unawaited(_loadOfflineBundle());
+      unawaited(_flushQueue());
     } catch (e) {
       if (!mounted) return;
+      // CMD #1878 — a failed load is not necessarily a broken screen: the
+      // device may simply be offline, and the cached bundle is a real answer.
+      await _loadOfflineBundle();
+      if (!mounted) return;
+      if (_today != null && _offline) {
+        setState(() { _loading = false; _loadError = null; });
+        return;
+      }
       setState(() { _loadError = e.toString(); _loading = false; });
     }
   }
@@ -14342,6 +14536,10 @@ class _RoutesTabState extends State<_RoutesTab> {
     // empty copy), so route count 0 must not read as "the widget never drew".
     RenderLog.write('c1872_today_view', 1);
     final children = <Widget>[
+      // CMD #1878 — the live card sits above the day: who is on the road right
+      // now, the rep's own share toggle, and anything the device is still
+      // holding. Every string in it is the backend's.
+      _buildLiveCard(),
       Text(today['title']?.toString() ?? '', style: Ds.t.title),
       SizedBox(height: Ds.space.x4),
       Text(today['header_label']?.toString() ?? '', style: Ds.t.caption),
@@ -14370,6 +14568,28 @@ class _RoutesTabState extends State<_RoutesTab> {
       }
     }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: children);
+  }
+
+  /// CMD #1878 — route_worker_dots(), drawn verbatim. Absent for a caller the
+  /// backend does not serve (partner staff), exactly like the day card.
+  Widget _buildLiveCard() {
+    final live = _live;
+    if (live == null || !RouteLivePlan.shows(live)) return const SizedBox.shrink();
+    return RouteLiveWorkersMap(
+      live: live,
+      // The chip's caption is the backend's own, looked up by count. Dart
+      // never pluralises "check-in".
+      pendingLabel: RouteSyncPlan.pendingLabel(
+          _sync, RouteOfflineQueue.instance.pendingCount),
+      offlineLabel:
+          _offline ? (_sync?['offline_banner'])?.toString() : null,
+      sharing: WorkerLivePing.instance.sharing.value,
+      deniedLabel: WorkerLivePing.instance.denied.value,
+      onToggleShare: RouteLivePlan.canShare(live) ? _toggleShare : null,
+      onRetrySync: _flushQueue,
+      retryLabel: _sync?['retry_label']?.toString(),
+      isDesktop: MediaQuery.of(context).size.width >= 900,
+    );
   }
 
   Widget _todayRouteCard(Map<String, dynamic> r) {
@@ -14460,8 +14680,25 @@ class _RoutesTabState extends State<_RoutesTab> {
   /// routes_today() so the outcome chip and the progress line are the
   /// backend's new answer, never a patched local row.
   Future<void> _openStopCheckIn(String routeId, String stopId) async {
-    final res = await RouteStopCheckInSheet.open(context, stopId);
+    // CMD #1878 — the cached sheet travels with the call so the rep can open
+    // a stop with no network, and the sync block carries the wording for a
+    // check-in that ends up held on the device.
+    final cachedSheet = _cachedSheets[stopId];
+    final res = await RouteStopCheckInSheet.open(
+      context,
+      stopId,
+      cachedSheet:
+          cachedSheet is Map ? Map<String, dynamic>.from(cachedSheet) : null,
+      sync: _sync,
+    );
     if (res == null || !mounted) return;
+    // A check-in HELD on the device changed nothing on the server: refetching
+    // would only overwrite the row the rep just answered. The pending chip is
+    // the feedback, and the replay refetches for real.
+    if (res['queued'] == true) {
+      setState(() {});
+      return;
+    }
     await _loadRouteStops(routeId, force: true);
     await _refreshToday();
 
@@ -15720,6 +15957,8 @@ class _RoutesTabState extends State<_RoutesTab> {
         mapData: data,
         isDesktop: widget.isDesktop,
         onTapStop: _openMapStopSheet,
+        // CMD #1878 — the same dots the live card draws, on the route line.
+        workers: RouteLivePlan.dots(_live),
       ),
       // B5 — leg buttons: Google's directions URL takes only ~9 waypoints, so
       // a 27-stop route is chunked server-side into legs. Never build one URL.

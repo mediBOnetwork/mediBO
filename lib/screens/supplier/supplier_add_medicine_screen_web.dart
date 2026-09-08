@@ -8,10 +8,12 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../design_tokens.dart';
 import '../../services/ui_copy.dart';
 import '../../supabase_config.dart';
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
+import '../../widgets/ds_tone.dart';
 
 const _kOcrEdgeFn = 'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/gemini-ocr';
 
@@ -43,12 +45,12 @@ class _SupplierAddMedicineScreenState extends State<SupplierAddMedicineScreen>
   Widget build(BuildContext context) {
     return Column(children: [
       Container(
-        color: Colors.white,
+        color: Ds.c.surface,
         child: TabBar(
           controller: _tabs,
-          labelColor: const Color(0xFF1B7A43),
-          unselectedLabelColor: const Color(0xFF6B7280),
-          indicatorColor: const Color(0xFF1B7A43),
+          labelColor: Ds.c.brand,
+          unselectedLabelColor: Ds.c.textSecondary,
+          indicatorColor: Ds.c.brand,
           tabs: [
             Tab(text: c('supplier_add_medicine.tab_add_company')),
             Tab(text: c('supplier_add_medicine.tab_add_medicine')),
@@ -118,14 +120,13 @@ class _AddCompanyTabState extends State<_AddCompanyTab> {
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.all(Ds.space.x16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(c('supplier_add_medicine.company_title'),
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-        const SizedBox(height: 4),
-        Text(c('supplier_add_medicine.company_subtitle'),
-          style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
-        const SizedBox(height: 16),
+          style: Ds.t.subtitle.copyWith(fontWeight: FontWeight.w700)),
+        SizedBox(height: Ds.space.x4),
+        Text(c('supplier_add_medicine.company_subtitle'), style: Ds.t.caption),
+        SizedBox(height: Ds.space.x16),
         Form(key: _formKey, child: Column(children: [
           TextFormField(controller: _nameCtrl,
             decoration: _inp(c('supplier_add_medicine.field_company_name_label'),
@@ -141,11 +142,13 @@ class _AddCompanyTabState extends State<_AddCompanyTab> {
         if (_pending.isNotEmpty) ...[
           const SizedBox(height: 24),
           Text(c('supplier_add_medicine.your_submissions'),
-            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
-          const SizedBox(height: 8),
+            style: Ds.t.body.copyWith(fontWeight: FontWeight.w600)),
+          SizedBox(height: Ds.space.x8),
           ..._pending.map((p) => _PendingRow(
             label: p['company_name'] as String? ?? '',
-            status: p['status'] as String? ?? 'pending',
+            statusLabel: (p['status_label'] as String?) ??
+                (p['status'] as String? ?? ''),
+            statusTone: p['status_tone'] as String?,
           )),
         ],
       ]),
@@ -215,14 +218,13 @@ class _AddMedicineTabState extends State<_AddMedicineTab> {
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.all(Ds.space.x16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(c('supplier_add_medicine.medicine_title'),
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-        const SizedBox(height: 4),
-        Text(c('supplier_add_medicine.medicine_subtitle'),
-          style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
-        const SizedBox(height: 16),
+          style: Ds.t.subtitle.copyWith(fontWeight: FontWeight.w700)),
+        SizedBox(height: Ds.space.x4),
+        Text(c('supplier_add_medicine.medicine_subtitle'), style: Ds.t.caption),
+        SizedBox(height: Ds.space.x16),
         Form(key: _formKey, child: Column(children: [
           TextFormField(controller: _nameCtrl,
             decoration: _inp(c('supplier_add_medicine.field_product_name_label'),
@@ -252,11 +254,13 @@ class _AddMedicineTabState extends State<_AddMedicineTab> {
         if (_pending.isNotEmpty) ...[
           const SizedBox(height: 24),
           Text(c('supplier_add_medicine.your_submissions'),
-            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
-          const SizedBox(height: 8),
+            style: Ds.t.body.copyWith(fontWeight: FontWeight.w600)),
+          SizedBox(height: Ds.space.x8),
           ..._pending.map((p) => _PendingRow(
             label: '${p['product_name']} — ${p['marketer']}',
-            status: p['status'] as String? ?? 'pending',
+            statusLabel: (p['status_label'] as String?) ??
+                (p['status'] as String? ?? ''),
+            statusTone: p['status_tone'] as String?,
           )),
         ],
       ]),
@@ -427,12 +431,12 @@ class _AddSchemeTabState extends State<_AddSchemeTab> {
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.all(Ds.space.x16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         // ── Search & manual ──────────────────────────────────────────────────
         Text(c('supplier_add_medicine.scheme_title'),
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-        const SizedBox(height: 12),
+          style: Ds.t.subtitle.copyWith(fontWeight: FontWeight.w700)),
+        SizedBox(height: Ds.space.x12),
         TextField(
           controller: _searchCtrl,
           onChanged: _onSearch,
@@ -440,15 +444,16 @@ class _AddSchemeTabState extends State<_AddSchemeTab> {
               c('supplier_add_medicine.field_search_medicine_hint')),
         ),
         if (_searching)
-          const Padding(padding: EdgeInsets.symmetric(vertical: 8),
-            child: LinearProgressIndicator(color: Color(0xFF1B7A43), backgroundColor: Color(0xFFD1FAE5))),
+          Padding(padding: EdgeInsets.symmetric(vertical: Ds.space.x8),
+            child: LinearProgressIndicator(
+                color: Ds.c.brand, backgroundColor: Ds.c.successSoft)),
         if (_results.isNotEmpty && _selected == null)
           Container(
-            margin: const EdgeInsets.only(top: 4),
+            margin: EdgeInsets.only(top: Ds.space.x4),
             decoration: BoxDecoration(
-              color: Colors.white, borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFFE5E7EB)),
-              boxShadow: const [BoxShadow(color: Color(0x12000000), blurRadius: 8)],
+              color: Ds.c.surface, borderRadius: Ds.r.rButton,
+              border: Border.all(color: Ds.c.divider),
+              boxShadow: Ds.elevation.e2,
             ),
             child: Column(children: _results.map((r) => InkWell(
               onTap: () => setState(() {
@@ -456,34 +461,36 @@ class _AddSchemeTabState extends State<_AddSchemeTab> {
                 _searchCtrl.text = r['product_name'] as String? ?? '';
               }),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                padding: EdgeInsets.symmetric(
+                    horizontal: Ds.space.x12, vertical: Ds.space.x8),
                 child: Row(children: [
                   Expanded(child: Text(r['product_name'] as String? ?? '',
-                    style: const TextStyle(fontSize: 13, color: Color(0xFF111827)))),
-                  Text(r['marketer'] as String? ?? '',
-                    style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+                    style: Ds.t.caption.copyWith(color: Ds.c.text))),
+                  Text(r['marketer'] as String? ?? '', style: Ds.t.caption),
                 ]),
               ),
             )).toList()),
           ),
         if (_selected != null) ...[
-          const SizedBox(height: 10),
+          SizedBox(height: Ds.space.x8),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x12, vertical: Ds.space.x8),
             decoration: BoxDecoration(
-              color: const Color(0xFFD1FAE5), borderRadius: BorderRadius.circular(8)),
+              color: Ds.c.successSoft, borderRadius: Ds.r.rButton),
             child: Row(children: [
-              const Icon(Icons.check_circle, color: Color(0xFF065F46), size: 16),
-              const SizedBox(width: 6),
+              Icon(Icons.check_circle, color: Ds.c.success, size: 16),
+              SizedBox(width: Ds.space.x4),
               Expanded(child: Text(_selected!['product_name'] as String? ?? '',
-                style: const TextStyle(fontSize: 13, color: Color(0xFF065F46), fontWeight: FontWeight.w500))),
+                style: Ds.t.caption.copyWith(
+                    color: Ds.c.success, fontWeight: FontWeight.w500))),
               GestureDetector(
                 onTap: () => setState(() { _selected = null; _searchCtrl.clear(); }),
-                child: const Icon(Icons.close, color: Color(0xFF065F46), size: 16),
+                child: Icon(Icons.close, color: Ds.c.success, size: 16),
               ),
             ]),
           ),
-          const SizedBox(height: 10),
+          SizedBox(height: Ds.space.x8),
           DropdownButtonFormField<String>(
             value: _schemeType,
             decoration: _inp(c('supplier_add_medicine.field_scheme_type_label'), ''),
@@ -522,66 +529,71 @@ class _AddSchemeTabState extends State<_AddSchemeTab> {
           )),
         ],
         const SizedBox(height: 28),
-        const Divider(color: Color(0xFFE5E7EB)),
+        Divider(color: Ds.c.divider),
         const SizedBox(height: 16),
         // ── OCR upload ───────────────────────────────────────────────────────
         Text(c('supplier_add_medicine.ocr_title'),
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-        const SizedBox(height: 4),
-        Text(c('supplier_add_medicine.ocr_subtitle'),
-          style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
-        const SizedBox(height: 12),
+          style: Ds.t.subtitle.copyWith(fontWeight: FontWeight.w700)),
+        SizedBox(height: Ds.space.x4),
+        Text(c('supplier_add_medicine.ocr_subtitle'), style: Ds.t.caption),
+        SizedBox(height: Ds.space.x12),
         OutlinedButton.icon(
           onPressed: _ocrLoading ? null : _pickAndOcr,
           icon: _ocrLoading
-              ? const SizedBox(width: 16, height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43)))
+              ? SizedBox(width: 16, height: 16,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Ds.c.brand))
               : const Icon(Icons.upload_file, size: 18),
           label: Text(_ocrLoading
               ? c('supplier_add_medicine.btn_extracting')
               : c('supplier_add_medicine.btn_upload_scheme_image')),
           style: OutlinedButton.styleFrom(
-            foregroundColor: const Color(0xFF1B7A43),
-            side: const BorderSide(color: Color(0xFF1B7A43)),
-            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+            foregroundColor: Ds.c.brand,
+            side: BorderSide(color: Ds.c.brand),
+            padding: EdgeInsets.symmetric(
+                vertical: Ds.space.x12, horizontal: Ds.space.x16),
           ),
         ),
         if (_ocrReview.isNotEmpty) ...[
           const SizedBox(height: 16),
           Text(c('supplier_add_medicine.ocr_review_title'),
-            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
-          const SizedBox(height: 8),
+            style: Ds.t.body.copyWith(fontWeight: FontWeight.w600)),
+          SizedBox(height: Ds.space.x8),
           Container(
             decoration: BoxDecoration(
-              border: Border.all(color: const Color(0xFFE5E7EB)),
-              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Ds.c.divider),
+              borderRadius: Ds.r.rButton,
             ),
             child: Column(children: [
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                color: const Color(0xFFF3F4F6),
+                padding: EdgeInsets.symmetric(
+                    horizontal: Ds.space.x12, vertical: Ds.space.x8),
+                color: Ds.c.bg,
                 child: Row(children: [
-                  Expanded(flex: 3, child: Text(c('supplier_add_medicine.ocr_col_product_name'), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF6B7280)))),
-                  const SizedBox(width: 8),
-                  SizedBox(width: 48, child: Text(c('supplier_add_medicine.ocr_col_buy'), textAlign: TextAlign.center, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF6B7280)))),
-                  const SizedBox(width: 8),
-                  SizedBox(width: 48, child: Text(c('supplier_add_medicine.ocr_col_free'), textAlign: TextAlign.center, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF6B7280)))),
+                  Expanded(flex: 3, child: Text(c('supplier_add_medicine.ocr_col_product_name'), style: _colHead)),
+                  SizedBox(width: Ds.space.x8),
+                  SizedBox(width: 48, child: Text(c('supplier_add_medicine.ocr_col_buy'), textAlign: TextAlign.center, style: _colHead)),
+                  SizedBox(width: Ds.space.x8),
+                  SizedBox(width: 48, child: Text(c('supplier_add_medicine.ocr_col_free'), textAlign: TextAlign.center, style: _colHead)),
                 ]),
               ),
               ..._ocrReview.asMap().entries.map((e) {
                 final r = e.value;
                 return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  color: e.key.isEven ? Colors.white : const Color(0xFFF9FAFB),
+                  padding: EdgeInsets.symmetric(
+                      horizontal: Ds.space.x12, vertical: Ds.space.x8),
+                  color: e.key.isEven ? Ds.c.surface : Ds.c.bg,
                   child: Row(children: [
                     Expanded(flex: 3, child: Text(r['product_name'] as String? ?? '',
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF111827)))),
-                    const SizedBox(width: 8),
+                      style: Ds.t.caption.copyWith(color: Ds.c.text))),
+                    SizedBox(width: Ds.space.x8),
                     SizedBox(width: 48, child: Text('${r['order_qty'] ?? '—'}',
-                      textAlign: TextAlign.center, style: const TextStyle(fontSize: 12, color: Color(0xFF374151)))),
-                    const SizedBox(width: 8),
+                      textAlign: TextAlign.center,
+                      style: Ds.t.caption.copyWith(color: Ds.c.text))),
+                    SizedBox(width: Ds.space.x8),
                     SizedBox(width: 48, child: Text('${r['free_qty'] ?? '—'}',
-                      textAlign: TextAlign.center, style: const TextStyle(fontSize: 12, color: Color(0xFF374151)))),
+                      textAlign: TextAlign.center,
+                      style: Ds.t.caption.copyWith(color: Ds.c.text))),
                   ]),
                 );
               }),
@@ -607,60 +619,74 @@ class _AddSchemeTabState extends State<_AddSchemeTab> {
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
+/// The OCR review table's column heading — one style, three columns.
+TextStyle get _colHead => Ds.t.caption.copyWith(fontWeight: FontWeight.w600);
+
 InputDecoration _inp(String label, String hint) => InputDecoration(
   labelText: label,
   hintText: hint,
-  hintStyle: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 13),
+  hintStyle: Ds.t.caption,
   filled: true,
-  fillColor: const Color(0xFFF5F6F8),
-  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
-    borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
-    borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-  focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
-    borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+  fillColor: Ds.c.bg,
+  contentPadding: EdgeInsets.symmetric(
+      horizontal: Ds.space.x12, vertical: Ds.space.x12),
+  border: OutlineInputBorder(borderRadius: Ds.r.rButton,
+    borderSide: BorderSide(color: Ds.c.divider)),
+  enabledBorder: OutlineInputBorder(borderRadius: Ds.r.rButton,
+    borderSide: BorderSide(color: Ds.c.divider)),
+  focusedBorder: OutlineInputBorder(borderRadius: Ds.r.rButton,
+    borderSide: BorderSide(color: Ds.c.brand)),
 );
 
 ButtonStyle _btnStyle() => ElevatedButton.styleFrom(
-  backgroundColor: const Color(0xFF1B7A43),
-  foregroundColor: Colors.white,
-  padding: const EdgeInsets.symmetric(vertical: 14),
-  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+  backgroundColor: Ds.c.brand,
+  foregroundColor: Ds.c.surface,
+  padding: EdgeInsets.symmetric(vertical: Ds.space.x12),
+  shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
 );
 
-Widget _spinner() => const SizedBox(width: 20, height: 20,
-  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2));
+Widget _spinner() => SizedBox(width: 20, height: 20,
+  child: CircularProgressIndicator(color: Ds.c.surface, strokeWidth: 2));
 
+/// CHANGE #671 gap 51 — the approval chip is a PRINTER.
+///
+/// It used to switch on the staging status to pick one of three hardcoded hex
+/// pairs, with everything unrecognised silently drawn as "pending" amber.
+/// pending_staging_all sends status_label and status_tone now; this row does one
+/// tone -> token lookup and decides nothing.
 class _PendingRow extends StatelessWidget {
   final String label;
-  final String status;
-  const _PendingRow({required this.label, required this.status});
+  final String statusLabel;
+  final String? statusTone;
+  const _PendingRow({
+    required this.label,
+    required this.statusLabel,
+    this.statusTone,
+  });
 
   @override
   Widget build(BuildContext context) {
-    Color bg, fg;
-    switch (status) {
-      case 'approved': bg = const Color(0xFFD1FAE5); fg = const Color(0xFF065F46); break;
-      case 'rejected': bg = const Color(0xFFFEE2E2); fg = const Color(0xFF991B1B); break;
-      default:         bg = const Color(0xFFFEF3C7); fg = const Color(0xFF92400E);
-    }
     return Container(
-      margin: const EdgeInsets.only(bottom: 6),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      margin: EdgeInsets.only(bottom: Ds.space.x4),
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x12, vertical: Ds.space.x8),
       decoration: BoxDecoration(
-        color: Colors.white, borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        color: Ds.c.surface, borderRadius: Ds.r.rButton,
+        border: Border.all(color: Ds.c.divider),
       ),
       child: Row(children: [
         Expanded(child: Text(label,
-          style: const TextStyle(fontSize: 13, color: Color(0xFF111827)))),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-          decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
-          child: Text(status,
-            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: fg)),
-        ),
+          style: Ds.t.caption.copyWith(color: Ds.c.text))),
+        if (statusLabel.isNotEmpty)
+          Container(
+            padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x8, vertical: Ds.space.x4),
+            decoration: BoxDecoration(
+                color: dsToneBg(statusTone), borderRadius: Ds.r.rChip),
+            child: Text(statusLabel,
+              style: Ds.t.caption.copyWith(
+                  fontWeight: FontWeight.w500, color: dsToneFg(statusTone))),
+          ),
       ]),
     );
   }

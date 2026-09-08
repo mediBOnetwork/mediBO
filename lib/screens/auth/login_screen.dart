@@ -11,6 +11,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -19,6 +20,7 @@ import '../../app_state.dart';
 import '../../services/ui_copy.dart';
 import '../../models/cart_model.dart';
 import '../../services/gis_auth.dart';
+import '../../services/signin_diag.dart';
 import 'google_flow.dart';
 import '../../user_state.dart';
 import '../../utils/render_log.dart';
@@ -46,25 +48,35 @@ typedef NativeGoogleTokens = ({String? idToken, String? accessToken});
 typedef NativeGoogleSignIn = Future<NativeGoogleTokens?> Function(
     String serverClientId);
 
+/// CHANGE #275 — records one failed sign-in attempt and returns the backend's
+/// advice on what (if anything) to show. Matches [SignInDiag.note].
+typedef DiagNote = Future<DiagAdvice?> Function({
+  required String stage,
+  required String code,
+  String? description,
+  String? details,
+  int? elapsedMs,
+});
+
 /// The real native sign-in, using google_sign_in 7.x. Runs ONLY on Android (the
 /// caller gates on the platform); on web this function is never invoked.
 ///
-/// Cancellation is a null return, not an error — the login screen stays put and
-/// shows nothing. Any other GoogleSignInException propagates so the caller can
-/// surface its message.
+/// CHANGE #275 — NOTHING is swallowed here any more. It used to convert
+/// `GoogleSignInExceptionCode.canceled` into a null return ("the user said
+/// no"), and that is precisely how the Play-build failure went silent: Android
+/// Credential Manager reports a provider-side refusal — including an app whose
+/// signing certificate is not on a registered Android OAuth client — as a
+/// GetCredentialCancellationException, which the plugin maps to `canceled`.
+/// The account sheet appears, the user picks an account, the provider fails,
+/// and the app called it a cancellation. Every exception now reaches the
+/// caller, which records the real code and asks the backend what to say.
 Future<NativeGoogleTokens?> _defaultNativeGoogleSignIn(
     String serverClientId) async {
   final gsi = GoogleSignIn.instance;
   await gsi.initialize(serverClientId: serverClientId);
 
-  final GoogleSignInAccount account;
-  try {
-    account = await gsi.authenticate(scopeHint: const ['email', 'profile']);
-  } on GoogleSignInException catch (e) {
-    // The user closed the sheet — an answer, not a failure.
-    if (e.code == GoogleSignInExceptionCode.canceled) return null;
-    rethrow;
-  }
+  final GoogleSignInAccount account =
+      await gsi.authenticate(scopeHint: const ['email', 'profile']);
 
   final idToken = account.authentication.idToken;
 
@@ -101,11 +113,15 @@ class SupabaseLoginApi implements LoginApi {
     bool? isAndroid,
     NativeGoogleSignIn? nativeSignIn,
     Future<void> Function(String idToken, String? accessToken)? finishNative,
+    // CHANGE #275 — the failure recorder, injectable so the protected test can
+    // assert the exact code that gets recorded with no Supabase behind it.
+    DiagNote? diagNote,
   })  : _oneTap = oneTap ?? gisPromptOneTap,
         _popup = popup ?? gisPopupSignIn,
         _isAndroid = isAndroid ?? (!kIsWeb && defaultTargetPlatform == TargetPlatform.android),
         _nativeSignIn = nativeSignIn ?? _defaultNativeGoogleSignIn,
-        _finishNativeInjected = finishNative;
+        _finishNativeInjected = finishNative,
+        _diagNote = diagNote ?? SignInDiag.note;
 
   final Future<GoogleCredential> Function() _oneTap;
   final Future<GoogleCredential> Function({
@@ -120,6 +136,7 @@ class SupabaseLoginApi implements LoginApi {
   final NativeGoogleSignIn _nativeSignIn;
   final Future<void> Function(String idToken, String? accessToken)?
       _finishNativeInjected;
+  final DiagNote _diagNote;
 
   SupabaseClient get _c => Supabase.instance.client;
 
@@ -200,35 +217,127 @@ class SupabaseLoginApi implements LoginApi {
               accessToken: accessToken,
             );
 
+  /// Records a failed attempt and turns the backend's advice into the result
+  /// this screen renders. CHANGE #275.
+  ///
+  /// The RULE: the platform's own [code] is what gets recorded — never a
+  /// rewording, never a swallow — and the sentence the user reads is whatever
+  /// `auth_diag_note` sends back. When the backend has nothing to say (offline,
+  /// or `show:false` for a genuine cancellation) we fall back to [fallback],
+  /// which is itself a backend string.
+  Future<GoogleResult> _recordAndReport({
+    required String stage,
+    required String code,
+    required GoogleOutcome outcome,
+    String? description,
+    String? details,
+    int? elapsedMs,
+    String? fallback,
+  }) async {
+    final advice = await _diagNote(
+      stage: stage,
+      code: code,
+      description: description,
+      details: details,
+      elapsedMs: elapsedMs,
+    );
+    if (advice != null && advice.show && advice.message != null) {
+      // The backend chose to speak: its sentence wins, and it carries the code.
+      return (outcome: GoogleOutcome.suppressed, message: advice.message);
+    }
+    return (outcome: outcome, message: fallback);
+  }
+
   /// The Android native token flow. Kept entirely separate from the web path so
   /// nothing here can alter web behaviour.
   ///
-  ///  * cancel  -> closed, no message (the user said no)
-  ///  * no token -> suppressed, backend's [unavailableNote] (never invented)
-  ///  * signed in -> signedIn
-  ///  * auth error -> suppressed, the error's own message
+  /// CHANGE #275 — every exit that is not `signedIn` is RECORDED with the real
+  /// platform code before anything is decided, so a silent failure is now
+  /// impossible: even a cancellation the user never made leaves a row in
+  /// `auth_diag` carrying the code, the description, the app version and the
+  /// running APK's signing SHA-1.
+  ///
+  ///  * cancel     -> whatever the backend says for `canceled` (closed if silent)
+  ///  * no token   -> suppressed, backend's [unavailableNote] (never invented)
+  ///  * signed in  -> signedIn
+  ///  * auth error -> suppressed, the backend's sentence for the code
   Future<GoogleResult> _googleSignInAndroid(String unavailableNote) async {
     _logNow('c668_native', 'android');
+    // CHANGE #279 — record the client id that is about to be sent, so every
+    // auth_diag row (and the sentence the user reads) names the id that was
+    // actually used instead of one assumed after the fact.
+    SignInDiag.clientId = kGoogleWebClientId;
+    final sw = Stopwatch()..start();
     final NativeGoogleTokens? tokens;
     try {
       tokens = await _nativeSignIn(kGoogleWebClientId);
+    } on GoogleSignInException catch (e) {
+      // THE bug this command exists for: `canceled` is what Credential Manager
+      // reports when the Google provider itself refuses (an unregistered
+      // signing certificate, most often), and it used to be treated as the
+      // user saying no. It is now recorded like any other failure.
+      _logNow('c668_native', 'gsi_${e.code.name}');
+      return _recordAndReport(
+        stage: 'authenticate',
+        code: e.code.name,
+        outcome: e.code == GoogleSignInExceptionCode.canceled
+            ? GoogleOutcome.closed
+            : GoogleOutcome.suppressed,
+        description: e.description,
+        details: e.details?.toString(),
+        elapsedMs: sw.elapsedMilliseconds,
+        fallback: e.code == GoogleSignInExceptionCode.canceled
+            ? null
+            : (e.description ?? e.code.name),
+      );
+    } on PlatformException catch (e) {
+      // MissingPluginException lands here too — that is what a release build
+      // that stripped the plugin looks like from Dart.
+      _logNow('c668_native', 'platform_error');
+      return _recordAndReport(
+        stage: 'authenticate',
+        code: e is MissingPluginException ? 'plugin_missing' : 'platform_error',
+        outcome: GoogleOutcome.suppressed,
+        description: e.message,
+        details: '${e.code} ${e.details ?? ''}'.trim(),
+        elapsedMs: sw.elapsedMilliseconds,
+        fallback: e.message ?? e.code,
+      );
     } catch (e) {
       _logNow('c668_native', 'signin_error');
-      return (
+      return _recordAndReport(
+        stage: 'authenticate',
+        code: e is MissingPluginException ? 'plugin_missing' : 'unknownError',
         outcome: GoogleOutcome.suppressed,
-        message: e is AuthException ? e.message : e.toString(),
+        description: e.toString(),
+        elapsedMs: sw.elapsedMilliseconds,
+        fallback: e is AuthException ? e.message : e.toString(),
       );
     }
-    // Cancelled sheet — stay put, show nothing.
+    // A null return from the injected seam still means the sheet was closed —
+    // recorded, because we cannot tell a real cancellation from a refused one.
     if (tokens == null) {
       _logNow('c668_native', 'cancelled');
-      return (outcome: GoogleOutcome.closed, message: null);
+      return _recordAndReport(
+        stage: 'authenticate',
+        code: 'canceled',
+        outcome: GoogleOutcome.closed,
+        description: 'native sign-in returned no account',
+        elapsedMs: sw.elapsedMilliseconds,
+      );
     }
     final idToken = tokens.idToken;
     if (idToken == null || idToken.isEmpty) {
       // No id token: do NOT call Supabase. Show the backend's own note.
       _logNow('c668_native', 'no_id_token');
-      return (outcome: GoogleOutcome.suppressed, message: unavailableNote);
+      return _recordAndReport(
+        stage: 'id_token',
+        code: 'no_id_token',
+        outcome: GoogleOutcome.suppressed,
+        description: 'account returned without an id token',
+        elapsedMs: sw.elapsedMilliseconds,
+        fallback: unavailableNote,
+      );
     }
     try {
       await _finishNative(idToken, tokens.accessToken);
@@ -236,10 +345,25 @@ class SupabaseLoginApi implements LoginApi {
       return (outcome: GoogleOutcome.signedIn, message: null);
     } on AuthException catch (e) {
       _logNow('c668_native', 'auth_error');
-      return (outcome: GoogleOutcome.suppressed, message: e.message);
+      return _recordAndReport(
+        stage: 'supabase',
+        code: 'supabase_auth_error',
+        outcome: GoogleOutcome.suppressed,
+        description: e.message,
+        details: e.statusCode,
+        elapsedMs: sw.elapsedMilliseconds,
+        fallback: e.message,
+      );
     } catch (e) {
       _logNow('c668_native', 'error');
-      return (outcome: GoogleOutcome.suppressed, message: e.toString());
+      return _recordAndReport(
+        stage: 'supabase',
+        code: 'unknownError',
+        outcome: GoogleOutcome.suppressed,
+        description: e.toString(),
+        elapsedMs: sw.elapsedMilliseconds,
+        fallback: e.toString(),
+      );
     }
   }
 

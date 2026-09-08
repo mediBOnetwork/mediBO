@@ -2,11 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../../models/user_profile.dart';
 import '../../services/ui_copy.dart';
 import '../../user_state.dart';
 import '../../utils/render_log.dart';
 import '../../widgets/code_field.dart';
+import '../../widgets/customer_registration_form.dart';
 
 // ─── Role enum ───────────────────────────────────────────────────────────────
 
@@ -55,11 +55,16 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
   _Role _role = _Role.pharmacy;
   final _formKey = GlobalKey<FormState>();
 
+  // CHANGE #1887 — self-signup renders THE registration form, the same widget
+  // and the same customer_form_schema() field list as Import customer and
+  // Convert lead. Nothing about the pharmacy fields is written in this file
+  // any more.
+  late final CustomerFormController _pharmacyForm =
+      CustomerFormController(formContext: 'signup');
+
   // ── Pharmacy fields ──────────────────────────────────────────────────────
   final _customerNameCtrl = TextEditingController();
   final _pharmacyCtrl = TextEditingController();
-  String? _storeType;
-  String? _rangeZone;
   final _addressCtrl = TextEditingController();
   final _cityCtrl = TextEditingController();
   final _stateCtrl = TextEditingController();
@@ -71,7 +76,6 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
   final _dl20bCtrl = TextEditingController();
   final _dl21bCtrl = TextEditingController();
   final _gstCtrl = TextEditingController();
-  String? _paymentTerm;
   final _customerCodeCtrl = TextEditingController();
   CodeStatus _customerCodeStatus = CodeStatus.idle;
 
@@ -128,23 +132,6 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
   String? _saveError;
 
   // ── Static option lists ──────────────────────────────────────────────────
-  List<String> get _storeTypes => [
-    c('business_details.store_type_retail'),
-    c('business_details.store_type_hospital'),
-    c('business_details.store_type_clinic'),
-    c('business_details.store_type_wholesale'),
-    c('business_details.store_type_other'),
-  ];
-  List<String> get _rangeZones => [
-    c('business_details.range_local'),
-    c('business_details.range_city'),
-    c('business_details.range_district'),
-    c('business_details.range_regional'),
-  ];
-  List<String> get _paymentTerms => [
-    c('business_details.payment_advance'),
-    c('business_details.payment_cod'),
-  ];
   List<String> get _idProofTypes => [
     c('business_details.id_proof_aadhaar'),
     c('business_details.id_proof_pan'),
@@ -169,6 +156,8 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
       _mrPhoneCtrl.text = stripped;
       _coPhoneCtrl.text = stripped;
       _dpPhoneCtrl.text = stripped;
+      _pharmacyForm.setValue('whatsapp_no', stripped);
+      _pharmacyForm.setValue('phone', stripped);
     }
     if (widget.email.isNotEmpty) {
       _emailCtrl.text = widget.email;
@@ -176,6 +165,7 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
       _mrEmailCtrl.text = widget.email;
       _coEmailCtrl.text = widget.email;
       _dpEmailCtrl.text = widget.email;
+      _pharmacyForm.setValue('email', widget.email);
     }
   }
 
@@ -194,6 +184,7 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
       _coWebsiteCtrl, _dpNameCtrl, _dpPhoneCtrl, _dpEmailCtrl, _dpZoneCtrl,
       _dpCityCtrl, _dpStateCtrl, _dpAddressCtrl,
     ]) c.dispose();
+    _pharmacyForm.dispose();
     super.dispose();
   }
 
@@ -215,6 +206,20 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
   // ── Submit routing ───────────────────────────────────────────────────────
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
+    if (_role == _Role.pharmacy) {
+      // The required set is the backend's, and so is the sentence.
+      final missing = _pharmacyForm.missingRequired();
+      if (missing.isNotEmpty) {
+        setState(() {
+          _saveError = '${_pharmacyForm.text('missing_required_message')} '
+              '${missing.map(_pharmacyForm.labelOf).join(', ')}';
+          for (final k in missing) {
+            _pharmacyForm.flagged.add(k);
+          }
+        });
+        return;
+      }
+    }
     setState(() { _saving = true; _saveError = null; });
     try {
       switch (_role) {
@@ -238,29 +243,11 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
   }
 
   Future<void> _savePharmacy() async {
-    final profile = UserProfile(
-      userId: widget.userId,
-      customerName: _customerNameCtrl.text.trim(),
-      pharmacyName: _pharmacyCtrl.text.trim(),
-      storeType: _storeType!,
-      rangeZone: _rangeZone!,
-      addressLocal: _addressCtrl.text.trim(),
-      city: _cityCtrl.text.trim(),
-      state: _stateCtrl.text.trim(),
-      pincode: _pincodeCtrl.text.trim(),
-      storeLocationLink: _storeLocationCtrl.text.trim().isNotEmpty ? _storeLocationCtrl.text.trim() : null,
-      whatsappNo: _whatsappCtrl.text.trim(),
-      otherContactNo: _otherContactCtrl.text.trim(),
-      email: _emailCtrl.text.trim(),
-      dl20b: _dl20bCtrl.text.trim(),
-      dl21b: _dl21bCtrl.text.trim().isNotEmpty ? _dl21bCtrl.text.trim() : null,
-      gstNo: _gstCtrl.text.trim().isNotEmpty ? _gstCtrl.text.trim().toUpperCase() : null,
-      paymentTerm: _paymentTerm!,
-      customerCode: _customerCodeCtrl.text.trim().toUpperCase(),
-    );
     // #571 — goes through save_customer_profile(), which keys the write to the
     // ACCOUNT and refuses any client-supplied approval flag.
-    await UserState.read(context).saveProfile(profile.toInsertJson());
+    // #1887 — the payload is the schema's own field list, verbatim; the
+    // backend lands registration_stage on whatever the data supports.
+    await UserState.read(context).saveProfile(_pharmacyForm.payload());
   }
 
   Future<void> _saveSupplier() async {
@@ -460,61 +447,10 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
     );
   }
 
-  // ── Pharmacy form (unchanged) ──────────────────────────────────────────
+  // ── Pharmacy form — THE registration form (CHANGE #1887) ───────────────
   List<Widget> _buildPharmacyForm() => [
-    _SectionHeader(icon: Icons.storefront_outlined, title: c('business_details.sec_business')),
-    const SizedBox(height: 14),
-    _Field(label: c('business_details.ph_customer_name_label'), required: true, controller: _customerNameCtrl, hint: c('business_details.ph_customer_name_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_name_required') : null),
-    const SizedBox(height: 14),
-    _Field(label: c('business_details.ph_pharmacy_name_label'), required: true, controller: _pharmacyCtrl, hint: c('business_details.ph_pharmacy_name_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_business_name_required') : null),
-    const SizedBox(height: 14),
-    _Dropdown(label: c('business_details.dd_store_type'), required: true, value: _storeType, items: _storeTypes, onChanged: (v) => setState(() => _storeType = v), validator: (v) => v == null ? c('business_details.err_select_store_type') : null),
-    const SizedBox(height: 14),
-    _Dropdown(label: c('business_details.dd_range_zone'), required: true, value: _rangeZone, items: _rangeZones, onChanged: (v) => setState(() => _rangeZone = v), validator: (v) => v == null ? c('business_details.err_select_range') : null),
-    const SizedBox(height: 28),
-    _SectionHeader(icon: Icons.location_on_outlined, title: c('business_details.sec_address')),
-    const SizedBox(height: 14),
-    _Field(label: c('business_details.ph_address_label'), required: true, controller: _addressCtrl, hint: c('business_details.ph_address_hint'), maxLines: 2, validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_address_required') : null),
-    const SizedBox(height: 14),
-    Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Expanded(child: _Field(label: c('business_details.ph_city_label'), required: true, controller: _cityCtrl, hint: c('business_details.ph_city_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_required') : null)),
-      const SizedBox(width: 12),
-      Expanded(child: _Field(label: c('business_details.ph_state_label'), required: true, controller: _stateCtrl, hint: c('business_details.ph_state_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_required') : null)),
-    ]),
-    const SizedBox(height: 14),
-    Row(children: [SizedBox(width: 160, child: _Field(label: c('business_details.ph_pincode_label'), required: true, controller: _pincodeCtrl, hint: c('business_details.ph_pincode_hint'), keyboardType: TextInputType.number, maxLength: 6, inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(6)], validator: (v) { if (v == null || v.trim().isEmpty) return c('business_details.err_required'); if (v.trim().length != 6) return c('business_details.err_6_digits'); return null; }))]),
-    const SizedBox(height: 14),
-    _Field(label: c('business_details.ph_store_link_label'), controller: _storeLocationCtrl, hint: c('business_details.ph_store_link_hint'), keyboardType: TextInputType.url, capitalization: TextCapitalization.none),
-    const SizedBox(height: 28),
-    _SectionHeader(icon: Icons.phone_outlined, title: c('business_details.sec_contact')),
-    const SizedBox(height: 14),
-    _Field(label: c('business_details.ph_whatsapp_label'), required: true, controller: _whatsappCtrl, hint: c('business_details.ph_whatsapp_hint'), keyboardType: TextInputType.phone, maxLength: 10, inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)], validator: (v) { if (v == null || v.trim().isEmpty) return c('business_details.err_required'); if (v.trim().length != 10) return c('business_details.err_10_digit_number'); return null; }),
-    const SizedBox(height: 14),
-    _Field(label: c('business_details.ph_other_contact_label'), controller: _otherContactCtrl, hint: c('business_details.ph_other_contact_hint'), keyboardType: TextInputType.phone, maxLength: 10, inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)], validator: (v) { if (v == null || v.trim().isEmpty) return null; if (v.trim().length != 10) return c('business_details.err_10_digit_number'); return null; }),
-    const SizedBox(height: 14),
-    _Field(label: c('business_details.ph_email_label'), required: widget.email.isEmpty, controller: _emailCtrl, hint: c('business_details.ph_email_hint'), keyboardType: TextInputType.emailAddress, capitalization: TextCapitalization.none, readOnly: widget.email.isNotEmpty, validator: (v) { if (v == null || v.trim().isEmpty) return c('business_details.err_required'); if (!v.trim().contains('@')) return c('business_details.err_invalid_email'); return null; }),
-    const SizedBox(height: 28),
-    _SectionHeader(icon: Icons.verified_outlined, title: c('business_details.sec_drug_licenses')),
-    const SizedBox(height: 14),
-    _Field(label: c('business_details.ph_dl20b_label'), required: true, controller: _dl20bCtrl, hint: c('business_details.ph_dl20b_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_dl20b_required') : null),
-    const SizedBox(height: 14),
-    _Field(label: c('business_details.ph_dl21b_label'), controller: _dl21bCtrl, hint: c('business_details.ph_dl21b_hint')),
-    const SizedBox(height: 14),
-    _Field(label: c('business_details.ph_gst_label'), controller: _gstCtrl, hint: c('business_details.ph_gst_hint'), maxLength: 15, capitalization: TextCapitalization.characters, validator: (v) { if (v == null || v.trim().isEmpty) return null; final gst = v.trim().toUpperCase(); if (!RegExp(r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$').hasMatch(gst)) return c('business_details.err_invalid_gstin'); return null; }),
-    const SizedBox(height: 28),
-    _SectionHeader(icon: Icons.manage_accounts_outlined, title: c('business_details.sec_account_setup')),
-    const SizedBox(height: 14),
-    _Dropdown(label: c('business_details.dd_payment_term'), required: true, value: _paymentTerm, items: _paymentTerms, onChanged: (v) => setState(() => _paymentTerm = v), validator: (v) => v == null ? c('business_details.err_select_payment_term') : null),
-    const SizedBox(height: 14),
-    CodeField(
-      controller: _customerCodeCtrl,
-      label: c('business_details.ph_customer_code_label'),
-      hint: c('business_details.ph_customer_code_hint'),
-      isTaken: (code) async =>
-          await Supabase.instance.client.rpc('is_customer_code_taken', params: {'p_code': code}) as bool,
-      onStatusChanged: (s) => setState(() => _customerCodeStatus = s),
-    ),
-  ];
+        CustomerRegistrationForm(controller: _pharmacyForm),
+      ];
 
   // ── Supplier form ──────────────────────────────────────────────────────
   List<Widget> _buildSupplierForm() => [

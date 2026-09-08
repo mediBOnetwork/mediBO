@@ -521,3 +521,383 @@ begin
   return v;
 end;
 $function$;
+
+
+-- ── 10. CMD #1868's filter lane learns the Archived view ───────────────────
+-- Archived is a filter-state key, so it normalises, pages, counts and saves
+-- into a view exactly like every other filter — and the existing filter row
+-- draws its toggle with no client change.
+CREATE OR REPLACE FUNCTION public._sleads_filters_norm(p_filters jsonb)
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE
+ SET search_path TO 'public'
+AS $function$
+  with cfg as (
+    select coalesce((select value from app_settings where key='sleads_filters'), '{}'::jsonb) as v
+  ), f as (
+    select coalesce(p_filters, '{}'::jsonb) as v
+  )
+  select jsonb_build_object(
+    'classes', coalesce(
+       (select jsonb_agg(x) from jsonb_array_elements_text((select v->'classes' from f)) x
+         where btrim(x) <> ''), '[]'::jsonb),
+    'preset',       nullif(btrim(coalesce((select v->>'preset' from f), '')), ''),
+    'city',         nullif(btrim(coalesce((select v->>'city' from f), '')), ''),
+    'search',       nullif(btrim(coalesce((select v->>'search' from f), '')), ''),
+    'status',       nullif(btrim(coalesce((select v->>'status' from f), '')), ''),
+    -- CMD #1869 — the Archived view is a filter, so it saves into a view,
+    -- pages and counts exactly like every other filter.
+    'archived',     coalesce(((select v->>'archived' from f))::boolean, false),
+    'min_score',    greatest(0, coalesce(
+                      ((select v->>'min_score' from f))::int,
+                      ((select v->'min_score'->>'default' from cfg))::int, 0)),
+    'with_phone',       coalesce(((select v->>'with_phone' from f))::boolean, false),
+    'open_now',         coalesce(((select v->>'open_now' from f))::boolean, false),
+    'with_email',       coalesce(((select v->>'with_email' from f))::boolean, false),
+    'show_non_targets', coalesce(((select v->>'show_non_targets' from f))::boolean, false),
+    'show_closed',      coalesce(((select v->>'show_closed' from f))::boolean, false),
+    'show_matched',     coalesce(((select v->>'show_matched' from f))::boolean, false),
+    'show_stale',       coalesce(((select v->>'show_stale' from f))::boolean, false)
+  );
+$function$;
+
+CREATE OR REPLACE FUNCTION public.sleads_page(p_city text DEFAULT NULL::text, p_class text DEFAULT NULL::text, p_targets_only boolean DEFAULT true, p_with_phone boolean DEFAULT false, p_search text DEFAULT NULL::text, p_status text DEFAULT NULL::text, p_open_now boolean DEFAULT false, p_with_email boolean DEFAULT false, p_limit integer DEFAULT 50, p_offset integer DEFAULT 0, p_classes text[] DEFAULT NULL::text[], p_include_closed boolean DEFAULT false, p_filters jsonb DEFAULT NULL::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_copy   jsonb;
+  v_rows   jsonb := '[]'::jsonb;
+  v_total  bigint := 0;
+  v_n      integer := 0;
+  v_limit  integer := least(greatest(coalesce(p_limit, 50), 1), 100);
+  v_offset integer := greatest(coalesce(p_offset, 0), 0);
+  v_next   integer;
+  v_more   boolean;
+  v_f      jsonb;
+  v_cls    text[];
+begin
+  if get_my_role() not in ('admin','super_admin') then raise exception 'not_authorized'; end if;
+
+  select coalesce(jsonb_object_agg(key, value), '{}'::jsonb)
+    into v_copy from ui_copy where key like 'sleads.%';
+
+  -- One filter shape, whichever way the caller spelled it.
+  v_f := case
+           when p_filters is not null then public._sleads_filters_norm(p_filters)
+           else public._sleads_filters_norm(jsonb_build_object(
+                  'city', p_city,
+                  'search', p_search,
+                  'status', p_status,
+                  'with_phone', coalesce(p_with_phone,false),
+                  'open_now', coalesce(p_open_now,false),
+                  'with_email', coalesce(p_with_email,false),
+                  'show_non_targets', not coalesce(p_targets_only, true),
+                  'show_closed', coalesce(p_include_closed,false),
+                  'show_matched', coalesce(p_include_closed,false),
+                  'classes', case when coalesce(p_classes, case when nullif(btrim(coalesce(p_class,'')),'') is null
+                                                            then null
+                                                            else string_to_array(p_class, ',') end) is null
+                               then '[]'::jsonb
+                               else to_jsonb(coalesce(p_classes, string_to_array(p_class, ','))) end))
+         end;
+
+  select coalesce(array_agg(x), null) into v_cls
+    from jsonb_array_elements_text(v_f->'classes') x;
+
+  with page as (
+    select g.*, row_number() over () as ord
+      from public.get_scraped_leads(
+             p_city             => v_f->>'city',
+             p_class            => null,
+             p_targets_only     => true,
+             p_with_phone       => (v_f->>'with_phone')::boolean,
+             p_search           => v_f->>'search',
+             -- CMD #1869
+      p_status           => case when (v_f->>'archived')::boolean
+                             then 'archived' else v_f->>'status' end,
+             p_open_now         => (v_f->>'open_now')::boolean,
+             p_with_email       => (v_f->>'with_email')::boolean,
+             p_limit            => v_limit,
+             p_offset           => v_offset,
+             p_classes          => v_cls,
+             p_include_closed   => false,
+             p_min_score        => (v_f->>'min_score')::int,
+             p_show_non_targets => (v_f->>'show_non_targets')::boolean,
+             p_show_closed      => (v_f->>'show_closed')::boolean,
+             p_show_matched     => (v_f->>'show_matched')::boolean,
+             p_show_stale       => (v_f->>'show_stale')::boolean,
+             p_preset           => v_f->>'preset') g
+  )
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id',            p.id,
+           'title',         p.name,
+           'type_label',    nullif(btrim(coalesce(p.type_label, '')), ''),
+           'rating_label',  case when p.rating is not null
+                              then trim(to_char(p.rating, 'FM90.0')) || ' ★'
+                                   || case when coalesce(p.user_ratings, 0) > 0
+                                        then ' (' || to_char(p.user_ratings, 'FM999,999,999') || ')'
+                                        else '' end
+                            end,
+           'open_label',    case when p.open_now is true
+                                 then coalesce(v_copy->>'sleads.open_now', 'Open now')
+                                 when p.open_now is false
+                                 then coalesce(v_copy->>'sleads.closed_now', 'Closed now') end,
+           'open_bg',       case when p.open_now is true then '#D1FAE5'
+                                 when p.open_now is false then '#FEE2E2' end,
+           'open_fg',       case when p.open_now is true then '#065F46'
+                                 when p.open_now is false then '#991B1B' end,
+           'address_label', nullif(btrim(coalesce(p.short_address, p.address, '')), ''),
+           'phone_label',   nullif(btrim(coalesce(p.phone, '')), ''),
+           'has_photo',     (p.photo_url is not null and p.photo_url <> ''),
+           -- CMD #1869 — the class chip and the Restore button, per row.
+           'class_key',     p.effective_class,
+           'class_label',   coalesce(v_copy->>('sleads.filters.class_' || p.effective_class),
+                                     initcap(replace(p.effective_class, '_', ' '))),
+           'archived',      (p.status = 'archived')
+         ) order by p.ord), '[]'::jsonb),
+         coalesce(max(p.total_count), 0),
+         count(*)
+    into v_rows, v_total, v_n
+    from page p;
+
+  v_next := v_offset + v_n;
+  v_more := v_next < v_total;
+
+  return jsonb_build_object(
+    'ok',            true,
+    'page_size',     v_limit,
+    'offset',        v_offset,
+    'rows',          v_rows,
+    'total',         v_total,
+    'filters',       v_f,
+    'count_chip',    replace(coalesce(v_copy->>'sleads.filters.count_chip','S Leads ({n})'),
+                             '{n}', to_char(v_total, 'FM999,999,999')),
+    'count_label',   replace(case when v_total = 1
+                               then coalesce(v_copy->>'sleads.count_one',  '{n} lead')
+                               else coalesce(v_copy->>'sleads.count_many', '{n} leads') end,
+                             '{n}', to_char(v_total, 'FM999,999,999')),
+    'has_more',      v_more,
+    'next_offset',   case when v_more then v_next end,
+    -- CMD #1869 — the bulk toolbar's labels and rules travel with the page.
+    'bulk',          public.sleads_bulk_block(),
+    'empty_label',   case when (v_f->>'archived')::boolean
+                       then coalesce(v_copy->>'sleads.archived_empty', 'Nothing archived')
+                       else coalesce(v_copy->>'sleads.empty', '0 leads match these filters') end,
+    'more_label',    coalesce(v_copy->>'sleads.loading_more', 'Loading more…'),
+    'end_label',     case when v_total > 0 and not v_more
+                       then replace(coalesce(v_copy->>'sleads.end', 'All {n} leads shown'),
+                                    '{n}', to_char(v_total, 'FM999,999,999')) end
+  );
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.sleads_count(p_filters jsonb DEFAULT '{}'::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_f     jsonb;
+  v_total bigint := 0;
+  v_tpl   text;
+  v_cls   text[];
+begin
+  if get_my_role() not in ('admin','super_admin') then raise exception 'not_authorized'; end if;
+
+  v_f := public._sleads_filters_norm(p_filters);
+  select coalesce(array_agg(x), null) into v_cls
+    from jsonb_array_elements_text(v_f->'classes') x;
+
+  select coalesce(max(r.total_count), 0) into v_total
+    from public.get_scraped_leads(
+      p_city             => v_f->>'city',
+      p_class            => null,
+      p_targets_only     => true,
+      p_with_phone       => (v_f->>'with_phone')::boolean,
+      p_search           => v_f->>'search',
+      -- CMD #1869
+      p_status           => case when (v_f->>'archived')::boolean
+                             then 'archived' else v_f->>'status' end,
+      p_open_now         => (v_f->>'open_now')::boolean,
+      p_with_email       => (v_f->>'with_email')::boolean,
+      p_limit            => 1,
+      p_offset           => 0,
+      p_classes          => v_cls,
+      p_include_closed   => false,
+      p_min_score        => (v_f->>'min_score')::int,
+      p_show_non_targets => (v_f->>'show_non_targets')::boolean,
+      p_show_closed      => (v_f->>'show_closed')::boolean,
+      p_show_matched     => (v_f->>'show_matched')::boolean,
+      p_show_stale       => (v_f->>'show_stale')::boolean,
+      p_preset           => v_f->>'preset') r;
+
+  v_tpl := coalesce((select value #>> '{}' from ui_copy where key='sleads.filters.count_chip'),
+                    'S Leads ({n})');
+
+  return jsonb_build_object(
+    'ok',         true,
+    'total',      v_total,
+    'count_chip', replace(v_tpl, '{n}', to_char(v_total, 'FM999,999,999')),
+    'filters',    v_f);
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.sleads_filters(p_filters jsonb DEFAULT '{}'::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_f        jsonb;
+  v_cfg      jsonb;
+  v_copy     jsonb;
+  v_zone     smallint;
+  v_zone_lbl text;
+  v_stale    numeric;
+  v_counts   jsonb;
+  v_asof     date;
+  v_score    integer;
+  v_chips    jsonb;
+  v_total    bigint;
+begin
+  if get_my_role() not in ('admin','super_admin') then raise exception 'not_authorized'; end if;
+
+  v_f    := public._sleads_filters_norm(p_filters);
+  v_cfg  := coalesce((select value from app_settings where key='sleads_filters'), '{}'::jsonb);
+  v_zone := public.admin_active_zone();
+  v_asof := public.admin_active_date();
+  v_stale:= coalesce((v_cfg->>'stale_years')::numeric, 3);
+  v_score:= coalesce((v_f->>'min_score')::int, 0);
+
+  select coalesce(jsonb_object_agg(replace(key,'sleads.filters.',''), value), '{}'::jsonb)
+    into v_copy from ui_copy where key like 'sleads.filters.%';
+
+  v_zone_lbl := coalesce((select z.name from zones z where z.id = v_zone),
+                         v_copy->>'zone_all', 'All zones');
+
+  -- Facet counts: every filter EXCEPT the class/preset dimension itself, so a
+  -- chip's number is what tapping it would give you.
+  with base as (
+    select coalesce(nullif(btrim(s.manual_class), ''), s.lead_class, 'other') as eff_class
+      from scraped_leads s
+     where ((v_f->>'city') is null or s.city ilike (v_f->>'city'))
+       and (v_zone is null or public.zone_resolve(s.district, s.city, false) = v_zone)
+       and (s.scraped_at is null
+            or (s.scraped_at at time zone 'Asia/Kolkata')::date <= v_asof)
+       and (v_score = 0 or coalesce(s.lead_score,0) >= v_score)
+       and (not (v_f->>'with_phone')::boolean or s.phone is not null)
+       and (not (v_f->>'open_now')::boolean   or s.open_now is true)
+       and (not (v_f->>'with_email')::boolean or s.emails is not null)
+       -- CMD #1869 — archived leads are only ever counted in the archived view.
+       and (case when (v_f->>'archived')::boolean then s.status = 'archived'
+                 else s.status is distinct from 'archived' end)
+       and ((v_f->>'status') is null or s.status = (v_f->>'status'))
+       and ((v_f->>'show_non_targets')::boolean or coalesce(s.is_target,false))
+       and ((v_f->>'show_closed')::boolean
+            or coalesce(s.business_status,'OPERATIONAL') = 'OPERATIONAL')
+       and ((v_f->>'show_matched')::boolean
+            or (s.matched_customer_id is null and s.matched_supplier_id is null))
+       and ((v_f->>'show_stale')::boolean
+            or not (s.phone is null
+                    and coalesce(public._review_age_years(s.last_review_age), 99) >= v_stale))
+  )
+  select coalesce(jsonb_object_agg(eff_class, n), '{}'::jsonb), coalesce(sum(n), 0)
+    into v_counts, v_total
+    from (select eff_class, count(*) as n from base group by eff_class) t;
+
+  -- Chip list: order and labels are DATA, never a Dart list.
+  select jsonb_agg(chip order by ord) into v_chips from (
+    select 1 as ord, jsonb_build_object(
+      'key', 'all', 'kind', 'all',
+      'label', coalesce(v_copy->>'all_classes','All'),
+      'count', v_total,
+      'count_label', to_char(v_total,'FM999,999,999'),
+      'selected', (jsonb_array_length(v_f->'classes') = 0 and (v_f->>'preset') is null)) as chip
+    union all
+    select 2, jsonb_build_object(
+      'key', 'non_pharmacy', 'kind', 'preset',
+      'label', coalesce(v_copy->>'preset_non_pharmacy','Non-pharmacy'),
+      'count', c.n, 'count_label', to_char(c.n,'FM999,999,999'),
+      'selected', ((v_f->>'preset') is not distinct from 'non_pharmacy'))
+      from (select coalesce(sum((v_counts->>k)::bigint),0) as n
+              from (select jsonb_object_keys(v_counts) as k) kk
+             where k not in ('medical_store','chain','wholesaler')) c
+    union all
+    select 2 + t.ord, jsonb_build_object(
+      'key', t.key, 'kind', 'class',
+      'label', coalesce(v_copy->>('class_'||t.key), initcap(replace(t.key,'_',' '))),
+      'count', coalesce((v_counts->>t.key)::bigint, 0),
+      'count_label', to_char(coalesce((v_counts->>t.key)::bigint,0),'FM999,999,999'),
+      'selected', (v_f->'classes') ? t.key)
+      from (values ('medical_store',1),('chain',2),('wholesaler',3),('hospital',4),
+                   ('clinic',5),('lab',6),('alt_med',7),('other',8)) t(key, ord)
+  ) chips;
+
+  return jsonb_build_object(
+    'ok', true,
+    'filters', v_f,
+    'classes', jsonb_build_object(
+      'label', coalesce(v_copy->>'classes_label','Class'),
+      'chips', coalesce(v_chips,'[]'::jsonb)),
+    'hidden', jsonb_build_object(
+      'label', coalesce(v_copy->>'hidden_label','Hidden by default'),
+      'toggles', jsonb_build_array(
+        jsonb_build_object('key','show_non_targets',
+          'label', coalesce(v_copy->>'show_non_targets','Show non-targets'),
+          'hint',  coalesce(v_copy->>'show_non_targets_hint',''),
+          'value', (v_f->>'show_non_targets')::boolean),
+        jsonb_build_object('key','show_closed',
+          'label', coalesce(v_copy->>'show_closed','Show closed'),
+          'hint',  coalesce(v_copy->>'show_closed_hint',''),
+          'value', (v_f->>'show_closed')::boolean),
+        jsonb_build_object('key','show_matched',
+          'label', coalesce(v_copy->>'show_matched','Show matched'),
+          'hint',  coalesce(v_copy->>'show_matched_hint',''),
+          'value', (v_f->>'show_matched')::boolean),
+        jsonb_build_object('key','show_stale',
+          'label', coalesce(v_copy->>'show_stale','Show stale'),
+          'hint',  coalesce(v_copy->>'show_stale_hint',''),
+          'value', (v_f->>'show_stale')::boolean),
+        -- CMD #1869 — Archived is a toggle like the rest, so the existing
+        -- filter row draws it and a saved view can carry it.
+        jsonb_build_object('key','archived',
+          'label', coalesce(v_copy->>'archived','Archived'),
+          'hint',  replace(coalesce(v_copy->>'archived_hint',''), '{d}',
+                     greatest(1, coalesce((select value::text::int from app_settings
+                                            where key='lead_archive_days'), 30))::text),
+          'value', (v_f->>'archived')::boolean))),
+    'score', jsonb_build_object(
+      'label', coalesce(v_copy->>'score_label','Minimum score'),
+      'min',   coalesce((v_cfg->'min_score'->>'min')::int, 0),
+      'max',   coalesce((v_cfg->'min_score'->>'max')::int, 100),
+      'step',  coalesce((v_cfg->'min_score'->>'step')::int, 5),
+      'default', coalesce((v_cfg->'min_score'->>'default')::int, 0),
+      'value', v_score,
+      'value_label', case when v_score = 0
+                       then coalesce(v_copy->>'score_any','Any score')
+                       else replace(coalesce(v_copy->>'score_value','Score {n}+'),
+                                    '{n}', v_score::text) end),
+    'zone', jsonb_build_object(
+      'label', coalesce(v_copy->>'zone_label','Zone'),
+      'zone_id', v_zone,
+      'value_label', v_zone_lbl,
+      'hint', coalesce(v_copy->>'zone_hint','')),
+    'views', jsonb_build_object(
+      'label',       coalesce(v_copy->>'views_label','Saved views'),
+      'empty',       coalesce(v_copy->>'views_empty',''),
+      'save_label',  coalesce(v_copy->>'view_save','Save view'),
+      'name_hint',   coalesce(v_copy->>'view_name_hint','Name this view'),
+      'delete_label',coalesce(v_copy->>'view_delete','Delete'),
+      'items',       public._lead_views_json()),
+    'reset_label', coalesce(v_copy->>'reset','Reset filters'),
+    'count_chip',  replace(coalesce(v_copy->>'count_chip','S Leads ({n})'),
+                           '{n}', to_char(v_total,'FM999,999,999')),
+    'total', v_total);
+end;
+$function$;

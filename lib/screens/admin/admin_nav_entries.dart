@@ -1,7 +1,28 @@
 import 'package:flutter/material.dart';
 
+import '../../design_tokens.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
+import 'nav_registry_view.dart';
+import 'recon_screen.dart';
+
+/// CHANGE #471 — the door to Money › Reconciliation, opened from here rather
+/// than written inline in the shell.
+///
+/// `home_shell.dart` sits at 1,998 lines of a hard 2,000-line guard
+/// (test/protected/god_file_guard_test.dart), and the four lines a `case` and
+/// its import cost turned that guard red on the first attempt. The usual home
+/// for a door in that situation is `shell/shell_extra_routes.dart` — but that
+/// file is the most contended in the repo (nine commands were queued on it
+/// when this shipped), while this one is registered conflict-exempt precisely
+/// because it is only ever appended to. So the shell keeps a one-line case and
+/// the push lives here, next to the nav list it belongs to.
+///
+/// Authorisation is not the door: recon_home(), recon_run_detail() and
+/// recon_run_now() each gate on is_admin() and the screen prints whatever they
+/// answer.
+void openRecon(BuildContext context) => Navigator.push<void>(
+    context, MaterialPageRoute<void>(builder: (_) => const ReconScreen()));
 
 /// One item in an admin nav surface.
 class AdminNavEntry {
@@ -14,19 +35,44 @@ class AdminNavEntry {
   const AdminNavEntry(this.label, this.icon, {this.route});
 }
 
+/// CHANGE #653 — the ONE interface. Super admin, admin and partner share this
+/// nav; the only differentiator is the per-feature View/Write matrix, so every
+/// surface that renders a nav list renders it through here.
+///
+/// Pure on purpose (no Supabase, no BuildContext): [canView] is the caller's
+/// `Access.routeCanView`, which is a straight read of the `access_boot()`
+/// payload. An entry with no route is left in — a destination the registry has
+/// not catalogued yet must not silently disappear from the shell.
+List<AdminNavEntry> visibleNavEntries(
+    List<AdminNavEntry> entries, bool Function(String routeKey) canView) {
+  return entries
+      .where((e) => e.route == null || e.route!.isEmpty || canView(e.route!))
+      .toList(growable: false);
+}
+
 /// The five primary sections of the WIDE shell's top row, in render order.
 ///
 /// The wide shell starts at 900 px, and at that width this row plus the logo
 /// and the profile chip already needs nearly all of it. Anything added here
-/// clips rather than wraps — which is why the WhatsApp screens live in
-/// [kAdminOverflowNav] behind a "More" popup instead of as two more links.
+/// clips rather than wraps.
+///
+/// CHANGE #325 — that ceiling used to push the overflow into a "More" popup
+/// sharing one list with the profile dropdown, which is how ~20 features ended
+/// up in a dropdown. The overflow is gone: a destination that does not fit
+/// these five tabs belongs to a dashboard category, and the command palette
+/// reaches it in two keystrokes.
 List<AdminNavEntry> get kAdminTopNav => <AdminNavEntry>[
-      AdminNavEntry(c('admin_nav.top_dashboard'), Icons.dashboard_outlined),
-      AdminNavEntry(c('admin_nav.top_whatsapp'), Icons.forum_outlined),
-      AdminNavEntry(c('admin_nav.top_customers'), Icons.people_outline),
-      AdminNavEntry(c('admin_nav.top_suppliers'), Icons.inventory_2_outlined),
+      AdminNavEntry(c('admin_nav.top_dashboard'), Icons.dashboard_outlined,
+          route: 'dashboard'),
+      AdminNavEntry(c('admin_nav.top_whatsapp'), Icons.forum_outlined,
+          route: 'whatsapp'),
+      AdminNavEntry(c('admin_nav.top_customers'), Icons.people_outline,
+          route: 'customers'),
+      AdminNavEntry(c('admin_nav.top_suppliers'), Icons.inventory_2_outlined,
+          route: 'suppliers'),
       AdminNavEntry(
-          c('admin_nav.top_fulfillment'), Icons.local_shipping_outlined),
+          c('admin_nav.top_fulfillment'), Icons.local_shipping_outlined,
+          route: 'fulfillment'),
     ];
 
 /// The NARROW shell's bottom bar, in render order. Five tabs is the ceiling —
@@ -37,241 +83,62 @@ List<AdminNavEntry> get kAdminTopNav => <AdminNavEntry>[
 /// fits the narrow tab. That is why this list is separate from [kAdminTopNav]
 /// rather than shared.
 List<AdminNavEntry> get kAdminBottomNav => <AdminNavEntry>[
-      AdminNavEntry(c('admin_nav.bottom_dashboard'), Icons.dashboard_outlined),
-      AdminNavEntry(c('admin_nav.bottom_whatsapp'), Icons.forum_outlined),
-      AdminNavEntry(c('admin_nav.bottom_customers'), Icons.people_outline),
-      AdminNavEntry(c('admin_nav.bottom_suppliers'), Icons.inventory_2_outlined),
+      AdminNavEntry(c('admin_nav.bottom_dashboard'), Icons.dashboard_outlined,
+          route: 'dashboard'),
+      AdminNavEntry(c('admin_nav.bottom_whatsapp'), Icons.forum_outlined,
+          route: 'whatsapp'),
+      AdminNavEntry(c('admin_nav.bottom_customers'), Icons.people_outline,
+          route: 'customers'),
+      AdminNavEntry(c('admin_nav.bottom_suppliers'), Icons.inventory_2_outlined,
+          route: 'suppliers'),
       AdminNavEntry(
-          c('admin_nav.bottom_fulfill'), Icons.local_shipping_outlined),
+          c('admin_nav.bottom_fulfill'), Icons.local_shipping_outlined,
+          route: 'fulfillment'),
     ];
 
-/// Destinations that do not fit the top row, shown in its "More" popup AND —
-/// as the same list, not a second copy — in the mobile profile sheet via
-/// [AdminProfileMenuTiles]. Between those two surfaces every entry here is
-/// reachable at every viewport.
+/// CHANGE #325 — the profile dropdown, and NOTHING but the profile dropdown.
 ///
-/// All five WhatsApp screens live here rather than in [kAdminTopNav]. The top
-/// row is already at its ceiling: see that list's comment — at 900 px it plus
-/// the logo and the profile chip needs nearly the whole width, and even at
-/// 1024 px five more links of this length clip rather than wrap.
+/// This widget used to generate ~20 rows from `kAdminOverflowNav` plus eight
+/// hand-written ones, which is how the dropdown reached the thirty items Om
+/// counted. Both lists are gone. The rows it draws now are exactly
+/// `nav_registry().profile_menu`, and the backend admits only two features
+/// onto that surface — a CHECK constraint on `feature_registry` rejects
+/// `surface='profile'` for anything that is not View Profile or Logout. A
+/// future feature therefore CANNOT leak back in here: there is no list in this
+/// file to append it to, and the table would refuse it if there were.
 ///
-/// Every entry MUST have a `route`, and that key MUST have a case in
-/// `_handleAdminNav` in home_shell.dart. A key with no case renders a perfect
-/// row that does nothing on tap — the #645/#646 bug, three deploys deep.
-List<AdminNavEntry> get kAdminOverflowNav => <AdminNavEntry>[
-      AdminNavEntry(
-          c('admin_nav.overflow_wa_templates'), Icons.description_outlined,
-          route: 'wa_templates'),
-      AdminNavEntry(
-          c('admin_nav.overflow_wa_campaigns'), Icons.campaign_outlined,
-          route: 'wa_campaigns'),
-      AdminNavEntry(c('admin_nav.overflow_segments'), Icons.filter_alt_outlined,
-          route: 'wa_segments'),
-      AdminNavEntry(c('admin_nav.overflow_sequences'), Icons.timeline_outlined,
-          route: 'wa_drips'),
-      AdminNavEntry(
-          c('admin_nav.overflow_wa_ops'), Icons.settings_suggest_outlined,
-          route: 'wa_ops'),
-      // Sibling of registration approvals: the customer account/data-deletion
-      // queue (CHANGE #681). Badge count comes from
-      // admin_deletion_request_count(), passed in as a plain int so this file
-      // keeps its Supabase-free, VM-testable isolation.
-      AdminNavEntry(c('admin_nav.overflow_deletion_requests'),
-          Icons.person_remove_outlined,
-          route: 'deletion_requests'),
-    ];
-
-/// The wide shell's "More" popup, sitting after Fulfillment in the top row.
-///
-/// A popup rather than two more links: see [kAdminTopNav] — at the 900 px
-/// where the wide shell begins, two extra links clip the row.
-class AdminMoreNavMenu extends StatelessWidget {
-  final ValueChanged<String> onNav;
-
-  /// Live count for the Deletion Requests entry (admin_deletion_request_count).
-  final int deletionCount;
-
-  /// Dev Queue is the only super-admin-only overflow destination, so it is not
-  /// in [kAdminOverflowNav] (which is shown to every admin) — it is rendered
-  /// here conditionally instead.
-  final bool isSuperAdmin;
-
-  const AdminMoreNavMenu({
-    super.key,
-    required this.onNav,
-    this.deletionCount = 0,
-    this.isSuperAdmin = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return PopupMenuButton<String>(
-      tooltip: c('admin_nav.more_tooltip'),
-      offset: const Offset(0, 40),
-      onSelected: onNav,
-      itemBuilder: (_) => [
-        if (isSuperAdmin)
-          PopupMenuItem<String>(
-            value: 'dev_queue',
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              const Icon(Icons.terminal, size: 16, color: Color(0xFF1B7A43)),
-              const SizedBox(width: 10),
-              Flexible(
-                child: Text(c('dev_queue.nav_label'),
-                    style: const TextStyle(
-                        fontSize: 14, color: Color(0xFF1B7A43))),
-              ),
-            ]),
-          ),
-        for (final e in kAdminOverflowNav)
-          PopupMenuItem<String>(
-            value: e.route,
-            // min + Flexible: the popup constrains its items, and these two
-            // labels are long enough to clip against a narrow one.
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              (e.route == 'deletion_requests' && deletionCount > 0)
-                  ? Badge(
-                      label: Text('$deletionCount'),
-                      child: Icon(e.icon,
-                          size: 16, color: const Color(0xFF374151)))
-                  : Icon(e.icon, size: 16, color: const Color(0xFF374151)),
-              const SizedBox(width: 10),
-              Flexible(
-                child: Text(e.label,
-                    style: const TextStyle(
-                        fontSize: 14, color: Color(0xFF374151))),
-              ),
-            ]),
-          ),
-      ],
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.more_horiz, size: 16, color: Color(0xFF374151)),
-            const SizedBox(width: 5),
-            Text(c('admin_nav.more_label'),
-                style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: Color(0xFF374151))),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// The admin action rows of the mobile profile sheet, plus the row widget the
-/// whole sheet is built from.
-///
-/// This lives in its own file deliberately. home_shell.dart transitively pulls
-/// in web-only libraries (package:web / dart:html), so anything imported from
-/// it cannot be loaded by a Dart VM widget test — the same trap that left five
-/// test files silently never compiling before #635. Keeping these rows here,
-/// behind nothing heavier than material.dart and RenderLog, is what makes them
-/// testable at a phone viewport without a network or a Supabase session.
-///
-/// Every row dismisses the sheet and then hands its route key to [nav]. Those
-/// key strings must stay in step with `_handleAdminNav`'s switch in
-/// home_shell.dart, which is what actually opens the screen: a row whose key
-/// that switch does not handle renders perfectly and does nothing on tap. That
-/// was exactly the bug being fixed when this widget was extracted — #645/#646
-/// added WhatsApp Templates and Campaigns to the desktop-only nav row, and the
-/// router had no case for either.
+/// The labels, the icons, the order and the destructive tone all arrive in the
+/// payload; this file renders them and computes nothing.
 class AdminProfileMenuTiles extends StatelessWidget {
-  final bool isSuperAdmin;
-  final ValueChanged<String> nav;
+  /// `nav_registry().profile_menu`, in payload order.
+  final List<Map<String, dynamic>> items;
 
-  /// Live count for the Deletion Requests tile (admin_deletion_request_count).
-  final int deletionCount;
+  /// Fires the row's own `route_key`, untouched.
+  final ValueChanged<String> nav;
 
   const AdminProfileMenuTiles({
     super.key,
-    required this.isSuperAdmin,
+    required this.items,
     required this.nav,
-    this.deletionCount = 0,
   });
 
   @override
   Widget build(BuildContext context) {
+    RenderLog.write('c325_profile_menu_rows', items.length);
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (isSuperAdmin)
+        for (final item in items)
           AdminSheetTile(
-            icon: Icons.admin_panel_settings_outlined,
-            label: c('admin_nav.tile_manage_admins'),
-            color: const Color(0xFF1B7A43),
-            onTap: () { Navigator.pop(context); nav('manage_admins'); },
-          ),
-        if (isSuperAdmin)
-          Builder(builder: (_) {
-            RenderLog.write('c209_upi_tile_rendered', 1);
-            return AdminSheetTile(
-              icon: Icons.qr_code_outlined,
-              label: c('admin_nav.tile_payment_partner'),
-              color: const Color(0xFF1B7A43),
-              onTap: () { Navigator.pop(context); nav('payment_upi'); },
-            );
-          }),
-        if (isSuperAdmin)
-          AdminSheetTile(
-            icon: Icons.terminal,
-            label: c('dev_queue.nav_label'),
-            color: const Color(0xFF1B7A43),
-            onTap: () { Navigator.pop(context); nav('dev_queue'); },
-          ),
-        AdminSheetTile(
-          icon: Icons.add_business_outlined,
-          label: c('admin_nav.tile_add_supplier'),
-          onTap: () { Navigator.pop(context); nav('add_supplier'); },
-        ),
-        AdminSheetTile(
-          icon: Icons.person_add_outlined,
-          label: c('admin_nav.tile_add_customer'),
-          onTap: () { Navigator.pop(context); nav('add_customer'); },
-        ),
-        Builder(builder: (_) { RenderLog.write('c206_dropdown_addmed', 1); return const SizedBox.shrink(); }),
-        AdminSheetTile(
-          icon: Icons.medication_outlined,
-          label: c('admin_nav.tile_add_medicine'),
-          onTap: () { Navigator.pop(context); nav('add_medicine'); },
-        ),
-        AdminSheetTile(
-          icon: Icons.badge_outlined,
-          label: c('admin_nav.tile_mr_registrations'),
-          onTap: () { Navigator.pop(context); nav('mr'); },
-        ),
-        AdminSheetTile(
-          icon: Icons.business_outlined,
-          label: c('admin_nav.tile_company_registrations'),
-          onTap: () { Navigator.pop(context); nav('companies'); },
-        ),
-        AdminSheetTile(
-          icon: Icons.delivery_dining_outlined,
-          label: c('admin_nav.tile_delivery_partners'),
-          onTap: () { Navigator.pop(context); nav('delivery_partners'); },
-        ),
-        // #645/#646 shipped the WhatsApp screens but wired them only into
-        // admin_shell.dart's wide-viewport link row, so a phone had no way in.
-        //
-        // These rows are now GENERATED from [kAdminOverflowNav] rather than
-        // hand-written, so the popup and the sheet cannot drift: adding a
-        // WhatsApp screen to that one list reaches both viewports at once, and
-        // a label added to only one surface is no longer possible.
-        //
-        // None is gated on isSuperAdmin: every one of these screens calls RPCs
-        // that gate on get_my_role() and renders the backend's not_authorized
-        // answer itself.
-        for (final e in kAdminOverflowNav)
-          AdminSheetTile(
-            icon: e.icon,
-            label: e.label,
-            badgeCount:
-                e.route == 'deletion_requests' ? deletionCount : 0,
-            onTap: () { Navigator.pop(context); nav(e.route ?? ''); },
+            icon: navIcon((item['icon_key'] ?? '').toString()),
+            label: (item['label'] ?? '').toString(),
+            color: (item['tone'] ?? '') == 'danger'
+                ? Ds.c.danger
+                : const Color(0xFF374151),
+            onTap: () {
+              Navigator.pop(context);
+              nav((item['route_key'] ?? '').toString());
+            },
           ),
       ],
     );

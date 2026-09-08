@@ -46,6 +46,8 @@ import 'package:pharma_b2b/models/home_sections.dart';
 import 'package:pharma_b2b/models/storefront_p3.dart';
 import 'package:pharma_b2b/widgets/compact_product_card.dart';
 import 'package:pharma_b2b/widgets/home_sections_view.dart';
+import 'package:pharma_b2b/utils/render_log.dart';
+import 'package:pharma_b2b/widgets/animations.dart';
 
 /// One rail card — the exact shape storefront_home_v2() sends.
 Map<String, dynamic> _card({
@@ -171,7 +173,8 @@ class _Taps {
   int browseAll = 0;
 }
 
-Future<_Taps> _pump(WidgetTester tester, Map<String, dynamic> payload) async {
+Future<_Taps> _pump(WidgetTester tester, Map<String, dynamic> payload,
+    {bool settle = true}) async {
   // Tall surface: the feed is a lazy ListView, so a short viewport simply
   // would not build the lower sections and assertions would turn into scroll
   // position tests.
@@ -211,11 +214,25 @@ Future<_Taps> _pump(WidgetTester tester, Map<String, dynamic> payload) async {
       ),
     ),
   );
-  await tester.pumpAndSettle();
+  // CMD #1813 — the ok:false branch now paints the shimmering skeleton, whose
+  // animation repeats forever, so that one case pumps a couple of frames
+  // instead of settling. Everything else still settles as before.
+  if (settle) {
+    await tester.pumpAndSettle();
+  } else {
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+  }
   return taps;
 }
 
 void main() {
+  // CHANGE #274 — the feed now posts a render-log line counting the cards it
+  // painted (the only evidence a canvas screen can produce). Its 800ms flush
+  // is a real Timer that would outlive these tests and try to reach Supabase,
+  // so it is disabled here exactly as CLAUDE.md's protected-suite note says.
+  setUpAll(() => RenderLog.flushEnabled = false);
+
   setUp(seedUiCopy);
   setUp(() {
     CartModel.rpcTransport = (fn, params) async =>
@@ -273,11 +290,28 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('ok:false shows the retry block, never a blank page or a throw',
-        (tester) async {
-      await _pump(tester, {'ok': false});
+    // CMD #1813 — this test used to assert `find.text('Retry')`.
+    //
+    // On 2026-09-06 every RPC in the app stalled together at ~13.9 s and this
+    // is the block a customer met: an empty feed with a button asking them to
+    // solve it by tapping. The protected behaviour CHANGED with that command,
+    // deliberately and by name — "no blank body, no bare Retry button, ever" —
+    // so the assertion is inverted rather than deleted. What must hold now is
+    // that ok:false is still not a blank page and still not a throw, and that
+    // the way out is the app's own retry rather than the customer's thumb.
+    testWidgets('ok:false is a live skeleton — never a blank page, never a '
+        'throw, and never a Retry button', (tester) async {
+      await _pump(tester, {'ok': false}, settle: false);
 
-      expect(find.text('Retry'), findsOneWidget);
+      expect(find.text('Retry'), findsNothing,
+          reason: 'CMD #1813 — the bare Retry button is gone for good');
+      expect(find.byType(OutlinedButton), findsNothing);
+      expect(find.byType(FilledButton), findsNothing);
+
+      // Still a page, and still the feed's own geometry: the skeleton it uses
+      // everywhere else, so nothing shifts when the payload finally lands.
+      expect(find.byType(HomeSectionsView), findsOneWidget);
+      expect(find.byType(Shimmer), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   });

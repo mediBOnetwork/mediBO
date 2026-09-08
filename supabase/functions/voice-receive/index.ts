@@ -279,6 +279,34 @@ function buildSimplePrompt(hintNames?: string[]): string {
   return p
 }
 
+// CMD #409 — SEARCH MODE. The customer storefront's mic rides this same
+// function rather than a second STT stack: same Vertex model, same region
+// fallback, same secret. What it wants back is different — a SEARCH PHRASE,
+// not a counted item — so it gets its own prompt and short-circuits before the
+// counting filters. The medicine-vocabulary corrections stay in the database
+// (voice_search_resolve), where counting already keeps them.
+const SEARCH_PREAMBLE =
+  `You are transcribing a short voice search spoken into an Indian B2B pharmacy ordering app. ` +
+  `The speaker is a pharmacist naming ONE medicine they want to find, in Indian-accented English ` +
+  `or in Hindi. Transcribe the product name EXACTLY as spoken — Indian pharma brand names are ` +
+  `proper nouns: never translate them, never expand them, never "correct" them into ordinary ` +
+  `English or Hindi words (keep "Pan D", never "pan dee"). Keep any strength or number that is ` +
+  `part of the name ("Telma 40"). Write the name in Latin script even when it was spoken in Hindi.`
+
+function buildSearchPrompt(lang?: string): string {
+  const hi = String(lang ?? '').toLowerCase().startsWith('hi')
+  return SEARCH_PREAMBLE +
+    (hi ? `\n\nThe speaker is most likely speaking Hindi.` : '') +
+    `\n\nRULES:\n` +
+    `1. Transcribe the audio FIRST. Report only words you can ACTUALLY HEAR.\n` +
+    `2. If the audio is silence, breathing, background noise or has no product name, return ` +
+    `{"query":"","transcript":""}. An empty result is correct and expected — never guess a medicine.\n` +
+    `3. query = just the product name as spoken, with filler words ("umm", "search for", "dikhao", ` +
+    `"chahiye") removed. Leave quantities and pack words in the transcript; do not invent any.\n\n` +
+    `Return ONLY strict JSON, no markdown:\n` +
+    `{"query":"<product name as spoken, or empty>","transcript":"<full raw transcript>"}`
+}
+
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
   try {
@@ -295,6 +323,9 @@ serve(async (req: Request) => {
       recording_seq?: number
       window_offset_sec?: number
       stage?: string
+      // CMD #409 — 'search' is the customer storefront's voice search.
+      mode?: string
+      lang?: string
     }
     const audio = body.audio_base64 ?? ''
     const mime = body.mime_type ?? 'audio/webm'
@@ -307,6 +338,50 @@ serve(async (req: Request) => {
     const windowOffset = typeof body.window_offset_sec === 'number' && Number.isFinite(body.window_offset_sec)
       ? body.window_offset_sec
       : null
+
+    // CMD #409 — SEARCH MODE runs to its own `return`, ABOVE every counting
+    // path, so the storefront mic cannot change one byte of what counting
+    // sees. It returns the raw transcript; the medicine-vocabulary correction
+    // and every user-facing string are voice_search_resolve()'s job.
+    if (String(body.mode ?? '') === 'search') {
+      const saSearch = JSON.parse(saJson) as Record<string, string>
+      if (!saSearch.project_id) throw new Error('project_id missing from GCP_SA_KEY')
+      const tokenSearch = await getAccessToken(saJson)
+      const rawSearch = await callVertex(saSearch.project_id, tokenSearch, {
+        contents: [{ role: 'user', parts: [
+          { inlineData: { mimeType: mime, data: audio } },
+          { text: buildSearchPrompt(body.lang) },
+        ] }],
+        generationConfig: {
+          temperature: 0,
+          maxOutputTokens: 512,
+          thinkingConfig: { thinkingLevel: 'minimal' },
+          responseMimeType: 'application/json',
+        },
+      })
+      let q = ''
+      let tx = ''
+      try {
+        const cleaned = rawSearch.trim()
+          .replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```$/i, '').trim()
+        const p = JSON.parse(cleaned) as { query?: unknown; transcript?: unknown }
+        q = typeof p.query === 'string' ? p.query : ''
+        tx = typeof p.transcript === 'string' ? p.transcript : ''
+      } catch {
+        tx = rawSearch
+      }
+      // The counting flow's phantom guard, applied to search: a transcript
+      // with fewer than two alphanumerics is silence, and silence must not
+      // become a query.
+      const heard = (q || tx)
+      const blank = heard.replace(/[^a-z0-9]/gi, '').length < 2
+      return new Response(JSON.stringify({
+        mode: 'search',
+        query: blank ? '' : heard,
+        transcript: blank ? '' : tx,
+        blank_transcript: blank,
+      }), { headers: { ...cors, 'Content-Type': 'application/json' } })
+    }
 
     const hasExpected = Array.isArray(body.expected) && body.expected.length > 0
     const mode = hasExpected ? 'reconcile' : 'simple'

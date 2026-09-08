@@ -5,9 +5,12 @@ import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart'; // CHANGE #464
 import 'package:flutter/material.dart';
+import '../../widgets/substitute_choice.dart'; // #366 row 176
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../../services/live_feed.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 import 'package:pharma_b2b/services/ui_copy.dart';
@@ -17,10 +20,17 @@ import '../../utils/file_pick_io.dart' as filepick;
 
 import '../../utils/download_bytes.dart'; // CHANGE #463
 import '../../utils/render_log.dart';
-import '../../design_tokens.dart'; // CMD #1869 — bulk toolbar uses Ds only
+import 'customer_pipeline_screen.dart';
+import '../../user_state.dart'; // CMD #633 — the session gate below
+import '../../design_tokens.dart'; // CHANGE #238 — Ds tokens for the new panel chrome
+import 'sleads_filter_bar.dart'; // CMD #1868 — the S Leads filter row
 import 'sleads_bulk.dart'; // CMD #1869 — the bulk lane's pure decisions
+import '../../services/sleads_filter_service.dart'; // CMD #1868
+import '../../models/order_item_panel_view.dart'; // CHANGE #238
 import '../../fulfill/fulfill_lookups.dart'; // C639: backend-owned entry label
 import 'demand_preview_sheet.dart'; // C639 PART D
+import '../../services/access.dart';
+import '../../widgets/access_readonly_chip.dart';
 import '../../services/admin_date_scope.dart'; // CHANGE #545
 import '../../services/admin_zone_scope.dart'; // CHANGE #609
 import '../../services/date_labels.dart'; // CHANGE #548
@@ -38,6 +48,13 @@ import '../../widgets/native_signed_image.dart'; // CHANGE #550
 import '../../widgets/cash_payment_sheet.dart';
 import '../../widgets/fullscreen_image.dart';
 import '../../utils/bill_mime.dart'; // CHANGE #465
+import 'admin_customer_360_screen.dart'; // CHANGE #396
+import 'admin_customer_page.dart'; // CHANGE #810
+import 'leads_paging.dart'; // CHANGE #1867 — PagedList / SLeadRow
+import '../../widgets/customer_console_row.dart'; // CHANGE #810
+import '../../widgets/customer_payment_term_sheet.dart'; // CHANGE #1888
+import '../../widgets/customer_autofill_strip.dart'; // CHANGE #1888
+import '../../url_sync.dart' show initialSearch; // CHANGE #1888
 
 // CHANGE #242: payment-image sharing now goes through the platform-conditional
 // download_bytes wrapper (Web Share API on web / share_plus on Android), so no
@@ -341,6 +358,11 @@ class _AdminEntry {
 
 enum _CustFilter {
   approvedCustomers,
+  // CMD #1886 — the registration funnel: the people who signed in and stopped,
+  // the rows somebody owes a call, and the rows that cannot be approved yet.
+  signedUp,
+  followUps,
+  needsAttention,
   customerOrders,
   cartNotOrdered,
   pendingRegistrations,
@@ -354,7 +376,27 @@ enum _CustFilter {
 class AdminCustomerScreen extends StatefulWidget {
   static final _screenKey = GlobalKey<_AdminCustomerScreenState>();
 
-  AdminCustomerScreen() : super(key: _screenKey);
+  /// CHANGE #537 — the Fulfill pipeline mounts this SAME screen as its stage-1
+  /// tab ("Customer order"). Two things had to be optional for that to be
+  /// navigation rather than a rewrite:
+  ///
+  ///  * [initialFilter] — which of this screen's own sub-tabs it opens on. Null
+  ///    keeps the historical default (Customers).
+  ///  * [embedded] — when true the screen does not draw its OWN tab row,
+  ///    because the Fulfill pipeline bar is already the tab row above it. A
+  ///    tab bar inside a tab bar is the thing this change exists to remove.
+  ///
+  /// Nothing else differs. The embedded instance loads, refetches, renders and
+  /// acts exactly as the standalone one does.
+  ///
+  /// The shell's instance still takes the static [_screenKey], so
+  /// [triggerFocus] keeps reaching it and only it; an embedded instance is
+  /// given its own key by its host, which is what lets both exist at once.
+  final String? initialFilter;
+  final bool embedded;
+
+  AdminCustomerScreen({Key? key, this.initialFilter, this.embedded = false})
+      : super(key: key ?? _screenKey);
 
   /// Called by the shell when this screen becomes the active page.
   static void triggerFocus() =>
@@ -366,6 +408,26 @@ class AdminCustomerScreen extends StatefulWidget {
   /// currently built (it's only mounted while that sub-tab is active) or its
   /// plan isn't loaded yet — same early-return the button itself is subject to.
   static bool triggerOptimizeAllRoutes() => _RoutesTab.triggerOptimizeAllRoutes();
+
+  /// CHANGE #1867 — open one of this screen's own sub-tabs on the shell's
+  /// instance, by the SAME key the tab row uses (`sLeads`, `routes`, …).
+  /// Null, empty or unknown is ignored rather than thrown on, matching how
+  /// [initialFilter] treats a stage this build has never heard of.
+  ///
+  /// It retries for a few frames because the caller is the shell reading the
+  /// URL in initState, before this screen's state exists — the deep link must
+  /// survive a cold start, which is the only kind that matters for a link.
+  static void openTab(String? filterName, {int tries = 12}) {
+    if (filterName == null || filterName.isEmpty) return;
+    final st = _screenKey.currentState;
+    if (st != null) {
+      st._openTabByName(filterName);
+      return;
+    }
+    if (tries <= 0) return;
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => openTab(filterName, tries: tries - 1));
+  }
 
   @override
   State<AdminCustomerScreen> createState() => _AdminCustomerScreenState();
@@ -567,6 +629,14 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   List<_AdminEntry> _admins      = [];
   final Set<String> _expandedLeads = {};
   bool _loading = true;
+  /// CMD #1886 — customer_pipeline_home(): the three new tab captions, their
+  /// counts and the office team the follow-up sheet may assign to. Every word
+  /// of it is the backend's.
+  Map<String, dynamic> _pipeHome = const {};
+  /// customers_stage_meta(): {customer id -> {chip, approve, missing_label}}.
+  /// The stage chip on every Customers row, and the reason the Approve button
+  /// is disabled, both come from here.
+  Map<String, dynamic> _stageMeta = const {};
   _CustFilter _filter = _CustFilter.approvedCustomers;
   final Set<String> _expanded = {};
   // CHANGE #213 — per-order payment panel open state
@@ -577,8 +647,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   // above orders in the Customer Orders tab. Sourced solely from
   // get_leads_grouped_today(), one Lead per sender phone with N LeadImages.
   List<Lead> _leads = [];
-  // orderId → per-product inquiry status from get_order_item_inquiry_status
-  final Map<String, List<Map<String, dynamic>>> _orderItemStatuses = {};
+  // CHANGE #238 — orderId → the render-ready item lines from
+  // order_item_status_panel(), and that order's reconciliation block. Both are
+  // stored verbatim: nothing in this file re-counts, re-orders or re-words them.
+  final Map<String, OrderItemPanelView> _orderPanels = {};
   // CHANGE #384 — MEDICINE.id → brief catalog row (image_url_1, marketer,
   // pack_qty/pack_type/pack_size, salt_composition), keyed by product_id, for
   // the Customer Orders item cards. Merged-into across loads so re-expanding
@@ -589,13 +661,23 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   // Fetched independently of _load() so it's populated before the tab is
   // ever opened; kept in sync afterwards via _SLeadsTab.onTotalChanged.
   int _sLeadsTotal = 0;
+
+  /// CMD #1868 — sleads_count()'s own caption for the S Leads tab, filtered
+  /// exactly like the list. Null until the tab has loaded once, at which point
+  /// it OUTRANKS the locally composed fallback below.
+  String? _sLeadsCountChip;
   // CHANGE #445 — "Routes" tab badge count (zones.length from
   // lead_routes_screen). Kept in sync via _RoutesTab.onZonesChanged; only
   // populated once the tab has been opened (no independent bootstrap fetch,
   // unlike S Leads — zones list is heavier and city-scoped).
   int _routesZones = 0;
+  /// CHANGE #1867 — the two chip CAPTIONS, whole, from customers_tab_counts().
+  /// Two cheap count(*)s; neither is a list length, so the chip can no longer
+  /// disagree with a page of 50. Absent (not yet loaded, or the call failed)
+  /// falls back to the old locally-composed caption.
+  Map<String, dynamic> _tabCounts = const {};
 
-  final List<RealtimeChannel> _realtimeChannels = [];
+  final List<LiveFeedHandle> _realtimeChannels = [];
   Timer? _debounce;
 
   // ── Auto-load guard (prevents concurrent/storm fetches) ──────────────────
@@ -606,6 +688,15 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   @override
   void initState() {
     super.initState();
+    // CHANGE #537 — open on the sub-tab the host asked for. An unknown key is
+    // ignored rather than thrown on, so the backend can name a stage this
+    // build has never heard of without white-screening the pipeline.
+    final want = widget.initialFilter;
+    if (want != null && want.isNotEmpty) {
+      for (final f in _CustFilter.values) {
+        if (f.name == want) { _filter = f; break; }
+      }
+    }
     // CHANGE #545 — follow the central admin date.
     AdminDateScope.instance.addListener(_onDateScopeChanged);
     AdminDateScope.instance.ensureLoaded();
@@ -620,9 +711,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     FulfillLookups.instance.ensureLoaded().then((_) {
       if (mounted) setState(() {});
     });
-    _load();
-    _subscribeRealtime();
-    _loadSLeadsTotal();
+    // CMD #633 — the first fetch moved to didChangeDependencies, where the
+    // session is actually readable. See _bootForAdminOnce below.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         RenderLog.write('c322_build', 322);
@@ -634,6 +724,81 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     });
   }
 
+  /// CMD #633 — an admin tab must not fetch admin data for a visitor who is
+  /// not an admin.
+  ///
+  /// HomeShell builds this screen as one of an IndexedStack's children, and an
+  /// IndexedStack builds EVERY child, so initState here ran for anonymous
+  /// visitors too: admin_customer_screen_data was called on a signed-out boot,
+  /// refused, and the catch showed a red error toast on the public storefront —
+  /// which is exactly what a shopper saw on medibo.in/<anything-unknown>.
+  ///
+  /// The gate lives in didChangeDependencies rather than initState because the
+  /// session is an inherited dependency: this runs again the moment auth
+  /// resolves to an admin, so a real admin still loads on open (and loads once,
+  /// not on every rebuild).
+  bool _bootedForAdmin = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_bootedForAdmin) return;
+    if (!UserState.of(context).isAdmin) {
+      RenderLog.write('c633_anon_boot', 'admin_fetch=0');
+      return;
+    }
+    _bootedForAdmin = true;
+    // CHANGE #810 — Customer 360 is a route this screen owns, so the customer
+    // page is handed the opener rather than importing the route itself.
+    AdminCustomerPage.open360 = (ctx, id) => Navigator.of(ctx).push(
+        MaterialPageRoute(builder: (_) => AdminCustomer360Screen(customerId: id)));
+    _load();
+    _loadCusConsole(); // CHANGE #810
+    _subscribeRealtime();
+    _loadSLeadsTotal();
+    _loadTabCounts(); // CHANGE #1867
+    _openDeepLinkPanel(); // CHANGE #1888
+  }
+
+  /// CHANGE #1888 — /admin/customers?panel=import opens the Import Customer
+  /// sheet on a cold start.
+  ///
+  /// The registration form is where the mandatory GPS pin, the "I don't have
+  /// GST" answer and the Cash-on-Delivery default actually live, and until now
+  /// the only way in was a tap. A Flutter web app paints to canvas, so a tap is
+  /// exactly what no verifier can perform: the sheet was deployed, correct and
+  /// unphotographable. A URL the admin session can be driven to makes it
+  /// provable — and gives an admin a link to hand somebody.
+  ///
+  /// Only an admin reaches this (it runs behind the isAdmin gate above), an
+  /// unknown panel name is ignored the way [openTab] ignores an unknown tab,
+  /// and it fires once because [_bootedForAdmin] has already been set.
+  void _openDeepLinkPanel() {
+    // initialSearch(), never Uri.base: usePathUrlStrategy() rewrites the
+    // browser URL to '/' about a second into boot, and this screen mounts
+    // after that — Uri.base was ALWAYS empty here, so the link opened the
+    // customer list and nothing else. CHANGE #747 captured the query at the
+    // top of main() for exactly this class of deep link; the catalogue and
+    // orders screens already read it the same way.
+    String? panel;
+    try {
+      panel = Uri.splitQueryString(
+          initialSearch().replaceFirst('?', ''))['panel'];
+    } catch (_) {
+      // A malformed percent-escape in someone's URL is not worth losing
+      // the admin customer screen over.
+      return;
+    }
+    if (panel == null || panel.isEmpty) return;
+    RenderLog.write('c1888_panel_link', panel);
+    if (panel != 'import') return;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final saved = await ImportCustomerSheet.open(context);
+      if (saved == true && mounted) _load(showSpinner: false);
+    });
+  }
+
   void _onScreenFocus() {
     if (!mounted) return;
     // CHANGE #545 — re-read the central date on focus so a backgrounded tab is
@@ -641,6 +806,23 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     AdminDateScope.instance.refresh();
     _autoLoad(key: _filter.name, force: true);
     RenderLog.write('screen_autoload_on_focus', 'customers');
+  }
+
+  /// CHANGE #1867 — one cheap RPC for both tab captions.
+  void _loadTabCounts() {
+    Supabase.instance.client.rpc('customers_tab_counts').then((res) {
+      if (!mounted || res is! Map) return;
+      setState(() => _tabCounts = Map<String, dynamic>.from(res));
+      RenderLog.write('c1867_tab_counts',
+          '${_tabCounts['sleads']?['n']}/${_tabCounts['routes']?['n']}');
+    }).catchError((_) {});
+  }
+
+  /// The caption for one of the two counted tabs, verbatim from the backend.
+  String _countedTabLabel(String key, String fallback) {
+    final m = _tabCounts[key];
+    final label = m is Map ? m['label']?.toString() : null;
+    return (label == null || label.isEmpty) ? fallback : label;
   }
 
   // CHANGE #443 — lightweight, independent fetch for the "S Leads" tab badge.
@@ -655,6 +837,17 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       setState(() => _sLeadsTotal = total);
       RenderLog.write('c443_summary_total', total);
     }).catchError((_) {});
+  }
+
+  /// CHANGE #1867 — see [AdminCustomerScreen.openTab].
+  void _openTabByName(String filterName) {
+    for (final f in _CustFilter.values) {
+      if (f.name != filterName) continue;
+      if (!mounted) return;
+      setState(() => _filter = f);
+      _autoLoad(key: f.name, force: true);
+      return;
+    }
   }
 
   void _autoLoad({required String key, bool force = false}) {
@@ -685,6 +878,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     }
     _realtimeChannels.clear();
     _scrollCtrl.dispose();
+    _cusSearchDebounce?.cancel();   // CHANGE #810
+    _cusSearchCtl.dispose();
     super.dispose();
   }
 
@@ -697,18 +892,23 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     // periodic/2s poll timer anywhere in this file — debounced-load only).
     const tables = ['cart_items', 'orders', 'order_items', 'pharmacy_profiles', 'payment_claims', 'pending_orders'];
     RenderLog.write('co_realtime_369', 'tables:${tables.join(",")}');
-    for (final table in tables) {
-      final ch = client
-          .channel('admin_${table}_$ts')
-          .onPostgresChanges(
-            event: PostgresChangeEvent.all,
-            schema: 'public',
-            table: table,
-            callback: (_) => _debouncedLoad(),
-          )
-          .subscribe();
-      _realtimeChannels.add(ch);
-    }
+    // CHANGE #643: six UNFILTERED bindings, one per table, held open by every
+    // admin session — on the two busiest tables in the product. LiveFeed asks
+    // realtime_plan() which of these still publish and polls the rest on the
+    // registry's interval. The refetch is the same debounced reload.
+    LiveFeed.instance
+        .watch(
+          channelPrefix: 'admin_customer_feeds',
+          tables: tables,
+          onChange: (_) => _debouncedLoad(),
+        )
+        .then((h) {
+      if (!mounted) {
+        h.dispose();
+        return;
+      }
+      _realtimeChannels.add(h);
+    });
   }
 
   void _debouncedLoad() {
@@ -1004,13 +1204,67 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        showToast(context, cf('admin_customer.failed_to_load', {'a': '$e'}), isError: true);
+        showToast(context, cf('admin_customer.failed_to_load', {'e': '$e'}), isError: true);
       }
     } finally {
       _loadInFlight = false;
     }
     _loadLeads();
+    _loadPipeline();
   }
+
+  /// CMD #1886 — the registration funnel's own two reads. Fire-and-forget, like
+  /// the lead load above: neither the tab captions nor the stage chips may hold
+  /// up the list, and a failure leaves the previous payload on screen rather
+  /// than a Dart-invented substitute.
+  Future<void> _loadPipeline() async {
+    try {
+      final client = Supabase.instance.client;
+      final home = await client.rpc('customer_pipeline_home');
+      final meta = await client.rpc('customers_stage_meta');
+      if (!mounted) return;
+      setState(() {
+        _pipeHome = home is Map ? Map<String, dynamic>.from(home) : const {};
+        _stageMeta = (meta is Map && meta['by_id'] is Map)
+            ? Map<String, dynamic>.from(meta['by_id'] as Map)
+            : const {};
+      });
+      RenderLog.write('c1886_pipeline_tabs', _pipeTabs.length);
+    } catch (_) {
+      // the backend owns every sentence here; silence beats a Dart apology
+    }
+  }
+
+  List<Map<String, dynamic>> get _pipeTabs =>
+      ((_pipeHome['tabs'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+
+  List<Map<String, dynamic>> get _pipeAssignees =>
+      ((_pipeHome['assignees'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+
+  /// The caption for one pipeline tab, as the backend wrote it: "Signed up (5)".
+  /// A tab the payload has not described yet renders nothing at all.
+  String _pipeLabel(String key) {
+    for (final t in _pipeTabs) {
+      if ((t['key'] ?? '').toString() == key) {
+        final label = (t['label'] ?? '').toString();
+        final count = (t['count_label'] ?? '').toString();
+        if (label.isEmpty) return '';
+        return count.isEmpty ? label : '$label ($count)';
+      }
+    }
+    return '';
+  }
+
+  /// The stage chip + approve gate the backend computed for one customer row.
+  Map<String, dynamic> _metaFor(String id) => (_stageMeta[id] is Map)
+      ? Map<String, dynamic>.from(_stageMeta[id] as Map)
+      : const {};
 
   // CHANGE #384 — one batched MEDICINE lookup (by distinct product_id) for
   // the Customer Orders + cart item cards. Skips ids already cached so
@@ -1252,6 +1506,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       case _CustFilter.leads:
       case _CustFilter.sLeads:
       case _CustFilter.routes:
+      // CMD #1886 — the three funnel tabs draw their own rows from their own
+      // RPC; this legacy list is not theirs.
+      case _CustFilter.signedUp:
+      case _CustFilter.followUps:
+      case _CustFilter.needsAttention:
         return [];
     }
   }
@@ -1304,125 +1563,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         .catchError((_) {});
   }
 
-  // ── Suspend / Reactivate approved customers ────────────────────────────────
-
-  Future<void> _suspendCustomer(_ApprovedRow row) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: Text(c('admin_customer.suspend_customer'),
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-        content: Text(
-          cf('admin_customer.suspend_confirm_prompt', {'a': row.pharmacyName.isNotEmpty ? row.pharmacyName : row.customerName}),
-          style: const TextStyle(fontSize: 13),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text(c('admin_customer.cancel')),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
-            child: Text(c('admin_customer.suspend')),
-          ),
-        ],
-      ),
-    );
-    if (confirm != true) return;
-    try {
-      // #578 — 'suspended' was a status word spelled in Dart; it now comes
-      // from app_settings.customer_status_values, and the admin check lives
-      // in the database rather than in RLS alone.
-      await Supabase.instance.client.rpc('admin_customer_action',
-          params: {'p_customer_id': row.id, 'p_action': 'suspend'});
-      _load(showSpinner: false);
-    } catch (e) {
-      if (mounted) {
-        showToast(context, cf('admin_customer.suspend_failed', {'a': '$e'}), isError: true);
-      }
-    }
-  }
-
-  Future<void> _reactivateCustomer(_ApprovedRow row) async {
-    try {
-      await Supabase.instance.client
-          .rpc('admin_customer_action',
-              params: {'p_customer_id': row.id, 'p_action': 'reactivate'});
-      _load(showSpinner: false);
-    } catch (e) {
-      if (mounted) {
-        showToast(context, cf('admin_customer.reactivate_failed', {'a': '$e'}), isError: true);
-      }
-    }
-  }
-
-  Future<void> _editCustomer(_ApprovedRow row) async {
-    final saved = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => _CustomerEditDialog(row: row),
-    );
-    if (saved == true) _load(showSpinner: false);
-  }
-
-  // Part A-3 / Part C-1: delete customer
-  Future<void> _deleteCustomer(_ApprovedRow row) async {
-    final displayName = row.pharmacyName.isNotEmpty ? row.pharmacyName : row.customerName;
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: Text(cf('admin_customer.delete_confirm_title', {'a': displayName}),
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700,
-                color: Color(0xFF111827))),
-        content: Text(
-          c('admin_customer.delete_login_access_warning'),
-          style: const TextStyle(fontSize: 13, color: Color(0xFF374151)),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text(c('admin_customer.cancel')),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
-            child: Text(c('admin_customer.delete')),
-          ),
-        ],
-      ),
-    );
-    if (confirm != true) return;
-    try {
-      final client    = Supabase.instance.client;
-      // #578 — deleted_by came from auth.currentUser.email (a CREDENTIAL, not
-      // an account) with a Dart fallback of 'admin', deleted_at from the
-      // device clock, and the snapshot was whatever the client held. The
-      // server stamps all three from the row itself.
-      await client.rpc('admin_customer_action',
-          params: {'p_customer_id': row.id, 'p_action': 'delete'});
-      // Supabase Admin API: DELETE /auth/v1/admin/users/{user_id}
-      final uid = row.rawData['user_id'] as String?;
-      if (uid != null) {
-        try {
-          await client.functions.invoke(
-            'admin-user-actions',
-            body: {'action': 'delete_user', 'user_id': uid},
-          );
-        } catch (_) {} // non-fatal — profile already marked deleted in DB
-      }
-      _load(showSpinner: false);
-      if (mounted) {
-        showToast(context, c('admin_customer.customer_deleted'), duration: const Duration(seconds: 3));
-      }
-    } catch (e) {
-      if (mounted) {
-        showToast(context, cf('admin_customer.delete_failed', {'a': '$e'}), isError: true);
-      }
-    }
-  }
+  // ── Suspend / Reactivate / Edit / Delete an approved customer ────────────
+  //
+  // CHANGE #810 — these four moved to the customer page, where each one now
+  // collects a reason and records it: Block and Delete go through
+  // admin_customer_action_reason(), and Edit is a backend-described form
+  // (admin_customer_edit_form / _save) rather than a hardcoded field list.
 
   // Part A-4 / Part C-2: restore deleted customer
   Future<void> _restoreCustomer(Map<String, dynamic> deletedRow) async {
@@ -1583,36 +1729,54 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     });
   }
 
+  /// CHANGE #238 — one RPC feeds the whole expanded panel.
+  ///
+  /// It replaces get_order_item_inquiry_status, which returned rows keyed only
+  /// by product name (the caller had to name-match them against the orders
+  /// JSONB) and hid `current_supplier` behind `asked_at is not null` — NULL for
+  /// the entire manual lane, which blanked the supplier badge on every item.
+  /// order_item_status_panel returns one line per order_items row, in backend
+  /// order, plus the reconciliation block for the order as a whole.
   Future<void> _fetchOrderItemStatus(String orderId) async {
     try {
-      final rows = await Supabase.instance.client.rpc(
-        'get_order_item_inquiry_status',
+      final raw = await Supabase.instance.client.rpc(
+        'order_item_status_panel',
         params: {'p_order_id': orderId},
-      ) as List;
+      );
+      final view = OrderItemPanelView.fromPayload(raw,
+          errorFallback: c('admin_customer.items_load_failed'));
+      final lines = view.lines;
+      final recon = view.reconcile.raw;
       if (mounted) {
-        setState(() {
-          _orderItemStatuses[orderId] =
-              rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
-        });
-        RenderLog.write('order_item_status', 'orderId:$orderId count:${rows.length}');
-        // CHANGE #625 — proof the three new columns arrived and that the chip
-        // is painting from them rather than from a colour map in Dart.
-        final unf = rows
-            .where((r) => (r as Map)['unfulfillable'] == true)
-            .length;
-        final withColors = rows
-            .where((r) => (r as Map)['status_colors'] is Map)
-            .length;
-        RenderLog.write('c625_unfulfilled_items',
-            'admin;order:$orderId;rows:${rows.length};unfulfillable:$unf;colors:$withColors');
-        for (final r in rows) {
-          final m = r as Map;
-          RenderLog.write('order_item_rpc_row',
-              '${m['product_name']}:pid=${m['product_id']}:status=${m['current_status']}:sup=${m['current_supplier']}');
+        setState(() => _orderPanels[orderId] = view);
+        RenderLog.write('order_item_status', 'orderId:$orderId count:${lines.length}');
+        // CHANGE #238 — proof the panel painted from the RPC: how many lines
+        // arrived, and whether the backend says this order reconciles.
+        RenderLog.write(
+            'c238_reconcile',
+            'admin;order:$orderId;lines:${lines.length}'
+            ';balanced:${recon['balanced']}'
+            ';assigned:${recon['assigned']}'
+            ';unfulfillable:${recon['unfulfillable']}'
+            ';in_inquiry:${recon['in_inquiry']}'
+            ';unaccounted:${recon['unaccounted']}'
+            ';missing_po:${recon['missing_po']}');
+        final withSupplier = lines.where((l) => l.hasSupplier).length;
+        RenderLog.write('c238_supplier_labels',
+            'order:$orderId;lines:${lines.length};with_supplier:$withSupplier');
+        for (final l in lines) {
+          RenderLog.write(
+              'order_item_rpc_row',
+              '${l.productName}:state=${l.state}'
+              ':status=${l.statusLabel}:sup=${l.supplierLabel}');
         }
       }
     } catch (e) {
       RenderLog.write('order_item_status_error', 'orderId:$orderId err:$e');
+      if (mounted) {
+        setState(() => _orderPanels[orderId] =
+            OrderItemPanelView.failed(c('admin_customer.items_load_failed')));
+      }
     }
   }
 
@@ -1701,6 +1865,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    _redirectIfTabHidden();
     return LayoutBuilder(builder: (ctx, box) {
       final isDesktop = box.maxWidth >= 900;
 
@@ -1730,7 +1895,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _buildHeader(isDesktop),
+              // CHANGE #537 — embedded in the Fulfill pipeline the bar above is
+              // already the tab row; drawing this screen's own would be two.
+              if (!widget.embedded) _buildHeader(isDesktop),
               _buildScrollContent(isDesktop),
             ],
           ),
@@ -1739,7 +1906,325 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     });
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CHANGE #810 — the Customers CONSOLE.
+  //
+  // The tall per-customer card is gone. Rows, chips and their counts, the sort
+  // options and every label all arrive from admin_customers_console(); this
+  // screen holds the chosen filters and prints what came back. Numbers and
+  // actions live on the customer page you reach by tapping a row.
+  // ═══════════════════════════════════════════════════════════════════════════
+  Map<String, dynamic> _cusConsole = const {};
+  final Set<String> _cusFilters = <String>{};
+  final TextEditingController _cusSearchCtl = TextEditingController();
+  String _cusQuery = '';
+  String _cusSort = '';
+  bool _cusLoading = false;
+  Timer? _cusSearchDebounce;
+
+  List<Map<String, dynamic>> _cusList(String key) {
+    final v = _cusConsole[key];
+    return v is List
+        ? v.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList()
+        : const <Map<String, dynamic>>[];
+  }
+
+  String _cusStr(String key) => (_cusConsole[key] as String?) ?? '';
+
+  Future<void> _loadCusConsole() async {
+    if (!mounted) return;
+    setState(() => _cusLoading = true);
+    try {
+      final res = await Supabase.instance.client.rpc(
+        'admin_customers_console',
+        params: {
+          'p_filters': _cusFilters.toList(),
+          if (_cusSort.isNotEmpty) 'p_sort': _cusSort,
+          if (_cusQuery.isNotEmpty) 'p_search': _cusQuery,
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _cusConsole = res is Map ? res.cast<String, dynamic>() : const {};
+        _cusLoading = false;
+      });
+      RenderLog.write('c810_customer_rows', '${_cusList('rows').length}');
+      RenderLog.write('c810_customer_chips', '${_cusList('chips').length}');
+    } catch (_) {
+      if (mounted) setState(() => _cusLoading = false);
+    }
+  }
+
+  void _onCusSearchChanged(String v) {
+    _cusQuery = v.trim();
+    _cusSearchDebounce?.cancel();
+    _cusSearchDebounce =
+        Timer(const Duration(milliseconds: 300), _loadCusConsole);
+  }
+
+  void _toggleCusFilter(String key) {
+    if (key.isEmpty) return;
+    setState(() {
+      if (!_cusFilters.remove(key)) _cusFilters.add(key);
+    });
+    _loadCusConsole();
+  }
+
+  void _setCusSort(String key) {
+    if (key.isEmpty || key == _cusSort) return;
+    setState(() => _cusSort = key);
+    _loadCusConsole();
+  }
+
+  /// ONE horizontally scrollable row of small chips, with the sort sheet
+  /// behind the filter icon. No zone chip: the header's zone picker already
+  /// said which zone this is.
+  Widget _buildCusChips(double pad) {
+    final chips = _cusList('chips');
+    if (chips.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.fromLTRB(0, 0, 0, Ds.space.x12),
+      child: Row(children: [
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: EdgeInsets.symmetric(horizontal: pad),
+            child: Row(children: [
+              for (final ch in chips) ...[
+                _CusChip(
+                  label: (ch['label'] as String?) ?? '',
+                  count:
+                      ch['count'] is num ? (ch['count'] as num).toInt() : null,
+                  active: ch['active'] == true,
+                  onTap: () => _toggleCusFilter((ch['key'] as String?) ?? ''),
+                ),
+                SizedBox(width: Ds.space.x8),
+              ],
+            ]),
+          ),
+        ),
+        Padding(
+          padding: EdgeInsets.only(right: pad),
+          child: IconButton(
+            tooltip: _cusStr('filters_label'),
+            icon: Icon(Icons.tune,
+                size: Ds.space.x16 + Ds.space.x4, color: Ds.c.textSecondary),
+            onPressed: _openCusSortSheet,
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Future<void> _openCusSortSheet() async {
+    final sorts = _cusList('sorts');
+    if (sorts.isEmpty) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet))),
+      builder: (sctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Padding(
+            padding: EdgeInsets.all(Ds.space.x16),
+            child: Text(_cusStr('sort_sheet_title'), style: Ds.t.subtitle),
+          ),
+          for (final so in sorts)
+            ListTile(
+              title: Text((so['label'] as String?) ?? '', style: Ds.t.body),
+              trailing: so['active'] == true
+                  ? Icon(Icons.check,
+                      color: Ds.c.brand, size: Ds.space.x16 + Ds.space.x4)
+                  : null,
+              onTap: () {
+                Navigator.pop(sctx);
+                _setCusSort((so['key'] as String?) ?? '');
+              },
+            ),
+          SizedBox(height: Ds.space.x8),
+        ]),
+      ),
+    );
+  }
+
+  /// The follow-ups inbox strip. It appears only when the backend says a
+  /// follow-up is due, and its wording and count are the payload's.
+  Widget _buildCusFollowups(double pad) {
+    final fu = _cusConsole['followups'];
+    final m = fu is Map ? fu.cast<String, dynamic>() : const {};
+    if (m['has'] != true) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.fromLTRB(pad, 0, pad, Ds.space.x12),
+      child: InkWell(
+        onTap: () => _openCusFollowups((m['rpc'] as String?) ?? ''),
+        borderRadius: Ds.r.rButton,
+        child: Container(
+          width: double.infinity,
+          constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+          padding: EdgeInsets.all(Ds.space.x12),
+          decoration: BoxDecoration(
+            color: Ds.c.warningSoft,
+            borderRadius: Ds.r.rButton,
+          ),
+          child: Row(children: [
+            Icon(Icons.notifications_active_outlined,
+                size: Ds.space.x16 + Ds.space.x4, color: Ds.c.warning),
+            SizedBox(width: Ds.space.x8),
+            Expanded(
+              child: Text((m['label'] as String?) ?? '',
+                  style: Ds.t.body.copyWith(color: Ds.c.warning)),
+            ),
+            Icon(Icons.chevron_right, color: Ds.c.warning),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openCusFollowups(String rpc) async {
+    if (rpc.isEmpty) return;
+    Map<String, dynamic> res;
+    try {
+      final raw = await Supabase.instance.client.rpc(rpc);
+      res = raw is Map ? raw.cast<String, dynamic>() : const {};
+    } catch (e) {
+      if (mounted) showToast(context, '$e', isError: true);
+      return;
+    }
+    if (!mounted) return;
+    final items = (res['items'] is List)
+        ? (res['items'] as List)
+            .whereType<Map>()
+            .map((e) => e.cast<String, dynamic>())
+            .toList()
+        : const <Map<String, dynamic>>[];
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet))),
+      builder: (sctx) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.all(Ds.space.x16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text((res['title'] as String?) ?? '', style: Ds.t.subtitle),
+              SizedBox(height: Ds.space.x12),
+              if (items.isEmpty)
+                Text((res['empty'] as String?) ?? '',
+                    style: Ds.t.bodySecondary)
+              else
+                for (final it in items)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text((it['title'] as String?) ?? '',
+                        style: Ds.t.bodyStrong),
+                    subtitle: Text(
+                        '${(it['subtitle'] as String?) ?? ''}\n${(it['meta'] as String?) ?? ''}',
+                        style: Ds.t.caption),
+                    isThreeLine: true,
+                    onTap: () {
+                      Navigator.pop(sctx);
+                      _openCustomerPage((it['customer_id'] as String?) ?? '');
+                    },
+                  ),
+              SizedBox(height: Ds.space.x8),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The page owns every customer action now — approval, edit, zone, notes,
+  /// merge, block and delete-with-reason all run there. The list only reloads
+  /// afterwards, because a rename, a merge or a delete changes what it shows.
+  Future<void> _openCustomerPage(String id, {String initialTab = ''}) async {
+    if (id.isEmpty) return;
+    await openAdminCustomerPage(context, id, initialTab: initialTab);
+    if (!mounted) return;
+    await _load(showSpinner: false);
+    await _loadCusConsole();
+  }
+
+  Widget _buildCustomersConsole(bool isDesktop) {
+    final pad = isDesktop ? Ds.space.x24 : Ds.space.x16;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Padding(
+        padding: EdgeInsets.fromLTRB(pad, 0, pad, Ds.space.x8),
+        child: TextField(
+          controller: _cusSearchCtl,
+          onChanged: _onCusSearchChanged,
+          textInputAction: TextInputAction.search,
+          style: Ds.t.caption,
+          decoration: InputDecoration(
+            hintText: _cusStr('search_hint'),
+            prefixIcon: Icon(Icons.search, size: Ds.space.x16 + Ds.space.x4),
+            suffixIcon: _cusQuery.isEmpty
+                ? null
+                : IconButton(
+                    icon: Icon(Icons.clear, size: Ds.space.x16 + Ds.space.x4),
+                    onPressed: () {
+                      _cusSearchCtl.clear();
+                      _onCusSearchChanged('');
+                    },
+                  ),
+            isDense: true,
+            contentPadding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x12, vertical: Ds.space.x8),
+            border: OutlineInputBorder(borderRadius: Ds.r.rButton),
+          ),
+        ),
+      ),
+      _buildCusChips(pad),
+      // CHANGE #1888 — the book's own completeness, above the list that has
+      // the holes in it.
+      CustomerAutofillStrip(
+          padding: EdgeInsets.fromLTRB(pad, 0, pad, Ds.space.x8)),
+      _buildCusFollowups(pad),
+      if (_cusLoading && _cusList('rows').isEmpty)
+        Padding(
+          padding: EdgeInsets.all(Ds.space.x32),
+          child: const Center(child: CircularProgressIndicator()),
+        )
+      else if (_cusList('rows').isEmpty)
+        _ssvEmptyState(_cusStr('empty_label'))
+      else ...[
+        Padding(
+          padding: EdgeInsets.fromLTRB(pad, 0, pad, Ds.space.x8),
+          child: Text(_cusStr('count_label'), style: Ds.t.caption),
+        ),
+        for (final row in _cusList('rows'))
+          CustomerConsoleRow(
+            row: row,
+            // CMD #1886 — the funnel's word for this row, from the backend.
+            stageChip: _metaFor((row['id'] as String?) ?? '')['chip'],
+            onOpen: () => _openCustomerPage((row['id'] as String?) ?? ''),
+          ),
+      ],
+    ]);
+  }
+
   Widget _buildScrollContent(bool isDesktop) {
+    // CMD #1886 — the three funnel tabs. One widget, one backend tab key; the
+    // payload decides everything it draws.
+    final pipeKey = const {
+      _CustFilter.signedUp: 'signed_up',
+      _CustFilter.followUps: 'followups',
+      _CustFilter.needsAttention: 'needs',
+    }[_filter];
+    if (pipeKey != null) {
+      return CustomerPipelineTab(
+        key: ValueKey('c1886_$pipeKey'),
+        tabKey: pipeKey,
+        assignees: _pipeAssignees,
+        onCountChanged: (_) => _loadPipeline(),
+      );
+    }
     // S Leads tab (CHANGE #443 — scraped lead-generation UI)
     if (_isSLeadsView) {
       RenderLog.write('c443_tab_present', 1);
@@ -1747,6 +2232,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         isDesktop: isDesktop,
         onTotalChanged: (n) {
           if (mounted) setState(() => _sLeadsTotal = n);
+        },
+        onCountChip: (chip) {
+          if (mounted) setState(() => _sLeadsCountChip = chip);
         },
       );
     }
@@ -1772,13 +2260,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         children: [
           // CHANGE #547 — Import Customer, mirroring Import Supplier's styling.
           _buildImportCustomerButton(),
-          if (_approvedRows.isEmpty)
-            _ssvEmptyState('0 approved customers')
-          else ...[
-            if (isDesktop) _buildApprovedTableHeader(),
-            ..._approvedRows.map((r) =>
-                isDesktop ? _buildDesktopApprovedRow(r) : _buildMobileApprovedCard(r)),
-          ],
+          // CHANGE #810 — the console replaces the tall per-customer card.
+          _buildCustomersConsole(isDesktop),
           const SizedBox(height: 32),
           // Part C-2: collapsible Recently Deleted section
           _buildDeletedSection(isDesktop),
@@ -2005,27 +2488,58 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(mainAxisSize: MainAxisSize.min, children: [
-                _tab(_CustFilter.approvedCustomers,
-                    'Customers (${_approvedRows.length})'),
+                // CHANGE #653 — ONE interface. Each tab is its own row in the
+                // permission matrix (partner_screen_tab -> feature_registry),
+                // so a super admin, an admin and a partner see the SAME screen
+                // with the tabs their matrix turned on. `tabCanView` answers
+                // true for a tab the backend has not catalogued, so a new tab
+                // is never hidden by a stale registry.
+                if (_tabOn('customers'))
+                  _tab(_CustFilter.approvedCustomers,
+                      'Customers (${_approvedRows.length})'),
                 const SizedBox(width: 4),
                 // CHANGE #606 — the count is the backend's `count`, not
                 // _orderRows.length. The list and the number can no longer
                 // disagree because only one of them is computed.
-                _tab(_CustFilter.customerOrders,
-                    'Customer Orders ($_ordersCount)'),
+                if (_tabOn('orders'))
+                  _tab(_CustFilter.customerOrders,
+                      'Customer Orders ($_ordersCount)'),
                 const SizedBox(width: 4),
-                _tab(_CustFilter.cartNotOrdered,
-                    'Cart (${_cartRows.length})'),
+                if (_tabOn('cart'))
+                  _tab(_CustFilter.cartNotOrdered,
+                      'Cart (${_cartRows.length})'),
                 const SizedBox(width: 4),
-                _tab(_CustFilter.pendingRegistrations,
-                    'Pending Approval (${_regRows.length})'),
+                if (_tabOn('pending'))
+                  _tab(_CustFilter.pendingRegistrations,
+                      'Pending Approval (${_regRows.length})'),
                 const SizedBox(width: 4),
-                _tab(_CustFilter.leads,
-                    'Leads (${_loggedInLeads.length + _otherLeads.length})'),
+                if (_tabOn('leads'))
+                  _tab(_CustFilter.leads,
+                      'Leads (${_loggedInLeads.length + _otherLeads.length})'),
                 const SizedBox(width: 4),
-                _tab(_CustFilter.sLeads, 'S Leads ($_sLeadsTotal)'),
+                if (_tabOn('s_leads'))
+                  _tab(
+                      _CustFilter.sLeads,
+                      _sLeadsCountChip ??
+                          _countedTabLabel('sleads', 'S Leads ($_sLeadsTotal)')),
                 const SizedBox(width: 4),
-                _tab(_CustFilter.routes, 'Routes ($_routesZones)'),
+                if (_tabOn('routes'))
+                  _tab(_CustFilter.routes,
+                      _countedTabLabel('routes', 'Routes ($_routesZones)')),
+                // CMD #1886 — the funnel. Each caption and count is
+                // customer_pipeline_home()'s; an undescribed tab draws nothing.
+                if (_tabOn('signed_up') && _pipeLabel('signed_up').isNotEmpty) ...[
+                  const SizedBox(width: 4),
+                  _tab(_CustFilter.signedUp, _pipeLabel('signed_up')),
+                ],
+                if (_tabOn('followups') && _pipeLabel('followups').isNotEmpty) ...[
+                  const SizedBox(width: 4),
+                  _tab(_CustFilter.followUps, _pipeLabel('followups')),
+                ],
+                if (_tabOn('needs_attention') && _pipeLabel('needs').isNotEmpty) ...[
+                  const SizedBox(width: 4),
+                  _tab(_CustFilter.needsAttention, _pipeLabel('needs')),
+                ],
               ]),
             ),
           ),
@@ -2036,10 +2550,53 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     );
   }
 
+  /// CHANGE #653 — is this tab turned on for the signed-in login? The screen
+  /// asks the matrix; it never decides by role.
+  bool _tabOn(String tabKey) => Access.instance.tabCanView('customer', tabKey);
+
+  /// The backend's tab key for each filter, in the tab row's own order.
+  static const Map<_CustFilter, String> _tabKeys = {
+    _CustFilter.approvedCustomers: 'customers',
+    _CustFilter.customerOrders: 'orders',
+    _CustFilter.cartNotOrdered: 'cart',
+    _CustFilter.pendingRegistrations: 'pending',
+    _CustFilter.leads: 'leads',
+    _CustFilter.sLeads: 's_leads',
+    _CustFilter.routes: 'routes',
+    _CustFilter.signedUp: 'signed_up',
+    _CustFilter.followUps: 'followups',
+    _CustFilter.needsAttention: 'needs_attention',
+  };
+
+  /// CHANGE #653 — a tab this login does not hold must not be left OPEN
+  /// either: the button is gone, so there would be no way back. Land on the
+  /// first tab the matrix does allow.
+  void _redirectIfTabHidden() {
+    // CHANGE #754 — an EMBEDDED instance is a Fulfill stage, not this screen's
+    // tab bar. Its permission is `fulfill_tabs()`, and the customer/orders row
+    // is now retired precisely BECAUSE the stage owns it, so honouring that
+    // row here would bounce the Fulfill Customer-order tab off its own body.
+    if (widget.embedded) return;
+    if (_tabOn(_tabKeys[_filter] ?? '')) return;
+    for (final e in _tabKeys.entries) {
+      if (_tabOn(e.value)) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && !_tabOn(_tabKeys[_filter] ?? '')) {
+            setState(() => _filter = e.key);
+          }
+        });
+        return;
+      }
+    }
+  }
+
   // Part D: MouseRegion for pointer cursor on all tabs
   // Part E: pill/chip style tabs — active = green fill, inactive = grey outline
   Widget _tab(_CustFilter f, String label) {
     final active = _filter == f;
+    // CHANGE #653 — View on + Write off is a real state, and the tab says so
+    // in the backend's own word. The refusal itself is server-side.
+    final readOnly = !Access.instance.tabCanWrite('customer', _tabKeys[f] ?? '');
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
@@ -2062,14 +2619,18 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               color: active ? const Color(0xFF1B7A43) : const Color(0xFFD1D5DB),
             ),
           ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-              color: active ? Colors.white : const Color(0xFF6B7280),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                color: active ? Colors.white : const Color(0xFF6B7280),
+              ),
             ),
-          ),
+            if (readOnly)
+              AccessReadOnlyChip(label: Access.instance.readonlyBadge),
+          ]),
         ),
       ),
     );
@@ -2445,7 +3006,14 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               ),
               Expanded(
                 flex: 1,
-                child: Text('${row.items.length}',
+                // CHANGE #238 — the backend's own order_items count. This read
+                // `row.items.length` (the orders.items JSONB), so the collapsed
+                // row could say 9 while expanding it listed 18. Cart rows have
+                // no render payload and keep their own list length.
+                child: Text(
+                    row.isOrder
+                        ? '${(row.render['items_count'] as num?)?.toInt() ?? row.items.length}'
+                        : '${row.items.length}',
                     style: const TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
@@ -2750,7 +3318,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   /// when an item could not be sourced, so C2's reason text needs no branch
   /// here — the same field carries it.
   Widget _itemInquiryBadge(Map<String, dynamic>? s) {
-    final text = (s?['current_status'] ?? '').toString().trim();
+    // CHANGE #238 — `status_label` from order_item_status_panel; it already
+    // resolves to the unfulfillable reason, the live inquiry status, or the
+    // backend's own "not accounted for" wording.
+    final text = (s?['status_label'] ?? '').toString().trim();
     if (text.isEmpty) return const SizedBox.shrink();
     final colors = s?['status_colors'] is Map
         ? (s!['status_colors'] as Map).cast<String, dynamic>()
@@ -2771,9 +3342,14 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   /// #625 — the assigned supplier, when there is one. It used to be glued into
   /// the status chip's sentence in Dart; it is a value, so it renders as a
   /// value beside the chip instead of being written into a phrase.
+  ///
+  /// CHANGE #238 — it prints `supplier_label`, the backend's finished phrase:
+  /// "Accepted by X" once a supplier has taken the line, "Asking X" while the
+  /// waterfall is still on X. The app no longer reads the bare name and no
+  /// longer decides which of those two things is happening.
   Widget _itemSupplierBadge(Map<String, dynamic>? s) {
-    final name = (s?['current_supplier'] ?? '').toString().trim();
-    if (name.isEmpty) return const SizedBox.shrink();
+    final name = (s?['supplier_label'] ?? '').toString().trim();
+    if (s?['has_supplier'] != true || name.isEmpty) return const SizedBox.shrink();
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
@@ -2839,67 +3415,80 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     final lpad = isDesktop ? 28.0 : 16.0;
     final rpad = isDesktop ? 28.0 : 16.0;
 
-    if (row.source == 'whatsapp' && row.items.isEmpty) {
-      return Container(
-        color: const Color(0xFFF9FAFB),
-        padding: EdgeInsets.fromLTRB(lpad, 10, rpad, 14),
-        child: Text(
-          c('admin_customer.whatsapp_order_items_unavailable'),
-          style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-        ),
-      );
-    }
-
     if (row.isCartOnly) {
       return _buildCartExpandedItems(row, lpad: lpad, rpad: rpad);
     }
 
-    if (row.items.isEmpty) {
+    // ── CHANGE #238 — the item list is the BACKEND's list ────────────────────
+    //
+    // What was here: `row.items` (parsed out of the orders.items JSONB) joined
+    // in Dart against get_order_item_inquiry_status rows by lower-cased,
+    // whitespace-collapsed product NAME. Any item whose JSONB name differed
+    // from order_items.product_name lost its status, its supplier and its
+    // unfulfillable flag — silently, with a dash where the answer should be.
+    // That name-match is also the app deciding what the list is.
+    //
+    // order_item_status_panel() returns one line per order_items row, in the
+    // backend's order, with state, status_label, supplier_label, qty_label,
+    // price_label and the reconciliation block already decided. Nothing on
+    // this panel is computed here anymore.
+    final panel = row.orderId != null
+        ? (_orderPanels[row.orderId!] ?? OrderItemPanelView.loading)
+        : OrderItemPanelView.loading;
+    final panelLines = panel.lines;
+    final loaded = panel.loaded;
+    final reconcile = panel.reconcile;
+
+    // CHANGE #238 — the error state. The catch used to only write a render-log
+    // line, so a failed RPC left the panel skeleton-ing forever with no words
+    // and no way out; and a `{"error": ...}` reply parsed as "this order has no
+    // items" for an order that has eighteen.
+    if (panel.hasError) {
       return Container(
         color: const Color(0xFFF9FAFB),
         padding: EdgeInsets.fromLTRB(lpad, 10, rpad, 14),
-        child: Text(c('admin_customer.no_items_recorded'),
+        child: Row(children: [
+          Expanded(
+            child: Text(panel.errorMessage,
+                style: Ds.t.caption.copyWith(color: Ds.c.danger)),
+          ),
+          TextButton(
+            onPressed: row.orderId == null
+                ? null
+                : () => _fetchOrderItemStatus(row.orderId!),
+            child: Text(c('admin_customer.retry')),
+          ),
+        ]),
+      );
+    }
+
+    // The WhatsApp case is decided AFTER the panel has answered. It used to be
+    // an early return keyed on the orders.items JSONB being empty, which meant
+    // a WhatsApp order with real order_items rows printed "items unavailable"
+    // and never rendered a single line, a state, or the reconciliation banner.
+    if (panel.isEmpty) {
+      return Container(
+        color: const Color(0xFFF9FAFB),
+        padding: EdgeInsets.fromLTRB(lpad, 10, rpad, 14),
+        child: Text(
+            row.source == 'whatsapp'
+                ? c('admin_customer.whatsapp_order_items_unavailable')
+                : c('admin_customer.no_items_recorded'),
             style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
       );
     }
+
     // CHANGE #606 — items_label and amount_label, verbatim. This line used to
     // be `'Order Items (${row.items.length})' + ' · ₹' + total.toStringAsFixed(2)`
     // — a Dart count, a Dart rupee prefix and a Dart decimal format, all three
     // of which the backend already returns as finished strings.
     final itemsLabel  = row.rs('items_label');
     final amountLabel = row.rs('amount_label');
-    final rawStatuses = row.orderId != null
-        ? (_orderItemStatuses[row.orderId!] ?? <Map<String, dynamic>>[])
-        : <Map<String, dynamic>>[];
 
-    // orders.items JSONB has product_name but no product_id — match by normalized name
-    String _norm(String s) => s.toLowerCase().trim().replaceAll(RegExp(r'\s+'), ' ');
-    final statusByName = <String, Map<String, dynamic>>{};
-    for (final s in rawStatuses) {
-      final pname = s['product_name'] as String?;
-      if (pname != null) statusByName[_norm(pname)] = s;
-    }
-
-    RenderLog.write('order_items_expanded',
-        'orderId:${row.orderId ?? "?"}:items:${row.items.length}:statuses:${rawStatuses.length}');
-
-    // Per-item resolved status instrumentation
-    var anyDash = false;
-    for (final item in row.items) {
-      final s = statusByName[_norm(item.name)];
-      final resolved = s?['current_status'] as String? ?? '—';
-      if (resolved == '—') anyDash = true;
-      RenderLog.write('order_item_resolved',
-          '${item.name}:status=$resolved:supplier=${s?['current_supplier'] ?? "none"}');
-    }
-    if (anyDash && rawStatuses.isNotEmpty) {
-      RenderLog.write('order_item_FAIL', 'accepted order has dash items — name mismatch?');
-    }
-
-    // CHANGE #442 — instrumentation counters for image/company/pack/qty_label
-    // coverage across this order's item cards, written once per card below.
-    var c442Total = 0, c442Image = 0, c442Company = 0, c442Pack = 0, c442Qty = 0;
-    String? c442Sample;
+    RenderLog.write('c238_panel_lines',
+        'orderId:${row.orderId ?? "?"}:lines:${panelLines.length}'
+        ':balanced:${reconcile.balanced}'
+        ':unaccounted:${reconcile.raw['unaccounted']}');
 
     final content = Container(
       color: const Color(0xFFF9FAFB),
@@ -2911,10 +3500,19 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           const SizedBox(width: 4),
           Expanded(
             child: Text(
-              cf('admin_customer.ordered_by', {
-                'a': row.name,
-                'b': row.pharmacy.isNotEmpty ? ' · ${row.pharmacy}' : '',
-              }),
+              // CHANGE #686 — the header Om photographed. It passed {a} and
+              // {b} at a template that takes {name}, so cf() stripped the
+              // unresolved placeholder and the dangling colon and the customer's
+              // name never appeared at all. It also built " · <pharmacy>" here,
+              // separator included — copy composed in Dart.
+              // Both live in the backend now: two keys, and this file only
+              // answers "is there a pharmacy", which is why both keys exist.
+              row.pharmacy.isEmpty
+                  ? cf('admin_customer.ordered_by', {'name': row.name})
+                  : cf('admin_customer.ordered_by_with_pharmacy', {
+                      'name': row.name,
+                      'pharmacy': row.pharmacy,
+                    }),
               style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
               overflow: TextOverflow.ellipsis,
             ),
@@ -2947,62 +3545,32 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                     color: Color(0xFF111827))),
           ],
         ]),
+        // CHANGE #238 — the reconciliation banner. It says, in the backend's
+        // own words, whether every customer item is accounted for: on a
+        // purchase order, explicitly unfulfillable, or explicitly still under
+        // inquiry. An order that does not add up says so here instead of
+        // looking complete while items are missing downstream.
+        _reconcileBanner(reconcile),
         const SizedBox(height: 8),
-        // CHANGE #382 — replaced the fixed 4-column Product/Qty/Price/Status
-        // table (its fixed-width header cells wrapped "Product" to vertical
-        // letters on narrow admin viewports) with a responsive per-item row:
-        // thumbnail + name/pack/company/qty+price+status. Status pill logic
-        // (_itemInquiryBadge above, untouched) and every other field on this
-        // card — total, "Order Items (N)" count, Accept/Reject, View
-        // Payment, delete — are unchanged; only this item-row layout changed.
-        ...row.items.map((item) {
-          final s = statusByName[_norm(item.name)];
-          // CHANGE #625 C2 — the backend says whether we could source this
-          // item; the card is flagged on that boolean alone. The items are NOT
-          // regrouped in Dart: splitting or reordering server rows is the app
-          // deciding what the list is. The flag rides on the row in place.
-          final unfulfillable = s?['unfulfillable'] == true;
-          try {
-            RenderLog.write('cust_order_items_redesign_382',
-                'orderId:${row.orderId ?? "?"}:item:${item.name}');
-          } catch (_) {}
-
-          // Null-guarded derived text — a missing value hides its line/token,
-          // never renders "null"/"undefined"/"NaN"/"₹null".
-          // CHANGE #442 — image/company/pack/qty_label now come straight off
-          // `s`, the get_order_item_inquiry_status row already matched by
-          // normalized product name above. That RPC now returns these fields
-          // pre-formatted server-side (image_url, company, pack_label,
-          // qty_label) — no client-side MEDICINE lookup, no string logic here.
-          // The old CHANGE #384 MEDICINE-table lookup (_medDisplayFields) is
-          // left in place for cart_items (_buildCartExpandedItems) where a
-          // real product_id column exists; real orders never populated it
-          // reliably (orders.items JSONB product_id is unreliable), which was
-          // the actual root cause of this bug.
-          String? nz(String? s) => (s != null && s.trim().isNotEmpty) ? s.trim() : null;
-          final imageUrl = nz(s?['image_url'] as String?);
-          final company = nz(s?['company'] as String?);
-          final packLine = nz(s?['pack_label'] as String?) ??
-              (item.packSize?.trim().isNotEmpty == true ? item.packSize!.trim() : null);
-          final qtyLabel = nz(s?['qty_label'] as String?) ?? '${item.qty}';
-          c442Total++;
-          if (imageUrl != null) c442Image++;
-          if (company != null) c442Company++;
-          if (packLine != null) c442Pack++;
-          if (nz(s?['qty_label'] as String?) != null) c442Qty++;
-          c442Sample ??= '${item.name}|$qtyLabel|${packLine ?? ''}|${company ?? ''}';
-          final priceVal = (item.price != null && item.price! > 0)
-              ? item.price
-              : ((item.mrp != null && item.mrp! > 0) ? item.mrp : null);
-          final priceText =
-              priceVal != null ? '₹${priceVal.toStringAsFixed(2)}' : null;
+        if (!loaded) ..._itemSkeletons(),
+        // CHANGE #382 — responsive per-item row: thumbnail + name/pack/company
+        // /qty+price+status. CHANGE #238 drives every field off the backend
+        // line; there is no orders.items JSONB and no name match left.
+        ...panelLines.map((line) {
+          final unfulfillable = line.isFlagged;
+          final imageUrl   = line.imageUrl;
+          final company    = line.company;
+          final packLine   = line.packLabel;
+          final qtyLabel   = line.qtyLabel;
+          final priceText  = line.priceLabel;
+          final name       = line.productName;
+          final poWarning  = line.poWarning;
+          final nextLabel  = line.nextSupplierLabel;
 
           // #625 — an unfulfilled item is tinted with the SAME status_colors
           // its chip uses, so the card and the chip cannot disagree about
           // which items we could not source.
-          final rowColors = s?['status_colors'] is Map
-              ? (s!['status_colors'] as Map).cast<String, dynamic>()
-              : const <String, dynamic>{};
+          final rowColors = line.statusColors;
           return Container(
             margin: const EdgeInsets.only(top: 10),
             padding: const EdgeInsets.all(10),
@@ -3018,20 +3586,21 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                   width: unfulfillable ? 1 : 0.5),
             ),
             child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              _custOrderItemThumb(imageUrl, isDesktop: isDesktop),
+              _custOrderItemThumb(imageUrl.isEmpty ? null : imageUrl,
+                  isDesktop: isDesktop),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(item.name,
+                    Text(name,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.w600,
                             color: Color(0xFF111827))),
-                    if (company != null) ...[
+                    if (company.isNotEmpty) ...[
                       const SizedBox(height: 2),
                       Text(company,
                           maxLines: 1,
@@ -3042,7 +3611,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                               color: Color(0xFF9CA3AF),
                               letterSpacing: 0.8)),
                     ],
-                    if (packLine != null) ...[
+                    if (packLine.isNotEmpty) ...[
                       const SizedBox(height: 2),
                       Text(packLine,
                           maxLines: 1,
@@ -3056,17 +3625,31 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                       runSpacing: 8,
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
-                        _custOrderItemQtyPill(qtyLabel),
-                        if (priceText != null)
+                        if (qtyLabel.isNotEmpty) _custOrderItemQtyPill(qtyLabel),
+                        if (priceText.isNotEmpty)
                           Text(priceText,
                               style: const TextStyle(
                                   fontSize: 15,
                                   fontWeight: FontWeight.w700,
                                   color: Color(0xFF111827))),
-                        _itemInquiryBadge(s),
-                        _itemSupplierBadge(s),
+                        _itemInquiryBadge(line.raw),
+                        _itemSupplierBadge(line.raw),
                       ],
                     ),
+                    // CHANGE #238 — who is next in the waterfall, and the loud
+                    // case: an item assigned to a supplier that never reached
+                    // that supplier's purchase order. Both are backend strings.
+                    if (nextLabel.isNotEmpty) ...[
+                      SizedBox(height: Ds.space.x4),
+                      Text(nextLabel, style: Ds.t.caption),
+                    ],
+                    if (poWarning.isNotEmpty) ...[
+                      SizedBox(height: Ds.space.x4),
+                      Text(poWarning,
+                          style: Ds.t.caption.copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: Ds.c.danger)),
+                    ],
                   ],
                 ),
               ),
@@ -3079,16 +3662,55 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         // delete_lead_group in the grouped Leads section above.)
       ]),
     );
-    // CHANGE #442 — render-log proof that image/company/pack/qty_label
-    // resolved from the RPC row, not just compiled into the bundle.
-    RenderLog.write('c442_items_total', c442Total);
-    RenderLog.write('c442_with_image', c442Image);
-    RenderLog.write('c442_with_company', c442Company);
-    RenderLog.write('c442_with_pack', c442Pack);
-    RenderLog.write('c442_with_qtylabel', c442Qty);
-    if (c442Sample != null) RenderLog.write('c442_sample', c442Sample!);
     return content;
   }
+
+  /// CHANGE #238 — the reconciliation banner, printed exactly as
+  /// order_reconcile() returned it. The app never counts the items itself and
+  /// never decides whether an order balances: `label`, `detail` and the three
+  /// tone colours all arrive in the payload.
+  Widget _reconcileBanner(OrderItemPanelReconcile v) {
+    if (!v.show) return const SizedBox.shrink();
+    final r = v.raw;
+    final label = v.label;
+    final detail = v.detail;
+    return Container(
+      margin: EdgeInsets.only(top: Ds.space.x8),
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x12, vertical: Ds.space.x8),
+      decoration: BoxDecoration(
+        color: _hex(r['bg'], Ds.c.brandSoft),
+        borderRadius: Ds.r.rButton,
+        border: Border.all(color: _hex(r['border'], Ds.c.divider), width: 0.5),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label,
+            style: Ds.t.caption.copyWith(
+                fontWeight: FontWeight.w600,
+                color: _hex(r['fg'], Ds.c.text))),
+        if (detail.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x4),
+          Text(detail,
+              style: Ds.t.caption
+                  .copyWith(color: _hex(r['fg'], Ds.c.textSecondary))),
+        ],
+      ]),
+    );
+  }
+
+  /// CHANGE #238 — a skeleton while order_item_status_panel is in flight, so
+  /// an expanding row never flashes an "no items" state it is about to
+  /// contradict.
+  List<Widget> _itemSkeletons() => List<Widget>.generate(
+      3,
+      (_) => Container(
+            margin: EdgeInsets.only(top: Ds.space.x8),
+            height: Ds.space.x48 + Ds.space.x24,
+            decoration: BoxDecoration(
+              color: Ds.c.bg,
+              borderRadius: Ds.r.rButton,
+            ),
+          ));
 
   Widget _buildCartExpandedItems(_CustRow row,
       {required double lpad, required double rpad}) {
@@ -3326,6 +3948,13 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               }),
             ],
           ],
+          // CMD #366 row 176 — the substitution panel. Om's rule is the whole
+          // design: never auto-substitute. This asks the customer and shows
+          // their answer; Apply is enabled only once the BACKEND says the
+          // customer approved, and the backend refuses it otherwise even if
+          // this button were somehow tapped.
+          if (row.isOrder && row.orderId != null)
+            _SubstitutePanel(orderId: row.orderId!),
           if (row.removedItems.isNotEmpty) ...[
             const SizedBox(height: 12),
             const Divider(height: 1, color: Color(0xFFE5E7EB)),
@@ -3567,6 +4196,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 child: Text(row.phone.isNotEmpty ? row.phone : '—',
                     style: const TextStyle(
                         fontSize: 12, color: Color(0xFF6B7280)))),
+            // CMD #1886 — the stage chip. Word and tone are the backend's;
+            // a row the payload has not described draws nothing.
+            Padding(
+                padding: EdgeInsets.only(right: Ds.space.x8),
+                child: CustomerStageChip(chip: _metaFor(row.id)['chip'])),
             Expanded(
                 flex: 2,
                 child: Text(
@@ -3597,6 +4231,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 flex: 3,
                 child: _RegApproveActions(
                     id: row.id,
+                    gate: _metaFor(row.id)['approve'],
+                    onFix: () => _openCustomerPage(row.id),
                     onApprove: () => _approveReg(row),
                     onReject:  () => _rejectReg(row))),
             // Rotating chevron
@@ -3648,6 +4284,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                               color: Color(0xFF111827)),
                           overflow: TextOverflow.ellipsis)),
                   const SizedBox(width: 8),
+                  // CMD #1886 — the funnel stage, in the backend's own word.
+                  CustomerStageChip(chip: _metaFor(row.id)['chip']),
+                  SizedBox(width: Ds.space.x8),
                   _pendingBadge(),
                   const SizedBox(width: 4),
                   AnimatedRotation(
@@ -3689,6 +4328,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 // Approve/Reject (inner InkWells — stop propagation to outer InkWell)
                 _RegApproveActions(
                     id: row.id,
+                    gate: _metaFor(row.id)['approve'],
+                    onFix: () => _openCustomerPage(row.id),
                     onApprove: () => _approveReg(row),
                     onReject:  () => _rejectReg(row)),
               ]),
@@ -3705,222 +4346,14 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // APPROVED CUSTOMERS view  (Tasks 3 + 4)
+  // APPROVED CUSTOMERS view — replaced by the CHANGE #810 console.
+  //
+  // The tall card (desktop table row + mobile card, each with its own Edit /
+  // Suspend / Delete buttons and an expanding detail panel) is gone. Its every
+  // capability moved to the customer page: Edit is the backend-described edit
+  // form, Suspend is Block-with-reason, Delete is Delete-with-reason, and the
+  // expanded detail panel is the Info tab. See _buildCustomersConsole above.
   // ═══════════════════════════════════════════════════════════════════════════
-
-  Widget _buildApprovedTableHeader() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 10),
-      decoration: const BoxDecoration(
-        color: Color(0xFFF9FAFB),
-        border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
-      ),
-      child: Row(children: [
-        _th('PHARMACY', flex: 4),
-        _th('CONTACT', flex: 3),
-        _th('PHONE', flex: 2),
-        _th('CODE', flex: 2),
-        _th('CITY', flex: 2),
-        _th('STATUS', flex: 2),
-        const SizedBox(width: 230), // actions column (Edit + Suspend + Delete)
-        const SizedBox(width: 32),  // chevron
-      ]),
-    );
-  }
-
-  Widget _buildDesktopApprovedRow(_ApprovedRow row) {
-    final isExpanded = row.id.let((id) => _expanded.contains(id));
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      InkWell(
-        onTap: () => _toggleExpand(row.id),
-        mouseCursor: SystemMouseCursors.click,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 13),
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
-          ),
-          child: Row(children: [
-            Expanded(
-                flex: 4,
-                child: Text(
-                    row.pharmacyName.isNotEmpty ? row.pharmacyName : '—',
-                    style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF111827)),
-                    overflow: TextOverflow.ellipsis)),
-            Expanded(
-                flex: 3,
-                child: Text(
-                    row.customerName.isNotEmpty ? row.customerName : '—',
-                    style: const TextStyle(
-                        fontSize: 13, color: Color(0xFF374151)),
-                    overflow: TextOverflow.ellipsis)),
-            Expanded(
-                flex: 2,
-                child: Text(row.phone.isNotEmpty ? row.phone : '—',
-                    style: const TextStyle(
-                        fontSize: 12, color: Color(0xFF6B7280)))),
-            Expanded(
-                flex: 2,
-                child: Text(
-                    row.customerCode.isNotEmpty ? row.customerCode : '—',
-                    style: const TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF374151),
-                        fontFamily: 'monospace'))),
-            Expanded(
-                flex: 2,
-                child: Text(
-                    [row.city, row.state]
-                        .where((s) => s.isNotEmpty)
-                        .join(', ')
-                        .let((s) => s.isNotEmpty ? s : '—'),
-                    style: const TextStyle(
-                        fontSize: 12, color: Color(0xFF6B7280)),
-                    overflow: TextOverflow.ellipsis)),
-            Expanded(
-              flex: 2,
-              child: _CustomerStatusBadge(status: row.status),
-            ),
-            // Edit + Suspend/Reactivate + Delete actions (inner InkWells — absorb tap)
-            SizedBox(
-              width: 230,
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                _actionBtn('Edit', const Color(0xFF1B7A43),
-                    () => _editCustomer(row)),
-                const SizedBox(width: 6),
-                _actionBtn(
-                  row.isSuspended ? 'Reactivate' : 'Suspend',
-                  row.isSuspended
-                      ? const Color(0xFF1B7A43)
-                      : const Color(0xFFD97706),
-                  () => row.isSuspended
-                      ? _reactivateCustomer(row)
-                      : _suspendCustomer(row),
-                ),
-                const SizedBox(width: 6),
-                _actionBtn('Delete', const Color(0xFFDC2626),
-                    () => _deleteCustomer(row)),
-              ]),
-            ),
-            // Rotating chevron
-            SizedBox(
-              width: 32,
-              child: AnimatedRotation(
-                turns: isExpanded ? 0.5 : 0.0,
-                duration: const Duration(milliseconds: 200),
-                child: const Icon(Icons.expand_more,
-                    size: 18, color: Color(0xFF6B7280)),
-              ),
-            ),
-          ]),
-        ),
-      ),
-      if (isExpanded) _buildDynamicDetails(row.rawData, lpad: 44, rpad: 28),
-    ]);
-  }
-
-  Widget _buildMobileApprovedCard(_ApprovedRow row) {
-    final isExpanded = _expanded.contains(row.id);
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: row.isSuspended
-              ? const Color(0xFFFECACA)
-              : const Color(0xFFE5E7EB),
-        ),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: InkWell(
-          onTap: () => _toggleExpand(row.id),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                // Name line: [Full customer/pharmacy name] [Active status badge]
-                Builder(builder: (_) {
-                  RenderLog.write('customer_card_restructured', 'true');
-                  return const SizedBox.shrink();
-                }),
-                Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                  Expanded(
-                      child: Text(
-                          row.pharmacyName.isNotEmpty
-                              ? row.pharmacyName
-                              : row.customerName.isNotEmpty
-                                  ? row.customerName
-                                  : 'Unknown',
-                          style: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                              color: Color(0xFF111827)),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis)),
-                  const SizedBox(width: 8),
-                  _CustomerStatusBadge(status: row.status),
-                ]),
-                if (row.customerName.isNotEmpty) ...[
-                  const SizedBox(height: 3),
-                  Text(row.customerName,
-                      style: const TextStyle(
-                          fontSize: 12, color: Color(0xFF6B7280)),
-                      overflow: TextOverflow.ellipsis),
-                ],
-                if (row.phone.isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(row.phone,
-                      style: const TextStyle(
-                          fontSize: 12, color: Color(0xFF6B7280))),
-                ],
-                const SizedBox(height: 8),
-                Wrap(spacing: 12, runSpacing: 4, children: [
-                  if (row.customerCode.isNotEmpty)
-                    _mobileField('Code', row.customerCode),
-                  if (row.paymentTerm.isNotEmpty)
-                    _mobileField('Payment', row.paymentTerm),
-                  if (row.city.isNotEmpty)
-                    _mobileField(
-                        'City',
-                        [row.city, row.state]
-                            .where((s) => s.isNotEmpty)
-                            .join(', ')),
-                ]),
-                const SizedBox(height: 12),
-                // Action buttons (inner InkWells — absorb tap)
-                Wrap(spacing: 8, runSpacing: 6, children: [
-                  _actionBtn('Edit', const Color(0xFF1B7A43),
-                      () => _editCustomer(row)),
-                  _actionBtn(
-                    row.isSuspended ? 'Reactivate' : 'Suspend',
-                    row.isSuspended
-                        ? const Color(0xFF1B7A43)
-                        : const Color(0xFFD97706),
-                    () => row.isSuspended
-                        ? _reactivateCustomer(row)
-                        : _suspendCustomer(row),
-                  ),
-                  _actionBtn('Delete', const Color(0xFFDC2626),
-                      () => _deleteCustomer(row)),
-                ]),
-              ]),
-            ),
-            if (isExpanded) ...[
-              const Divider(height: 1, color: Color(0xFFE5E7EB)),
-              _buildDynamicDetails(row.rawData, lpad: 16, rpad: 16),
-            ],
-          ]),
-        ),
-      ),
-    );
-  }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // CUSTOMER DETAIL CARD  (deduplicated, explicit field list)
@@ -4063,6 +4496,34 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 children: sections[si].$2
                     .map((f) => fieldCell(f.$1, f.$2))
                     .toList(),
+              ),
+            ],
+            // CHANGE #1888 — the payment term is the one field on this panel a
+            // human still decides, so it is the one that gets a control. Its
+            // options, its copy and its refusal all come from
+            // customer_payment_term_panel(); this button only opens it.
+            if (_str(rawData['id']).isNotEmpty) ...[
+              SizedBox(height: Ds.space.x16),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: SizedBox(
+                  height: 44,
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: Ds.c.brand),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: Ds.r.rButton),
+                    ),
+                    icon: Icon(Icons.account_balance_wallet_outlined,
+                        size: Ds.space.x16, color: Ds.c.brand),
+                    label: Text(
+                      c('customer_form.term_title'),
+                      style: Ds.t.body.copyWith(color: Ds.c.brand),
+                    ),
+                    onPressed: () => CustomerPaymentTermSheet.open(
+                        ctx, _str(rawData['id'])),
+                  ),
+                ),
               ),
             ],
           ],
@@ -4712,49 +5173,6 @@ class _PaymentBadge extends StatelessWidget {
 
 // ── Customer status badge ─────────────────────────────────────────────────────
 
-class _CustomerStatusBadge extends StatelessWidget {
-  final String status;
-  const _CustomerStatusBadge({required this.status});
-
-  @override
-  Widget build(BuildContext context) {
-    final Color color;
-    final String label;
-    final IconData icon;
-    switch (status) {
-      case 'suspended':
-        color = const Color(0xFFDC2626);
-        label = 'Suspended';
-        icon  = Icons.block_outlined;
-        break;
-      case 'approved':
-        color = const Color(0xFF1B7A43);
-        label = 'Active';
-        icon  = Icons.verified_outlined;
-        break;
-      default:
-        color = const Color(0xFFD97706);
-        label = status.isNotEmpty ? status : 'Active';
-        icon  = Icons.info_outline;
-    }
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withValues(alpha: 0.3)),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, size: 11, color: color),
-        const SizedBox(width: 3),
-        Text(label,
-            style: TextStyle(
-                fontSize: 11, fontWeight: FontWeight.w600, color: color)),
-      ]),
-    );
-  }
-}
-
 // ── Order confirmation ────────────────────────────────────────────────────────
 //
 // CHANGE #608 — _ConfirmActions is DELETED.
@@ -4772,8 +5190,21 @@ class _RegApproveActions extends StatefulWidget {
   final String id;
   final Future<void> Function() onApprove;
   final Future<void> Function() onReject;
+
+  /// CMD #1886 — customer_approve_gate(). The Approve button is NEVER hidden:
+  /// when `can` is false it is disabled and carries the backend's own sentence
+  /// ("Licence not verified", or the fields that are actually absent) plus a
+  /// Fix link to the page that edits them. An absent gate leaves the button
+  /// exactly as it was before this change.
+  final dynamic gate;
+  final VoidCallback? onFix;
+
   const _RegApproveActions(
-      {required this.id, required this.onApprove, required this.onReject});
+      {required this.id,
+      required this.onApprove,
+      required this.onReject,
+      this.gate,
+      this.onFix});
 
   @override
   State<_RegApproveActions> createState() => _RegApproveActionsState();
@@ -4804,14 +5235,44 @@ class _RegApproveActionsState extends State<_RegApproveActions> {
           child: CircularProgressIndicator(
               strokeWidth: 2, color: Color(0xFF1B7A43)));
     }
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      _btn('Approve', const Color(0xFF1B7A43), () => _act(widget.onApprove)),
+    final gate = widget.gate is Map
+        ? Map<String, dynamic>.from(widget.gate as Map)
+        : const <String, dynamic>{};
+    final blocked = gate.isNotEmpty && gate['can'] != true;
+    final reason = (gate['reason'] ?? '').toString();
+    final fixLabel = (gate['fix_label'] ?? '').toString();
+    final fixField = (gate['fix_field_label'] ?? '').toString();
+
+    final buttons = Row(mainAxisSize: MainAxisSize.min, children: [
+      _btn('Approve', const Color(0xFF1B7A43),
+          blocked ? null : () => _act(widget.onApprove)),
       const SizedBox(width: 4),
       _btn('Reject',  const Color(0xFFDC2626), () => _act(widget.onReject)),
     ]);
+    if (!blocked || reason.isEmpty) return buttons;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        buttons,
+        SizedBox(height: Ds.space.x4),
+        Text(reason, style: Ds.t.caption.copyWith(color: Ds.c.danger)),
+        if (fixLabel.isNotEmpty && widget.onFix != null)
+          InkWell(
+            onTap: widget.onFix,
+            child: Padding(
+              padding: EdgeInsets.only(top: Ds.space.x4),
+              child: Text(
+                  fixField.isEmpty ? fixLabel : '$fixLabel: $fixField',
+                  style: Ds.t.caption.copyWith(color: Ds.c.brand)),
+            ),
+          ),
+      ],
+    );
   }
 
-  Widget _btn(String label, Color color, VoidCallback onTap) => InkWell(
+  Widget _btn(String label, Color color, VoidCallback? onTap) => InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(6),
         child: Container(
@@ -5255,216 +5716,12 @@ class _StepperButton extends StatelessWidget {
   }
 }
 
-// ── Customer Edit Dialog  (Task 4) ────────────────────────────────────────────
-
-// All editable fields in pharmacy_profiles (non-system columns).
-const _kEditFields = [
-  ('pharmacy_name',     'Pharmacy / Clinic Name', true),
-  ('customer_name',     'Customer Name',          false),
-  ('owner_name',        'Owner Name',             false),
-  ('whatsapp_no',       'WhatsApp No.',           false),
-  ('phone',             'Phone',                  false),
-  ('email',             'Email',                  false),
-  ('other_contact_no',  'Other Contact',          false),
-  ('store_type',        'Store Type',             false),
-  ('range_zone',        'Range / Zone',           false),
-  ('address_local',     'Local Address',          false),
-  ('address',           'Address',                false),
-  ('city',              'City',                   false),
-  ('state',             'State',                  false),
-  ('pincode',           'Pincode',                false),
-  ('store_location_link','Store Location Link',   false),
-  ('dl_20b',            'Drug Licence 20B',       false),
-  ('dl_21b',            'Drug Licence 21B',       false),
-  ('gst_no',            'GST No.',                false),
-  ('gstin',             'GSTIN',                  false),
-  ('drug_license',      'Drug License',           false),
-  ('payment_term',      'Payment Term',           false),
-  ('customer_code',     'Customer Code',          false),
-];
-
-class _CustomerEditDialog extends StatefulWidget {
-  final _ApprovedRow row;
-  const _CustomerEditDialog({required this.row});
-
-  @override
-  State<_CustomerEditDialog> createState() => _CustomerEditDialogState();
-}
-
-class _CustomerEditDialogState extends State<_CustomerEditDialog> {
-  late final Map<String, TextEditingController> _ctrl;
-  final _formKey = GlobalKey<FormState>();
-  bool _saving = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = {
-      for (final (key, _, _) in _kEditFields)
-        key: TextEditingController(
-          text: widget.row.rawData[key]?.toString() ?? '',
-        ),
-    };
-  }
-
-  @override
-  void dispose() {
-    for (final c in _ctrl.values) c.dispose();
-    super.dispose();
-  }
-
-  Future<void> _save() async {
-    if (!(_formKey.currentState?.validate() ?? false)) return;
-    setState(() => _saving = true);
-    try {
-      final client = Supabase.instance.client;
-      final updates = <String, dynamic>{
-        for (final (key, _, _) in _kEditFields)
-          key: _ctrl[key]!.text.trim().isEmpty ? null : _ctrl[key]!.text.trim(),
-      };
-
-      // CHANGE #578 — admin_customer_update() applies the patch.
-      //
-      // The old code UPDATEd pharmacy_profiles with whatever keys the form
-      // held: nothing stopped `approved`, `status` or `user_id` riding along —
-      // the very columns my_session().can_place_order reads. The RPC has an
-      // explicit allow-list and reports anything it refused rather than
-      // dropping it quietly.
-      //
-      // The customer_code uniqueness pre-check is gone too. It was a SELECT
-      // followed by a throw in Dart: racy, and redundant because
-      // pharmacy_profiles_customer_code_unique already enforces it. The index
-      // is the guard; the RPC surfaces its violation as customer_code_taken.
-      await client.rpc('admin_customer_update', params: {
-        'p_customer_id': widget.row.id,
-        'p_patch': updates,
-      });
-      if (mounted) Navigator.pop(context, true);
-    } catch (e) {
-      if (mounted) {
-        setState(() => _saving = false);
-        showToast(context, cf('admin_customer.save_failed_e', {'e': '$e'}), isError: true);
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: 580, maxHeight: MediaQuery.of(context).size.height * 0.88),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          // Header
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 18, 12, 0),
-            child: Row(children: [
-              Expanded(
-                child: Text(c('admin_customer.edit_customer'),
-                    style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF111827))),
-              ),
-              IconButton(
-                icon: const Icon(Icons.close, size: 18),
-                onPressed: _saving ? null : () => Navigator.pop(context),
-                visualDensity: VisualDensity.compact,
-              ),
-            ]),
-          ),
-          const Divider(height: 16, indent: 20, endIndent: 20),
-          // Scrollable form
-          Expanded(
-            child: Form(
-              key: _formKey,
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-                child: LayoutBuilder(builder: (ctx, constraints) {
-                  final wide = constraints.maxWidth > 460;
-                  return Wrap(
-                    spacing: 12,
-                    runSpacing: 14,
-                    children: _kEditFields.map((rec) {
-                      final (key, label, required) = rec;
-                      return SizedBox(
-                        width: wide
-                            ? (constraints.maxWidth - 12) / 2
-                            : constraints.maxWidth,
-                        child: TextFormField(
-                          controller: _ctrl[key],
-                          decoration: InputDecoration(
-                            labelText: label,
-                            labelStyle: const TextStyle(
-                                fontSize: 12, color: Color(0xFF6B7280)),
-                            border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(8)),
-                            contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 10),
-                            isDense: true,
-                          ),
-                          style: const TextStyle(fontSize: 13),
-                          validator: required
-                              ? (v) => (v == null || v.trim().isEmpty)
-                                  ? '$label is required'
-                                  : null
-                              : null,
-                        ),
-                      );
-                    }).toList(),
-                  );
-                }),
-              ),
-            ),
-          ),
-          const Divider(height: 1, indent: 20, endIndent: 20),
-          // Footer buttons
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 10, 20, 16),
-            child: Row(children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: _saving ? null : () => Navigator.pop(context),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF374151),
-                    side: const BorderSide(color: Color(0xFFD1D5DB)),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8)),
-                    padding: const EdgeInsets.symmetric(vertical: 11),
-                  ),
-                  child: Text(c('admin_customer.cancel'),
-                      style: TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w600)),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: FilledButton(
-                  onPressed: _saving ? null : _save,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF1B7A43),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8)),
-                    padding: const EdgeInsets.symmetric(vertical: 11),
-                  ),
-                  child: _saving
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white))
-                      : Text(c('admin_customer.save_changes'),
-                          style: TextStyle(
-                              fontSize: 13, fontWeight: FontWeight.w600)),
-                ),
-              ),
-            ]),
-          ),
-        ]),
-      ),
-    );
-  }
-}
+// ── Customer Edit Dialog — replaced by the CHANGE #810 backend-described form.
+//
+// The dialog held a const list of 23 (column, label, required) records: the
+// field list, the labels and which one was mandatory were all Dart. They now
+// live in admin_customer_edit_field and arrive from admin_customer_edit_form(),
+// so adding a field to the customer form is an INSERT, not a deploy.
 
 // ─── CSV Import Dialog ────────────────────────────────────────────────────────
 
@@ -6387,7 +6644,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
   final Map<String, String> _imgViewTypes = {};   // claimId → HtmlElementView viewType
   final Set<String> _signedUrlErrors = {};        // claimId → sign or image-load failed (CHANGE #474)
   final Map<String, int> _imgAttempt = {};        // claimId → retry attempt counter (CHANGE #474)
-  RealtimeChannel? _paymentChannel;
+  LiveFeedHandle? _paymentChannel;
 
   @override
   void initState() {
@@ -6407,17 +6664,25 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
     // No order_id filter: online claims may arrive with order_id=null initially
     // (linked later by admin). Subscribe to ALL payment_claims changes and let
     // the RPC handle filtering. Belt-and-suspenders with the top-level list sub.
-    _paymentChannel = Supabase.instance.client
-        .channel('payclaims_${widget.orderId}')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'payment_claims',
-          callback: (_) {
+    // CHANGE #643: payment_claims is an admin list feed on the registry's
+    // interval. No order_id filter, as before — an online claim can arrive with
+    // order_id null and be linked later, so the RPC is what filters.
+    LiveFeed.instance
+        .watch(
+          channelPrefix: 'payclaims_${widget.orderId}',
+          tables: const ['payment_claims'],
+          onChange: (_) {
             if (mounted) _load();
           },
         )
-        .subscribe();
+        .then((h) {
+      if (!mounted) {
+        h.dispose();
+        return;
+      }
+      _paymentChannel?.unsubscribe();
+      _paymentChannel = h;
+    });
     RenderLog.write('c227_payclaims_rt',
         'change:227,subscribed:true,table:payment_claims,covers:cash+online');
   }
@@ -6645,6 +6910,36 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
     openFullscreenImage(ctx, url);
   }
 
+  /// CHANGE #396 — "reachable from any order". The order does not know which
+  /// pharmacy it belongs to; `customer_360_for_order` answers that (and its own
+  /// button label), and the 360 view opens on that pharmacy.
+  Future<void> _openCustomer360() async {
+    try {
+      final raw = await Supabase.instance.client
+          .rpc('customer_360_for_order', params: {'p_order_id': widget.orderId});
+      final m = raw is Map
+          ? Map<String, dynamic>.from(raw)
+          : const <String, dynamic>{};
+      final id = (m['customer_id'] ?? '').toString();
+      if (!mounted) return;
+      if (m['ok'] != true || id.isEmpty) {
+        final msg = (m['message'] ?? '').toString();
+        if (msg.isNotEmpty) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(msg)));
+        }
+        return;
+      }
+      RenderLog.write('c396_c360_from_order', 1);
+      await Navigator.push(
+          context,
+          MaterialPageRoute(
+              builder: (_) => AdminCustomer360Screen(customerId: id)));
+    } catch (_) {
+      // a failed lookup leaves the order panel exactly as it was
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     RenderLog.write('c217_paydash_built', 1);
@@ -6702,6 +6997,12 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
               style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
                   color: Color(0xFF6B7280), letterSpacing: 0.3)),
           const Spacer(),
+          // CHANGE #396 — every order is a door into the pharmacy behind it.
+          TextButton.icon(
+            onPressed: _openCustomer360,
+            icon: Icon(Icons.person_search, size: Ds.space.x16),
+            label: Text(c('c360.open_from_order'), style: Ds.t.caption),
+          ),
           if (_loading)
             const SizedBox(width: 13, height: 13,
                 child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF9CA3AF))),
@@ -8420,30 +8721,25 @@ Future<List<_LeadCategoryNode>> _fetchCategoryTree(String use) async {
   return _parseCategoryTree(res);
 }
 
-const Map<String, String> _sLeadClassLabels = {
-  'medical_store': 'Medical Store',
-  'wholesaler': 'Wholesaler',
-  'chain': 'Chain',
-  'clinic': 'Clinic',
-  'alt_med': 'Alt Med',
-  'other': 'Other',
-};
-
-const List<String> _sLeadClassOrder = [
-  'medical_store',
-  'chain',
-  'wholesaler',
-  'clinic',
-  'alt_med',
-  'other',
-];
+// CMD #1868 — the class taxonomy that used to live here (_sLeadClassLabels /
+// _sLeadClassOrder) is GONE. Chips, their order, their labels and their counts
+// now arrive from sleads_filters(); adding Hospital / Lab was a deploy, and is
+// now one INSERT. See lib/screens/admin/sleads_filter_bar.dart.
 
 const List<String> _sLeadActiveStatuses = ['planning', 'running', 'paused_budget'];
 
 class _SLeadsTab extends StatefulWidget {
   final bool isDesktop;
   final ValueChanged<int> onTotalChanged;
-  const _SLeadsTab({required this.isDesktop, required this.onTotalChanged});
+
+  /// CMD #1868 — the tab's caption, whole, from sleads_count() for the SAME
+  /// filters the list is showing. "S Leads (12)" is the backend's sentence.
+  final ValueChanged<String> onCountChip;
+  const _SLeadsTab({
+    required this.isDesktop,
+    required this.onTotalChanged,
+    required this.onCountChip,
+  });
 
   @override
   State<_SLeadsTab> createState() => _SLeadsTabState();
@@ -8520,13 +8816,21 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   // ── CMD #1869 — S Leads bulk lane ─────────────────────────────────────
   /// Multi-select is entered by long-pressing a card (or Select all) and left
   /// by Clear. Every label below comes from lead_leads_summary().bulk.
-  /// The "Archived" filter. It is the ONLY way archived leads are listed:
-  /// get_scraped_leads hides them from every other call.
-  bool _archivedFilter = false;
+  /// The "Archived" view is a FILTER (CMD #1868's canonical map), so the
+  /// existing filter row draws its toggle and a saved view can carry it.
+  bool get _archivedFilter => SLeadsBulk.isArchivedView(_fs.value);
 
-  SLeadsBulk get _bulkUi => SLeadsBulk(_summary?['bulk'] is Map
-      ? Map<String, dynamic>.from(_summary!['bulk'] as Map)
-      : const <String, dynamic>{});
+  /// The toolbar's copy rides the page envelope (sleads_page().bulk), falling
+  /// back to the summary's copy of the SAME block before the first page lands.
+  SLeadsBulk get _bulkUi {
+    final fromPage = _leadPage.meta['bulk'];
+    if (fromPage is Map) return SLeadsBulk(Map<String, dynamic>.from(fromPage));
+    final fromSummary = _summary?['bulk'];
+    if (fromSummary is Map) {
+      return SLeadsBulk(Map<String, dynamic>.from(fromSummary));
+    }
+    return const SLeadsBulk(<String, dynamic>{});
+  }
 
   Map<String, dynamic> get _bulk => _bulkUi.payload;
 
@@ -8544,25 +8848,39 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   String? _activeRunLevel;
   List<String> _activeRunTypeLabels = [];
   Map<String, dynamic>? _runStatus;
-  RealtimeChannel? _runChannel;
+  LiveFeedHandle? _runChannel;
   Timer? _pollTimer;
   bool _resuming = false;
 
   // ── Results / filters ─────────────────────────────────────────────────
   Map<String, dynamic>? _summary;
-  List<Map<String, dynamic>> _rows = [];
-  int _totalCount = 0;
+  List<Map<String, dynamic>> get _rows => _leadPage.rows;
   bool _rowsLoading = false;
   String? _cityFilter;
-  String _classFilter = 'all';
-  bool _targetsOnly = true;
-  bool _withPhone = false;
-  bool _openNowOnly = false;
-  bool _withEmailOnly = false;
+
+  // ── CMD #1868 — ONE filter map, the shape _sleads_filters_norm() returns.
+  // It is what sleads_page() / sleads_count() / sleads_filters() are called
+  // with and what a saved view stores, so save -> apply is a round-trip with
+  // nothing translated in Dart.
+  SLeadsFilterState _fs = const SLeadsFilterState();
+  SLeadsFilterModel _filterModel = const SLeadsFilterModel({});
+  static const SLeadsFilterService _filterSvc = SLeadsFilterService();
+  bool _filterBusy = false;
   final TextEditingController _searchCtrl = TextEditingController();
   Timer? _searchDebounce;
-  int _page = 0;
-  static const int _pageSize = 100;
+  // CHANGE #1867 — 50-row pages, appended by infinite scroll. The old value
+  // was 100 rows built EAGERLY, each with a network photo and its own
+  // scrape_lead_card() call; that, not the 107-250 ms RPC, was the jank.
+  static const int _pageSize = 50;
+  /// sleads_page()'s rows + its envelope (count_label / empty_label /
+  /// more_label / end_label / has_more / next_offset). PagedList owns the two
+  /// paging decisions; see lib/screens/admin/leads_paging.dart.
+  PagedList _leadPage = const PagedList();
+  bool _moreLoading = false;
+  /// The results list scrolls in its own viewport so ListView.builder is
+  /// genuinely lazy (a shrinkWrap list inside the page's SingleChildScrollView
+  /// builds every row, which is the bug). This controller drives the append.
+  final ScrollController _resultsCtrl = ScrollController();
 
   // ── CHANGE #443 (part 2) — row expand + get_lead_detail cache ──────────
   final Set<int> _expandedIds = {};
@@ -8609,12 +8927,23 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   void initState() {
     super.initState();
     _searchCtrl.addListener(_onSearchChanged);
+    _resultsCtrl.addListener(_onResultsScroll);
     _bootstrap();
+  }
+
+  /// CHANGE #1867 — infinite scroll: within 400 px of the end, append the
+  /// next 50. Guarded by _moreLoading so a fling fires one fetch, not ten.
+  void _onResultsScroll() {
+    if (!_resultsCtrl.hasClients) return;
+    final pos = _resultsCtrl.position;
+    if (pos.pixels >= pos.maxScrollExtent - 400) _loadMore();
   }
 
   @override
   void dispose() {
     _searchDebounce?.cancel();
+    _resultsCtrl.removeListener(_onResultsScroll);
+    _resultsCtrl.dispose();
     _pollTimer?.cancel();
     _runChannel?.unsubscribe();
     _searchCtrl.removeListener(_onSearchChanged);
@@ -8712,7 +9041,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         if (_activeRunId != null) _subscribeToRun(_activeRunId!);
       }
 
-      await _loadRows(reset: true);
+      await Future.wait([_loadRows(reset: true), _refreshFilterModel()]);
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -9066,85 +9395,184 @@ class _SLeadsTabState extends State<_SLeadsTab> {
 
   // ── Results ────────────────────────────────────────────────────────────
 
+  // CHANGE #1867 — 300 ms, and it resets to page 1: a keystroke can never
+  // append someone else's page onto the list it is filtering.
   void _onSearchChanged() {
     _searchDebounce?.cancel();
     _searchDebounce =
-        Timer(const Duration(milliseconds: 400), () => _loadRows(reset: true));
+        Timer(const Duration(milliseconds: 300), () => _loadRows(reset: true));
   }
 
+  /// CHANGE #1867 — ONE page of sleads_page(). `reset` starts at offset 0 and
+  /// replaces the list; otherwise the payload's own next_offset is appended.
+  /// Every label on screen is the envelope's; nothing is composed here.
   Future<void> _loadRows({bool reset = false}) async {
-    if (reset) _page = 0;
-    setState(() => _rowsLoading = true);
+    final offset = _leadPage.offsetFor(reset: reset);
+    setState(() {
+      if (reset) {
+        _rowsLoading = true;
+      } else {
+        _moreLoading = true;
+      }
+    });
     try {
-      final offset = _page * _pageSize;
       final search = _searchCtrl.text.trim();
-      final res = await Supabase.instance.client.rpc('get_scraped_leads', params: {
-        'p_city': _cityFilter,
-        'p_class': _classFilter == 'all' ? null : _classFilter,
-        'p_targets_only': _targetsOnly,
-        'p_with_phone': _withPhone,
-        'p_search': search.isEmpty ? null : search,
-        // CMD #1869 — the ONLY way archived leads are listed.
-        'p_status': SLeadsBulk.statusParam(_archivedFilter),
-        'p_open_now': _openNowOnly,
-        'p_with_email': _withEmailOnly,
+      final res = await Supabase.instance.client.rpc('sleads_page', params: {
+        'p_filters': _effectiveFilters(search),
         'p_limit': _pageSize,
         'p_offset': offset,
-      }) as List;
-      final rows = res.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-      final total = rows.isNotEmpty
-          ? ((rows.first['total_count'] as num?)?.toInt() ?? 0)
-          : 0;
-      final withPhoto = rows.where((r) => (r['photo_url'] as String?)?.isNotEmpty == true).length;
-      final withHours = rows.where((r) => (r['hours_text'] as List?)?.isNotEmpty == true).length;
-      final openNowTrue = rows.where((r) => r['open_now'] == true).length;
-      RenderLog.write('c443_rows_rendered', rows.length);
-      RenderLog.write('c443_total_count', total);
-      RenderLog.write('c443_rows', rows.length);
-      RenderLog.write('c443_with_photo', withPhoto);
-      RenderLog.write('c443_with_hours', withHours);
-      RenderLog.write('c443_open_now_true', openNowTrue);
-      RenderLog.write('c1869_archived_view', _archivedFilter ? 1 : 0);
-      RenderLog.write('c1869_rows', rows.length);
+      });
+      final env = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      final before = reset ? 0 : _leadPage.rows.length;
       if (!mounted) return;
       setState(() {
-        _rows = rows;
-        _totalCount = total;
+        _leadPage = _leadPage.applyPage(env, reset: reset);
         _rowsLoading = false;
+        _moreLoading = false;
       });
+      final page = _leadPage.rows.length - before;
+      RenderLog.write('c1867_page_rows', page);
+      RenderLog.write('c1867_loaded_rows', _leadPage.rows.length);
+      RenderLog.write('c443_rows_rendered', page);
+      RenderLog.write('c443_total_count', _leadPage.total);
+      RenderLog.write('c443_rows', page);
     } catch (e) {
       if (mounted) {
-        setState(() => _rowsLoading = false);
+        setState(() {
+          _rowsLoading = false;
+          _moreLoading = false;
+        });
         showToast(context, cf('admin_customer.load_leads_fail_e', {'e': '$e'}), isError: true);
       }
     }
   }
 
-  void _changeFilters({
-    String? city,
-    bool cityIsAll = false,
-    String? classKey,
-    bool? targetsOnly,
-    bool? withPhone,
-    bool? openNow,
-    bool? withEmail,
-  }) {
-    setState(() {
-      if (cityIsAll) _cityFilter = null;
-      if (city != null) _cityFilter = city;
-      if (classKey != null) _classFilter = classKey;
-      if (targetsOnly != null) _targetsOnly = targetsOnly;
-      if (withPhone != null) _withPhone = withPhone;
-      if (openNow != null) _openNowOnly = openNow;
-      if (withEmail != null) _withEmailOnly = withEmail;
-    });
-    _loadRows(reset: true);
-  }
-
-  void _goToPage(int page) {
-    setState(() => _page = page);
+  /// Append the next page. The BACKEND decides there is one (has_more +
+  /// next_offset); the client never guesses from a list length.
+  void _loadMore() {
+    if (_moreLoading || _rowsLoading || !_leadPage.canLoadMore) return;
+    if (_resultsRunId != null) return; // a run's own set is not paged
     _loadRows();
   }
+
+  /// The filter map actually sent: the canonical state plus the two controls
+  /// the screen still owns (the city dropdown and the search box).
+  Map<String, dynamic> _effectiveFilters([String? search]) => _fs
+      .withCity(_cityFilter)
+      .withSearch(search ?? _searchCtrl.text)
+      .value;
+
+  /// CMD #1868 — one filter change: re-read the rows AND the chip model
+  /// (counts, which chip is lit, the score caption, the count chip). Every one
+  /// of those is the backend's answer to the SAME map.
+  ///
+  /// CHANGE #1867's 300 ms debounce is kept: tapping three chips in a row is
+  /// one fetch, not three.
+  void _applyFilters(SLeadsFilterState next) {
+    setState(() => _fs = next);
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 300), () {
+      _loadRows(reset: true);
+      _refreshFilterModel();
+    });
+  }
+
+  Future<void> _refreshFilterModel() async {
+    final sent = _effectiveFilters();
+    try {
+      final results = await Future.wait([
+        _filterSvc.filters(sent),
+        _filterSvc.count(sent),
+      ]);
+      if (!mounted) return;
+      final model = SLeadsFilterModel.fromPayload(results[0]);
+      setState(() {
+        _filterModel = model;
+        // The backend normalised the map (defaults filled in); adopt its
+        // version so the next call round-trips exactly what it sent back.
+        if (model.filters.isNotEmpty) _fs = model.state;
+      });
+      final chip = results[1]['count_chip']?.toString() ?? model.countChip;
+      widget.onCountChip(chip);
+      RenderLog.write('c1868_chips', model.chips.length);
+      RenderLog.write('c1868_toggles', model.toggles.length);
+      RenderLog.write('c1868_views', model.viewItems.length);
+      RenderLog.write('c1868_count_chip', chip);
+    } catch (_) {
+      // A failed filter read leaves the last good model on screen; the list
+      // itself reports its own error.
+    }
+  }
+
+  void _changeFilters({String? city, bool cityIsAll = false}) {
+    if (cityIsAll) _cityFilter = null;
+    if (city != null) _cityFilter = city;
+    _applyFilters(_fs);
+  }
+
+  // ── CMD #1868 — saved views ─────────────────────────────────────────────
+
+  Future<void> _saveView() async {
+    final ctrl = TextEditingController();
+    final views = _filterModel.views;
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(views['save_label']?.toString() ?? ''),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: InputDecoration(hintText: views['name_hint']?.toString()),
+          onSubmitted: (v) => Navigator.pop(ctx, v),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(c('admin_customer.cancel'))),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, ctrl.text),
+              child: Text(views['save_label']?.toString() ?? '')),
+        ],
+      ),
+    );
+    if (name == null || !mounted) return;
+    await _runViewRpc(() => _filterSvc.saveView(name, _effectiveFilters()));
+  }
+
+  Future<void> _applyView(int id) async {
+    final res = await _runViewRpc(() => _filterSvc.applyView(id));
+    if (res == null || res['ok'] != true) return;
+    _applyFilters(SLeadsFilterState.fromPayload(res['filters']));
+  }
+
+  Future<void> _deleteView(int id) async =>
+      _runViewRpc(() => _filterSvc.deleteView(id));
+
+  /// Every saved-view RPC answers with its own message and the fresh list;
+  /// this prints both verbatim and never composes a sentence.
+  Future<Map<String, dynamic>?> _runViewRpc(
+      Future<Map<String, dynamic>> Function() call) async {
+    if (_filterBusy) return null;
+    setState(() => _filterBusy = true);
+    try {
+      final res = await call();
+      if (!mounted) return res;
+      setState(() => _filterBusy = false);
+      final msg = res['message']?.toString();
+      if (msg != null && msg.isNotEmpty) {
+        showToast(context, msg, isError: res['ok'] != true);
+      }
+      await _refreshFilterModel();
+      return res;
+    } catch (e) {
+      if (mounted) {
+        setState(() => _filterBusy = false);
+        showToast(context, '$e', isError: true);
+      }
+      return null;
+    }
+  }
+
 
   // ── Scrape control ────────────────────────────────────────────────────
 
@@ -9296,21 +9724,30 @@ class _SLeadsTabState extends State<_SLeadsTab> {
 
   void _subscribeToRun(String runId) {
     _runChannel?.unsubscribe();
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    _runChannel = Supabase.instance.client
-        .channel('s_leads_run_${runId}_$ts')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.update,
-          schema: 'public',
-          table: 'lead_scrape_runs',
-          filter: PostgresChangeFilter(
-            type: PostgresChangeFilterType.eq,
-            column: 'id',
-            value: runId,
-          ),
-          callback: (_) => _refreshStatus(),
+    // CHANGE #643: the filter is kept and handed to LiveFeed, so if the
+    // registry ever puts lead_scrape_runs back on a live channel this stays
+    // narrowed to one run rather than every run in the system.
+    LiveFeed.instance
+        .watch(
+          channelPrefix: 's_leads_run_$runId',
+          tables: const ['lead_scrape_runs'],
+          filters: {
+            'lead_scrape_runs': PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'id',
+              value: runId,
+            ),
+          },
+          onChange: (_) => _refreshStatus(),
         )
-        .subscribe();
+        .then((h) {
+      if (!mounted) {
+        h.dispose();
+        return;
+      }
+      _runChannel?.unsubscribe();
+      _runChannel = h;
+    });
   }
 
   void _startPolling() {
@@ -10157,9 +10594,9 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         // whatever that run produced, so they are hidden in run mode.
         if (!runMode) ...[
           _buildFilterBar(byClass, cities, total),
-          // CMD #1869 — the Archived filter and the bulk toolbar, both drawn
-          // entirely from lead_leads_summary().bulk.
-          _archivedFilterRow(),
+          // CMD #1869 — the bulk toolbar, drawn entirely from the payload's
+          // own bulk block. The Archived toggle itself lives in the filter
+          // row above, because it is a filter like any other.
           _bulkToolbar(rows),
           SizedBox(height: Ds.space.x12),
         ] else ...[
@@ -10174,17 +10611,10 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         else if (rows.isEmpty)
           _ssvEmptyStateLocal(runMode
               ? 'This run has no leads left.'
-              : (_archivedFilter
-                  ? (_bulk['archived_empty']?.toString() ?? '')
-                  : '0 leads match these filters'))
-        else ...[
+              : (_leadPage.emptyLabel ?? ''))
+        else
           _leadCardGrid(rows,
               selectable: runMode || _selectMode || _selectedLeadIds.isNotEmpty),
-          if (!runMode) ...[
-            const SizedBox(height: 12),
-            _buildPagination(),
-          ],
-        ],
       ],
     );
   }
@@ -10268,42 +10698,6 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   // RPCs (leads_bulk_set_status, leads_bulk_set_class); this code renders them
   // and sends the ids back.
   // ═══════════════════════════════════════════════════════════════════════
-
-  /// The Archived filter. get_scraped_leads hides archived leads from every
-  /// other call, so this chip is the only door to them.
-  Widget _archivedFilterRow() {
-    final label = _bulk['archived_chip']?.toString() ?? '';
-    if (label.isEmpty) return const SizedBox.shrink();
-    final hint = _bulk['archived_hint']?.toString() ?? '';
-    RenderLog.write('c1869_archived_chip', 1);
-    return Padding(
-      padding: EdgeInsets.only(top: Ds.space.x12),
-      child: Wrap(
-        spacing: Ds.space.x12,
-        runSpacing: Ds.space.x8,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          ChoiceChip(
-            label: Text(label, style: Ds.t.caption),
-            selected: _archivedFilter,
-            onSelected: (v) {
-              setState(() {
-                _archivedFilter = v;
-                _leadSelection.clear();
-              });
-              _loadRows(reset: true);
-            },
-            selectedColor: Ds.c.brandSoft,
-            backgroundColor: Ds.c.bg,
-            side: BorderSide(color: _archivedFilter ? Ds.c.brand : Ds.c.divider),
-            labelStyle: TextStyle(
-                color: _archivedFilter ? Ds.c.brand : Ds.c.textSecondary),
-          ),
-          if (hint.isNotEmpty) Text(hint, style: Ds.t.caption),
-        ],
-      ),
-    );
-  }
 
   /// Idle it is the backend's one-line hint; with a selection it is the
   /// toolbar. Archive is replaced by Restore while the Archived filter is on —
@@ -10553,8 +10947,11 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     if (!ok) return;
     _leadCards.clear();
     _leadCardsFailed.clear();
+    // The archived count, the chip counts and the "S Leads (N)" tab chip are
+    // all the backend's answer to the SAME filter map — re-ask for all three.
     await _refreshSummaryAndUsage();
     await _loadRows(reset: true);
+    await _refreshFilterModel();
   }
 
   Future<void> _selectResultsRun(String? runId) async {
@@ -10628,99 +11025,61 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     );
   }
 
+  /// CMD #1868 — the filter row is sleads_filters(), rendered. The chips,
+  /// their order, their labels, their counts, the four hidden-by-default
+  /// switches, the score range and its caption, the active zone's name and
+  /// the saved views all arrive in that one payload. `byClass` is still the
+  /// summary's, but only the city dropdown reads it now.
   Widget _buildFilterBar(
       List<Map<String, dynamic>> byClass, List<Map<String, dynamic>> cities, int total) {
-    final classCounts = <String, int>{
-      for (final c in byClass) (c['class']?.toString() ?? ''): (c['n'] as num?)?.toInt() ?? 0
-    };
-
-    final classChips = <Widget>[
-      _classChip('all', 'All ($total)', _classFilter == 'all'),
-      ..._sLeadClassOrder.map((k) =>
-          _classChip(k, '${_sLeadClassLabels[k]} (${classCounts[k] ?? 0})', _classFilter == k)),
-    ];
-
     final cityDropdown = DropdownButton<String?>(
       value: _cityFilter,
-      hint: Text(c('admin_customer.all_cities'), style: const TextStyle(fontSize: 12.5)),
+      hint: Text(c('admin_customer.all_cities'), style: Ds.t.body),
       underline: const SizedBox.shrink(),
       items: [
-        DropdownMenuItem<String?>(value: null, child: Text(c('admin_customer.all_cities'), style: const TextStyle(fontSize: 12.5))),
+        DropdownMenuItem<String?>(
+            value: null,
+            child: Text(c('admin_customer.all_cities'), style: Ds.t.body)),
         ...cities.map((c) => DropdownMenuItem<String?>(
               value: c['city']?.toString(),
-              child: Text('${c['city']} (${c['n']})', style: const TextStyle(fontSize: 12.5)),
+              child: Text('${c['city']} (${c['n']})', style: Ds.t.body),
             )),
       ],
       onChanged: (v) => _changeFilters(city: v, cityIsAll: v == null),
     );
 
-    final targetsToggle = _filterToggle('Only B2B targets', _targetsOnly, (v) => _changeFilters(targetsOnly: v));
-    final phoneToggle = _filterToggle('Only with phone', _withPhone, (v) => _changeFilters(withPhone: v));
-    final openNowToggle = _filterToggle('Open now', _openNowOnly, (v) => _changeFilters(openNow: v));
-    final emailToggle = _filterToggle('Has email', _withEmailOnly, (v) => _changeFilters(withEmail: v));
-
     final searchBox = TextField(
       controller: _searchCtrl,
       decoration: InputDecoration(
         hintText: c('admin_customer.search_leads_hint'),
-        hintStyle: const TextStyle(fontSize: 12.5),
-        prefixIcon: const Icon(Icons.search, size: 18),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        hintStyle: Ds.t.caption,
+        prefixIcon: const Icon(Icons.search),
+        border: OutlineInputBorder(borderRadius: Ds.r.rButton),
         isDense: true,
       ),
-      style: const TextStyle(fontSize: 13),
+      style: Ds.t.body,
     );
 
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      // CHANGE #443 (part 2) — always Wrap (never a plain Row) now that there
-      // are 5 items in this group; a fixed Row overflowed near the 900px
-      // desktop/mobile boundary once "Open now" + "Has email" were added.
-      Wrap(spacing: 16, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
-        cityDropdown, targetsToggle, phoneToggle, openNowToggle, emailToggle,
-      ]),
-      const SizedBox(height: 10),
-      widget.isDesktop
-          ? Wrap(spacing: 6, runSpacing: 6, children: classChips)
-          : SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(children: [
-                for (int i = 0; i < classChips.length; i++) ...[
-                  if (i > 0) const SizedBox(width: 6),
-                  classChips[i],
-                ],
-              ]),
-            ),
-      const SizedBox(height: 10),
-      SizedBox(width: widget.isDesktop ? 360 : double.infinity, child: searchBox),
-    ]);
-  }
-
-  Widget _classChip(String key, String label, bool selected) {
-    return ChoiceChip(
-      label: Text(label, style: const TextStyle(fontSize: 11)),
-      selected: selected,
-      onSelected: (_) => _changeFilters(classKey: key),
-      selectedColor: const Color(0xFFDCFCE7),
-      backgroundColor: const Color(0xFFF3F4F6),
-      side: BorderSide(color: selected ? const Color(0xFF1B7A43) : const Color(0xFFD1D5DB)),
-      labelStyle: TextStyle(color: selected ? const Color(0xFF1B7A43) : const Color(0xFF374151)),
-    );
-  }
-
-  Widget _filterToggle(String label, bool value, ValueChanged<bool> onChanged) {
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      Transform.scale(
-        scale: 0.75,
-        child: Switch(
-          value: value,
-          onChanged: onChanged,
-          activeColor: const Color(0xFF1B7A43),
-          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        ),
+    return SLeadsFilterBar(
+      model: _filterModel,
+      onChipTap: (key, kind) => _applyFilters(_fs.tapChip(key, kind)),
+      onToggle: (key, value) => _applyFilters(_fs.setToggle(key, value)),
+      onScore: (score) => _applyFilters(_fs.setScore(score)),
+      onApplyView: _applyView,
+      onDeleteView: _deleteView,
+      onSaveView: _saveView,
+      trailing: Wrap(
+        spacing: Ds.space.x16,
+        runSpacing: Ds.space.x8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          cityDropdown,
+          SizedBox(
+              width: widget.isDesktop ? Ds.space.x48 * 8 : double.infinity,
+              child: searchBox),
+        ],
       ),
-      Text(label, style: const TextStyle(fontSize: 12.5, color: Color(0xFF374151))),
-    ]);
+    );
   }
 
   // ── CHANGE #443 (part 2) — rich lead card ───────────────────────────────
@@ -10752,26 +11111,170 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   // Nothing is composed, formatted or constructed in Dart.
   // ═══════════════════════════════════════════════════════════════════════
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // CHANGE #1867 — the results list is LAZY.
+  //
+  // It was a Wrap (desktop) / Column (mobile) of 100 full cards, built eagerly
+  // inside the page's SingleChildScrollView: 100 network photos and 100
+  // scrape_lead_card() calls, each completion setState-ing the whole thing.
+  // Now it is a ListView.builder in its own bounded viewport — only the rows
+  // on screen exist — and a row is a COMPACT tile drawn straight from
+  // sleads_page(). The rich card (photo, actions, scrape_lead_card()) is
+  // built for an EXPANDED row only, i.e. on tap.
+  // ═══════════════════════════════════════════════════════════════════════
+
   Widget _leadCardGrid(List<Map<String, dynamic>> rows, {required bool selectable}) {
-    if (!widget.isDesktop) {
-      return Column(
-        children: rows
-            .map((r) => Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: _scrapeLeadCard(r, selectable: selectable),
-                ))
-            .toList(),
-      );
-    }
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      children: rows
-          .map((r) => SizedBox(
-              width: 320, child: _scrapeLeadCard(r, selectable: selectable)))
-          .toList(),
+    final vh = MediaQuery.of(context).size.height;
+    final h = (vh * 0.72).clamp(360.0, 900.0);
+    // rows + one footer slot (loading more / end-of-list, both backend copy).
+    final footer = _resultsRunId == null ? 1 : 0;
+    return SizedBox(
+      height: h,
+      child: Scrollbar(
+        controller: _resultsCtrl,
+        child: ListView.builder(
+          controller: _resultsCtrl,
+          primary: false,
+          padding: EdgeInsets.only(bottom: Ds.space.x8),
+          itemCount: rows.length + footer,
+          itemBuilder: (ctx, i) {
+            if (i >= rows.length) return _leadListFooter();
+            final r = rows[i];
+            final id = (r['id'] as num?)?.toInt();
+            final expanded = id != null && _expandedIds.contains(id);
+            RenderLog.write('c1867_row_built', '$i');
+            return Padding(
+              padding: EdgeInsets.only(bottom: Ds.space.x8),
+              child: expanded
+                  ? _scrapeLeadCard(r, selectable: selectable)
+                  : _leadCompactRow(r, selectable: selectable),
+            );
+          },
+        ),
+      ),
     );
   }
+
+  /// The list footer. Both strings are sleads_page()'s own — "Loading more…"
+  /// while a page is in flight, its end_label once the backend says there is
+  /// nothing left. Neither is composed in Dart.
+  Widget _leadListFooter() {
+    if (_moreLoading) {
+      return Padding(
+        padding: EdgeInsets.symmetric(vertical: Ds.space.x16),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          SizedBox(
+              width: 14, height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Ds.c.brand)),
+          SizedBox(width: Ds.space.x8),
+          Text(_leadPage.moreLabel ?? '', style: Ds.t.caption),
+        ]),
+      );
+    }
+    final end = _leadPage.endLabel;
+    if (end != null) {
+      return Padding(
+        padding: EdgeInsets.symmetric(vertical: Ds.space.x16),
+        child: Center(child: Text(end, style: Ds.t.caption)),
+      );
+    }
+    return SizedBox(height: Ds.space.x24);
+  }
+
+  /// CHANGE #1867 — a list row. Text only: no photo, no map, no per-row RPC.
+  /// Every string is sleads_page()'s (a run's own leads fall back to that
+  /// payload's field of the same meaning); absent means the line is absent.
+  Widget _leadCompactRow(Map<String, dynamic> r, {required bool selectable}) {
+    final row = SLeadRow.from(r);
+    final id = row.id;
+    final title = row.title;
+    final typeLabel = row.typeLabel;
+    final ratingLabel = row.ratingLabel;
+    final openLabel = row.openLabel;
+    final address = row.addressLabel;
+    final phone = row.phoneLabel;
+    final selected = id != null && _selectedLeadIds.contains(id);
+
+    return InkWell(
+      onTap: id == null
+          ? null
+          : () {
+              setState(() => _expandedIds.add(id));
+              if (!_leadDetailCache.containsKey(id) && !_detailLoading.contains(id)) {
+                _fetchLeadDetail(id);
+              }
+            },
+      borderRadius: Ds.r.rCard,
+      child: Container(
+        constraints: BoxConstraints(minHeight: Ds.touch.listRowMinHeight),
+        padding: EdgeInsets.all(Ds.space.x12),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          border: Border.all(
+              color: selected ? Ds.c.brand : Ds.c.divider, width: selected ? 1.5 : 1),
+        ),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (selectable && id != null)
+            Padding(
+              padding: EdgeInsets.only(right: Ds.space.x4),
+              child: Checkbox(
+                value: selected,
+                onChanged: (v) => setState(() {
+                  if (v == true) {
+                    _selectedLeadIds.add(id);
+                  } else {
+                    _selectedLeadIds.remove(id);
+                  }
+                }),
+                activeColor: Ds.c.brand,
+              ),
+            ),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Ds.t.bodyStrong),
+              SizedBox(height: Ds.space.x4),
+              Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x4,
+                  crossAxisAlignment: WrapCrossAlignment.center, children: [
+                if (typeLabel != null && typeLabel.isNotEmpty)
+                  _leadRowChip(typeLabel, Ds.c.bg, Ds.c.text),
+                if (ratingLabel != null && ratingLabel.isNotEmpty)
+                  Text(ratingLabel, style: Ds.t.caption.copyWith(color: Ds.c.warning)),
+                if (openLabel != null && openLabel.isNotEmpty)
+                  _leadRowChip(openLabel, Ds.hex(row.openBg, Ds.c.bg),
+                      Ds.hex(row.openFg, Ds.c.textSecondary)),
+              ]),
+              if (address != null && address.isNotEmpty) ...[
+                SizedBox(height: Ds.space.x4),
+                Text(address,
+                    maxLines: 1, overflow: TextOverflow.ellipsis, style: Ds.t.caption),
+              ],
+              if (phone != null && phone.isNotEmpty) ...[
+                SizedBox(height: Ds.space.x4),
+                Text(phone, style: Ds.t.caption.copyWith(color: Ds.c.text)),
+              ],
+            ]),
+          ),
+          Padding(
+            padding: EdgeInsets.only(left: Ds.space.x8),
+            child: Icon(Icons.expand_more, size: 20, color: Ds.c.textSecondary),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  /// One pill on a compact row. Colours arrive already decided (the open/closed
+  /// pair comes straight from sleads_page()); this only draws them.
+  Widget _leadRowChip(String label, Color bg, Color fg) => Container(
+        padding: EdgeInsets.symmetric(horizontal: Ds.space.x8, vertical: Ds.space.x4),
+        decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rChip),
+        child: Text(label,
+            style: Ds.t.caption.copyWith(color: fg, fontWeight: FontWeight.w600)),
+      );
 
   static const Map<String, IconData> _scrapeActionIcons = {
     'call': Icons.call,
@@ -10783,11 +11286,13 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     'import': Icons.person_add_alt_1_outlined,
   };
 
-  /// scrape_lead_card() fetch + cache. One call per lead, on first render.
+  /// scrape_lead_card() fetch + cache.
   ///
-  /// Capped at [_leadCardConcurrency] in flight: a full page is 100 rows and
-  /// firing 100 RPCs at once is pointless. Each completion setStates, which
-  /// rebuilds and starts the next few — so the queue drains itself. The error
+  /// CHANGE #1867 — this is a TAP-ONLY call now. It runs from _scrapeLeadCard,
+  /// and _scrapeLeadCard is built for an EXPANDED row only; a list row is the
+  /// text-only _leadCompactRow, drawn from sleads_page() with no call of its
+  /// own. The concurrency cap stays for the case where several cards are open
+  /// at once. Each completion setStates, so the queue drains itself; the error
   /// path setStates too, otherwise a failure would stall that pump.
   static const int _leadCardConcurrency = 8;
 
@@ -11053,7 +11558,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         ),
 
         // ── CMD #1869 — Restore, the only way back out of Archived ───────
-        if (_archivedFilter && id != null)
+        if (SLeadsBulk.rowArchived(r) && id != null)
           Padding(
             padding: EdgeInsets.fromLTRB(
                 Ds.space.x12, Ds.space.x8, Ds.space.x12, 0),
@@ -11105,9 +11610,13 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   /// (effective_class) and the label from lead_leads_summary().bulk.classes —
   /// nothing here names a class in Dart.
   Widget _leadClassChip(int id, Map<String, dynamic> r) {
-    final key = (r['effective_class'] ?? r['lead_class'])?.toString() ?? '';
+    final key = (r['class_key'] ?? r['effective_class'] ?? r['lead_class'])
+            ?.toString() ??
+        '';
     if (key.isEmpty) return const SizedBox.shrink();
-    final label = _bulkUi.classLabel(key);
+    // The row carries its own rendered label; the bulk block is the fallback.
+    final rowLabel = r['class_label']?.toString() ?? '';
+    final label = rowLabel.isNotEmpty ? rowLabel : _bulkUi.classLabel(key);
     final title = _bulk['row_reclassify']?.toString() ?? '';
     return Tooltip(
       message: title,
@@ -11347,21 +11856,6 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     );
   }
 
-  Widget _buildPagination() {
-    final totalPages = _totalCount == 0 ? 1 : ((_totalCount + _pageSize - 1) ~/ _pageSize);
-    return Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-      IconButton(
-        onPressed: _page > 0 ? () => _goToPage(_page - 1) : null,
-        icon: const Icon(Icons.chevron_left, size: 20),
-      ),
-      Text(cf('admin_customer.page_of', {'n': '${_page + 1}', 'total': '$totalPages'}), style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
-      IconButton(
-        onPressed: (_page + 1) * _pageSize < _totalCount ? () => _goToPage(_page + 1) : null,
-        icon: const Icon(Icons.chevron_right, size: 20),
-      ),
-    ]);
-  }
-
   // ── B5: Past runs ──────────────────────────────────────────────────────
 
   // ── C: Past runs — real table (web) / stacked cards (mobile) ────────────
@@ -11393,8 +11887,17 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(color: const Color(0xFFF9FAFB), borderRadius: BorderRadius.circular(8)),
           child: Text(
-            cf('admin_customer.enrich_summary', {'enriched': '$enriched', 'errors': '$errors', 'photos': '$withPhoto', 'hours': '$withHours'}) +
-            '$withWebsite websites · $withEmail emails',
+            // CHANGE #686 — the template ended on a dangling ' · ' because
+            // the last two counts were concatenated here, separator and
+            // wording included. All six counts are slots now.
+            cf('admin_customer.enrich_summary', {
+              'enriched': '$enriched',
+              'errors': '$errors',
+              'photos': '$withPhoto',
+              'hours': '$withHours',
+              'websites': '$withWebsite',
+              'emails': '$withEmail',
+            }),
             style: const TextStyle(fontSize: 12, color: Color(0xFF4B5563)),
           ),
         ),
@@ -11771,10 +12274,16 @@ class _RoutesTabState extends State<_RoutesTab> {
 
   // ── C5: past plans, collapsible, lazy-loaded ──────────────────────────────
   bool _pastPlansExpanded = false;
-  List<Map<String, dynamic>>? _pastPlans;
+  // CHANGE #1867 — route_plan_list() is paged and its rows are built lazily.
+  // Same envelope, same two paging decisions, same class as S Leads.
+  PagedList? _plans;
+  List<Map<String, dynamic>>? get _pastPlans => _plans?.rows;
+  bool _plansMoreLoading = false;
+  static const int _plansPageSize = 20;
+  final ScrollController _plansCtrl = ScrollController();
   // ── CHANGE #486: realtime status (queued/building/ready) — replaces the
   // old #483 4s poll. Patches the affected card in place, no full reload.
-  RealtimeChannel? _planRealtimeChannel;
+  LiveFeedHandle? _planRealtimeChannel;
 
   // ── D3: Today's Visits (admin, collapsible, lazy-loaded) — unchanged from #446
   bool _visitsExpanded = false;
@@ -11846,6 +12355,7 @@ class _RoutesTabState extends State<_RoutesTab> {
   @override
   void dispose() {
     _countDebounce?.cancel();
+    _plansCtrl.dispose();
     _planRealtimeChannel?.unsubscribe();
     _planRealtimeChannel = null;
     super.dispose();
@@ -11856,72 +12366,77 @@ class _RoutesTabState extends State<_RoutesTab> {
   // flicker). Ignored while _pastPlans hasn't been loaded yet — the next
   // expand fetches it fresh via route_plan_list() anyway.
   void _subscribePlanRealtime() {
-    try {
-      _planRealtimeChannel = Supabase.instance.client
-          .channel('route_plans_changes')
-          .onPostgresChanges(
-            event: PostgresChangeEvent.update,
-            schema: 'public',
-            table: 'route_plans',
-            callback: _onPlanRealtimeChange,
-          )
-          .onPostgresChanges(
-            event: PostgresChangeEvent.insert,
-            schema: 'public',
-            table: 'route_plans',
-            callback: _onPlanRealtimeChange,
-          )
-          .onPostgresChanges(
-            // CHANGE #488: a plan deleted on one device disappears live here too.
-            event: PostgresChangeEvent.delete,
-            schema: 'public',
-            table: 'route_plans',
-            callback: _onPlanRealtimeChange,
-          )
-          .subscribe();
+    // CHANGE #643: route_plans is an admin list feed and no longer publishes,
+    // so there is no per-row payload to patch from. The list is refetched with
+    // route_plan_list() — the same call the expand and the clear-old path
+    // already used, and the one that was always the fallback "so the count is
+    // right even if a realtime event is missed".
+    LiveFeed.instance
+        .watch(
+          channelPrefix: 'route_plans_changes',
+          tables: const ['route_plans'],
+          onChange: (_) => _refetchPlans(),
+        )
+        .then((h) {
+      if (!mounted) {
+        h.dispose();
+        return;
+      }
+      _planRealtimeChannel?.unsubscribe();
+      _planRealtimeChannel = h;
       RenderLog.write('c486_autocluster_realtime', 1);
-    } catch (_) {}
+    });
+  }
+
+  /// CHANGE #1867 — ONE page of route_plan_list(p_limit, p_offset). `reset`
+  /// starts at offset 0 and replaces the list; otherwise the payload's own
+  /// next_offset is appended. Only the rows just fetched get their
+  /// plan_google_status badge, so appending never re-fetches the page above.
+  Future<void> _loadPlans({bool reset = false}) async {
+    if (!mounted) return;
+    final held = _plans ?? const PagedList();
+    final offset = held.offsetFor(reset: reset);
+    if (!reset) setState(() => _plansMoreLoading = true);
+    try {
+      final res = await Supabase.instance.client.rpc('route_plan_list',
+          params: {'p_limit': _plansPageSize, 'p_offset': offset});
+      final env = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      final next = held.applyPage(env, reset: reset);
+      if (!mounted) return;
+      final page = next.rows.sublist(reset ? 0 : held.rows.length);
+      setState(() {
+        _plans = next;
+        _plansMoreLoading = false;
+      });
+      RenderLog.write('c1867_plan_page_rows', page.length);
+      RenderLog.write('c1867_plans_loaded', next.rows.length);
+      _fetchOptStatusFor(page);
+    } catch (_) {
+      if (mounted) setState(() => _plansMoreLoading = false);
+    }
+  }
+
+  /// One refetch, used by every path that needs the plan list to be current.
+  /// It re-reads page 1 only — a realtime tick must not silently drop the
+  /// pages the user already scrolled past, and it must not refetch them all.
+  Future<void> _refetchPlans() async {
+    if (_plans == null || !mounted) return;
+    await _loadPlans(reset: true);
+  }
+
+  /// CHANGE #1867 — infinite scroll inside the past-plans panel.
+  void _onPlansScroll() {
+    if (!_plansCtrl.hasClients) return;
+    final pos = _plansCtrl.position;
+    if (pos.pixels < pos.maxScrollExtent - 240) return;
+    if (_plansMoreLoading || !(_plans?.canLoadMore ?? false)) return;
+    _loadPlans();
   }
 
   // CHANGE #548: backend-formatted (ist_fmt 'dmy2_hm').
   String _planWhenLabel(String? createdAt) =>
       DateLabels.instance.label(createdAt, DateStyle.dmy2Hm) ?? '';
 
-  void _onPlanRealtimeChange(PostgresChangePayload payload) {
-    if (_pastPlans == null || !mounted) return;
-    // CHANGE #488: DELETE payloads carry the row in oldRecord, not newRecord.
-    if (payload.eventType == PostgresChangeEvent.delete) {
-      final deletedId = payload.oldRecord['id']?.toString();
-      if (deletedId == null) return;
-      setState(() => _pastPlans =
-          _pastPlans!.where((p) => p['plan_id'].toString() != deletedId).toList());
-      return;
-    }
-    final row = payload.newRecord;
-    final planId = row['id']?.toString();
-    if (planId == null) return;
-    if (payload.eventType == PostgresChangeEvent.update) {
-      final idx = _pastPlans!.indexWhere((p) => p['plan_id'].toString() == planId);
-      if (idx == -1) return;
-      setState(() => _pastPlans![idx] = {..._pastPlans![idx], 'status': row['status']});
-    } else if (payload.eventType == PostgresChangeEvent.insert) {
-      if (_pastPlans!.any((p) => p['plan_id'].toString() == planId)) return;
-      final city = row['city']?.toString() ?? '';
-      final k = (row['k'] as num?)?.toInt() ?? 0;
-      final totalLeads = (row['total_leads'] as num?)?.toInt() ?? 0;
-      final classes = ((row['classes'] as List?) ?? []).join(', ');
-      final createdAt = row['created_at']?.toString();
-      final item = <String, dynamic>{
-        'plan_id': planId,
-        'city': city,
-        'title': '$city · ${k}R · $totalLeads leads',
-        'types': classes,
-        'when_label': _planWhenLabel(createdAt),
-        'status': row['status']?.toString() ?? 'queued',
-      };
-      setState(() => _pastPlans = [item, ..._pastPlans!]);
-    }
-  }
 
   /// CHANGE #552 — chips + their lead_class mapping, both backend-sourced.
   /// Best-effort: a failure here leaves the chip row empty rather than
@@ -12552,15 +13067,7 @@ class _RoutesTabState extends State<_RoutesTab> {
   Future<void> _togglePastPlans() async {
     final expanding = !_pastPlansExpanded;
     setState(() => _pastPlansExpanded = expanding);
-    if (expanding && _pastPlans == null) {
-      try {
-        final res = await Supabase.instance.client.rpc('route_plan_list', params: {'p_limit': 10});
-        final list = ((res as List?) ?? []).map((p) => Map<String, dynamic>.from(p as Map)).toList();
-        if (!mounted) return;
-        setState(() => _pastPlans = list);
-        _fetchOptStatusFor(list);
-      } catch (_) {}
-    }
+    if (expanding && _plans == null) await _loadPlans(reset: true);
   }
 
   // ── CHANGE #488: per-plan optimization badge — plan_google_status() isn't
@@ -12617,7 +13124,17 @@ class _RoutesTabState extends State<_RoutesTab> {
       // Remove it locally right away for snappy UX — the realtime DELETE
       // handler above will also fire and no-op harmlessly on a second pass.
       setState(() {
-        _pastPlans = (_pastPlans ?? []).where((p) => p['plan_id'].toString() != planId).toList();
+        final held = _plans;
+        if (held != null) {
+          _plans = PagedList(
+            rows: held.rows.where((p) => p['plan_id'].toString() != planId).toList(),
+            meta: held.meta,
+            hasMore: held.hasMore,
+            nextOffset: held.nextOffset,
+            total: held.total,
+            loaded: held.loaded,
+          );
+        }
         if (_planId == planId) {
           _plan = null;
           _planId = null;
@@ -12661,11 +13178,7 @@ class _RoutesTabState extends State<_RoutesTab> {
           SnackBar(content: Text(cf('admin_customer.deleted_old_plans', {'n': '$deleted'}))));
       // Realtime DELETE events land per-row already; refetch too so the
       // count is right even if a realtime event is missed.
-      final list = await Supabase.instance.client.rpc('route_plan_list', params: {'p_limit': 10});
-      if (!mounted) return;
-      final freshList = ((list as List?) ?? []).map((p) => Map<String, dynamic>.from(p as Map)).toList();
-      setState(() => _pastPlans = freshList);
-      _fetchOptStatusFor(freshList);
+      await _loadPlans(reset: true);
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -13130,18 +13643,73 @@ class _RoutesTabState extends State<_RoutesTab> {
         ),
         if (_pastPlansExpanded) ...[
           const Divider(height: 1, color: Color(0xFFE5E7EB)),
-          if (_pastPlans == null)
+          if (_plans == null)
             const Padding(
               padding: EdgeInsets.all(16),
               child: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)),
             )
           else if (_pastPlans!.isEmpty)
             Padding(
-              padding: EdgeInsets.all(14),
-              child: Text(c('admin_customer.no_past_plans'), style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+              padding: EdgeInsets.all(Ds.space.x16),
+              child: Text(
+                  _plans?.emptyLabel ?? c('admin_customer.no_past_plans'),
+                  style: Ds.t.caption),
             )
           else
-            ..._pastPlans!.map((p) {
+            // CHANGE #1867 — lazy rows in their own viewport: a plan row is
+            // built when it scrolls into view, and the next page is appended
+            // when the backend says there is one. Never the whole table.
+            SizedBox(
+              height: (MediaQuery.of(context).size.height * 0.5).clamp(220.0, 560.0),
+              child: NotificationListener<ScrollNotification>(
+                onNotification: (_) {
+                  _onPlansScroll();
+                  return false;
+                },
+                child: Scrollbar(
+                  controller: _plansCtrl,
+                  child: ListView.builder(
+                    controller: _plansCtrl,
+                    primary: false,
+                    itemCount: _pastPlans!.length + 1,
+                    itemBuilder: (ctx, i) {
+                      if (i >= _pastPlans!.length) return _plansListFooter();
+                      return _pastPlanRow(_pastPlans![i]);
+                    },
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ]),
+    );
+  }
+
+  /// The past-plans footer — route_plan_list()'s own more_label / end_label.
+  Widget _plansListFooter() {
+    if (_plansMoreLoading) {
+      return Padding(
+        padding: EdgeInsets.symmetric(vertical: Ds.space.x16),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          SizedBox(
+              width: 12, height: 12,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Ds.c.brand)),
+          SizedBox(width: Ds.space.x8),
+          Text(_plans?.moreLabel ?? '', style: Ds.t.caption),
+        ]),
+      );
+    }
+    final end = _plans?.endLabel;
+    if (end != null) {
+      return Padding(
+        padding: EdgeInsets.symmetric(vertical: Ds.space.x16),
+        child: Center(child: Text(end, style: Ds.t.caption)),
+      );
+    }
+    return SizedBox(height: Ds.space.x12);
+  }
+
+  Widget _pastPlanRow(Map<String, dynamic> p) {
               final planId = p['plan_id'].toString();
               final optStatus = p['opt_status'] as Map?;
               final total = (optStatus?['total_routes'] as num?)?.toInt() ?? 0;
@@ -13177,10 +13745,6 @@ class _RoutesTabState extends State<_RoutesTab> {
                   ]),
                 ),
               );
-            }),
-        ],
-      ]),
-    );
   }
 
   // ── B4: plan summary + C1: route cards ───────────────────────────────────
@@ -15009,6 +15573,176 @@ class _AssignRouteDialogState extends State<_AssignRouteDialog> {
               : const Text('Assign'),
         ),
       ],
+    );
+  }
+}
+
+/// CMD #366 row 176 — the admin side of substitution.
+///
+/// It offers exactly two verbs: ASK the customer, and APPLY what the customer
+/// already approved. There is deliberately no third verb that swaps a line on
+/// the customer's behalf — the backend's sub_offer_apply refuses anything that
+/// is not status='approved' with a chosen product the customer picked from the
+/// list they were shown, so this panel cannot become one either.
+class _SubstitutePanel extends StatefulWidget {
+  final String orderId;
+  const _SubstitutePanel({required this.orderId});
+
+  @override
+  State<_SubstitutePanel> createState() => _SubstitutePanelState();
+}
+
+class _SubstitutePanelState extends State<_SubstitutePanel> {
+  List<Map<String, dynamic>> _offers = const [];
+  bool _busy = false;
+  bool _loaded = false;
+  String _error = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final res = await SubstituteChoice.rpc(
+          'sub_offers_for_order', {'p_order_id': widget.orderId});
+      if (!mounted) return;
+      final rows = (res is Map ? (res['offers'] as List?) : null) ?? const [];
+      setState(() {
+        _offers = rows
+            .whereType<Map>()
+            .map((e) => e.cast<String, dynamic>())
+            .toList();
+        _loaded = true;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loaded = true);
+    }
+  }
+
+  Future<void> _run(String fn, Map<String, dynamic> params) async {
+    setState(() {
+      _busy = true;
+      _error = '';
+    });
+    try {
+      final res = await SubstituteChoice.rpc(fn, params);
+      if (res is Map && res['ok'] == false) {
+        // The refusal ships its own sentence — "The customer has not approved
+        // a substitute for this line yet." Print that, never a local one.
+        if (mounted) {
+          setState(() =>
+              _error = (res['message'] ?? res['error'] ?? '').toString());
+        }
+      }
+      await _load();
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_loaded) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(height: Ds.space.x12),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                c('admin_customer.substitute_title'),
+                style: Ds.t.caption.copyWith(
+                    fontWeight: FontWeight.w700, color: Ds.c.textSecondary),
+              ),
+            ),
+            TextButton(
+              onPressed: _busy
+                  ? null
+                  : () => _run('sub_offer_open_for_order',
+                      {'p_order_id': widget.orderId}),
+              child: Text(c('admin_customer.substitute_ask')),
+            ),
+          ],
+        ),
+        if (_error.isNotEmpty)
+          Text(_error, style: Ds.t.caption.copyWith(color: Ds.c.danger)),
+        for (final o in _offers) ...[
+          SizedBox(height: Ds.space.x8),
+          Container(
+            padding: EdgeInsets.all(Ds.space.x12),
+            decoration: BoxDecoration(
+              color: Ds.c.surface,
+              borderRadius: Ds.r.rButton,
+              border: Border.all(color: Ds.c.divider),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // readOnly: the admin sees the customer's options and their
+                // answer, and cannot answer for them.
+                SubstituteChoice(offer: o, readOnly: true),
+                if ((o['status'] ?? '') == 'approved') ...[
+                  SizedBox(height: Ds.space.x8),
+                  SizedBox(
+                    width: double.infinity,
+                    height: Ds.space.x48,
+                    child: FilledButton(
+                      onPressed: _busy
+                          ? null
+                          : () => _run(
+                              'sub_offer_apply', {'p_offer_id': o['offer_id']}),
+                      child: Text(c('admin_customer.substitute_apply')),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// CHANGE #810 — one filter chip on the Customers list. Label and count are
+/// the payload's; this widget only says whether it is on.
+class _CusChip extends StatelessWidget {
+  final String label;
+  final int? count;
+  final bool active;
+  final VoidCallback onTap;
+  const _CusChip(
+      {required this.label,
+      this.count,
+      required this.active,
+      required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: Ds.r.rChip,
+      child: Container(
+        constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+        alignment: Alignment.center,
+        padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
+        decoration: BoxDecoration(
+          color: active ? Ds.c.brandSoft : Ds.c.surface,
+          borderRadius: Ds.r.rChip,
+          border: Border.all(color: active ? Ds.c.brand : Ds.c.divider),
+        ),
+        child: Text(
+          count == null ? label : '$label  $count',
+          style:
+              active ? Ds.t.caption.copyWith(color: Ds.c.brand) : Ds.t.caption,
+        ),
+      ),
     );
   }
 }

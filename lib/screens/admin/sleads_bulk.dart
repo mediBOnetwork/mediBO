@@ -73,10 +73,19 @@ class SLeadsBulk {
   /// both already substituted server-side except for {n}.
   String confirmTitle(int n) => label('confirm_title', n: n);
 
-  /// `p_status` for `get_scraped_leads`. Archived leads are hidden from every
-  /// other call, so asking for them by name is the only way to see them.
-  static String? statusParam(bool archivedView) =>
-      archivedView ? 'archived' : null;
+  /// The filter-state key the Archived view lives under. It is a FILTER, not
+  /// a screen mode: it normalises, pages, counts and saves into a view like
+  /// every other filter, and `sleads_page` turns it into
+  /// `get_scraped_leads(p_status => 'archived')`. Every other call hides
+  /// archived leads, so this key is the only way to see them.
+  static const String archivedKey = 'archived';
+
+  static bool isArchivedView(Map<String, dynamic> filters) =>
+      filters[archivedKey] == true;
+
+  /// Whether THIS row is archived — the backend flags it per row, so a card
+  /// never infers it from which filter happens to be on.
+  static bool rowArchived(Map<String, dynamic> row) => row['archived'] == true;
 }
 
 /// Multi-select on the lead grid: long-press enters it, a tap toggles inside

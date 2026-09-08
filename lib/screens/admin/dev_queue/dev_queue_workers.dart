@@ -5,6 +5,7 @@ import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
 import 'dev_queue_common.dart';
+import 'restart_safety.dart';
 import 'dev_queue_detail.dart';
 import 'dev_queue_service.dart';
 
@@ -18,11 +19,17 @@ import 'dev_queue_service.dart';
 /// only forwards the admin's patch to `pool_set`.
 class WorkerGridCard extends StatelessWidget {
   final Map<String, dynamic> pool;
+  /// CHANGE #1366 — `dev_ctl_get().disk` (runner_disk_state), already a label,
+  /// a value string, a sub-line and a tone name. The card computes no
+  /// percentage and knows no threshold: a disk that filled to 99% for 21 hours
+  /// was invisible here because nothing on this card was ever asked to say so.
+  final Map<String, dynamic> disk;
   final DevQueueService service;
   final VoidCallback onChanged;
   const WorkerGridCard({
     super.key,
     required this.pool,
+    this.disk = const {},
     required this.service,
     required this.onChanged,
   });
@@ -32,11 +39,8 @@ class WorkerGridCard extends StatelessWidget {
   Map<String, dynamic> get _state =>
       (pool['state'] as Map?)?.cast<String, dynamic>() ?? const {};
 
-  List<Map<String, dynamic>> get _workers =>
-      ((_state['workers'] as List?) ?? const [])
-          .whereType<Map>()
-          .map((e) => Map<String, dynamic>.from(e))
-          .toList();
+  PoolLiveness get _live => PoolLiveness(_state);
+  List<Map<String, dynamic>> get _workers => _live.workers;
 
   @override
   Widget build(BuildContext context) {
@@ -44,8 +48,20 @@ class WorkerGridCard extends StatelessWidget {
     final active = asInt(_state['active_workers']);
     final cap = asInt(_config['cap']);
     final shrink = (_state['shrink_display'] ?? '').toString();
+    // CHANGE #1662 — Remote Control flapping. The sentence, and the tone it is
+    // painted in, are dev_rc_health()'s; the card decides nothing, not even
+    // whether there is a problem. Absent key = no banner, never a placeholder.
+    final rcBanner = (_state['rc_banner'] ?? '').toString();
+    final rcTone = (_state['rc_banner_tone'] ?? '').toString();
     final quota = (_state['quota_display'] ?? '').toString();
     final load = (_state['load_display'] ?? '').toString();
+    // CHANGE #1149 — "branch: on · 2h 14m" / "branch: off" is the backend's
+    // sentence (build_branch_state().display, forwarded by the supervisor).
+    final branch = (_state['branch_display'] ?? '').toString();
+    // CHANGE #233B — the backend blanks workers/counts/countdowns and hands
+    // down this one line the moment the pool's own heartbeat goes stale, so a
+    // stopped VM can never keep drawing a live worker grid.
+    final stale = _live.staleDisplay;
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       // Header: title · active/cap count · settings gear.
@@ -70,6 +86,38 @@ class WorkerGridCard extends StatelessWidget {
           ),
         ),
       ]),
+      // Disk line. Present whenever the backend has a reading; absent (has:false)
+      // draws nothing rather than a dash, so "not measured" never reads as "0%".
+      if ((disk['has'] ?? false) == true) ...[
+        SizedBox(height: Ds.space.x8),
+        RunnerDiskLine(disk: disk),
+      ],
+      // Offline banner — same shape as the shrink banner, danger tone.
+      if (stale.isNotEmpty) ...[
+        SizedBox(height: Ds.space.x8),
+        Container(
+          width: double.infinity,
+          padding: EdgeInsets.symmetric(
+              horizontal: Ds.space.x8 + 2, vertical: Ds.space.x8),
+          decoration: BoxDecoration(
+              color: Ds.c.dangerSoft, borderRadius: Ds.r.rButton),
+          child: Row(children: [
+            Icon(Icons.cloud_off_outlined,
+                size: Ds.space.x16, color: Ds.c.danger),
+            SizedBox(width: Ds.space.x8),
+            Flexible(
+              child: Text(stale,
+                  style: Ds.t.caption.copyWith(
+                      fontWeight: FontWeight.w600, color: Ds.c.danger)),
+            ),
+          ]),
+        ),
+      ],
+      // Remote Control flapping banner — the backend's own sentence.
+      if (rcBanner.isNotEmpty) ...[
+        SizedBox(height: Ds.space.x8),
+        _RcBanner(text: rcBanner, tone: rcTone),
+      ],
       // Shrink banner (only when the backend supplied a reason string).
       if (shrink.isNotEmpty) ...[
         SizedBox(height: Ds.space.x8),
@@ -101,18 +149,20 @@ class WorkerGridCard extends StatelessWidget {
           runSpacing: Ds.space.x8,
           children: [for (final w in workers) _WorkerChip(worker: w, service: service)],
         ),
-      // Quota / load caption.
-      if (quota.isNotEmpty || load.isNotEmpty) ...[
+      // Quota / load / build-branch caption — each segment is a backend string.
+      if (quota.isNotEmpty || load.isNotEmpty || branch.isNotEmpty) ...[
         SizedBox(height: Ds.space.x8),
-        Row(children: [
-          if (quota.isNotEmpty)
-            Text(quota, style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
-          if (quota.isNotEmpty && load.isNotEmpty)
-            Text('   ·   ',
-                style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
-          if (load.isNotEmpty)
-            Text(load, style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
-        ]),
+        Wrap(
+          spacing: Ds.space.x8,
+          runSpacing: Ds.space.x4,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            for (final seg in [quota, load, branch].where((s) => s.isNotEmpty))
+              Text(seg,
+                  key: seg == branch ? const Key('c1149_branch_line') : null,
+                  style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+          ],
+        ),
       ],
     ]);
   }
@@ -127,6 +177,49 @@ class WorkerGridCard extends StatelessWidget {
       builder: (_) => _PoolSettingsSheet(config: _config, service: service),
     );
     if (changed == true) onChanged();
+  }
+}
+
+/// The Remote Control flapping banner (CHANGE #1662).
+///
+/// A session that keeps being opened and closed is a fact the BACKEND counts
+/// (dev_rc_event) and the BACKEND words (dev_rc_health.rc_banner); this widget
+/// only prints it. An unknown tone stays neutral rather than guessing a colour,
+/// so a new tone added server-side can never paint the card wrong.
+class _RcBanner extends StatelessWidget {
+  final String text;
+  final String tone;
+  const _RcBanner({required this.text, required this.tone});
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = switch (tone) {
+      'danger' => Ds.c.dangerSoft,
+      'warning' => Ds.c.warningSoft,
+      'success' => Ds.c.successSoft,
+      _ => Ds.c.infoSoft,
+    };
+    final fg = switch (tone) {
+      'danger' => Ds.c.danger,
+      'warning' => Ds.c.warning,
+      'success' => Ds.c.success,
+      _ => Ds.c.info,
+    };
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x8 + 2, vertical: Ds.space.x8),
+      decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rButton),
+      child: Row(children: [
+        Icon(Icons.link_off, size: Ds.space.x16, color: fg),
+        SizedBox(width: Ds.space.x8),
+        Flexible(
+          child: Text(text,
+              style: Ds.t.caption
+                  .copyWith(fontWeight: FontWeight.w600, color: fg)),
+        ),
+      ]),
+    );
   }
 }
 
@@ -517,4 +610,66 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
           ),
         ),
       );
+}
+
+/// CHANGE #1366 — the disk line on the Runner health card, on its own so it can
+/// be tested without a Supabase client behind it.
+///
+/// A PRINTER: `runner_disk_state()` sends the label, the value sentence, the
+/// sub-line and a tone name. Nothing here divides, rounds or compares against a
+/// threshold. `has:false` draws nothing — "not measured yet" must never render
+/// as a reassuring 0%.
+class RunnerDiskLine extends StatelessWidget {
+  final Map<String, dynamic> disk;
+  const RunnerDiskLine({super.key, required this.disk});
+
+  @override
+  Widget build(BuildContext context) {
+    if ((disk['has'] ?? false) != true) return const SizedBox.shrink();
+    final sub = (disk['sub_line'] ?? '').toString();
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Icon(Icons.storage_outlined,
+          size: Ds.space.x16, color: Ds.c.textSecondary),
+      SizedBox(width: Ds.space.x8),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Text((disk['label'] ?? '').toString(),
+                style: Ds.t.caption.copyWith(
+                    fontWeight: FontWeight.w600, color: Ds.c.text)),
+            SizedBox(width: Ds.space.x8),
+            Flexible(
+              child: Text((disk['value'] ?? '').toString(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Ds.t.caption
+                      .copyWith(color: _diskColor((disk['tone'] ?? '').toString()))),
+            ),
+          ]),
+          if (sub.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(sub, style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+          ],
+        ]),
+      ),
+    ]);
+  }
+
+  /// The tone→colour lookup, exposed so the protected test can prove there is
+  /// exactly ONE of them and that an unknown tone falls back to neutral.
+  static Color debugValueColour(String tone) => _diskColor(tone);
+
+  static Color _diskColor(String tone) {
+    switch (tone) {
+      case 'success':
+        return Ds.c.success;
+      case 'warning':
+        return Ds.c.warning;
+      case 'danger':
+      case 'error':
+        return Ds.c.danger;
+      default:
+        return Ds.c.textSecondary;
+    }
+  }
 }

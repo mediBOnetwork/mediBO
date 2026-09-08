@@ -6,8 +6,9 @@
 //     "Archive 3", never pluralises "3 leads", never names a lead class.
 //   • Archive and Restore are ONE button in two states, and the archived view
 //     is the only thing that flips it. 'delete' is not an option the UI has.
-//   • `p_status` is 'archived' ONLY in the archived view and null everywhere
-//     else — that is what keeps archived leads out of the default list.
+//   • The archived view is ONE key in CMD #1868's canonical filter map, and a
+//     row's own `archived` flag — not the filter — is what puts Restore on a
+//     card. Every other call hides archived leads.
 //   • Long-press enters multi-select, a tap toggles inside it, and clearing
 //     the last lead leaves it, so an empty toolbar can never strand the grid.
 //
@@ -91,13 +92,24 @@ void main() {
     });
   });
 
-  group('the archived filter is the only door to archived leads', () {
-    test('p_status is null in the default view', () {
-      expect(SLeadsBulk.statusParam(false), isNull);
+  group('the archived view is a FILTER, not a screen mode', () {
+    test('it lives under one key in the canonical filter map', () {
+      expect(SLeadsBulk.archivedKey, 'archived');
+      expect(SLeadsBulk.isArchivedView(const {'archived': true}), isTrue);
+      expect(SLeadsBulk.isArchivedView(const {'archived': false}), isFalse);
     });
 
-    test("p_status is 'archived' only when the filter is on", () {
-      expect(SLeadsBulk.statusParam(true), 'archived');
+    test('an absent key is the default view — never a guess', () {
+      expect(SLeadsBulk.isArchivedView(const {}), isFalse);
+      expect(SLeadsBulk.isArchivedView(const {'archived': null}), isFalse);
+      expect(SLeadsBulk.isArchivedView(const {'archived': 'true'}), isFalse);
+    });
+
+    test('a row says whether IT is archived; the filter never decides that',
+        () {
+      expect(SLeadsBulk.rowArchived(const {'id': 1, 'archived': true}), isTrue);
+      expect(SLeadsBulk.rowArchived(const {'id': 1, 'archived': false}), isFalse);
+      expect(SLeadsBulk.rowArchived(const {'id': 1}), isFalse);
     });
   });
 

@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../services/live_feed.dart';
+
 import 'product.dart';
 import '../utils/order_code.dart';
 import '../utils/render_log.dart';
@@ -272,7 +274,7 @@ class CartModel extends ChangeNotifier {
   final ValueNotifier<String?> cartError = ValueNotifier<String?>(null);
 
   StreamSubscription<AuthState>? _authSub;
-  RealtimeChannel? _cartChannel;
+  LiveFeedHandle? _cartChannel;
 
   // ── View As mode ──────────────────────────────────────────────────────────
   // CHANGE #559: cart_state()/cart_set_item()/cart_clear() resolve the target
@@ -446,19 +448,21 @@ class CartModel extends ChangeNotifier {
 
   void _subscribeToCartRealtime(String uid) {
     _cartChannel?.unsubscribe();
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    _cartChannel = Supabase.instance.client
-        .channel('customer_cart_${uid}_$ts')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'cart_items',
-          filter: PostgresChangeFilter(
-            type: PostgresChangeFilterType.eq,
-            column: 'user_id',
-            value: uid,
-          ),
-          callback: (_) {
+    // CHANGE #643: cart_items is one of the eight tables the registry still
+    // marks live — one buyer on two devices must agree instantly — and it is
+    // filtered to this user, which is what the registry requires of it.
+    LiveFeed.instance
+        .watch(
+          channelPrefix: 'customer_cart_$uid',
+          tables: const ['cart_items'],
+          filters: {
+            'cart_items': PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'user_id',
+              value: uid,
+            ),
+          },
+          onChange: (_) {
             // CHANGE #610 — our OWN cart_set_item already returned the new
             // cart, and adopting it is what put it on screen. The realtime
             // echo of that same write must not kick off a second full read:
@@ -472,7 +476,10 @@ class CartModel extends ChangeNotifier {
             refresh();
           },
         )
-        .subscribe();
+        .then((h) {
+      _cartChannel?.unsubscribe();
+      _cartChannel = h;
+    });
   }
 
   // ── Reading the server cart ───────────────────────────────────────────────
@@ -848,9 +855,8 @@ class CartModel extends ChangeNotifier {
       ((_cart['unit_count'] as num?)?.toInt() ?? 0) +
       _sampleLines.values.fold(0, (s, l) => s + l.quantity);
 
-  /// Cart value as the server computed it — the MRP subtotal, which is now the
-  /// only number the cart has. #615: cart_state() returns `subtotal`, not
-  /// `total`; the old key would have read 0 forever.
+  /// Cart value as the server computed it. #355: `subtotal` is the TAXABLE
+  /// trade value (ex-GST); it was the MRP subtotal until this change.
   double get total => (_cart['subtotal'] as num?)?.toDouble() ?? 0.0;
 
   double get subtotal =>
@@ -869,6 +875,62 @@ class CartModel extends ChangeNotifier {
   String label(String key) =>
       ((render['labels'] as Map?)?[key] ?? '').toString();
 
+  // ── CHANGE #355 — the cart's money is the TRADE rate, never the MRP ───────
+  //
+  // feature_gaps #79: every order in history was billed at MRP because
+  // cart_state() priced each line at its printed ceiling and every total
+  // multiplied that up. cart_pricing_block() now resolves PTR -> discount ->
+  // scheme -> GST server-side and returns the whole block; a line with no
+  // trade rate contributes zero and says so in the backend's own words.
+  //
+  // Nothing here computes: the amounts, the labels, the GST split and the
+  // "N items not priced yet" sentence all arrive formatted.
+
+  /// The cart lines exactly as cart_render() sent them, including the per-line
+  /// trade fields (`has_trade_rate`, `price_display`, `rate_note`, `qty_label`)
+  /// the row widgets print verbatim. Read-only passthrough — the model does not
+  /// reinterpret a line's money.
+  List<Map<String, dynamic>> get rawItems =>
+      ((_cart['items'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => e.cast<String, dynamic>())
+          .toList(growable: false);
+
+  /// The pricing block from cart_render(): totals, the GST breakup and the
+  /// unpriced-line copy.
+  Map<String, dynamic> get pricing =>
+      (render['pricing'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  /// True when at least one line has a trade rate, so there is tax to show.
+  bool get hasTax => render['has_tax'] == true;
+
+  /// Taxable value / CGST / SGST / GST total, in payload order. Each entry is
+  /// {label, value} and both halves are printed verbatim.
+  List<Map<String, dynamic>> get taxLines =>
+      ((render['tax_lines'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => e.cast<String, dynamic>())
+          .toList(growable: false);
+
+  /// "3 items not priced yet — rate comes with the supplier quote", or ''.
+  /// Pluralised by the backend; never assembled here.
+  String get unpricedNote => (pricing['unpriced_note'] ?? '').toString();
+
+  /// Set when a shown GST rate came from the class rules rather than a
+  /// confirmed per-product rate.
+  String get gstNote => (pricing['gst_note'] ?? '').toString();
+
+  /// The payable, formatted. With no line priced yet this is the backend's
+  /// "Awaiting supplier rates", NOT a rupee amount — because there is no
+  /// amount owed until the suppliers quote.
+  String get netPayableDisplay => rs('net_payable_display');
+
+  /// What the basket is worth at the printed ceiling. Reference only: it is
+  /// never the payable (legal_get_page('about'), "How pricing and billing
+  /// actually work").
+  String get mrpWorthDisplay => (pricing['mrp_worth_display'] ?? '').toString();
+  String get mrpWorthLabel => (pricing['mrp_worth_label'] ?? '').toString();
+
   /// CHANGE #636 — the floating cart pill, rendered entirely by cart_render().
   ///
   /// `show` is the BACKEND's answer to "is there a pill right now?". The app
@@ -878,15 +940,39 @@ class CartModel extends ChangeNotifier {
   Map<String, dynamic> get pill =>
       (render['pill'] as Map?)?.cast<String, dynamic>() ?? const {};
 
+  /// CMD #791 — "Frequently bought together" for the basket as a whole, from
+  /// `cart_render().companions`. `has` is the backend's verdict; the strip is
+  /// absent on an empty cart and on a basket with no co-purchase evidence,
+  /// because there is nothing honest to suggest.
+  Map<String, dynamic> get companions =>
+      (_cart['companions'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  /// CHANGE #174 — the trade margin on this basket, computed by
+  /// `cart_margin_block()` from the SAME engine the cards use. Empty map when
+  /// the payload carried none.
+  ///
+  /// `has` is the backend's answer to "is any line in this cart priced yet?".
+  /// The app never sums a margin itself, and never treats an un-priced line as
+  /// zero margin — those lines are excluded and counted in `note` instead.
+  Map<String, dynamic> get margin =>
+      (render['margin'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  bool get marginHas => margin['has'] == true;
+  String get marginLabel => (margin['label'] ?? '').toString();
+  String get marginTotalDisplay => (margin['total_display'] ?? '').toString();
+  String get marginNote => (margin['note'] ?? '').toString();
+
   bool get pillShow => pill['show'] == true;
   String get pillItemsLabel => (pill['items_label'] ?? '').toString();
   String get pillCta => (pill['cta'] ?? '').toString();
   String get pillImage => (pill['image'] ?? '').toString();
 
-  /// #615 — the one figure the customer pays, as the SERVER computed it:
-  /// sum(qty × MRP). `grand_total` in the render block, `mrp_total` /
-  /// `subtotal` / `net_payable` at the top level are all the same number by
-  /// construction, so there is nothing left that can disagree.
+  /// #355 — the one figure the customer pays, as the SERVER computed it: the
+  /// trade payable (taxable + GST) over the lines that have a trade rate.
+  /// `grand_total` in the render block and `net_payable` at the top level are
+  /// the same number by construction. `mrp_total` is deliberately NOT that
+  /// number any more — it is the reference ceiling, and pricing an order on it
+  /// is what feature_gaps #79 was.
   double get grandTotal => (render['grand_total'] as num?)?.toDouble() ?? 0.0;
 
   /// Total MRP as the SERVER computed it.
@@ -894,8 +980,8 @@ class CartModel extends ChangeNotifier {
       ((_cart['mrp_total'] as num?)?.toDouble() ?? 0.0) +
       _sampleLines.values.fold(0.0, (s, l) => s + l.product.mrp * l.quantity);
 
-  /// Net payable, straight from cart_state(). #615: identical to the MRP
-  /// subtotal — there is no discount, GST or delivery fee to apply.
+  /// Net payable, straight from cart_state(). #355: the trade total incl. GST
+  /// over priced lines — 0 while no line in the basket has a trade rate yet.
   double get netPayable => (_cart['net_payable'] as num?)?.toDouble() ?? 0.0;
 
   bool get hasSampleItems => _sampleLines.isNotEmpty;
@@ -953,6 +1039,12 @@ class CartModel extends ChangeNotifier {
     final current = quantityOf(productId);
     _requestQty(productId, current > 0 ? current + 1 : 1);
   }
+
+  /// CMD #791 — set an exact quantity by id. The one-tap "Add usual qty (9)"
+  /// on the purchase overlay is a SET, not nine increments: the backend already
+  /// decided the number, so the app writes it once through the same debounced
+  /// path every stepper uses.
+  void setQuantityId(String productId, int qty) => _requestQty(productId, qty);
 
   void incrementId(String productId) =>
       _requestQty(productId, quantityOf(productId) + 1);

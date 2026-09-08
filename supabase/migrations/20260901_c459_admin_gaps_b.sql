@@ -1,0 +1,58 @@
+-- CHANGE #459 — MEDIUM defects, admin batch B: the LAST 7 approved
+-- severity=medium surface=admin feature_gaps rows (40, 53, 54, 55, 56, 57, 179).
+-- Batch A (#529) took the first 8 (13,16,21,22,36,37,38,39).
+--
+-- This file is the historical record; every statement is idempotent, so a
+-- resumed worker re-applying it is a silent no-op. Applied to prod as, in order:
+--   c459_admin_gaps_b_copy            — every display string these queues print
+--   c459_gap40_oos_followup_queue     — ask TTL + re-ask + admin queue
+--   c459_admin_guard_helper           — _c459_admin() / _c459_refuse()
+--   c459_gap40_use_shared_guard
+--   c459_gap40_backfill_ask_count
+--   c459_gap53_stuck_scan
+--   c459_gap54_alert_recovery
+--   c459_gap55_acting_as_ledger
+--   c459_gap57_arrivals_and_counts
+--   c459_gap57_count_copy_fix
+--   c459_fix_month_format
+--   c459_gap55_ledger_history_block
+--   c459_gap55_ledger_order_fix
+--   c459_ops_queues_umbrella
+--   c459_ops_queues_nav_entry        — the nav row (feature_registry)
+--
+-- ROOT CAUSES (each reproduced against prod before the fix):
+--  40  stock_update_sweep() only picks rows with asked_at IS NULL, so the
+--      instant a form went out the row was stranded: the supplier never
+--      replied, the 3-day form expired, nothing re-asked. 10/10 rows overdue,
+--      0 ever resolved.
+--  53  pending_orders.scan_status='pending' with no age, no retry and no
+--      alert — 853ac49a sat 5 days looking exactly like a row waiting for a
+--      human.
+--  54  notify_health_scan() resolved an open alert whenever the CURRENT
+--      1-hour window fell below threshold — including when the window was
+--      empty. 10 of the last 12 alerts closed at exactly 60-63 minutes at
+--      failure_pct=100. Absence of failures was read as recovery.
+--  55  admin_acting_as is a live-session table with no history, and all 33
+--      admin-placed orders had no ledger to sit in.
+--  56  admin_inquiry_po_integrity() had zero callers in lib/, test/ or web/.
+--  57  count_mismatch compares shop_qty to wh_recount_qty, and wh_recount_qty
+--      is NULL on all 293 order_items — one side of the comparison is never
+--      written, so the exception could not fire. Real differences exist
+--      (shop 1 vs received 2, shop 0 vs received 5).
+-- 179  a driver PostgrestException was printed verbatim to the visitor; there
+--      was no shared error state that renders backend copy for 42501.
+--
+-- The live SQL is applied via supabase migrations of the names above.
+
+-- ---------------------------------------------------------------------------
+-- QA ROUND (same command). The live capture of "Waiting at the warehouse"
+-- showed a row whose state chip read "Count differences" — the OTHER queue's
+-- SECTION heading used as a per-row state — beside a qty_label of "5 of 5"
+-- that flatly denied any difference existed. Two strings on one row
+-- contradicting each other. Applied to prod as:
+--   c459_arrivals_row_state_fix
+-- admin_arrivals_waiting() now reuses the per-row wording the count queue
+-- already owns (ops.count.short / ops.count.over) and prints the honest pair
+-- (ops.count.pair) whenever count_diff <> 0, so the numbers agree with the
+-- chip. Untouched rows are unchanged ("4 of 4" / "Next: pack it").
+-- Idempotent: create or replace, same signature and same default.

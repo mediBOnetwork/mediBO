@@ -45,9 +45,11 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../design_tokens.dart';
 import '../../fulfill/fulfill_lookups.dart';
 import '../../services/admin_zone_scope.dart';
 import '../../utils/render_log.dart';
+import '../../user_state.dart'; // CMD #633 — the session gate below
 
 Color get _kGreen => FulfillLookups.instance.color('c_ff1b7a43', const Color(0xFF1B7A43));
 Color get _kBorder => FulfillLookups.instance.color('c_ffe5e7eb', const Color(0xFFE5E7EB));
@@ -93,13 +95,42 @@ class AdminDeliveryPartnersSectionState
   String _pendingTitle = '';
   String _pendingNote = '';
 
+  /// CMD #633 — the same session gate the host screen carries.
+  ///
+  /// This section is hosted inside AdminDeliveryPartnerScreen, which is one of
+  /// HomeShell's IndexedStack children, and an IndexedStack builds every child
+  /// — so initState here ran for anonymous visitors, called
+  /// admin_delivery_partners, and recorded the refusal on the public
+  /// storefront's render log as c630_delivery_partners_err. It is gated
+  /// independently of its host because it is a reusable widget: whoever mounts
+  /// it next inherits the gate rather than the bug.
+  bool _bootedForAdmin = false;
+
   @override
   void initState() {
     super.initState();
+    // CMD #633 — the first fetch waits for didChangeDependencies, where the
+    // session is readable.
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_bootedForAdmin) return;
+    if (!UserState.of(context).isAdmin) {
+      RenderLog.write('c633_anon_boot', 'admin_fetch=0');
+      return;
+    }
+    _bootedForAdmin = true;
     _load();
   }
 
-  Future<void> reload() => _load();
+  Future<void> reload() {
+    // CMD #633 — the host calls this on a scope change; it must not become the
+    // back door the gate was put up to close.
+    if (!_bootedForAdmin) return Future.value();
+    return _load();
+  }
 
   Future<void> _load() async {
     if (mounted) setState(() => _loading = true);
@@ -148,17 +179,73 @@ class AdminDeliveryPartnersSectionState
   /// accidentally activate a rider. admin_delivery_partners() itself excludes
   /// status='rejected' from the pending list, so a rejected row drops out of
   /// view on the next load without this file deciding to hide it.
+  /// CMD #453 (feature_gaps 96): a rejection now carries a REASON. The RPC
+  /// stores it on the row and puts it in the applicant's inbox, and
+  /// my_delivery_application() reads it back to them — so "rejected" stops
+  /// being a status with no explanation attached to it anywhere.
   Future<void> _reject(String partnerId) async {
+    final reason = await _askRejectReason();
+    if (reason == null) return; // dismissed — nothing is written
     try {
       final res = await Supabase.instance.client.rpc(
         'admin_review_registration',
-        params: {'p_kind': 'delivery_partner', 'p_id': partnerId, 'p_status': 'rejected'},
+        params: {
+          'p_kind': 'delivery_partner',
+          'p_id': partnerId,
+          'p_status': 'rejected',
+          'p_reason': reason,
+        },
       );
       if (!mounted) return;
       await _load();
       await widget.onChanged();
       if (res is Map) _toast(res['message']?.toString() ?? '');
     } catch (_) {}
+  }
+
+  /// Returns the typed reason, or null when the admin backed out. An empty
+  /// string is a legitimate answer — the RPC decides what an absent reason
+  /// means, and my_delivery_application() prints its own copy for that case.
+  Future<String?> _askRejectReason() async {
+    final ctrl = TextEditingController();
+    final out = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet)),
+      ),
+      builder: (sheetCtx) => Padding(
+        padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x16, Ds.space.x16,
+            Ds.space.x16 + MediaQuery.of(sheetCtx).viewInsets.bottom),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(
+            controller: ctrl,
+            autofocus: true,
+            maxLines: 3,
+            decoration: InputDecoration(
+              labelText: _ui('dlv_reject_reason'),
+              border: const OutlineInputBorder(),
+            ),
+          ),
+          SizedBox(height: Ds.space.x16),
+          SizedBox(
+            width: double.infinity,
+            height: Ds.touch.minTarget,
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Ds.c.danger,
+                foregroundColor: Ds.c.surface,
+              ),
+              onPressed: () => Navigator.of(sheetCtx).pop(ctrl.text.trim()),
+              child: Text(_ui('dlv_reject_submit')),
+            ),
+          ),
+        ]),
+      ),
+    );
+    ctrl.dispose();
+    return out;
   }
 
   /// Deactivate. The same RPC that approves — one write path, one set of rules.
@@ -354,6 +441,9 @@ class AdminDeliveryPartnersSectionState
           Text([docType, docNumber].where((x) => x.isNotEmpty).join(' · '),
               style: TextStyle(fontSize: 11.5, color: _kSub)),
         ],
+        // CHANGE #463 (register row 121): the identity state, and the two
+        // actions that move it, on the card the reviewer already reads.
+        _verificationStrip(r, reviewable: true),
         const SizedBox(height: 8),
         Row(children: [
           // A2 — open the scanned ID so the admin can actually verify it.
@@ -407,6 +497,123 @@ class AdminDeliveryPartnersSectionState
     } catch (_) {}
   }
 
+  /// CHANGE #463 (register row 121) — `rider-selfies` is PRIVATE, unlike
+  /// `partner-docs`, so the face opens through a short-lived signed URL rather
+  /// than a public one. The bucket and the path are the payload's; this file
+  /// builds neither.
+  Future<void> _openSelfie(String bucket, String path) async {
+    if (bucket.isEmpty || path.isEmpty) return;
+    try {
+      final url = await Supabase.instance.client.storage
+          .from(bucket)
+          .createSignedUrl(path, 300);
+      if (url.isEmpty) return;
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    } catch (_) {}
+  }
+
+  /// The reviewer's verdict on the identity. It is a SEPARATE decision from
+  /// approving the registration — an admin can verify a face today and still
+  /// leave the application pending — so it has its own RPC and never touches
+  /// status or is_active.
+  Future<void> _setVerification(String partnerId, String status) async {
+    if (partnerId.isEmpty) return;
+    try {
+      final res = await Supabase.instance.client.rpc(
+        'admin_delivery_verification_set',
+        params: {
+          'p': {'partner_id': partnerId, 'status': status}
+        },
+      );
+      if (!mounted) return;
+      await _load();
+      await widget.onChanged();
+      if (res is Map) _toast(res['message']?.toString() ?? '');
+      RenderLog.write('c463_rider_verification', 'admin_set;status=$status');
+    } catch (_) {}
+  }
+
+  Color _toneBg(String tone) {
+    switch (tone) {
+      case 'good':
+        return Ds.c.successSoft;
+      case 'bad':
+        return Ds.c.dangerSoft;
+      case 'warn':
+        return Ds.c.warningSoft;
+      default:
+        return Ds.c.infoSoft;
+    }
+  }
+
+  Color _toneFg(String tone) {
+    switch (tone) {
+      case 'good':
+        return Ds.c.success;
+      case 'bad':
+        return Ds.c.danger;
+      case 'warn':
+        return Ds.c.warning;
+      default:
+        return Ds.c.info;
+    }
+  }
+
+  /// The identity block, rendered verbatim. The chip's wording and its tone
+  /// are the backend's; only the token lookup happens here. An absent block
+  /// (an older payload) renders nothing rather than an empty chip.
+  Widget _verificationStrip(Map<String, dynamic> row, {required bool reviewable}) {
+    final v = row['verification'] is Map
+        ? Map<String, dynamic>.from(row['verification'] as Map)
+        : const <String, dynamic>{};
+    if (v.isEmpty) return const SizedBox.shrink();
+    final label = v['label']?.toString() ?? '';
+    if (label.isEmpty) return const SizedBox.shrink();
+    final tone = v['tone']?.toString() ?? '';
+    final selfiePath = v['selfie_path']?.toString() ?? '';
+    final selfieBucket = v['selfie_bucket']?.toString() ?? '';
+    final note = v['note']?.toString() ?? '';
+    final partnerId = row['partner_id']?.toString() ?? '';
+
+    return Padding(
+      padding: EdgeInsets.only(top: Ds.space.x8),
+      child: Wrap(
+        spacing: Ds.space.x8,
+        runSpacing: Ds.space.x4,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Container(
+            padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x8, vertical: Ds.space.x4),
+            decoration: BoxDecoration(
+              color: _toneBg(tone),
+              borderRadius: Ds.r.rChip,
+            ),
+            child: Text(label,
+                style: Ds.t.caption.copyWith(color: _toneFg(tone))),
+          ),
+          if (note.isNotEmpty) Text(note, style: Ds.t.caption),
+          if (selfiePath.isNotEmpty)
+            TextButton(
+              onPressed: () => _openSelfie(selfieBucket, selfiePath),
+              child: Text(v['view_label']?.toString() ?? ''),
+            ),
+          if (reviewable) ...[
+            TextButton(
+              onPressed: () => _setVerification(partnerId, 'verified'),
+              child: Text(v['verify_label']?.toString() ?? ''),
+            ),
+            TextButton(
+              style: TextButton.styleFrom(foregroundColor: Ds.c.danger),
+              onPressed: () => _setVerification(partnerId, 'rejected'),
+              child: Text(v['reject_label']?.toString() ?? ''),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _activeRow(Map<String, dynamic> p) {
     final typeLabel = p['type_label']?.toString() ?? '';
     final colors = p['type_colors'] is Map
@@ -455,6 +662,10 @@ class AdminDeliveryPartnersSectionState
           ].where((x) => x.isNotEmpty).join(' · '),
           style: TextStyle(fontSize: 11.5, color: _kSub),
         ),
+        // CHANGE #463 (register row 121): an already-approved rider's identity
+        // state is readable here too, and still reviewable — a face can be
+        // rejected after approval without touching is_active.
+        _verificationStrip(p, reviewable: true),
         const SizedBox(height: 6),
         Row(children: [
           if (isAgency) ...[

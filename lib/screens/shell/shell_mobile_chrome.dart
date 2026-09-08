@@ -148,7 +148,6 @@ class _MobileProfileAvatarState extends State<_MobileProfileAvatar> {
   @override
   void initState() {
     super.initState();
-    CustomerSurfaces.ensureLoaded();
     NotifUnread.refresh();
   }
 

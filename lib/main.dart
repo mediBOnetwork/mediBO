@@ -27,6 +27,7 @@ import 'view_as_state.dart';
 import 'models/cart_model.dart';
 import 'models/order_hours_model.dart';
 import 'models/inquiry_lock_model.dart';
+import 'screens/auth/complete_registration_screen.dart';
 import 'screens/auth/login_screen.dart';
 
 import 'screens/customer/customer_staff_screen.dart'; // CMD #438: /customer/staff
@@ -171,6 +172,14 @@ final Map<String, WidgetBuilder> kAppRoutes = <String, WidgetBuilder>{
   '/customer/profile':   (_) => const MyAccountScreen(initialTab: 'profile'),
   '/customer/addresses': (_) => const AddressBookScreen(),
   '/register':     (_) => const LoginScreen(),
+  // CMD #1904 — the address my_session().signup_route names. A WhatsApp signup
+  // now creates an auth user with no pharmacy row behind it, which is the same
+  // state a Google signup comes back in, so both are sent to one URL and one
+  // form. It guards nothing: the screen asks my_session() who the viewer is and
+  // renders the backend's own sentence for a signed-out or already-registered
+  // one. A real route (not a push from inside the login panel) is what lets the
+  // form survive the page reload the OAuth round trip performs.
+  '/complete-registration': (_) => const CompleteRegistrationScreen(),
   // CHANGE #631 (PART A) — the delivery-partner registration form.
   // delivery_partner_register() stamps auth.uid() itself, so the
   // screen asks for a sign-in rather than inventing an anonymous

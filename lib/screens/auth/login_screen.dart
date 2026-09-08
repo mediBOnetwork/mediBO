@@ -481,8 +481,8 @@ class _LoginScreenState extends State<LoginScreen> {
       final s = await _api.session();
       if (!mounted) return;
       if (s['signed_in'] != true) return;
-      final route = s['home_route'] as String?;
-      if (route == null || route.isEmpty) return;
+      final route = landingRoute(s);
+      if (route.isEmpty) return;
       _goTo(route);
     } catch (_) {
       // No local error copy — the view keeps showing the last backend message.
@@ -638,7 +638,7 @@ class _LoginPanelViewState extends State<LoginPanelView> {
       final s = await _api.session();
       if (!mounted) return;
       if (s['signed_in'] != true) return;
-      final route = (s['home_route'] as String?) ?? '';
+      final route = landingRoute(s);
       if (route.isEmpty) return;
       await _land(route);
     } catch (_) {

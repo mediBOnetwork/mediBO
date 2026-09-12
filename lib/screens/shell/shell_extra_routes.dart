@@ -48,6 +48,7 @@ import '../admin/support_threads_screen.dart';
 import '../partner/partner_tasks_screen.dart';
 import '../worker/worker_tasks_screen.dart';
 import '../admin/kyc_review_screen.dart';
+import '../admin/order_cutoff_screen.dart'; // CMD #1934 — the cut-off door
 import '../partner/partner_documents_screen.dart';
 import '../admin/settlement_invoices_screen.dart'; // CHANGE #695 — tax invoices
 import '../partner/partner_issues_screen.dart'; // CHANGE #696 — partner issues
@@ -248,6 +249,17 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       // partner_scorecard() resolves the partner from the CALLER — its
       // partnerId argument is an operator filter and never a way in — so the
       // door being open to a role decides nothing about what that role reads.
+      // CMD #1934 — Order cut-off. CMD #1847 built the whole rule (the clock,
+      // the two gates, the auto-cancel, the restoration window, the per-order
+      // actions and the settings writer) and gave it no door of its own: every
+      // knob was reachable only by scrolling the order-alerts screen, and the
+      // audit of who changed what and the never-auto-cancel list had no
+      // surface at all. This is that door.
+      //
+      // Authorisation is NOT here. order_cutoff_screen() gates on
+      // get_my_role() and answers anyone else with `not_admin`, which the
+      // screen renders — the same story as damage_report above.
+      'order_cutoff' => const OrderCutoffScreen(),
       'partner_scorecards' => const AdminPartnerScorecardsScreen(),
       'partner_scorecard' => const PartnerScorecardScreen(),
       _ => null,

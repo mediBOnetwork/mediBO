@@ -78,3 +78,19 @@ returns jsonb language sql stable security definer set search_path to 'public' a
     'payment_alerts_unmatched', public._pa_badge_count()
   );
 $$;
+
+-- The DOOR is declared too. surface_route is what rg_check's c821_shell_doors
+-- target reads, and a tile whose route nothing opens is exactly what it
+-- exists to catch. handled_by='home_shell' is the shell's router as a whole:
+-- this key's arm is in shell/shell_extra_routes.dart, which the shell's own
+-- `case _ when shellExtraRouteScreen(route) != null` lookup dispatches — the
+-- same half 'feedback' and 'triage' are registered through.
+insert into public.surface_route (route_key, feature_key, kind, handled_by, is_active, note)
+values ('payment_alerts', 'admin.payment_alerts', 'feature', 'home_shell', true,
+        'Payment alerts — opened by shellExtraRouteScreen in shell/shell_extra_routes.dart (CMD #1929).')
+on conflict (route_key, feature_key) do update set
+  kind        = excluded.kind,
+  handled_by  = excluded.handled_by,
+  is_active   = excluded.is_active,
+  note        = excluded.note,
+  updated_at  = now();

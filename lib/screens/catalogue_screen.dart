@@ -59,7 +59,6 @@ class CatalogueRoute {
 
   final CatFilterState filters;
   final String sort;
-  final bool zoneOn;
   final String query;
 
   /// CMD #1908 — the A–Z letter, or null for the whole list. It lives in the
@@ -74,7 +73,6 @@ class CatalogueRoute {
     this.listKey,
     this.filters = const CatFilterState(),
     this.sort = 'name',
-    this.zoneOn = true,
     this.query = '',
     this.letter,
   });
@@ -88,7 +86,6 @@ class CatalogueRoute {
     Object? listKey = _keep,
     CatFilterState? filters,
     String? sort,
-    bool? zoneOn,
     String? query,
     Object? letter = _keep,
   }) =>
@@ -99,7 +96,6 @@ class CatalogueRoute {
         listKey: identical(listKey, _keep) ? this.listKey : listKey as String?,
         filters: filters ?? this.filters,
         sort: sort ?? this.sort,
-        zoneOn: zoneOn ?? this.zoneOn,
         query: query ?? this.query,
         letter: identical(letter, _keep) ? this.letter : letter as String?,
       );
@@ -115,7 +111,6 @@ class CatalogueRoute {
     if (listKind != null) q.add('lk=$listKind');
     if (listKey != null) q.add('k=${Uri.encodeComponent(listKey!)}');
     if (sort != 'name') q.add('sort=$sort');
-    if (!zoneOn) q.add('zone=0');
     if (query.isNotEmpty) q.add('q=${Uri.encodeComponent(query)}');
     if (letter != null) q.add('l=${Uri.encodeComponent(letter!)}');
     final f = filters.toQuery();
@@ -139,8 +134,10 @@ class CatalogueRoute {
       listKind: q['lk'],
       listKey: q['k'] == null ? null : Uri.decodeComponent(q['k']!),
       filters: CatFilterState.fromQuery(q),
+      // CMD #1909 — `zone=0` is read and DROPPED, not honoured: an old link
+      // or a bookmark from when the switch existed still opens, it just opens
+      // the whole list like every other link does now.
       sort: q['sort'] == 'newest' ? 'newest' : 'name',
-      zoneOn: q['zone'] != '0',
       query: q['q'] == null ? '' : Uri.decodeComponent(q['q']!),
       letter: q['l'] == null ? null : Uri.decodeComponent(q['l']!),
     );
@@ -155,7 +152,6 @@ class CatalogueRoute {
         listKey: c.listKey,
         filters: filters,
         sort: sort,
-        zoneOn: zoneOn,
         query: '',
         letter: null,
       );
@@ -258,18 +254,18 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
     _booted = true;
     setState(() => _loading = true);
     try {
-      final home = CatHome.fromMap(await _call('catalogue_home', {'p_zone': _route.zoneOn}));
+      final home = CatHome.fromMap(await _call('catalogue_home', const {}));
       if (!mounted) return;
       setState(() => _home = home);
       // CHANGE #748 — best-effort: the three extras must never be able to stop
       // the catalogue itself from booting.
       try {
-        final ex = await _call('catalogue_extras', {'p_zone': _route.zoneOn});
+        final ex = await _call('catalogue_extras', const {});
         if (mounted) setState(() => _extras = ex);
       } catch (_) {}
       RenderLog.write('c747_catalogue_tabs',
           '${home.tabs.map((t) => t.key).join('>')};'
-          'zone=${home.zone.has ? (home.zone.on ? 'on' : 'off') : 'none'}');
+          'zone=${home.zone.has ? 'switch' : 'none'}');
       await _fetch();
     } catch (e) {
       if (mounted) setState(() { _loading = false; _error = e.toString(); });
@@ -288,7 +284,6 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
           'p_path': _route.path,
           'p_filters': _route.filters.toRpc(),
           'p_sort': _route.sort,
-          'p_zone': _route.zoneOn,
           'p_cursor': null,
           'p_limit': _pageSize,
         });
@@ -303,7 +298,9 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         });
         RenderLog.write('c747_catalogue_list',
             '${_route.listKind}:${_route.listKey ?? _route.path.join('/')};'
-            'items=${list.items.length};more=${list.hasMore};filters=${list.filtersActive}');
+            'items=${list.rows.length};more=${list.hasMore};filters=${list.filtersActive};'
+            'grouped=${list.grouped};'
+            'dividers=${list.rows.where((r) => r.dividerLabel.isNotEmpty).length}');
       } else {
         final fn = switch (_route.tab) {
           'companies' => 'catalogue_companies',
@@ -316,17 +313,16 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
           'companies' => {
               'p_letter': _route.query.isEmpty ? _route.letter : null,
               'p_q': _route.query.isEmpty ? null : _route.query,
-              'p_offset': 0, 'p_limit': _rowPage, 'p_zone': _route.zoneOn,
+              'p_offset': 0, 'p_limit': _rowPage,
             },
           'salts' => {
               'p_letter': _route.query.isEmpty ? _route.letter : null,
               'p_q': _route.query.isEmpty ? null : _route.query,
-              'p_offset': 0, 'p_limit': _rowPage, 'p_zone': _route.zoneOn,
+              'p_offset': 0, 'p_limit': _rowPage,
             },
           _ => {
               'p_path': _route.path,
               'p_letter': _route.letter,
-              'p_zone': _route.zoneOn,
             },
         };
         final b = CatBrowse.fromMap(await _call(fn, args));
@@ -402,7 +398,6 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         'p_path': _route.path,
         'p_filters': _route.filters.toRpc(),
         'p_sort': _route.sort,
-        'p_zone': _route.zoneOn,
         'p_cursor': _cursor,
         'p_limit': _pageSize,
       }));
@@ -418,7 +413,11 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
           filtersActive: cur.filtersActive, filtersActiveLabel: cur.filtersActiveLabel,
           zone: cur.zone, filters: cur.filters,
           sentence: cur.sentence, empty: cur.empty, trail: cur.trail,
-          items: [...cur.items, ...p.items],
+          // The groups come back on every page — the counts are the SCOPE's,
+          // not the page's, so the later payload is as good as the first and
+          // taking it keeps a changed count honest.
+          grouped: p.grouped, groups: p.groups,
+          rows: [...cur.rows, ...p.rows],
           // Paging stops when the BACKEND says so, never when a page comes back
           // short — that is wrong on an exact boundary.
           hasMore: p.hasMore, nextCursor: p.nextCursor,
@@ -437,7 +436,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
       final args = {
         'p_letter': _route.query.isEmpty ? _route.letter : null,
         'p_q': _route.query.isEmpty ? null : _route.query,
-        'p_offset': _nextOffset, 'p_limit': _rowPage, 'p_zone': _route.zoneOn,
+        'p_offset': _nextOffset, 'p_limit': _rowPage,
       };
       final b = CatBrowse.fromMap(await _call(fn, args));
       if (!mounted) return;
@@ -508,7 +507,6 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
             home: home,
             controller: _searchCtrl,
             focus: _searchFocus,
-            zoneOn: _route.zoneOn,
             suggest: _suggest,
             onSubmit: (q) {
               final t = q.trim();
@@ -552,7 +550,10 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
                 : (_isHome ? home.sentence : (_browse?.sentence ?? CatSentence.empty)),
             state: _route.filters,
             onToggle: (g, k, single) {
-              if (g == 'zone') { _go(_route.copy(zoneOn: !_route.zoneOn)); return; }
+              // CMD #1909 — 'zone' was a chip that filtered the list. The
+              // backend stopped sending it; an unknown group is skipped in
+              // silence rather than guessed at.
+              if (g == 'zone') return;
               final next = _route.filters.toggle(g, k, single: single);
               // A chip tapped on the front page has to have somewhere to land:
               // it opens the whole-catalogue grid already narrowed by it.
@@ -653,19 +654,10 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
             ),
           ),
         if (_isHome) SliverToBoxAdapter(child: _tabStrip()),
-        // The zone control keeps a place of its own on the front page. The
-        // sentence chip above is the quick toggle; this is the SETTING, and
-        // only it carries the backend's sentence explaining what the switch
-        // does — a chip cannot say "Showing what suppliers in your zone can
-        // send." and stay a chip.
-        if (_isHome && (_home?.zone.has ?? false))
-          SliverToBoxAdapter(
-            child: _ZoneSwitch(
-              zone: _home!.zone,
-              on: _route.zoneOn,
-              onChanged: (on) => _go(_route.copy(zoneOn: on)),
-            ),
-          ),
+        // CMD #1909 — the zone SWITCH used to sit here. Nothing replaces it:
+        // a catalogue list hides nothing any more, so there is no setting to
+        // offer. What was a filter is now the order the list arrives in, and
+        // the divider rows inside the list say so in the backend's words.
         SliverToBoxAdapter(
           child: Padding(
             padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x24, Ds.space.x16, Ds.space.x8),
@@ -762,7 +754,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
   Widget _productGrid() {
     final l = _list;
     if (l == null) return const _CatSkeleton();
-    if (l.items.isEmpty) {
+    if (l.rows.isEmpty) {
       return CustomScrollView(controller: _scroll, slivers: [
         SliverToBoxAdapter(
           child: _CatEmptyState(
@@ -801,18 +793,29 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
             padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
             sliver: SliverList(
               delegate: SliverChildBuilderDelegate(
-                (context, i) => Padding(
-                  padding: EdgeInsets.only(bottom: Ds.space.x12),
-                  child: ProductRowCard(
-                    product: l.items[i],
-                    addedLabel: _addedLabel,
-                    undoLabel: _undoLabel,
-                    onTap: () =>
-                        Navigator.of(context).pushNamed('/product/${l.items[i].id}'),
-                    onPeek: () => _openPeek(l.items[i]),
-                  ),
+                // CMD #1909 — the divider is drawn from the ROW's own
+                // `divider_label`, so it costs no lookahead, no grouping pass
+                // and no comparison between pages. An empty label is simply a
+                // row with no header above it.
+                (context, i) => Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (l.rows[i].dividerLabel.isNotEmpty)
+                      _GroupDivider(label: l.rows[i].dividerLabel, first: i == 0),
+                    Padding(
+                      padding: EdgeInsets.only(bottom: Ds.space.x12),
+                      child: ProductRowCard(
+                        product: l.rows[i].product,
+                        addedLabel: _addedLabel,
+                        undoLabel: _undoLabel,
+                        onTap: () => Navigator.of(context)
+                            .pushNamed('/product/${l.rows[i].product.id}'),
+                        onPeek: () => _openPeek(l.rows[i].product),
+                      ),
+                    ),
+                  ],
                 ),
-                childCount: l.items.length,
+                childCount: l.rows.length,
               ),
             ),
           ),
@@ -848,7 +851,6 @@ class _SearchHero extends StatelessWidget {
   final CatHome home;
   final TextEditingController controller;
   final FocusNode focus;
-  final bool zoneOn;
   final SearchSuggestController suggest;
   final ValueChanged<String> onSubmit;
   final ValueChanged<String> onPick;
@@ -858,7 +860,6 @@ class _SearchHero extends StatelessWidget {
     required this.home,
     required this.controller,
     required this.focus,
-    required this.zoneOn,
     required this.suggest,
     required this.onSubmit,
     required this.onPick,
@@ -879,7 +880,7 @@ class _SearchHero extends StatelessWidget {
                 controller: controller,
                 focusNode: focus,
                 textInputAction: TextInputAction.search,
-                onChanged: (v) => suggest.onQueryChanged(v, zoneOnly: zoneOn),
+                onChanged: suggest.onQueryChanged,
                 onSubmitted: onSubmit,
                 decoration: InputDecoration(
                   // The placeholder is the payload's. There is no second
@@ -974,31 +975,36 @@ class _SentenceRow extends StatelessWidget {
   }
 }
 
-/// The zone switch. Drawn only when the backend said this viewer HAS one, and
-/// worded entirely by it — including the sentence under it, which changes with
-/// the switch because the backend changed it, not because this widget did.
-class _ZoneSwitch extends StatelessWidget {
-  final CatZone zone;
-  final bool on;
-  final ValueChanged<bool> onChanged;
-  const _ZoneSwitch({required this.zone, required this.on, required this.onChanged});
+/// CMD #1909 — the grey rule that names an availability group.
+///
+/// It prints ONE string and decides nothing: the label already carries its own
+/// count, because a count assembled here ("Available in your zone" + " (" + n)
+/// would be this widget writing a sentence.
+///
+/// The rule sits ABOVE the label, and only when there is something above to
+/// separate from — [first] is the top of the whole list, not the top of a
+/// page, so an appended page never draws a stray line under nothing. The label
+/// is a left-aligned caption on its own line rather than centred between two
+/// rules: "Not available in your zone (2,95,412)" is 34 characters, and
+/// squeezed between two Expanded dividers on a 360 px phone it overflowed by
+/// 50 px — a header that hides the number it exists to show.
+class _GroupDivider extends StatelessWidget {
+  final String label;
+  final bool first;
+  const _GroupDivider({required this.label, required this.first});
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: EdgeInsets.fromLTRB(
-            Ds.space.x16, Ds.space.x24, Ds.space.x8, 0),
-        child: Row(
+        padding: EdgeInsets.only(
+            top: first ? 0 : Ds.space.x24, bottom: Ds.space.x12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(zone.label, style: Ds.t.body),
-                  if (zone.note.isNotEmpty) Text(zone.note, style: Ds.t.caption),
-                ],
-              ),
-            ),
-            Switch(value: on, activeThumbColor: Ds.c.brand, onChanged: onChanged),
+            if (!first) ...[
+              Divider(height: 1, color: Ds.c.divider),
+              SizedBox(height: Ds.space.x16),
+            ],
+            Text(label, style: Ds.t.caption, textAlign: TextAlign.left),
           ],
         ),
       );

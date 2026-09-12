@@ -12,9 +12,12 @@
 
 import 'product.dart';
 
-/// The "Available in my zone" control, exactly as `catalogue_zone_switch()`
-/// describes it. [has] false → draw nothing at all; an anonymous visitor is
-/// never shown a control that would not change what they see.
+/// CMD #1909 — the remains of the "Available in my zone" control. The backend
+/// now answers `has:false` for everyone, because catalogue lists no longer
+/// filter by zone at all: they show the whole scope and GROUP it. The class
+/// stays because the payload key stays, and because `has` is still the only
+/// thing allowed to decide whether a control exists — reading it as "off"
+/// would be the app inferring, which is what #638 forbade.
 class CatZone {
   final bool has;
   final bool on;
@@ -361,6 +364,58 @@ class CatBrowse {
   }
 }
 
+/// CMD #1909 — one of the two availability groups a catalogue list is ordered
+/// into. [label] already carries its count ("Available in your zone (5)") and
+/// is printed exactly as it arrived; [count] is here for nothing but tests and
+/// is never re-rendered into a label by the app.
+class CatGroup {
+  final String key;
+  final String label;
+  final int? count;
+
+  const CatGroup({required this.key, required this.label, required this.count});
+
+  static CatGroup fromMap(Object? raw) {
+    final m = raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
+    return CatGroup(
+      key: (m['key'] ?? '').toString(),
+      label: (m['label'] ?? '').toString(),
+      count: m['count'] is num ? (m['count'] as num).toInt() : null,
+    );
+  }
+}
+
+/// One row of a catalogue PRODUCT list: the card, plus the divider the BACKEND
+/// asked to be drawn above it. (Not [CatRow] — that is a browse row, a company
+/// or a salt on the way to a list like this one.)
+///
+/// The divider travels on the row that OPENS a group rather than as a separate
+/// list the app has to interleave. That is what makes paging safe: page two of
+/// the same group arrives with every [dividerLabel] empty, so a header is
+/// never repeated and never lost, and the app never compares one page's last
+/// item with the next page's first to work out where a group changed.
+class CatListRow {
+  final String dividerLabel;
+
+  /// 'in' | 'out', or '' when the list is not grouped at all (anonymous
+  /// viewers, and any viewer whose zone has no counts built yet).
+  final String group;
+
+  final Product product;
+
+  const CatListRow({
+    required this.dividerLabel,
+    required this.group,
+    required this.product,
+  });
+
+  static CatListRow fromMap(Map<String, dynamic> m) => CatListRow(
+        dividerLabel: (m['divider_label'] ?? '').toString(),
+        group: (m['group'] ?? '').toString(),
+        product: Product.fromHomeCard(m),
+      );
+}
+
 /// `catalogue_list()` — one page of products for any scope.
 ///
 /// [nextCursor] is OPAQUE. It is the backend's keyset position, handed straight
@@ -387,7 +442,15 @@ class CatList {
   /// CMD #1908 — the breadcrumb for this scope.
   final CatTrail trail;
 
-  final List<Product> items;
+  /// CMD #1909 — true when the backend split this list into the two zone
+  /// groups. False is not "no zone": it is "this list is one flat run", which
+  /// is what an anonymous visitor gets.
+  final bool grouped;
+
+  /// The two groups, in the order they appear. Empty when [grouped] is false.
+  final List<CatGroup> groups;
+
+  final List<CatListRow> rows;
   final bool hasMore;
   final String? nextCursor;
 
@@ -407,7 +470,9 @@ class CatList {
     required this.sentence,
     required this.empty,
     required this.trail,
-    required this.items,
+    required this.grouped,
+    required this.groups,
+    required this.rows,
     required this.hasMore,
     required this.nextCursor,
   });
@@ -431,9 +496,13 @@ class CatList {
       empty: CatEmptyState.fromMap(m['empty'],
           fallbackLabel: (m['empty_label'] ?? '').toString()),
       trail: CatTrail.fromMap(m['trail']),
-      items: ((m['items'] as List?) ?? const [])
+      grouped: m['grouped'] == true,
+      groups: ((m['groups'] as List?) ?? const [])
+          .map(CatGroup.fromMap)
+          .toList(growable: false),
+      rows: ((m['items'] as List?) ?? const [])
           .whereType<Map>()
-          .map((i) => Product.fromHomeCard(Map<String, dynamic>.from(i)))
+          .map((i) => CatListRow.fromMap(Map<String, dynamic>.from(i)))
           .toList(growable: false),
       hasMore: m['has_more'] == true,
       nextCursor: (m['next_cursor'] as String?),

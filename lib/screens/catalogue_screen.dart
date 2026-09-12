@@ -62,6 +62,11 @@ class CatalogueRoute {
   final bool zoneOn;
   final String query;
 
+  /// CMD #1908 — the A–Z letter, or null for the whole list. It lives in the
+  /// ROUTE and not in a field beside it, so the back button and a pasted link
+  /// land on the same letter the strip was showing.
+  final String? letter;
+
   const CatalogueRoute({
     this.tab = 'browse',
     this.path = const [],
@@ -71,6 +76,7 @@ class CatalogueRoute {
     this.sort = 'name',
     this.zoneOn = true,
     this.query = '',
+    this.letter,
   });
 
   bool get showsList => listKind != null;
@@ -84,6 +90,7 @@ class CatalogueRoute {
     String? sort,
     bool? zoneOn,
     String? query,
+    Object? letter = _keep,
   }) =>
       CatalogueRoute(
         tab: tab ?? this.tab,
@@ -94,6 +101,7 @@ class CatalogueRoute {
         sort: sort ?? this.sort,
         zoneOn: zoneOn ?? this.zoneOn,
         query: query ?? this.query,
+        letter: identical(letter, _keep) ? this.letter : letter as String?,
       );
 
   static const Object _keep = Object();
@@ -109,6 +117,7 @@ class CatalogueRoute {
     if (sort != 'name') q.add('sort=$sort');
     if (!zoneOn) q.add('zone=0');
     if (query.isNotEmpty) q.add('q=${Uri.encodeComponent(query)}');
+    if (letter != null) q.add('l=${Uri.encodeComponent(letter!)}');
     final f = filters.toQuery();
     if (f.isNotEmpty) q.add(f);
     return q.isEmpty ? '/catalogue' : '/catalogue?${q.join('&')}';
@@ -133,8 +142,23 @@ class CatalogueRoute {
       sort: q['sort'] == 'newest' ? 'newest' : 'name',
       zoneOn: q['zone'] != '0',
       query: q['q'] == null ? '' : Uri.decodeComponent(q['q']!),
+      letter: q['l'] == null ? null : Uri.decodeComponent(q['l']!),
     );
   }
+
+  /// CMD #1908 — a breadcrumb tap. The crumb carries the four values this
+  /// route is made of; applying it is a copy, never a computation.
+  CatalogueRoute applyCrumb(CatCrumb c) => CatalogueRoute(
+        tab: c.tab,
+        path: c.path,
+        listKind: c.listKind,
+        listKey: c.listKey,
+        filters: filters,
+        sort: sort,
+        zoneOn: zoneOn,
+        query: '',
+        letter: null,
+      );
 }
 
 class CatalogueScreen extends StatefulWidget {
@@ -165,6 +189,12 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
   // CHANGE #748 — Recently added / Missing product / Export. The payload says
   // whether each is offered at all, so an empty map simply draws none of them.
   Map<String, dynamic> _extras = const {};
+
+  // CMD #1908 — the breadcrumb and the letter strip are HEADER state: they
+  // survive a reload, because a trail that blinks out while the next payload
+  // is in flight is a trail that "disappeared after changing a filter".
+  CatTrail _trail = CatTrail.empty;
+  CatRail _rail = CatRail.empty;
 
   bool _booted = false;
   bool _loading = false;
@@ -267,6 +297,8 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         setState(() {
           _list = list;
           _cursor = list.nextCursor;
+          if (!list.trail.isEmpty) _trail = list.trail;
+          _rail = CatRail.empty;
           _loading = false;
         });
         RenderLog.write('c747_catalogue_list',
@@ -278,17 +310,24 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
           'salts' => 'catalogue_salts',
           _ => 'catalogue_tree',
         };
+        // CMD #1908 — companies, salts and classes all take the same letter,
+        // because they all draw the same strip.
         final args = switch (_route.tab) {
           'companies' => {
-              'p_letter': _route.query.isEmpty ? _letter : null,
+              'p_letter': _route.query.isEmpty ? _route.letter : null,
               'p_q': _route.query.isEmpty ? null : _route.query,
               'p_offset': 0, 'p_limit': _rowPage, 'p_zone': _route.zoneOn,
             },
           'salts' => {
+              'p_letter': _route.query.isEmpty ? _route.letter : null,
               'p_q': _route.query.isEmpty ? null : _route.query,
               'p_offset': 0, 'p_limit': _rowPage, 'p_zone': _route.zoneOn,
             },
-          _ => {'p_path': _route.path, 'p_zone': _route.zoneOn},
+          _ => {
+              'p_path': _route.path,
+              'p_letter': _route.letter,
+              'p_zone': _route.zoneOn,
+            },
         };
         final b = CatBrowse.fromMap(await _call(fn, args));
         if (!mounted) return;
@@ -299,6 +338,8 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
             ..addAll(b.rows);
           _rowsHaveMore = b.hasMore;
           _nextOffset = b.nextOffset;
+          if (!b.trail.isEmpty) _trail = b.trail;
+          _rail = b.rail;
           _loading = false;
         });
         RenderLog.write('c747_catalogue_browse',
@@ -308,8 +349,6 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
       if (mounted) setState(() { _loading = false; _error = e.toString(); });
     }
   }
-
-  String? _letter;
 
   void _onSuggest() { if (mounted) setState(() {}); }
 
@@ -324,7 +363,6 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
     _suggest.close();
     _searchFocus.unfocus();
     _searchCtrl.text = query;
-    _letter = null;
     // A search is a PRODUCT search, so it opens the grid — the same scope the
     // full catalogue uses, narrowed by the backend's own query string.
     _go(_route.copy(tab: 'browse', path: const [], listKind: 'search',
@@ -379,7 +417,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
           moreLabel: cur.moreLabel, endLabel: cur.endLabel, sort: cur.sort,
           filtersActive: cur.filtersActive, filtersActiveLabel: cur.filtersActiveLabel,
           zone: cur.zone, filters: cur.filters,
-          sentence: cur.sentence, empty: cur.empty,
+          sentence: cur.sentence, empty: cur.empty, trail: cur.trail,
           items: [...cur.items, ...p.items],
           // Paging stops when the BACKEND says so, never when a page comes back
           // short — that is wrong on an exact boundary.
@@ -396,16 +434,11 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
     setState(() => _loadingMore = true);
     try {
       final fn = _route.tab == 'companies' ? 'catalogue_companies' : 'catalogue_salts';
-      final args = _route.tab == 'companies'
-          ? {
-              'p_letter': _route.query.isEmpty ? _letter : null,
-              'p_q': _route.query.isEmpty ? null : _route.query,
-              'p_offset': _nextOffset, 'p_limit': _rowPage, 'p_zone': _route.zoneOn,
-            }
-          : {
-              'p_q': _route.query.isEmpty ? null : _route.query,
-              'p_offset': _nextOffset, 'p_limit': _rowPage, 'p_zone': _route.zoneOn,
-            };
+      final args = {
+        'p_letter': _route.query.isEmpty ? _route.letter : null,
+        'p_q': _route.query.isEmpty ? null : _route.query,
+        'p_offset': _nextOffset, 'p_limit': _rowPage, 'p_zone': _route.zoneOn,
+      };
       final b = CatBrowse.fromMap(await _call(fn, args));
       if (!mounted) return;
       final seen = _rows.map((r) => r.key).toSet();
@@ -423,12 +456,12 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
   // ── taps ──────────────────────────────────────────────────────────────────
 
   void _tapTab(CatTab t) {
-    _letter = null;
     if (t.kind == 'list') {
       _go(_route.copy(tab: t.key, path: const [], listKind: t.listKind,
-          listKey: t.listKey, query: ''));
+          listKey: t.listKey, query: '', letter: null));
     } else {
-      _go(_route.copy(tab: t.key, path: const [], listKind: null, listKey: null, query: ''));
+      _go(_route.copy(tab: t.key, path: const [], listKind: null,
+          listKey: null, query: '', letter: null));
     }
   }
 
@@ -450,9 +483,6 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         }
     }
   }
-
-  void _crumbTo(int depth) => _go(_route.copy(
-      path: _route.path.take(depth).toList(), listKind: null, listKey: null));
 
   // ── build ─────────────────────────────────────────────────────────────────
 
@@ -484,9 +514,8 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
               final t = q.trim();
               if (t.isEmpty) return;
               _suggest.close();
-              _letter = null;
               _go(_route.copy(tab: 'browse', path: const [], listKind: 'search',
-                  listKey: t, query: t));
+                  listKey: t, query: t, letter: null));
             },
             onPick: _pickSuggestion,
             onClear: () {
@@ -497,12 +526,30 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
               }
             },
           ),
-          // 2. The sentence. Sticky under the search on every state, because a
-          //    filter you cannot see is a filter you forget you set.
+          // 2. CMD #1908 — the breadcrumb. Sticky under the search on EVERY
+          //    state of this tab, outside the scroll view, so it cannot
+          //    scroll away, and held across a reload so it cannot blink out
+          //    while the next payload is in flight.
+          _TrailBar(
+            trail: _trail,
+            onTap: (c) => _go(_route.applyCrumb(c)),
+          ),
+          // 3. The A–Z strip, directly under the breadcrumb. The backend sends
+          //    a rail on the company, salt and class lists and none on a
+          //    product grid, so there is nothing here to decide.
+          if (!_rail.isEmpty)
+            CatalogueAlphabetRail(
+              rail: _rail,
+              active: _route.letter,
+              onPick: (l) => _go(_route.copy(letter: l, query: '')),
+            ),
+          // 4. The narrowing sentence. It belongs to a SEARCH and to the
+          //    catalogue's own front page; inside a company, a salt or a class
+          //    the backend sends an empty one and this row is simply absent.
           _SentenceRow(
             sentence: _route.showsList
-                ? (_list?.sentence ?? home.sentence)
-                : home.sentence,
+                ? (_list?.sentence ?? CatSentence.empty)
+                : (_isHome ? home.sentence : (_browse?.sentence ?? CatSentence.empty)),
             state: _route.filters,
             onToggle: (g, k, single) {
               if (g == 'zone') { _go(_route.copy(zoneOn: !_route.zoneOn)); return; }
@@ -584,7 +631,6 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
     final b = _browse;
     if (b == null) return const _CatSkeleton();
 
-    final searchable = _route.tab == 'companies' || _route.tab == 'salts';
     final list = CustomScrollView(
       controller: _scroll,
       slivers: [
@@ -602,11 +648,8 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
             child: _Doors(
               title: _home!.doorsTitle,
               doors: _home!.doors,
-              onTap: (d) {
-                _letter = null;
-                _go(_route.copy(tab: d.tab, path: const [], listKind: null,
-                    listKey: null, query: ''));
-              },
+              onTap: (d) => _go(_route.copy(tab: d.tab, path: const [],
+                  listKind: null, listKey: null, query: '', letter: null)),
             ),
           ),
         if (_isHome) SliverToBoxAdapter(child: _tabStrip()),
@@ -623,23 +666,6 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
               onChanged: (on) => _go(_route.copy(zoneOn: on)),
             ),
           ),
-        if (searchable && _route.tab == 'salts')
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x4),
-              child: TextField(
-                controller: TextEditingController(text: _route.query),
-                onSubmitted: (v) => _go(_route.copy(query: v.trim())),
-                decoration: InputDecoration(
-                  hintText: b.searchHint,
-                  prefixIcon: const Icon(Icons.search),
-                  isDense: true,
-                ),
-              ),
-            ),
-          ),
-        if (_route.path.isNotEmpty)
-          SliverToBoxAdapter(child: _Crumbs(browse: b, path: _route.path, onTap: _crumbTo)),
         SliverToBoxAdapter(
           child: Padding(
             padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x24, Ds.space.x16, Ds.space.x8),
@@ -691,24 +717,10 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
       ],
     );
 
-    // CHANGE #799 — the A–Z rail rides on the RIGHT of the company list, on
-    // top of it rather than beside it, so the rows keep the full width.
-    if (_route.tab != 'companies' || b.rail.isEmpty) return list;
-    return Stack(
-      children: [
-        Positioned.fill(child: list),
-        Positioned(
-          top: Ds.space.x24,
-          bottom: Ds.space.x24,
-          right: 0,
-          child: CatalogueAlphabetRail(
-            rail: b.rail,
-            active: _letter,
-            onPick: (l) { _letter = l; _go(_route.copy(query: '')); },
-          ),
-        ),
-      ],
-    );
+    // CMD #1908 — nothing rides over the rows any more. The A–Z index is the
+    // horizontal strip in the header, above this scroll view, where it is the
+    // same component on companies, salts and classes.
+    return list;
   }
 
   /// The tabs #747/#748 shipped — Schemes, Cold chain, Recently added — now a
@@ -1244,41 +1256,63 @@ class _Chip extends StatelessWidget {
       );
 }
 
-/// The trail back up the tree. Every word in it is a value the backend sent —
-/// the root's name is `home_label`, and each step is the class name itself.
-class _Crumbs extends StatelessWidget {
-  final CatBrowse browse;
-  final List<String> path;
-  final ValueChanged<int> onTap;
-  const _Crumbs({required this.browse, required this.path, required this.onTap});
+/// CMD #1908 — the breadcrumb, sticky under the search bar.
+///
+/// "Catalogue › Company › SUN PHARMA". Every word and every separator is a
+/// value `catalogue_trail()` sent, and every step carries the route it goes
+/// back to, so this widget neither writes a word nor works out a destination.
+/// It scrolls sideways rather than wrapping: a trail that grows to two lines
+/// pushes the list down by a row every time you go one level deeper.
+class _TrailBar extends StatelessWidget {
+  final CatTrail trail;
+  final ValueChanged<CatCrumb> onTap;
+  const _TrailBar({required this.trail, required this.onTap});
 
   @override
-  Widget build(BuildContext context) => Padding(
-        padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x12, Ds.space.x16, 0),
-        child: Wrap(
-          spacing: Ds.space.x8,
-          runSpacing: Ds.space.x4,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            if (browse.homeLabel.isNotEmpty)
-              InkWell(
-                onTap: () => onTap(0),
-                child: Text(browse.homeLabel,
-                    style: Ds.t.caption.copyWith(color: Ds.c.brand)),
-              ),
-            for (var i = 0; i < path.length; i++) ...[
-              Icon(Icons.chevron_right,
-                  size: Ds.t.captionSize, color: Ds.c.textSecondary),
-              InkWell(
-                onTap: () => onTap(i + 1),
-                child: Text(path[i],
-                    style: Ds.t.caption.copyWith(
-                        color: i == path.length - 1 ? Ds.c.text : Ds.c.brand)),
-              ),
-            ],
-          ],
+  Widget build(BuildContext context) {
+    if (trail.isEmpty) return const SizedBox.shrink();
+    return Container(
+      color: Ds.c.surface,
+      child: Semantics(
+        label: trail.label,
+        child: SizedBox(
+          height: Ds.touch.minTarget,
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            reverse: true, // the step you are ON stays in view as the trail grows
+            padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                for (var i = 0; i < trail.items.length; i++) ...[
+                  if (i > 0 && trail.separator.isNotEmpty)
+                    Padding(
+                      padding: EdgeInsets.symmetric(horizontal: Ds.space.x4),
+                      child: Text(trail.separator,
+                          style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+                    ),
+                  InkWell(
+                    onTap: () => onTap(trail.items[i]),
+                    borderRadius: Ds.r.rChip,
+                    child: Container(
+                      constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+                      padding: EdgeInsets.symmetric(horizontal: Ds.space.x4),
+                      alignment: Alignment.center,
+                      child: Text(
+                        trail.items[i].label,
+                        style: Ds.t.caption.copyWith(
+                            color: trail.items[i].current ? Ds.c.text : Ds.c.brand),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
         ),
-      );
+      ),
+    );
+  }
 }
 
 class _BrowseRow extends StatelessWidget {

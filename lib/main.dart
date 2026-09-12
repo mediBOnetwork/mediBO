@@ -35,6 +35,7 @@ import 'screens/wishlist_screen.dart'; // CHANGE #745: /wishlist
 import 'screens/customer/my_account_screen.dart'; // CHANGE #840: /my-account
 import 'screens/customer/address_book_screen.dart'; // CHANGE #745: /customer/addresses
 import 'screens/rewards_screen.dart'; // CHANGE #745: /rewards
+import 'screens/profile_screen.dart'; // CMD #1923: /profile
 import 'screens/admin/admin_partner_console_screen.dart';
 import 'screens/admin/admin_partner_scorecards_screen.dart';
 import 'screens/partner/partner_scorecard_card.dart';
@@ -166,6 +167,15 @@ final Map<String, WidgetBuilder> kAppRoutes = <String, WidgetBuilder>{
   // neither route guards anything of its own.
   '/wishlist':     (_) => const WishlistScreen(),
   '/rewards':      (_) => const RewardsScreen(),
+  // CMD #1923 — '/profile' becomes a real address. Two registry rows have
+  // claimed it for a long time (identity.view_profile, and cust.profile_home
+  // from CMD #1914), and neither URL opened the profile: MaterialApp found no
+  // entry here, onUnknownRoute took it and the storefront came up instead. A
+  // registry deep_link is a URL and not a promise (#745), and the RG contract
+  // gate c634 asks every active feature for a test entry point that a headless
+  // session can actually open. It guards nothing of its own — ProfileScreen
+  // asks the backend who the viewer is, exactly as it does from the dropdown.
+  '/profile':      (_) => const ProfileScreen(),
   // CMD #1834 — the second profile editor is gone for good. This address used
   // to open it; it opens My Account -> Profile & KYC, and asks for no section
   // because the editor is not embedded in that tab either.

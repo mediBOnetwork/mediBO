@@ -147,7 +147,14 @@ Future<T?> retryWithBackoff<T>(
 /// Reads are paginated: the storefront pulls [pageSize] rows at a time and
 /// keeps requesting the next page as the user scrolls.
 class MedicineRepository {
-  final SupabaseClient _client;
+  /// The client this repository was HANDED, or null for "ask Supabase when you
+  /// actually need one". CMD #1906 — the search header is constructed by two
+  /// screens whose widget tests never boot Supabase, and a repository that
+  /// resolves the client in its constructor makes merely BUILDING those screens
+  /// throw. Resolution moved to first use; nothing else changed.
+  final SupabaseClient? _handedClient;
+
+  SupabaseClient get _client => _handedClient ?? Supabase.instance.client;
 
   /// Hook every [fetchPage] RPC call goes through. Production code always
   /// forwards to the real client's `.rpc()`; tests substitute a fake so
@@ -158,7 +165,7 @@ class MedicineRepository {
   MedicineRepository([
     SupabaseClient? client,
     Future<dynamic> Function(String fn, {Map<String, dynamic>? params})? rpc,
-  ]) : _client = client ?? Supabase.instance.client {
+  ]) : _handedClient = client {
     _rpc = rpc ?? (fn, {params}) => _client.rpc(fn, params: params);
   }
 

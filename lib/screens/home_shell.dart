@@ -596,21 +596,26 @@ class _HomeShellState extends State<HomeShell> {
       _index = tab;
       return;
     }
+    final onCatalogue = CatalogueRoute.matches(path);
     if (path.startsWith('/c/')) {
       _category = ShellRoutes.slugToCat(path.substring(3));
-    } else if (CatalogueRoute.matches(path)) {
+    } else if (onCatalogue) {
       _index = 12; // #747 — the screen parses its own query string
     }
     // CMD #1906 — a link carrying a search opens ON that search, filters and
     // page included. initialSearch(), not Uri.base: boot's rewrite erases the
-    // query string (#747).
+    // query string (#747). The SAME parameters on `/catalogue?…` open the
+    // Catalogue tab on that search rather than bouncing the shopper to Home:
+    // the tab is the link's, the search is shared.
     final s = SearchQueryState.fromLocation('?${initialSearch().replaceFirst('?', '')}');
     if (s.hasQuery) {
       _search = s;
       _query = s.query;
-      _category = s.category;
       _searchCtrl.text = s.query;
-      _index = 0;
+      if (!onCatalogue) {
+        _category = s.category;
+        _index = 0;
+      }
     }
   }
 
@@ -1719,7 +1724,19 @@ class _HomeShellState extends State<HomeShell> {
           MyShopScreen(navigate: _handleAdminNav, active: _index == 11),
           // #747 — index 12, the CATALOGUE. Appended for My Shop's reason (3–10
           // are addressed by number); `active` keeps it from fetching unseen.
-          CatalogueScreen(active: _index == 12),
+          // CMD #1906 item 4 — the Catalogue is handed the SAME search Home
+          // is showing and hands back the one the shopper makes on it, so
+          // moving between the two tabs keeps query, filters and page.
+          CatalogueScreen(
+            active: _index == 12,
+            shellSearch: _search,
+            onSearchChanged: (s) => setState(() {
+              _search = s;
+              _query = s.query;
+              if (_searchCtrl.text != s.query) _searchCtrl.text = s.query;
+              if (!s.hasQuery) _searchPayload = null;
+            }),
+          ),
           // CHANGE #1016 — index 13 Money, index 14 More: staff_home() rendered.
           adminPage(() => shellStaffHomePage('money', _index == 13, _handleAdminNav)),
           adminPage(() => shellStaffHomePage('more', _index == 14, _handleAdminNav)),

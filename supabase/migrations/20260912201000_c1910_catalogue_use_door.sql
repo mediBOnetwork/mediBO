@@ -851,7 +851,9 @@ as $fn$
     'lead_label', public.uic('catalogue.conditions_lead','Biggest uses first — search to narrow.'),
     'empty_label', public.uic('catalogue.conditions_empty','No use matches this search.'),
     'count_label', to_char((select count(*) from hit),'FM9,99,99,999') || ' '
-                   || public.uic('catalogue.conditions_word','uses'),
+                   || case when (select count(*) from hit) = 1
+                           then public.uic('catalogue.condition_word','use')
+                           else public.uic('catalogue.conditions_word','uses') end,
     'offset', (select off from lim),
     'next_offset', (select off from lim) + (select count(*) from shown),
     'has_more', (select count(*) from page) > (select n from lim),
@@ -877,7 +879,8 @@ insert into public.ui_copy (key, value) values
   ('catalogue.condition_subtitle',    to_jsonb('Products used for this condition'::text)),
   ('catalogue.condition_search_hint', to_jsonb('Search a use, e.g. Fever'::text)),
   ('catalogue.conditions_lead',       to_jsonb('Biggest uses first — search to narrow.'::text)),
-  ('catalogue.conditions_empty',      to_jsonb('No use matches this search.'::text))
+  ('catalogue.conditions_empty',      to_jsonb('No use matches this search.'::text)),
+  ('catalogue.condition_word',        to_jsonb('use'::text))
 on conflict (key) do nothing;
 
 -- ── the counts, now ───────────────────────────────────────────────────────

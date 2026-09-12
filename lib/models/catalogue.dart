@@ -271,8 +271,19 @@ class CatBrowse {
   final List<CatRow> letters;
   final String allLabel;
 
-  /// CHANGE #799 — the fixed A–Z track on the right of the company list.
+  /// CHANGE #799 — the fixed A–Z track. CMD #1908 draws it as a horizontal
+  /// strip under the breadcrumb, and companies, salts and classes all send one.
   final CatRail rail;
+
+  /// CMD #1908 — the breadcrumb, worded and routed by the backend.
+  final CatTrail trail;
+
+  /// CMD #1908 — the pack/Rx sentence. An index screen sends none, so the row
+  /// simply is not there; the front page and a search still send theirs.
+  final CatSentence sentence;
+
+  /// The letter currently applied, or '' for the whole list.
+  final String letter;
 
   /// 'level' → the next tap opens another level; 'products' → it opens the grid.
   final String childOpens;
@@ -297,6 +308,9 @@ class CatBrowse {
     required this.letters,
     required this.allLabel,
     required this.rail,
+    required this.trail,
+    required this.sentence,
+    required this.letter,
     required this.childOpens,
     required this.productsLabel,
     required this.hasProducts,
@@ -335,6 +349,9 @@ class CatBrowse {
           .toList(growable: false),
       allLabel: (m['all_label'] ?? '').toString(),
       rail: CatRail.fromMap(m['rail']),
+      trail: CatTrail.fromMap(m['trail']),
+      sentence: CatSentence.fromMap(m['sentence']),
+      letter: (m['letter'] ?? '').toString(),
       childOpens: (m['child_opens'] ?? '').toString(),
       productsLabel: (m['products_label'] ?? '').toString(),
       hasProducts: m['has_products'] == true,
@@ -367,6 +384,9 @@ class CatList {
   final CatSentence sentence;
   final CatEmptyState empty;
 
+  /// CMD #1908 — the breadcrumb for this scope.
+  final CatTrail trail;
+
   final List<Product> items;
   final bool hasMore;
   final String? nextCursor;
@@ -386,6 +406,7 @@ class CatList {
     required this.filters,
     required this.sentence,
     required this.empty,
+    required this.trail,
     required this.items,
     required this.hasMore,
     required this.nextCursor,
@@ -409,6 +430,7 @@ class CatList {
       sentence: CatSentence.fromMap(m['sentence']),
       empty: CatEmptyState.fromMap(m['empty'],
           fallbackLabel: (m['empty_label'] ?? '').toString()),
+      trail: CatTrail.fromMap(m['trail']),
       items: ((m['items'] as List?) ?? const [])
           .whereType<Map>()
           .map((i) => Product.fromHomeCard(Map<String, dynamic>.from(i)))
@@ -734,5 +756,70 @@ class CatVariantMap {
           .toList(growable: false);
     });
     return CatVariantMap(title: (m['title'] ?? '').toString(), byId: out);
+  }
+}
+
+/// CMD #1908 — one step of the breadcrumb.
+///
+/// The label is a word the backend chose, and [route] is the FOUR values the
+/// catalogue's route is made of, sent as data. Tapping a crumb is "copy this
+/// object into the route" — the app never works out where "Company" goes, and
+/// it never joins "Catalogue" to anything.
+class CatCrumb {
+  final String label;
+  final bool current;
+  final String tab;
+  final List<String> path;
+  final String? listKind;
+  final String? listKey;
+
+  const CatCrumb({
+    required this.label,
+    required this.current,
+    required this.tab,
+    required this.path,
+    required this.listKind,
+    required this.listKey,
+  });
+
+  static CatCrumb fromMap(Object? raw) {
+    final m = raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
+    final r = m['route'] is Map
+        ? Map<String, dynamic>.from(m['route'] as Map)
+        : const <String, dynamic>{};
+    return CatCrumb(
+      label: (m['label'] ?? '').toString(),
+      current: m['current'] == true,
+      tab: (r['tab'] ?? 'browse').toString(),
+      path: ((r['path'] as List?) ?? const [])
+          .map((e) => e.toString())
+          .toList(growable: false),
+      listKind: r['list_kind']?.toString(),
+      listKey: r['list_key']?.toString(),
+    );
+  }
+}
+
+/// The trail every catalogue payload carries. Empty means "the backend sent
+/// none" — never "this screen decided there is nothing to show".
+class CatTrail {
+  final String label;
+  final String separator;
+  final List<CatCrumb> items;
+  const CatTrail({required this.label, required this.separator, required this.items});
+
+  static const CatTrail empty = CatTrail(label: '', separator: '', items: []);
+  bool get isEmpty => items.isEmpty;
+
+  static CatTrail fromMap(Object? raw) {
+    final m = raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
+    return CatTrail(
+      label: (m['label'] ?? '').toString(),
+      separator: (m['separator'] ?? '').toString(),
+      items: ((m['items'] as List?) ?? const [])
+          .whereType<Map>()
+          .map(CatCrumb.fromMap)
+          .toList(growable: false),
+    );
   }
 }

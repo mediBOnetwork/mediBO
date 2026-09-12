@@ -25,12 +25,8 @@ import '../widgets/animations.dart';
 import '../widgets/cart_pill.dart'; // C636
 import '../widgets/notification_bell.dart'; // CHANGE #298
 import '../services/push_service.dart'; // CHANGE #298
-import 'admin/admin_push_screen.dart'; // CHANGE #298
-import 'admin/catalogue_health_screen.dart'; // CHANGE #460
 import 'admin/admin_add_medicine_screen.dart';
 import 'admin/admin_manage_admins_screen.dart';
-import 'admin/admin_audit_screen.dart';
-import 'admin/admin_roles_screen.dart';
 import 'shell/shell_extra_routes.dart';             // CHANGE #570 — four doors
 import 'shell/shell_staff_routes.dart';             // CHANGE #1016 — six verbs
 import '../services/staff_nav.dart';                 // CHANGE #1016
@@ -46,41 +42,15 @@ import 'admin/admin_users_access_screen.dart'; // C653
 import 'catalogue_screen.dart'; // #747 — the Catalogue tab, page 12
 import 'admin/admin_nav_entries.dart';
 import 'admin/nav_registry_view.dart';
-import 'admin/reorder_admin_screen.dart';       // CHANGE #325
-import 'admin/pnl_screen.dart';                 // CHANGE #325
-import 'admin/loyalty_admin_screen.dart';       // CHANGE #325
-import 'admin/unmapped_companies_screen.dart';  // CHANGE #325
-import 'admin/admin_delivery_ops_screen.dart';  // CHANGE #325
-import 'admin/notify_cost_screen.dart';         // CHANGE #325
-import 'admin/admin_supplier_account_screen.dart'; // CHANGE #402
-import 'admin/settlement_screen.dart';          // CHANGE #325
 import '../services/discount_slabs_service.dart'; // CHANGE #325
-import 'admin/admin_pricing_screen.dart';
-import 'admin/pricing_backfill_screen.dart';
-import 'admin/admin_bill_pipeline_screen.dart'; // CHANGE #226
 import 'admin/admin_bulk_screen.dart'; // C397: bulk actions, exports, undo
-import 'admin/admin_scope_audit_screen.dart'; // CHANGE #227
-import 'admin/admin_order_closure_screen.dart'; // CHANGE #229
-import 'admin/admin_gst_screen.dart'; // CHANGE #320
-import 'admin/admin_reviews_screen.dart'; // CMD #410: review & Q&A moderation
 import 'admin/admin_customer_360_screen.dart'; // CMD #421: the customer_360 link
-import 'admin/admin_stock_on_hand_screen.dart'; // CMD #421: the stock_on_hand link
-import '../features/whatsapp/ui/wa_home_screen.dart';
-import '../features/whatsapp/ui/wa_templates_screen.dart';
-import 'admin/wa_campaigns_screen.dart';
-import 'admin/wa_diagnosis_screen.dart';
-import 'admin/notify_center_screen.dart';
-import 'admin/order_alerts_screen.dart'; // CHANGE #306
 import '../services/feature_gaps_service.dart'; // CHANGE #312
 import '../services/order_alert_service.dart'; // CHANGE #306
-import 'admin/wa_ops_screen.dart';
-import 'admin/wa_drips_screen.dart';
-import 'admin/wa_segments_screen.dart';
-import '../features/bags/bags_screen.dart';
 import 'admin/admin_supplier_screen.dart';
 import 'admin/admin_fulfillment_screen.dart';
 import 'admin/admin_upi_screen.dart';
-import 'admin/payment_alerts_screen.dart';
+import 'admin_route_table.dart';
 import 'admin/dev_queue/dev_queue_screen.dart';
 import 'auth/login_screen.dart';
 import 'bulk_upload_screen.dart';
@@ -94,36 +64,13 @@ import '../services/customer_nav.dart'; // #630 — the bottom bar registry
 import 'pharmacy/pos_screen.dart'; // CMD #411 — the pharmacy counter
 import '../widgets/scan_mic_search_controls.dart'; // #409 — used by the shell part files
 import '../services/pharmacy_stock_api.dart'; // CMD #412 — pharmacy_stock_entry() at boot
-import 'pharmacy/pharmacy_vault_screen.dart'; // CMD #423 — /admin/go/pharmacy_vault
-import 'pharmacy/pharmacy_stock_screen.dart'; // CMD #412 — the pharmacy's shelf
-import 'pharmacy/pharmacy_gst_screen.dart'; // CMD #440 — /admin/go/pharmacy_gst
-import 'pharmacy/pharmacy_audit_screen.dart'; // CMD #447 — /admin/go/pharmacy_audit
-import 'pharmacy/pharmacy_refill_screen.dart'; // CMD #417 — refills & counter
-import 'pharmacy/pharmacy_overpay_screen.dart'; // CMD #427 — /admin/go/price_check
-import 'pharmacy/paper_sale_screen.dart'; // CMD #429 — /admin/go/paper_sale
 // CHANGE #536 — the rest of the pharmacy suite. Every one of these screens was
 // already built and already routed by URL; what none of them had was a way in
 // from the account that owns the data. They are My Shop's tiles now.
 import 'pharmacy/my_shop_screen.dart';
-import 'pharmacy/rx_scan_screen.dart';
-import 'pharmacy/pharmacy_expiry_screen.dart';
-import 'pharmacy/pharmacy_variance_screen.dart';
-import 'pharmacy/pharmacy_parcel_count_screen.dart';
-import 'pharmacy/pharmacy_reorder_screen.dart';
-import 'pharmacy/khata_screen.dart';
-import 'pharmacy/px_screen.dart';
-import 'pharmacy/pharmacy_owner_screen.dart';
-import 'pharmacy/pharmacy_radar_screen.dart';
-import 'pharmacy/near_listing_screen.dart';
 // CHANGE #536 QA round 2 — /admin/go/purchases. The pharmacy's own purchase
 // analytics (CMD #367) existed but its ONLY door was a button inside Orders,
 // so the Money section the spec asks for had no Purchase reports tile.
-import 'purchases_screen.dart';
-import 'reorder_screen.dart';
-import 'order_lists_screen.dart';
-import 'customer/order_help_sheet.dart';
-import 'admin/admin_money_screen.dart'; // CMD #450 — /admin/go/money
-import 'admin/admin_demand_engine_screen.dart'; // CMD #427 — /admin/go/demand_engine
 import 'profile_screen.dart';
 import 'storefront_screen.dart';
 import 'supplier/supplier_shell.dart';
@@ -804,6 +751,16 @@ class _HomeShellState extends State<HomeShell> {
   /// PendingAdminNav.seed. Optional because most routes are a whole
   /// destination by themselves.
   void _handleAdminNav(String route, [String? seed]) {
+    // CMD #1929 — the 58 "push this const screen" cases live in
+    // kAdminSimpleRoutes (admin_route_table.dart). They are a lookup, not
+    // control flow, and holding them here is what pushed this file past the
+    // god-file ceiling. What stays below is every route with actual
+    // behaviour: a seed, a gate, an injected RPC, a tab index.
+    final simple = kAdminSimpleRoutes[route];
+    if (simple != null) {
+      Navigator.push(context, MaterialPageRoute(builder: simple));
+      return;
+    }
     if (!mounted) return;
     (route, seed) = shellFulfillHop(route, seed); // CHANGE #632 — stage hop
     route = shellResolveStaffRoute(route, seed); // CHANGE #1016 — nav_redirect
@@ -846,30 +803,14 @@ class _HomeShellState extends State<HomeShell> {
         setState(() { _index = 6; _cartOpen = false; });
         WidgetsBinding.instance.addPostFrameCallback((_) => AdminCustomerScreen.triggerFocus());
         break;
-      case 'bags':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const BagsScreen()));
-        break;
       // CHANGE #174 — PTR / GST backfill. Not gated here: admin_pricing_list()
       // and product_pricing_upsert() both check get_my_role() themselves and
       // the screen renders their answer, same story as the WhatsApp screens.
-      case 'pricing_backfill':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const PricingBackfillScreen()));
-        break;
       // CHANGE #226 — Bill pipeline (auto customer billing).
-      case 'bill_pipeline':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const AdminBillPipelineScreen()));
-        break;
 
       // CHANGE #397 — two registry features share one screen: bulk editing and
       // exports are the same admin acting on a SET of rows, so the tile that
       // was tapped only decides which tab opens.
-      case 'bulk_actions':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const AdminBulkScreen()));
-        break;
 
       case 'exports':
         Navigator.push(
@@ -878,39 +819,19 @@ class _HomeShellState extends State<HomeShell> {
                 builder: (_) => const AdminBulkScreen(initialTab: 1)));
         break;
       // CHANGE #227 — Scope audit (date + zone across order → delivered).
-      case 'scope_audit':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const AdminScopeAuditScreen()));
-        break;
       // CHANGE #229 — Order closure (customer close + supplier settle).
-      case 'order_closure':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const AdminOrderClosureScreen()));
-        break;
       // CHANGE #355 — trade price COVERAGE + the sellability policy. Sibling
       // of pricing_backfill (#174), which is where a rate is entered; this is
       // the measurement of how many products have one at all (feature_gaps
       // #80). pricing_coverage_report() gates on get_my_role() itself.
-      case 'pricing':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const AdminPricingScreen()));
-        break;
       case 'recon': openRecon(context); break; // CHANGE #471
       // CHANGE #320 — GST (input credit, monthly position, GSTR exports).
-      case 'gst':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const AdminGstScreen()));
-        break;
       // CMD #410 — the moderation desk. Nothing a pharmacy writes about a
       // product is public until it is approved here, so the queue needs a way
       // in from a phone: the feature_registry row alone is a tile with nowhere
       // to go (that was #397's finding). review_moderation_queue() gates on
       // get_my_role() and the screen renders its refusal, so there is no
       // _amISuper test here — same story as wa_ops and notify_center.
-      case 'reviews':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const AdminReviewsScreen()));
-        break;
       // CMD #421 — the two screens CHANGE #865 (#396) shipped. They were
       // reachable from the dashboard tile, the palette and the payment panel,
       // but not from the shell's route table, so /admin/go/customer_360/<id>
@@ -937,99 +858,55 @@ class _HomeShellState extends State<HomeShell> {
         break;
         }
       case 'order_timeline': shellOpenOrderTimeline(context, seed); break;
-      case 'stock_on_hand':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const AdminStockOnHandScreen()));
-        break;
       // CMD #411 — the pharmacy counter (POS). Reached from the account menu
       // via pos_entry(); this case also makes /admin/go/pos work. pos_home()
       // gates on the caller's own pharmacy and the screen renders its refusal,
       // so there is no role test here — same story as reviews and wa_ops.
-      case 'pos':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const PosScreen()));
-        break;
       // CMD #412 — the pharmacy's shelf. Sibling of the counter: reached from
       // the counter's own app bar and from the account tile via
       // pharmacy_stock_entry(), and this case is what makes
       // /admin/go/pharmacy_stock resolve. pharmacy_stock_home() gates on the
       // caller's own pharmacy and the screen renders its refusal, so there is
       // no role test here — same story as pos and reviews.
-      case 'pharmacy_stock':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const PharmacyStockScreen()));
-        break;
       // CMD #429/#444 — handwritten sale sheets photographed at the counter.
       // The proven entry is the counter's own app-bar button (CHANGE #916);
       // this is the deep link the closing-time nudge points at, which could
       // not land with #429 because this file was leased for the whole of it.
       // Its registry tile stayed is_active=false until this case existed, so
       // the tile was never a tap that did nothing.
-      case 'paper_sale':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const PaperSaleScreen()));
-        break;
       // CMD #450 — the four money answers that had no screen: receivables by
       // age (feature_gaps #23), payments waiting to be verified oldest-first
       // (#18), money attached to no order (#19) and supplier bills that
       // stalled after a successful scan (#20). admin_money_home() names the
       // tabs, so a fifth one is an INSERT and never a deploy.
-      case 'money':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const AdminMoneyScreen()));
-        break;
       // CMD #432 — the shop's UPI ID and its printable counter QR. Reached
       // from the counter's own app bar (and from the payment chips when UPI is
       // picked with no confirmed VPA); this case is what makes
       // /admin/go/pos_upi resolve. pharmacy_upi_get() gates on the caller's own
       // pharmacy and the screen renders its refusal, so there is no role test
       // here — same story as pos and pharmacy_stock.
-      case 'pos_upi':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const PosUpiSetupScreen()));
-        break;
       // CMD #416 shipped the GST pack behind an account tile only; this case
       // is what makes /admin/go/pharmacy_gst resolve. pharmacy_gst_home()
       // gates on the caller's own pharmacy and the screen renders its refusal,
       // so there is no role test here — same story as pos and pharmacy_stock.
-      case 'pharmacy_gst':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const PharmacyGstScreen()));
-        break;
       // CMD #430 shipped the audit behind the shelf app-bar icon only; this
       // case is what makes /admin/go/pharmacy_audit resolve, and
       // '/pharmacy/audit' in main.dart is the same screen at a plain URL.
       // pharmacy_audit_home() gates on the caller's own shop and the screen
       // prints its refusal, so there is no role test here — same story as pos,
       // pharmacy_stock and pharmacy_gst.
-      case 'pharmacy_audit':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const PharmacyAuditScreen()));
-        break;
       // CMD #427 — THE PRICE CHECK. Also reachable from the vault's app bar;
       // this case is what gives it an address, so a monthly WhatsApp note or a
       // push about a rate can point straight at /admin/go/price_check.
-      case 'price_check':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const PharmacyOverpayScreen()));
-        break;
       // CMD #427 — THE DEMAND ENGINE, the operator side of the same aggregate.
       // Admin-only by omission from HomeShell.selfGatedRoutes, and admin_demand_engine()
       // checks is_admin() for itself on top of that.
-      case 'demand_engine':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const AdminDemandEngineScreen()));
-        break;
       // CMD #423 — the BILL VAULT. Reached from the shelf's own app bar via
       // pharmacy_vault_entry(), and this case is what gives it a real address:
       // /admin/go/pharmacy_vault, so a WhatsApp button or a push about a bill
       // waiting to be checked can point straight at it. pharmacy_vault_home()
       // gates on the caller's own pharmacy and the screen renders its refusal,
       // so there is no role test here — same story as pos and pharmacy_stock.
-      case 'pharmacy_vault':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const PharmacyVaultScreen()));
-        break;
       // CMD #417 — refills, the WhatsApp storefront and the AI counter. Same
       // story as the two above, and the reason this case exists at all: the
       // dashboard tile alone resolves only when the dashboard is on screen, so
@@ -1037,81 +914,21 @@ class _HomeShellState extends State<HomeShell> {
       // registry) landed on the storefront home instead. refill_home() gates
       // on the caller's own pharmacy and the screen renders its refusal, so
       // there is no role test here.
-      case 'refill':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const PharmacyRefillScreen()));
-        break;
       // CHANGE #536 — the ten My Shop routes that had a screen and a URL but no
       // case here, so a registry tile could not open them. Each screen gates on
       // the caller's own pharmacy for itself; there is no role test here.
       case 'my_shop':
         setState(() { _index = 11; _cartOpen = false; });
         break;
-      case 'rx_scan':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const RxScanScreen()));
-        break;
-      case 'pharmacy_expiry':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const PharmacyExpiryScreen()));
-        break;
-      case 'pharmacy_variance':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const PharmacyVarianceScreen()));
-        break;
-      case 'pharmacy_parcel':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const ParcelCountHomeScreen()));
-        break;
-      case 'pharmacy_reorder':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const PharmacyReorderScreen()));
-        break;
-      case 'khata':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const KhataScreen()));
-        break;
-      case 'px_exchange':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const PxScreen()));
-        break;
-      case 'pharmacy_owner':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const PharmacyOwnerScreen()));
-        break;
-      case 'pharmacy_radar':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const PharmacyRadarScreen()));
-        break;
-      case 'near_listing':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const NearListingScreen()));
-        break;
       // CHANGE #536 QA round 2 — Purchase reports. my_purchases_screen()
       // resolves the caller's own pharmacy and the screen prints the backend's
       // refusal for anyone else, so there is no role test here.
-      case 'purchases':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const PurchasesScreen()));
-        break;
       // CHANGE #536 QA round 3 — the cshop_buying trio. See selfGatedRoutes.
       // CHANGE #630 PART A1 is why they exist at all: "Due for reorder" (#173),
       // Saved lists (#367) and Help requests were three header tiles and a help
       // box bolted to the top of a list of ORDERS. None of them is an order,
       // so they are My Shop registry rows now — and a registry row is a menu
       // entry until this switch gives it a door.
-      case 'cust_reorder_due':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const ReorderScreen()));
-        break;
-      case 'cust_saved_lists':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const OrderListsScreen()));
-        break;
-      case 'cust_help_requests':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const MySupportRequestsScreen()));
-        break;
       case 'mr': setState(() { _index = 7; _cartOpen = false; }); break;
       case 'companies': setState(() { _index = 8; _cartOpen = false; }); break;
       case 'delivery_partners': setState(() { _index = 9; _cartOpen = false; }); break;
@@ -1119,60 +936,24 @@ class _HomeShellState extends State<HomeShell> {
         setState(() { _index = 10; _cartOpen = false; });
         WidgetsBinding.instance.addPostFrameCallback((_) => AdminFulfillmentScreen.triggerFocus());
         break;
-      case 'whatsapp':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const WaHomeScreen()));
-        break;
       // #645/#646 shipped these screens but only wired them into
       // admin_shell.dart's wide-viewport link row, so on a phone there was no
       // way in at all. They are NOT gated on _amISuper here: both screens call
       // RPCs that gate on get_my_role() and render the backend's
       // not_authorized answer themselves.
-      case 'wa_templates':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const WaTemplatesScreen()));
-        break;
-      case 'wa_campaigns':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const WaCampaignsScreen()));
-        break;
       // Event routes, WABA health and the contact ledger. Same gating story as
       // the two above: wa_event_routes_screen / wa_waba_status /
       // wa_contact_ledger all check get_my_role() and the screen renders their
       // not_authorized answer, so there is no _amISuper test here.
-      case 'wa_ops':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const WaOpsScreen()));
-        break;
       // CHANGE #295 — WhatsApp delivery diagnosis. wa_event_diagnosis() gates
       // on get_my_role() and the screen renders its refusal, same as wa_ops.
-      case 'wa_diagnosis':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const WaDiagnosisScreen()));
-        break;
       // CHANGE #297 — Notification Centre. notify_center() gates on
       // get_my_role() and the screen renders its refusal, same as wa_ops.
-      case 'notify_center':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const NotifyCenterScreen()));
-        break;
       // CHANGE #298 — Push notifications (Firebase config + the per-event push
       // toggle). push_admin_screen() gates on get_my_role() and the screen
       // renders its refusal, same as notify_center above.
-      case 'admin_push':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const AdminPushScreen()));
-        break;
       // Same gating as the ones above: both screens call RPCs that check the
       // caller's role and render the backend's own refusal.
-      case 'wa_segments':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const WaSegmentsScreen()));
-        break;
-      case 'wa_drips':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const WaDripsScreen()));
-        break;
       case 'manage_admins':
         if (_amISuper) {
           Navigator.push(context,
@@ -1187,26 +968,10 @@ class _HomeShellState extends State<HomeShell> {
       // CHANGE #460 — Catalogue health (feature_gaps 161). catalogue_health()
       // gates on get_my_role() and the screen renders its refusal, same story
       // as wa_ops above: the fence is the RPC's, not the router's.
-      case 'catalogue_health':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const CatalogueHealthScreen()));
-        break;
-      case 'audit_log':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const AdminAuditScreen()));
-        break;
-      case 'admin_roles':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const AdminRolesScreen()));
-        break;
       // CMD #1929 — Payment alerts (partner phone notifications → auto-verify).
       // Same story as the three above: payment_alerts_screen() answers on the
       // caller's own role and renders its own refusal, so there is no `if`
       // here. The row itself comes from nav_registry(), not from a Dart list.
-      case 'payment_alerts':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const PaymentAlertsScreen()));
-        break;
       case 'payment_upi':
         if (_amISuper) {
           Navigator.push(context,
@@ -1234,10 +999,6 @@ class _HomeShellState extends State<HomeShell> {
       // escalation config, per-customer credit limits and the purchase gate.
       // order_alert_settings() gates on get_my_role() and the screen renders
       // its refusal, same story as notify_center and admin_push above.
-      case 'order_alerts':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const OrderAlertsScreen()));
-        break;
       // CHANGE #312 — Feature gaps register. Both RPCs are injected here so the
       // screen itself stays Supabase-free and pumps on the Dart VM;
       // feature_gaps_list() gates on is_admin() and the screen renders its
@@ -1287,50 +1048,14 @@ class _HomeShellState extends State<HomeShell> {
       // gated here: each screen's RPCs check get_my_role() and the screen
       // renders the backend's own refusal, the same story as the WhatsApp
       // screens above.
-      case 'reorder':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const ReorderAdminScreen()));
-        break;
-      case 'pnl':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const PnlScreen()));
-        break;
       case 'discount_slabs':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => buildDiscountSlabsScreen()));
         break;
-      case 'loyalty':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const LoyaltyAdminScreen()));
-        break;
-      case 'unmapped_companies':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const UnmappedCompaniesScreen()));
-        break;
-      case 'delivery_ops':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const AdminDeliveryOpsScreen()));
-        break;
-      case 'notify_cost':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const NotifyCostScreen()));
-        break;
-      case 'settlement':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const SettlementScreen()));
-        break;
       // CHANGE #402 — supplier bank/UPI approvals and the Hindi coverage
       // report. Both RPCs gate on get_my_role() and the screen renders the
       // backend's own refusal, the same story as the screens above.
-      case 'supplier_accounts':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const AdminSupplierAccountScreen()));
-        break;
       // The identity row the profile dropdown fires.
-      case 'profile':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const ProfileScreen()));
-        break;
       // CHANGE #325 — a medicine chosen in the command palette lands on the
       // storefront with that name already typed, which is the search the
       // shell already owns.

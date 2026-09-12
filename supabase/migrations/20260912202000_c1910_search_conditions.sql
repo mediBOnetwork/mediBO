@@ -324,4 +324,19 @@ insert into public.ui_copy (key, value) values
   ('search.chip_condition',  to_jsonb('Use: {name}'::text))
 on conflict (key) do nothing;
 
-select public.search_suggest_conditions_rebuild();
+-- CMD #1929 — same guard as the seed pass in
+-- 20260912200000_c1910_condition_schema_seed.sql: this rebuild is a live data
+-- pass at the end of a migration, and a migration that cancels on
+-- statement_timeout fails the whole replay for every command on the box. It is
+-- one statement, so a cancel rolls back whole; give it room, and defer with a
+-- warning rather than block the lane. Re-runnable at any time.
+set statement_timeout = '600s';
+
+do $rebuild$
+begin
+  perform public.search_suggest_conditions_rebuild();
+exception when others then
+  raise warning 'search_suggest_conditions_rebuild deferred (%) — re-run select public.search_suggest_conditions_rebuild();', sqlerrm;
+end $rebuild$;
+
+reset statement_timeout;

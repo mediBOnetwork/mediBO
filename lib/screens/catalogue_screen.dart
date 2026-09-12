@@ -311,6 +311,9 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         final fn = switch (_route.tab) {
           'companies' => 'catalogue_companies',
           'salts' => 'catalogue_salts',
+          // CMD #1910 — the fourth door. Same payload shape as companies and
+          // salts, so everything below this line is unchanged.
+          'conditions' => 'catalogue_conditions',
           _ => 'catalogue_tree',
         };
         // CMD #1908 — companies, salts and classes all take the same letter,
@@ -322,6 +325,11 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
               'p_offset': 0, 'p_limit': _rowPage,
             },
           'salts' => {
+              'p_letter': _route.query.isEmpty ? _route.letter : null,
+              'p_q': _route.query.isEmpty ? null : _route.query,
+              'p_offset': 0, 'p_limit': _rowPage,
+            },
+          'conditions' => {
               'p_letter': _route.query.isEmpty ? _route.letter : null,
               'p_q': _route.query.isEmpty ? null : _route.query,
               'p_offset': 0, 'p_limit': _rowPage,
@@ -382,6 +390,14 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         _showChip(s);
         _go(_route.copy(tab: 'salts', path: const [], listKind: 'salt',
             listKey: s.navId, query: '', letter: null));
+      case 'condition':
+        // CMD #1910 — "fever" is a USE, and the backend sent its id. Opening
+        // the scope is the whole point of the typed row: a text search for
+        // the word "fever" finds product NAMES containing it, which is a
+        // different and much worse answer.
+        _showChip(s);
+        _go(_route.copy(tab: 'conditions', path: const [], listKind: 'condition',
+            listKey: s.navId, query: '', letter: null));
       case 'category':
         _showChip(s);
         _go(_route.copy(tab: 'browse', path: [s.navId], listKind: 'tree',
@@ -403,6 +419,12 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
             listKey: s.navId, query: s.navId, letter: null));
     }
   }
+
+  /// CMD #1910 — the one seam the door's test uses. It drives the SAME method
+  /// a real tap drives, so the test can assert what a typed suggestion opens
+  /// without building the overlay the typeahead lives in.
+  @visibleForTesting
+  void pickSuggestionForTest(SearchSuggestion s) => _pickSuggestion(s);
 
   /// Put the backend's chip in the box. The raw text goes with it: the field
   /// is showing a scope now, not a phrase that was typed.
@@ -488,7 +510,11 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
   Future<void> _moreRows() async {
     setState(() => _loadingMore = true);
     try {
-      final fn = _route.tab == 'companies' ? 'catalogue_companies' : 'catalogue_salts';
+      final fn = switch (_route.tab) {
+        'companies' => 'catalogue_companies',
+        'conditions' => 'catalogue_conditions',
+        _ => 'catalogue_salts',
+      };
       final args = {
         'p_letter': _route.query.isEmpty ? _route.letter : null,
         'p_q': _route.query.isEmpty ? null : _route.query,
@@ -526,6 +552,8 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         _go(_route.copy(listKind: 'company', listKey: r.key));
       case 'salts':
         _go(_route.copy(listKind: 'salt', listKey: r.key));
+      case 'conditions':
+        _go(_route.copy(listKind: 'condition', listKey: r.key));
       default:
         final b = _browse;
         final next = [..._route.path, r.key];

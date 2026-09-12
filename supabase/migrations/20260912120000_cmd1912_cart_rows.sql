@@ -30,6 +30,10 @@ insert into ui_copy (key, value) values
   ('cart.summary_mrp_label',   to_jsonb('MRP total'::text)),
   ('cart.rate_note',           to_jsonb('Rate confirmed after supplier quote.'::text)),
   ('home_shell.clear_cart_cancel', to_jsonb('Cancel'::text)),
+  -- CMD #1912 — Clear Cart is a destructive action taken once in a hundred
+  -- visits, so it stops shouting in red from the header and lives behind the
+  -- overflow. The tooltip and the menu entry are copy, like every other word.
+  ('home_shell.cart_menu',     to_jsonb('More'::text)),
   -- The pending basket said "rate confirmed after supplier quote" in the
   -- summary line AND, since this change, once above the total. It is one
   -- sentence, so the line goes back to being just the item count.
@@ -86,11 +90,9 @@ begin
     v_rows := v_rows || jsonb_build_array(jsonb_build_object(
       'key','company','label', public._c('cart.row_label_company'), 'value', v_company));
   end if;
-  if v_has_mrp then
-    v_rows := v_rows || jsonb_build_array(jsonb_build_object(
-      'key','mrp','label', public._c('cart.row_label_mrp'),
-      'value', public.inr_money(v_mrp)));
-  end if;
+  -- MRP is deliberately NOT a detail row: the expanded body's one price line
+  -- already prints it ("MRP ₹944.80 × 4"), and the same number twice in one
+  -- panel is the repetition this rebuild exists to remove.
   if v_pack <> '' then
     v_rows := v_rows || jsonb_build_array(jsonb_build_object(
       'key','pack','label', public._c('cart.row_label_pack'), 'value', v_pack));

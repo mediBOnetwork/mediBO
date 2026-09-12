@@ -25,6 +25,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../design_tokens.dart';
+import 'app_update_gate_panel.dart';
 import 'dev_queue_common.dart';
 import 'dev_queue_service.dart';
 
@@ -141,6 +142,14 @@ class _PlayStoreScreenState extends State<PlayStoreScreen> {
                   Text(_s2('subtitle'), style: Ds.t.caption),
                   SizedBox(height: Ds.space.x24),
                   _tracksPanel(tracks),
+                  SizedBox(height: Ds.space.x24),
+                  // CHANGE #1922 — what Play believes (above) and what the
+                  // in-app prompt is therefore allowed to offer (here). They
+                  // were never on one screen before, which is how 1.3.25 spent
+                  // a day being advertised while Play still served 1.3.24.
+                  // Its payload is app_update_state() on PRODUCTION, where
+                  // app_releases lives — see the file's own header.
+                  const AppUpdateGatePanel(),
                   SizedBox(height: Ds.space.x24),
                   if (busy) ...[
                     _active(active),

@@ -24,8 +24,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:pharma_b2b/app_state.dart';
+import 'package:pharma_b2b/models/cart_model.dart';
 import 'package:pharma_b2b/screens/admin/admin_conditions_screen.dart';
+import 'package:pharma_b2b/screens/catalogue_screen.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
+import 'package:pharma_b2b/widgets/search_typeahead.dart';
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
@@ -273,4 +277,252 @@ void main() {
     expect(sent['p_product_id'], 4242);
     expect(sent['p_on'], false);
   });
+
+  // ── the door itself ─────────────────────────────────────────────────────
+  //
+  //   8. THE FOURTH DOOR IS A PAYLOAD ROW. catalogue_home() sends four doors;
+  //      the screen draws what it is given, in order, with the backend's own
+  //      count sentence. A Dart list of three doors is what this replaces.
+  //   9. TAPPING "Use" OPENS THE USE INDEX. The door carries its own tab, and
+  //      that tab is what decides the RPC — catalogue_conditions(), with the
+  //      same letter/offset contract companies and salts use.
+  //  10. A ROW OPENS THE CONDITION'S PRODUCTS, BY ID. catalogue_list is asked
+  //      for p_kind 'condition' and the row's own key, never a text search.
+  //  11. A "Conditions" SUGGESTION OPENS THE SCOPE. #1905 gave every
+  //      suggestion a nav; a condition's nav is a scope, so tapping "Fever"
+  //      must not run a product-NAME search for the word fever.
+
+  group('the Use door', () {
+    testWidgets('8 · four doors draw from the payload, in payload order',
+        (t) async {
+      final rpc = await _pumpCat(t, {
+        'catalogue_home': [_catHome()],
+        'catalogue_tree': [_catTree()],
+      });
+      expect(find.text('Use'), findsWidgets);
+      expect(find.text('18,402 products'), findsOneWidget);
+      expect(rpc.called('catalogue_conditions'), isFalse);
+    });
+
+    testWidgets('9 · tapping Use asks catalogue_conditions, not a text search',
+        (t) async {
+      final rpc = await _pumpCat(t, {
+        'catalogue_home': [_catHome()],
+        'catalogue_tree': [_catTree()],
+        'catalogue_conditions': [_catConditions()],
+      });
+      await t.tap(find.text('Use').first);
+      await t.pumpAndSettle();
+
+      expect(rpc.called('catalogue_conditions'), isTrue);
+      final a = rpc.lastArgs('catalogue_conditions');
+      expect(a['p_letter'], isNull);
+      expect(a['p_offset'], 0);
+      // The index prints the backend's own rows and counts.
+      expect(find.text('Fever'), findsWidgets);
+      expect(find.text('1,240 products'), findsWidgets);
+      // The breadcrumb is the payload's: Catalogue › Use.
+      expect(find.text('Use'), findsWidgets);
+    });
+
+    testWidgets('10 · a row opens catalogue_list by kind and key', (t) async {
+      final rpc = await _pumpCat(t, {
+        'catalogue_home': [_catHome()],
+        'catalogue_conditions': [_catConditions()],
+        'catalogue_list': [_catList()],
+      }, route: const CatalogueRoute(tab: 'conditions'));
+
+      await t.tap(find.text('Fever').first);
+      await t.pumpAndSettle();
+
+      final a = rpc.lastArgs('catalogue_list');
+      expect(a['p_kind'], 'condition');
+      expect(a['p_key'], 'fever');
+      // And what it draws is the backend's copy for THAT scope — the empty
+      // sentence names Fever, which is the #1905 fix this door inherits
+      // rather than re-deriving.
+      expect(find.text('Nothing in Fever right now.'), findsWidgets);
+    });
+
+    testWidgets('11 · a Conditions suggestion opens the scope, not a search',
+        (t) async {
+      final rpc = await _pumpCat(t, {
+        'catalogue_home': [_catHome()],
+        'catalogue_tree': [_catTree()],
+        'catalogue_conditions': [_catConditions()],
+        'catalogue_list': [_catList()],
+      });
+
+      final screen = t.state(find.byType(CatalogueScreen));
+      // The tap the typeahead would make, with the backend's own nav block.
+      (screen as dynamic).pickSuggestionForTest(SearchSuggestion.fromMap(const {
+        'kind': 'condition',
+        'id': 'fever',
+        'label': 'Fever',
+        'query': 'Fever',
+        'chip_label': 'Use: Fever',
+        'nav': {'kind': 'condition', 'id': 'fever', 'title': 'Fever'},
+      }));
+      await t.pumpAndSettle();
+
+      final a = rpc.lastArgs('catalogue_list');
+      expect(a['p_kind'], 'condition');
+      expect(a['p_key'], 'fever');
+      // Not a text query: 'search' would have been the wrong scope entirely.
+      expect(rpc.calls.where((c) => c.$1 == 'catalogue_list'
+          && c.$2['p_kind'] == 'search'), isEmpty);
+    });
+  });
+}
+
+// ── catalogue fixtures ───────────────────────────────────────────────────────
+
+Map<String, dynamic> _catZone() => const {
+      'has': false, 'on': false, 'label': '', 'zone_label': '', 'note': '',
+    };
+
+/// Four doors — the fourth is the one this command adds, and its count
+/// sentence is the BACKEND's (distinct products, already formatted).
+Map<String, dynamic> _catHome() => {
+      'ok': true,
+      'title': 'Catalogue',
+      'zone': _catZone(),
+      'doors_title': 'Browse by',
+      'doors': [
+        {'key': 'companies', 'kind': 'companies', 'tab': 'companies',
+         'label': 'Company', 'icon_key': 'store', 'icon_letter': 'C',
+         'count_label': '3,118 companies'},
+        {'key': 'salts', 'kind': 'salts', 'tab': 'salts',
+         'label': 'Salt', 'icon_key': 'science', 'icon_letter': 'S',
+         'count_label': '41,209 salts'},
+        {'key': 'conditions', 'kind': 'conditions', 'tab': 'conditions',
+         'label': 'Use', 'icon_key': 'medication', 'icon_letter': 'U',
+         'count_label': '18,402 products'},
+        {'key': 'browse', 'kind': 'tree', 'tab': 'browse',
+         'label': 'Category', 'icon_key': 'book', 'icon_letter': 'K',
+         'count_label': '2,52,760 products'},
+      ],
+      'tabs': <Map<String, dynamic>>[],
+      'recent_viewed': {'has': false, 'title': '', 'items': <Map<String, dynamic>>[]},
+      'sentence': {'lead': '', 'separator': '', 'all_label': '', 'clear_label': '',
+                   'has_selection': false, 'parts': <Map<String, dynamic>>[]},
+      'filters': {'groups': <Map<String, dynamic>>[]},
+    };
+
+Map<String, dynamic> _catTree() => {
+      'ok': true, 'title': 'Browse', 'count_label': '', 'zone': _catZone(),
+      'rows': <Map<String, dynamic>>[], 'crumbs': <Map<String, dynamic>>[],
+      'letters': <Map<String, dynamic>>[], 'has_more': false, 'next_offset': 0,
+      'child_opens': 'level', 'has_products': false,
+    };
+
+/// The Use index. Deliberately biggest-first, which is the backend's order —
+/// a client-side alphabetical sort would reverse the first two rows.
+Map<String, dynamic> _catConditions() => {
+      'ok': true,
+      'title': 'Use',
+      'zone': _catZone(),
+      'letter': null,
+      'all_label': 'All',
+      'lead_label': 'Biggest uses first — search to narrow.',
+      'empty_label': 'No use matches this search.',
+      'count_label': '46 uses',
+      'offset': 0, 'next_offset': 2, 'has_more': false, 'more_label': 'Load more',
+      'rail': {
+        'label': 'Jump to a letter', 'all_label': 'All',
+        'letters': [
+          {'key': 'F', 'label': 'F', 'n': 1, 'enabled': true},
+          {'key': 'A', 'label': 'A', 'n': 1, 'enabled': true},
+        ],
+      },
+      'trail': {
+        'label': 'You are here', 'separator': '›',
+        'items': [
+          {'label': 'Catalogue', 'current': false,
+           'route': {'tab': 'browse', 'path': <String>[], 'list_kind': null, 'list_key': null}},
+          {'label': 'Use', 'current': true,
+           'route': {'tab': 'conditions', 'path': <String>[], 'list_kind': null, 'list_key': null}},
+        ],
+      },
+      'rows': [
+        {'key': 'fever', 'label': 'Fever', 'n': 1240, 'letter': 'F',
+         'count_label': '1,240 products'},
+        {'key': 'acidity', 'label': 'Acidity & heartburn', 'n': 980, 'letter': 'A',
+         'count_label': '980 products'},
+      ],
+    };
+
+Map<String, dynamic> _catList() => {
+      'ok': true,
+      'kind': 'condition', 'key': 'fever', 'path': <String>[],
+      'title': 'Fever',
+      'subtitle': 'Products used for this condition',
+      'count_label': '1,240 products',
+      'empty_label': 'Nothing in Fever right now.',
+      'more_label': 'Load more', 'end_label': '', 'sort': 'name',
+      'filters_active': false, 'filters_active_label': '',
+      'zone': _catZone(),
+      'filters': {'groups': <Map<String, dynamic>>[]},
+      'sentence': {'lead': '', 'separator': '', 'all_label': '', 'clear_label': '',
+                   'has_selection': false, 'parts': <Map<String, dynamic>>[]},
+      'grouped': false, 'groups': <Map<String, dynamic>>[],
+      'trail': {
+        'label': 'You are here', 'separator': '›',
+        'items': [
+          {'label': 'Catalogue', 'current': false,
+           'route': {'tab': 'browse', 'path': <String>[], 'list_kind': null, 'list_key': null}},
+          {'label': 'Use', 'current': false,
+           'route': {'tab': 'conditions', 'path': <String>[], 'list_kind': null, 'list_key': null}},
+          {'label': 'Fever', 'current': true,
+           'route': {'tab': 'conditions', 'path': <String>[], 'list_kind': 'condition', 'list_key': 'fever'}},
+        ],
+      },
+      'empty': {'label': '', 'hint': '',
+                'action': {'has': false, 'kind': 'request', 'label': ''},
+                'clear': {'has': false, 'kind': 'clear_filters', 'label': ''}},
+      'items': <Map<String, dynamic>>[],
+      'has_more': false, 'next_cursor': null,
+    };
+
+class _CatRpc {
+  _CatRpc(this.queued);
+  final Map<String, List<Map<String, dynamic>>> queued;
+  final List<(String, Map<String, dynamic>)> calls = [];
+
+  Future<Map<String, dynamic>> call(String fn, Map<String, dynamic> args) async {
+    calls.add((fn, args));
+    final q = queued[fn];
+    if (q == null || q.isEmpty) return {'ok': false};
+    return q.length == 1 ? q.first : q.removeAt(0);
+  }
+
+  Map<String, dynamic> lastArgs(String fn) => calls.lastWhere((c) => c.$1 == fn).$2;
+  bool called(String fn) => calls.any((c) => c.$1 == fn);
+}
+
+Future<_CatRpc> _pumpCat(
+  WidgetTester t,
+  Map<String, List<Map<String, dynamic>>> queued, {
+  CatalogueRoute? route,
+}) async {
+  t.view.physicalSize = const Size(1400, 900);
+  t.view.devicePixelRatio = 1.0;
+  addTearDown(t.view.resetPhysicalSize);
+  addTearDown(t.view.resetDevicePixelRatio);
+
+  final rpc = _CatRpc(queued);
+  await t.pumpWidget(AppState(
+    cart: CartModel.forTest(),
+    child: MaterialApp(
+      home: Scaffold(
+        body: CatalogueScreen(
+          active: true,
+          rpc: rpc.call,
+          initialRoute: route ?? const CatalogueRoute(),
+        ),
+      ),
+    ),
+  ));
+  await t.pumpAndSettle();
+  return rpc;
 }

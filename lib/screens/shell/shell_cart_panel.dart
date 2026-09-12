@@ -116,12 +116,17 @@ class _CartPanelContentState extends State<_CartPanelContent> {
   final TextEditingController _searchCtrl = TextEditingController();
   String _searchQuery = '';
 
+  // CMD #1912 — one anchor for both overlays: the "..." button. The menu
+  // hangs off it, and so does the confirm the menu opens, so the confirmation
+  // appears exactly where the action was tapped.
   final LayerLink _clearCartLink = LayerLink();
   OverlayEntry? _clearCartOverlay;
+  OverlayEntry? _menuOverlay;
 
   @override
   void dispose() {
     _closeClearCartPopover();
+    _closeMenu();
     _searchCtrl.dispose();
     super.dispose();
   }
@@ -135,6 +140,30 @@ class _CartPanelContentState extends State<_CartPanelContent> {
         _searchQuery = '';
       }
     });
+  }
+
+  // CMD #1912 — the overflow. Clear Cart was a red pill in the header of every
+  // cart visit for an action taken almost never; it is now one entry behind
+  // "...", and it still opens the same confirm before anything is destroyed.
+  void _openMenu() {
+    _closeMenu();
+    final entry = OverlayEntry(
+      builder: (_) => _CartOverflowMenu(
+        link: _clearCartLink,
+        onDismissed: () { if (mounted) _closeMenu(); },
+        onClearCart: () {
+          _closeMenu();
+          _openClearCartPopover();
+        },
+      ),
+    );
+    _menuOverlay = entry;
+    Overlay.of(context).insert(entry);
+  }
+
+  void _closeMenu() {
+    _menuOverlay?.remove();
+    _menuOverlay = null;
   }
 
   void _openClearCartPopover() {
@@ -296,44 +325,6 @@ class _CartPanelContentState extends State<_CartPanelContent> {
                                           maxLines: 1,
                                         ),
                                       ),
-                                      CompositedTransformTarget(
-                                        link: _clearCartLink,
-                                        child: GestureDetector(
-                                          onTap: _openClearCartPopover,
-                                          child: Container(
-                                            padding: const EdgeInsets.symmetric(
-                                                horizontal: 10, vertical: 7),
-                                            decoration: BoxDecoration(
-                                              borderRadius:
-                                                  BorderRadius.circular(10),
-                                              border: Border.all(
-                                                  color: const Color(
-                                                      0xFFDC2626)),
-                                            ),
-                                            child: Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                const Icon(
-                                                  Icons.remove_shopping_cart,
-                                                  size: 13,
-                                                  color: Color(0xFFDC2626),
-                                                ),
-                                                const SizedBox(width: 5),
-                                                Text(
-                                                  c('home_shell.clear_cart'),
-                                                  style: const TextStyle(
-                                                    fontSize: 11,
-                                                    fontWeight:
-                                                        FontWeight.w600,
-                                                    color: Color(0xFFDC2626),
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
                                       GestureDetector(
                                         onTap: _toggleSearch,
                                         child: Container(
@@ -342,12 +333,24 @@ class _CartPanelContentState extends State<_CartPanelContent> {
                                           decoration: BoxDecoration(
                                             shape: BoxShape.circle,
                                             border: Border.all(
-                                                color: const Color(
-                                                    0xFFE5E7EB)),
+                                                color: Ds.c.divider),
                                           ),
-                                          child: const Icon(Icons.search,
+                                          child: Icon(Icons.search,
                                               size: 17,
-                                              color: Color(0xFF374151)),
+                                              color: Ds.c.textSecondary),
+                                        ),
+                                      ),
+                                      // CMD #1912 — "..." replaces the red
+                                      // Clear Cart pill. Both overlays hang
+                                      // off this one anchor.
+                                      CompositedTransformTarget(
+                                        link: _clearCartLink,
+                                        child: IconButton(
+                                          onPressed: _openMenu,
+                                          tooltip: c('home_shell.cart_menu'),
+                                          iconSize: 20,
+                                          color: Ds.c.textSecondary,
+                                          icon: const Icon(Icons.more_vert),
                                         ),
                                       ),
                                     ],
@@ -373,6 +376,77 @@ class _CartPanelContentState extends State<_CartPanelContent> {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ─── Cart overflow menu — CMD #1912 ──────────────────────────────────────────
+//
+// One entry today: Clear Cart. It is here rather than in the header because a
+// destructive action that is taken almost never should not be the loudest
+// thing on a screen the customer opens to check their basket. Choosing it
+// still opens the confirm; nothing is cleared from this menu.
+class _CartOverflowMenu extends StatelessWidget {
+  final LayerLink link;
+  final VoidCallback onDismissed;
+  final VoidCallback onClearCart;
+
+  const _CartOverflowMenu({
+    required this.link,
+    required this.onDismissed,
+    required this.onClearCart,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onDismissed,
+            child: const SizedBox.expand(),
+          ),
+        ),
+        CompositedTransformFollower(
+          link: link,
+          targetAnchor: Alignment.bottomRight,
+          followerAnchor: Alignment.topRight,
+          offset: Offset(0, Ds.space.x4),
+          showWhenUnlinked: false,
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
+              decoration: BoxDecoration(
+                color: Ds.c.surface,
+                borderRadius: Ds.r.rCard,
+                border: Border.all(color: Ds.c.divider),
+                boxShadow: Ds.elevation.e2,
+              ),
+              child: InkWell(
+                borderRadius: Ds.r.rCard,
+                onTap: onClearCart,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(
+                      horizontal: Ds.space.x16, vertical: Ds.space.x12),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.remove_shopping_cart,
+                          size: 18, color: Ds.c.danger),
+                      SizedBox(width: Ds.space.x12),
+                      Text(
+                        c('home_shell.clear_cart'),
+                        style: Ds.t.body.copyWith(color: Ds.c.danger),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

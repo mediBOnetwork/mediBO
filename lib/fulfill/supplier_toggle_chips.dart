@@ -110,6 +110,7 @@ class SupplierToggleChipRow extends StatelessWidget {
     required this.chips,
     required this.onToggle,
     this.onAction,
+    this.onSettings,
     this.busyKeys = const {},
   });
 
@@ -120,6 +121,10 @@ class SupplierToggleChipRow extends StatelessWidget {
 
   /// The chip's own extra affordance (Bundle → re-optimise).
   final void Function(SupplierToggleChip chip)? onAction;
+
+  /// CMD #1941 — long-press opens the chip's settings sheet, the same one the
+  /// #1890 strip offers. Null on a surface that has no sheet to open.
+  final void Function(SupplierToggleChip chip)? onSettings;
 
   /// Keys whose RPC is in flight; those chips show a spinner and refuse taps.
   final Set<String> busyKeys;
@@ -143,6 +148,7 @@ class SupplierToggleChipRow extends StatelessWidget {
       InkWell(
         borderRadius: Ds.r.rChip,
         onTap: busy ? null : () => onToggle(c, !c.on),
+        onLongPress: onSettings == null ? null : () => onSettings!(c),
         child: Container(
           constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
           padding: EdgeInsets.symmetric(

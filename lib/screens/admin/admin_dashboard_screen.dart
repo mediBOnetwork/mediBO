@@ -22,6 +22,7 @@ import '../../widgets/dashboard_quick_actions.dart'; // CMD #1893
 import 'admin_customer_screen.dart'; // CMD #1891 — sub-tab doors
 import 'admin_supplier_screen.dart'; // CMD #1891 — sub-tab doors
 import '../../services/ui_copy.dart';
+import '../../utils/toast.dart'; // CMD #1941 — the automation reply's own words
 import '../../services/staff_nav.dart'; // CHANGE #1016 — the layout flag
 import 'admin_ops_board_screen.dart';
 import 'command_palette.dart';   // CHANGE #325
@@ -205,6 +206,20 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   /// without Supabase.
   static Future<Map<String, dynamic>> loadDashboardHome() async {
     final raw = await Supabase.instance.client.rpc('dashboard_home');
+    return Map<String, dynamic>.from((raw is List ? raw.first : raw) as Map);
+  }
+
+  /// CMD #1941 — the AUTOMATION block's two doors. Both reply with the whole
+  /// block plus the sentence to show; the screen composes neither.
+  static Future<Map<String, dynamic>> _automationSet(String key, bool next) async {
+    final raw = await Supabase.instance.client.rpc('dashboard_automation_set',
+        params: {'p_key': key, 'p_on': next});
+    return Map<String, dynamic>.from((raw is List ? raw.first : raw) as Map);
+  }
+
+  static Future<Map<String, dynamic>> _automationAction(String key) async {
+    final raw = await Supabase.instance.client
+        .rpc('dashboard_automation_action', params: {'p_key': key});
     return Map<String, dynamic>.from((raw is List ? raw.first : raw) as Map);
   }
 
@@ -616,6 +631,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   onOpen: _openTile,
                   onHold: _holdTile,
                   revision: _homeFeed.revision,
+                  // CMD #1941 — AutoFlow / Bundle, at the top of the grid.
+                  automationSet: _automationSet,
+                  automationAction: _automationAction,
+                  onToast: (msg, isError) =>
+                      showToast(context, msg, isError: isError),
                 )),
                 const OrderHoursCard(),
                 const NotificationsCard(),

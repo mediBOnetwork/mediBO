@@ -66,9 +66,13 @@ as $$
   select jsonb_build_object(
     'label', public.uic('catalogue.rail_label','Jump to a letter'),
     'all_label', public.uic('catalogue.letter_all','All'),
-    'letters', coalesce((select jsonb_agg(jsonb_build_object(
+    -- An index over NOTHING is furniture. A scope with no rows behind any
+    -- letter (a leaf class, an empty zone) sends no track at all, and the app
+    -- draws no strip — rather than 27 grey letters that cannot be tapped.
+    'letters', case when not exists (select 1 from have) then '[]'::jsonb
+               else coalesce((select jsonb_agg(jsonb_build_object(
                   'key', t.key, 'label', t.label, 'n', t.n, 'enabled', t.n > 0)
-                  order by (t.key = '#'), t.key) from track t), '[]'::jsonb));
+                  order by (t.key = '#'), t.key) from track t), '[]'::jsonb) end);
 $$;
 
 -- ── 3. the breadcrumb ───────────────────────────────────────────────────────

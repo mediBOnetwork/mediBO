@@ -42,6 +42,7 @@ import '../admin/dev_queue/triage_inbox_screen.dart';
 import '../admin/damage_report_screen.dart';
 import '../partner/zone_pnl_screen.dart';
 import '../admin/wa_assistant_screen.dart';
+import '../admin/admin_conditions_screen.dart';
 import '../admin/search_synonyms_screen.dart';
 import '../admin/support_threads_screen.dart';
 import '../partner/partner_tasks_screen.dart';
@@ -182,6 +183,11 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       // itself on get_my_role() and the screen renders its refusal, the same
       // story as damage_report above.
       'search_synonyms' => const SearchSynonymsScreen(),
+      // CMD #1910 — Admin → Uses & conditions, the vocabulary behind the
+      // fourth browse door. admin_conditions_list() gates on get_my_role()
+      // and the screen renders that refusal itself, so the fence is the
+      // RPC's and this line is only the door.
+      'admin_conditions' => const AdminConditionsScreen(),
       // CHANGE #695 — the GST tax invoice raised on every settled period, its
       // credit notes and the monthly GSTR-1 register.
       //

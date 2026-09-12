@@ -209,98 +209,50 @@ alter table public.payment_alert_question     enable row level security;
 --    changes without notice, so each one anchors on the one token that never
 --    moves (the ₹ figure, the 12-digit UPI reference, the @handle).
 -- ─────────────────────────────────────────────────────────────────────────────
+-- NOTE ON REGEX DIALECT: Postgres ARE spells a word boundary \y, NOT \b
+-- (\b is a backspace here). A stop-word list written with \b silently never
+-- matches, which is how "credited by Rs.3,499" first read a sender of "Rs".
+with k as (
+  select
+    -- The rupee figure. Every app prints one and it never moves.
+    $$(?:₹|Rs\.?|INR)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)$$ as amount_re,
+    -- The UPI reference under any of its printed names.
+    $$(?:UTR|UPI\s*(?:transaction\s*)?(?:Ref(?:erence)?|ID)|UPI\s*Ref(?:erence)?\s*(?:No\.?)?|Ref\s*No\.?|RRN|Transaction\s*ID|Txn\s*ID|Order\s*ID)[:\s#-]*([0-9]{9,22}|[A-Za-z0-9]{12,22})$$ as utr_re,
+    -- The payer handle.
+    $$([A-Za-z0-9._-]{2,64}@[A-Za-z]{2,32})$$ as vpa_re,
+    -- The payer NAME as printed, in either word order ("X paid you" /
+    -- "received from X"). A run of name words, each one refused if it is a
+    -- banking stop-word, so the capture stops at the sentence and never
+    -- swallows "Ref No 8567...". Never expanded, never corrected — verbatim.
+    $$(?:^|[:.\s])((?!(?:on|via|to|using|ref|utr|upi|txn|rrn|at|for|dated|your|the|account|rs|inr|you|money|payment|received|credited)\y)[A-Za-z][A-Za-z&'()-]*(?:\s+(?!(?:on|via|to|using|ref|utr|upi|txn|rrn|at|for|dated|your|the|account|rs|inr|you|has|paid)\y)[A-Za-z][A-Za-z&'()-]*){0,4})\s+(?:paid\s+you|sent\s+you)|(?:received\s+from|trf\s+from|from|by)\s+((?![A-Za-z0-9._-]*@)(?!(?:on|via|to|using|ref|utr|upi|txn|rrn|a|at|for|dated|your|the|account|rs|inr)\y)[A-Za-z][A-Za-z&'()-]*(?:\s+(?!(?:on|via|to|using|ref|utr|upi|txn|rrn|a|at|for|dated|your|the|account|rs|inr)\y)[A-Za-z][A-Za-z&'()-]*){0,4})$$ as sender_re,
+    -- Money that is NOT arriving. Checked before anything is read out of the
+    -- text, because a collect request and a debit both carry a ₹ figure.
+    $$(?:requesting|requested|collect\s*request|reminder|you\s+paid|sent\s+to|payment\s+of\b.*\bto\b|debited|withdrawn|failed|declined|cancelled|reversed|refund|cashback|wallet\s*top)$$ as ignore_upi,
+    $$(?:debited|withdrawn|you\s+paid|failed|declined|reversed|reminder|cancelled)$$ as ignore_bank
+),
+seed(package_name, label, priority, kind, note) as (values
+  ('com.google.android.apps.nbu.paisa.user', 'Google Pay',      10, 'upi',  'GPay: "Pooja Medical paid you ₹500. UPI transaction ID: 4123…"'),
+  ('com.phonepe.app',                        'PhonePe',         10, 'upi',  'PhonePe: "₹1,250.50 received from Sharma Pharma. UTR: 5234…"'),
+  ('net.one97.paytm',                        'Paytm',           10, 'upi',  'Paytm: "Received ₹2,000 in your Paytm account from Ravi Kumar"'),
+  ('in.org.npci.upiapp',                     'BHIM',            10, 'upi',  'BHIM / NPCI reference app'),
+  ('com.whatsapp',                           'WhatsApp Pay',    30, 'upi',  'WhatsApp payments notification'),
+  ('com.sbi.lotusintouch',                   'SBI YONO',        20, 'bank', 'SBI: "A/c XX1234 is credited by Rs.3,499 trf from POOJA MEDICAL"'),
+  ('com.snapwork.hdfc',                      'HDFC Bank',       20, 'bank', 'HDFC MobileBanking credit alert'),
+  ('com.icicibank.pockets',                  'ICICI iMobile',   20, 'bank', 'ICICI iMobile credit alert'),
+  ('com.axis.mobile',                        'Axis Bank',       20, 'bank', 'Axis Mobile credit alert'),
+  ('com.msf.kbank.mobile',                   'Kotak 811',       20, 'bank', 'Kotak credit alert'),
+  ('com.bankofbaroda.mconnect',              'Bank of Baroda',  20, 'bank', 'BoB M-Connect credit alert'),
+  ('com.infrasofttech.PNBOne',               'PNB One',         20, 'bank', 'PNB One credit alert'),
+  ('com.csam.icici.bank.imobile',            'ICICI iMobile Pay',20,'bank', 'ICICI iMobile Pay credit alert'),
+  -- Catch-all: an unknown package still gets a rule pass before AI is paid for.
+  ('*',                                      'Generic UPI credit',900,'upi','Fallback rule for a package with no rule of its own')
+)
 insert into public.payment_alert_rules
   (package_name, label, amount_regex, utr_regex, vpa_regex, sender_regex, ignore_regex, priority, note)
-values
-  ('com.google.android.apps.nbu.paisa.user', 'Google Pay',
-   '(?:₹|Rs\.?|INR)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)',
-   '(?:UPI\s*(?:transaction\s*)?ID|UTR|Ref(?:erence)?\s*(?:No\.?|ID)?)[:\s#-]*([0-9]{9,22}|[A-Za-z0-9]{12,22})',
-   '([A-Za-z0-9._-]{2,64}@[A-Za-z]{2,32})',
-   '(?:from|by|received from)\s+([A-Za-z][A-Za-z0-9 .&''()-]{1,60}?)(?:\s*(?:on|via|to|using|\.|,|$))',
-   '(?:requesting|requested|reminder|you paid|sent|payment of .* to|debited|failed|declined|cancelled|refund)',
-   10, 'GPay: "You received ₹500 from Pooja Medical"'),
-
-  ('com.phonepe.app', 'PhonePe',
-   '(?:₹|Rs\.?|INR)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)',
-   '(?:UTR|UPI\s*(?:Ref|Transaction)\s*(?:No\.?|ID)?|Txn\s*ID)[:\s#-]*([0-9]{9,22}|[A-Za-z0-9]{12,22})',
-   '([A-Za-z0-9._-]{2,64}@[A-Za-z]{2,32})',
-   '(?:from|by)\s+([A-Za-z][A-Za-z0-9 .&''()-]{1,60}?)(?:\s*(?:on|via|to|using|\.|,|$))',
-   '(?:requesting|requested|reminder|you paid|sent to|debited|failed|declined|cancelled|refund|cashback)',
-   10, 'PhonePe: "₹500 received from Pooja Medical"'),
-
-  ('net.one97.paytm', 'Paytm',
-   '(?:₹|Rs\.?|INR)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)',
-   '(?:UPI\s*Ref(?:erence)?\s*(?:No\.?)?|UTR|Order\s*ID)[:\s#-]*([0-9]{9,22}|[A-Za-z0-9]{12,22})',
-   '([A-Za-z0-9._-]{2,64}@[A-Za-z]{2,32})',
-   '(?:from|by)\s+([A-Za-z][A-Za-z0-9 .&''()-]{1,60}?)(?:\s*(?:on|via|to|using|\.|,|$))',
-   '(?:requesting|requested|reminder|you paid|sent|debited|failed|declined|cancelled|refund|cashback|wallet\s*top)',
-   10, 'Paytm: "Received ₹500 in your Paytm ... from Pooja Medical"'),
-
-  ('in.org.npci.upiapp', 'BHIM',
-   '(?:₹|Rs\.?|INR)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)',
-   '(?:UPI\s*(?:Ref|Transaction)\s*(?:No\.?|ID)?|UTR|RRN)[:\s#-]*([0-9]{9,22}|[A-Za-z0-9]{12,22})',
-   '([A-Za-z0-9._-]{2,64}@[A-Za-z]{2,32})',
-   '(?:from|by)\s+([A-Za-z][A-Za-z0-9 .&''()-]{1,60}?)(?:\s*(?:on|via|to|using|\.|,|$))',
-   '(?:requesting|requested|collect\s*request|reminder|you paid|sent|debited|failed|declined|cancelled|refund)',
-   10, 'BHIM / NPCI reference app'),
-
-  ('com.sbi.lotusintouch', 'SBI YONO',
-   '(?:₹|Rs\.?|INR)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)',
-   '(?:UPI\s*Ref(?:erence)?\s*(?:No\.?)?|Ref\s*No\.?|UTR|RRN)[:\s#-]*([0-9]{9,22}|[A-Za-z0-9]{12,22})',
-   '([A-Za-z0-9._-]{2,64}@[A-Za-z]{2,32})',
-   '(?:from|by|trf\s*from)\s+([A-Za-z][A-Za-z0-9 .&''()-]{1,60}?)(?:\s*(?:on|via|to|using|\.|,|$))',
-   '(?:debited|withdrawn|you paid|failed|declined|reversed|reminder|available\s*balance\s*is)',
-   20, 'Bank credit SMS/notification wording: "credited ... Ref No 123456789012"'),
-
-  ('com.snapwork.hdfc', 'HDFC Bank',
-   '(?:₹|Rs\.?|INR)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)',
-   '(?:UPI\s*Ref(?:erence)?\s*(?:No\.?)?|Ref\s*No\.?|UTR|RRN)[:\s#-]*([0-9]{9,22}|[A-Za-z0-9]{12,22})',
-   '([A-Za-z0-9._-]{2,64}@[A-Za-z]{2,32})',
-   '(?:from|by|trf\s*from)\s+([A-Za-z][A-Za-z0-9 .&''()-]{1,60}?)(?:\s*(?:on|via|to|using|\.|,|$))',
-   '(?:debited|withdrawn|you paid|failed|declined|reversed|reminder|available\s*balance\s*is)',
-   20, 'HDFC MobileBanking credit alert'),
-
-  ('com.icicibank.pockets', 'ICICI iMobile',
-   '(?:₹|Rs\.?|INR)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)',
-   '(?:UPI\s*Ref(?:erence)?\s*(?:No\.?)?|Ref\s*No\.?|UTR|RRN)[:\s#-]*([0-9]{9,22}|[A-Za-z0-9]{12,22})',
-   '([A-Za-z0-9._-]{2,64}@[A-Za-z]{2,32})',
-   '(?:from|by|trf\s*from)\s+([A-Za-z][A-Za-z0-9 .&''()-]{1,60}?)(?:\s*(?:on|via|to|using|\.|,|$))',
-   '(?:debited|withdrawn|you paid|failed|declined|reversed|reminder|available\s*balance\s*is)',
-   20, 'ICICI iMobile credit alert'),
-
-  ('com.axis.mobile', 'Axis Bank',
-   '(?:₹|Rs\.?|INR)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)',
-   '(?:UPI\s*Ref(?:erence)?\s*(?:No\.?)?|Ref\s*No\.?|UTR|RRN)[:\s#-]*([0-9]{9,22}|[A-Za-z0-9]{12,22})',
-   '([A-Za-z0-9._-]{2,64}@[A-Za-z]{2,32})',
-   '(?:from|by|trf\s*from)\s+([A-Za-z][A-Za-z0-9 .&''()-]{1,60}?)(?:\s*(?:on|via|to|using|\.|,|$))',
-   '(?:debited|withdrawn|you paid|failed|declined|reversed|reminder|available\s*balance\s*is)',
-   20, 'Axis Mobile credit alert'),
-
-  ('com.msf.kbank.mobile', 'Kotak 811',
-   '(?:₹|Rs\.?|INR)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)',
-   '(?:UPI\s*Ref(?:erence)?\s*(?:No\.?)?|Ref\s*No\.?|UTR|RRN)[:\s#-]*([0-9]{9,22}|[A-Za-z0-9]{12,22})',
-   '([A-Za-z0-9._-]{2,64}@[A-Za-z]{2,32})',
-   '(?:from|by|trf\s*from)\s+([A-Za-z][A-Za-z0-9 .&''()-]{1,60}?)(?:\s*(?:on|via|to|using|\.|,|$))',
-   '(?:debited|withdrawn|you paid|failed|declined|reversed|reminder|available\s*balance\s*is)',
-   20, 'Kotak credit alert'),
-
-  ('com.whatsapp', 'WhatsApp Pay',
-   '(?:₹|Rs\.?|INR)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)',
-   '(?:UPI\s*(?:Ref|Transaction)\s*(?:No\.?|ID)?|UTR)[:\s#-]*([0-9]{9,22}|[A-Za-z0-9]{12,22})',
-   '([A-Za-z0-9._-]{2,64}@[A-Za-z]{2,32})',
-   '(?:from|by)\s+([A-Za-z][A-Za-z0-9 .&''()-]{1,60}?)(?:\s*(?:on|via|to|using|\.|,|$))',
-   '(?:requesting|requested|reminder|you paid|sent|debited|failed|declined)',
-   30, 'WhatsApp payments notification'),
-
-  -- Catch-all: any package with no rule of its own still gets a rule pass
-  -- before the AI fallback is paid for.
-  ('*', 'Generic UPI credit',
-   '(?:₹|Rs\.?|INR)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)',
-   '(?:UTR|UPI\s*Ref(?:erence)?\s*(?:No\.?)?|Ref\s*No\.?|RRN|Transaction\s*ID|Txn\s*ID)[:\s#-]*([0-9]{9,22}|[A-Za-z0-9]{12,22})',
-   '([A-Za-z0-9._-]{2,64}@[A-Za-z]{2,32})',
-   '(?:from|by|trf\s*from)\s+([A-Za-z][A-Za-z0-9 .&''()-]{1,60}?)(?:\s*(?:on|via|to|using|\.|,|$))',
-   '(?:requesting|requested|reminder|you paid|sent|debited|withdrawn|failed|declined|cancelled|refund|available\s*balance\s*is)',
-   900, 'Fallback rule for an unknown package')
+select s.package_name, s.label, k.amount_re, k.utr_re, k.vpa_re, k.sender_re,
+       case when s.kind = 'bank' then k.ignore_bank else k.ignore_upi end,
+       s.priority, s.note
+  from seed s cross join k
 on conflict (package_name, coalesce(label,'')) do update
   set amount_regex = excluded.amount_regex,
       utr_regex    = excluded.utr_regex,

@@ -76,6 +76,16 @@ is_missing_guard() {
   [ "$(jq -r '.error // ""' <<<"$1")" = "no such behaviour test" ]
 }
 
+# Reported loudly, alerted so the gap is tracked, never held against a branch.
+note_missing() {
+  echo "  $1: MISSING — the behaviour row is absent from the registry;" \
+       "no verdict, so this is not held against the branch"
+  missing=$((missing+1))
+  "$DEVCMD" rpc runner_ops_alert "$(jq -nc --arg g "$1" \
+    '{p_kind:"rg_behavior_missing",p_vars:{behavior:$g,source:"test_complete_fast_speed.sh"}}')" \
+    >/dev/null 2>&1 || true
+}
+
 rc=0
 missing=0
 for g in "${GUARDS[@]}"; do
@@ -103,15 +113,7 @@ for g in "${GUARDS[@]}"; do
   # exists for (#641: a 10–25 minute scan on the HTTP path) fails every sample,
   # so red now means three consecutive overruns, never one unlucky poll.
   # Structural guards (c641_no_rg_in_http_rpcs) still fail on the first read.
-  if is_missing_guard "$out"; then
-    echo "  $g: MISSING — the behaviour row is absent from the control-plane" \
-         "registry; no verdict, so this is not held against the branch"
-    missing=$((missing+1))
-    "$DEVCMD" rpc runner_ops_alert "$(jq -nc --arg g "$g" \
-      '{p_kind:"rg_behavior_missing",p_vars:{behavior:$g,source:"test_complete_fast_speed.sh"}}')" \
-      >/dev/null 2>&1 || true
-    continue
-  fi
+  if is_missing_guard "$out"; then note_missing "$g"; continue; fi
   if [ "$(jq -r '.ok // false' <<<"$out")" != "true" ] && [ "$g" = "c641_complete_fast_under_2s" ]; then
     for retry in 2 3; do
       echo "  $g: overrun on sample $((retry-1)) — $(jq -r '.error // .message // "unknown"' <<<"$out"); resampling"
@@ -121,8 +123,23 @@ for g in "${GUARDS[@]}"; do
         out="$again"
       fi
       [ "$(jq -r '.ok // false' <<<"$out")" = "true" ] && break
+      # A reply of "no such behaviour test" is not a slow sample — it is the
+      # registry saying the row is gone. Stop resampling and fall through to
+      # the MISSING verdict below instead of printing it as a third overrun.
+      is_missing_guard "$out" && break
     done
   fi
+  # CMD #1924 — THE MISSING CHECK IS FINAL, NOT FIRST. It used to run on sample
+  # 1 only: #1924's deploy read something unparseable first ("overrun on sample
+  # 1 — unknown"), resampled, got "no such behaviour test", and reported RED —
+  # the exact fleet-wide eviction #668 wrote is_missing_guard to end, reached by
+  # the one path that skips it. c641_complete_fast_under_2s cannot exist today:
+  # its body times dev_cmd_complete_fast, which #1761 moved to the control
+  # plane, while rg_behavior_tests/rg_run_behavior stayed on production (checked
+  # both sides: the control plane has neither). So this verdict is the normal
+  # state of that guard until the registry follows the function, and it must not
+  # cost a single branch its deploy.
+  if is_missing_guard "$out"; then note_missing "$g"; continue; fi
   if [ "$(jq -r '.ok // false' <<<"$out")" = "true" ]; then
     echo "  $g: GREEN"
   else

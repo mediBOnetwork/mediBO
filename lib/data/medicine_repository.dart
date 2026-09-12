@@ -1087,9 +1087,20 @@ class MedicineRepository {
 
   /// Fire-and-forget: increments sales_count by 1 each time a product is
   /// added to cart, so the popularity sort improves over time.
+  ///
+  /// CMD #1906 — it swallows its OWN failures. The card calls this from a tap
+  /// handler inside a `try`, which only ever caught the constructor resolving
+  /// `Supabase.instance`; now that the client is resolved on first use
+  /// (see [_client]) the throw happens after the first `await`, where no
+  /// caller's `try` can reach it. A popularity ping must never be able to
+  /// break an add-to-cart, so the guard lives here.
   Future<void> incrementSalesCount(String medicineId) async {
     final id = int.tryParse(medicineId);
     if (id == null) return;
-    await _client.rpc('increment_sales', params: {'medicine_id': id});
+    try {
+      await _client.rpc('increment_sales', params: {'medicine_id': id});
+    } catch (_) {
+      // The cart write is the real work and has already been sent.
+    }
   }
 }

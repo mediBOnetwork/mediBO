@@ -21,8 +21,8 @@ declare
 begin
   if auth.uid() is null or not (v_part or v_role in ('admin','super_admin')) then
     return jsonb_build_object('ok', false, 'error','not_authorized',
-      'message', public.uic('pay_alert.not_authorized',
-                            'Only a partner or an admin phone can forward payment alerts.'));
+      'message', public.uic('pay_alert.screen_denied',
+                            'Payment alerts are visible to a partner or an admin.'));
   end if;
   if v_status is not null and v_status not in ('new','matched','unmatched','ignored') then
     v_status := null;
@@ -64,17 +64,25 @@ begin
                       when v_total = 1 then public.uic('pay_alert.count_one','1 alert')
                       else replace(public.uic('pay_alert.count_tpl','{n} alerts'),
                                    '{n}', v_total::text) end,
-    'filters',      jsonb_build_array(
-                      jsonb_build_object('key','',          'label', public.uic('pay_alert.filter.all','All'),
-                                         'count', (select coalesce(sum((value)::int),0) from jsonb_each_text(v_counts))),
-                      jsonb_build_object('key','new',       'label', public.uic('pay_alert.status.new','New'),
-                                         'count', coalesce((v_counts->>'new')::int,0)),
-                      jsonb_build_object('key','matched',   'label', public.uic('pay_alert.status.matched','Matched'),
-                                         'count', coalesce((v_counts->>'matched')::int,0)),
-                      jsonb_build_object('key','unmatched', 'label', public.uic('pay_alert.status.unmatched','Needs a look'),
-                                         'count', coalesce((v_counts->>'unmatched')::int,0)),
-                      jsonb_build_object('key','ignored',   'label', public.uic('pay_alert.status.ignored','Ignored'),
-                                         'count', coalesce((v_counts->>'ignored')::int,0))),
+    -- The chip's whole caption is built here: Dart must not join a label to
+    -- a count, or the wording of that join stops being an UPDATE.
+    'filters',      (select jsonb_agg(jsonb_build_object(
+                        'key',   f.key,
+                        'label', f.label,
+                        'count', f.n,
+                        'chip_label', replace(replace(
+                           public.uic('pay_alert.filter.chip_tpl','{label} {count}'),
+                           '{label}', f.label), '{count}', f.n::text))
+                       order by f.ord)
+                     from (
+                       select 0 as ord, '' as key,
+                              public.uic('pay_alert.filter.all','All') as label,
+                              (select coalesce(sum((value)::int),0) from jsonb_each_text(v_counts)) as n
+                       union all select 1, 'new',       public.uic('pay_alert.status.new','New'),           coalesce((v_counts->>'new')::int,0)
+                       union all select 2, 'matched',   public.uic('pay_alert.status.matched','Matched'),   coalesce((v_counts->>'matched')::int,0)
+                       union all select 3, 'unmatched', public.uic('pay_alert.status.unmatched','Needs a look'), coalesce((v_counts->>'unmatched')::int,0)
+                       union all select 4, 'ignored',   public.uic('pay_alert.status.ignored','Ignored'),   coalesce((v_counts->>'ignored')::int,0)
+                     ) f),
     'active_filter', coalesce(v_status,''),
     'zone_id',       v_zone,
     'date',          v_date,

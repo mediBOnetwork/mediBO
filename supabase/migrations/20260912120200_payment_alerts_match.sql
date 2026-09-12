@@ -109,6 +109,12 @@ begin
     'raw_text',      coalesce(a.raw_text,''),
     'posted_label',  to_char(a.posted_at at time zone 'Asia/Kolkata','DD Mon, hh12:mi am'),
     'match_reason',  coalesce(a.match_reason, a.parse_note, ''),
+    -- Both buttons on the card. Absent on a matched row, because a verified
+    -- payment is not re-matched or ignored from this screen.
+    'retry_match_label', case when a.status = 'matched' then ''
+                              else public.uic('pay_alert.retry_match','Match again') end,
+    'ignore_label',      case when a.status = 'matched' then ''
+                              else public.uic('pay_alert.ignore','Ignore') end,
     'claim_id',      a.matched_claim_id,
     'order_id',      a.matched_order_id,
     'order_code',    coalesce(v_code,''),

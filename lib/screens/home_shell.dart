@@ -39,6 +39,7 @@ import '../features/bags/bags_screen.dart';
 import 'admin/admin_supplier_screen.dart';
 import 'admin/admin_fulfillment_screen.dart';
 import 'admin/admin_upi_screen.dart';
+import 'admin/payment_alerts_screen.dart';
 import 'admin/dev_queue/dev_queue_screen.dart';
 import 'auth/login_screen.dart';
 import 'bulk_upload_screen.dart';
@@ -455,6 +456,11 @@ class _HomeShellState extends State<HomeShell> {
           Navigator.push(context,
               MaterialPageRoute(builder: (_) => const AdminManageAdminsScreen()));
         }
+        break;
+      // CMD #1929 — Payment alerts (partner phone notifications → auto-verify).
+      case 'payment_alerts':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PaymentAlertsScreen()));
         break;
       case 'payment_upi':
         if (_amISuper) {

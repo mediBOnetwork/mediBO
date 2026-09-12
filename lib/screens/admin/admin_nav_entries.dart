@@ -79,6 +79,11 @@ List<AdminNavEntry> get kAdminOverflowNav => <AdminNavEntry>[
       AdminNavEntry(c('admin_nav.overflow_deletion_requests'),
           Icons.person_remove_outlined,
           route: 'deletion_requests'),
+      // CMD #1929 — Payment alerts: the notifications the partner phone
+      // forwards, and what the backend matched each one to.
+      AdminNavEntry(c('admin_nav.overflow_payment_alerts'),
+          Icons.notifications_active_outlined,
+          route: 'payment_alerts'),
     ];
 
 /// The wide shell's "More" popup, sitting after Fulfillment in the top row.

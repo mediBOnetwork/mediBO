@@ -303,7 +303,17 @@ insert into public.ui_copy(key, value) values
   ('pay_alert.ask_thanks_tpl', to_jsonb('Thank you — {amount} is now recorded against {order_code}.'::text)),
   ('pay_alert.ask_badnumber', to_jsonb('That number is not on the list. Please reply with one of the numbers above.'::text)),
   ('pay_alert.filter.all', to_jsonb('All'::text)),
+  ('pay_alert.filter.chip_tpl', to_jsonb('{label} {count}'::text)),
+  ('pay_alert.retry_match', to_jsonb('Match again'::text)),
+  ('pay_alert.ignore', to_jsonb('Ignore'::text)),
+  ('pay_alert.screen_denied', to_jsonb('Payment alerts are visible to a partner or an admin.'::text)),
   ('pay_alert.count_tpl', to_jsonb('{n} alerts'::text)),
   ('pay_alert.count_one', to_jsonb('1 alert'::text)),
   ('pay_alert.count_zero', to_jsonb('No alerts'::text))
+on conflict (key) do nothing;
+
+-- The nav label lives with the other overflow entries, not with this feature's
+-- own keys, because that is the namespace admin_nav_entries.dart reads.
+insert into public.ui_copy(key, value)
+values ('admin_nav.overflow_payment_alerts', to_jsonb('Payment alerts'::text))
 on conflict (key) do nothing;

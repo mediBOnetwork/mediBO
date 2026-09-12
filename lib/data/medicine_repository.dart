@@ -734,7 +734,39 @@ class MedicineRepository {
       'p_page_size': pageSize,
     });
     if (res is! Map) return SearchPagePayload.failed;
-    return SearchPagePayload.fromMap(Map<String, dynamic>.from(res));
+    final m = Map<String, dynamic>.from(res);
+    // CHANGE #497's instant chip row, kept: the header's chrome — the filter
+    // set and the empty state, with no rows in it — is the same on every cold
+    // start, so the last one is written to the device and repainted before the
+    // network answers. The cache is a render fallback, never an authority.
+    if (!state.hasQuery) unawaited(_persistSearchChrome(m));
+    return SearchPagePayload.fromMap(m);
+  }
+
+  static const _kSearchChromeKey = 'search_chrome_v1';
+
+  Future<void> _persistSearchChrome(Map<String, dynamic> payload) async {
+    try {
+      final sp = await SharedPreferences.getInstance();
+      await sp.setString(
+          _kSearchChromeKey, jsonEncode({...payload, 'items': const []}));
+    } catch (_) {
+      // A device that refuses storage still gets a live header.
+    }
+  }
+
+  /// The last header chrome this device saw, or null when there is none.
+  Future<SearchPagePayload?> cachedSearchChrome() async {
+    try {
+      final sp = await SharedPreferences.getInstance();
+      final raw = sp.getString(_kSearchChromeKey);
+      if (raw == null || raw.isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return null;
+      return SearchPagePayload.fromMap(Map<String, dynamic>.from(decoded));
+    } catch (_) {
+      return null;
+    }
   }
 
   /// CMD #1906 — the catalogue's extras block, which carries the "Request this

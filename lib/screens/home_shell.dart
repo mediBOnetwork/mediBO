@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart'; // CHANGE #298 — absolute dee
 import '../app_state.dart';
 import '../data/medicine_repository.dart';
 import '../models/app_session.dart';
+import '../models/search_page.dart';
 import '../models/cart_model.dart';
 import '../models/notification_inbox.dart'; // CHANGE #298 — the deep-link parser
 import '../design_tokens.dart';
@@ -22,6 +23,7 @@ import 'shell_routes.dart'; // #1892 — the path ↔ tab table
 import '../utils/render_log.dart';
 import '../utils/responsive.dart';
 import '../widgets/animations.dart';
+import '../widgets/search_surface.dart';
 import '../widgets/cart_pill.dart'; // C636
 import '../widgets/notification_bell.dart'; // CHANGE #298
 import '../services/push_service.dart'; // CHANGE #298
@@ -270,6 +272,19 @@ class _HomeShellState extends State<HomeShell> {
   String _viewAsKey = 'none'; // tracks active ViewAs identity; reset _index on change
   String _query = '';
   String _category = 'All';
+
+  /// CMD #1906 — the search, as ONE value: query, filters and page together.
+  /// It is the same type the Catalogue carries and the same spelling that goes
+  /// into the URL, which is what lets a shopper move between the two screens
+  /// without losing what they were looking at.
+  SearchQueryState _search = SearchQueryState.blank;
+
+  /// The last `search_page()` answer. The header's chip row and recent strip
+  /// are drawn from it, so the filters above the list and the list itself can
+  /// never be two different answers.
+  SearchPagePayload? _searchPayload;
+  final SearchSuggestController _suggest = SearchSuggestController();
+  final SearchDebouncer _searchDebounce = SearchDebouncer();
   // When true, the storefront shows the full product grid for 'All' (the
   // "Show all products" / "Browse catalogue" target) instead of the home feed.
   bool _browseAll = false;
@@ -298,7 +313,6 @@ class _HomeShellState extends State<HomeShell> {
   int _alertCount = 0;
 
   // Desktop sidebar: populated once storefront loads its CatalogMeta
-  CatalogMeta? _desktopMeta;
 
   // ── CHANGE #298 — push + inbox ───────────────────────────────────────────
   // One bell, two headers: whichever layout is on screen holds the key, so a
@@ -331,6 +345,11 @@ class _HomeShellState extends State<HomeShell> {
     kOpenCartRequest.addListener(_onOpenCartRequested);
     _initFromUrl();
     listenPopState(_applyPath);
+    // CMD #1906 — the header's chip row and recent strip come out of the SAME
+    // payload as the rows. With no query yet there are no rows, so this asks
+    // for the chrome alone: `search_page('')` skips the ranking pass entirely
+    // and answers with the filter set, the recent strip and the empty state.
+    _loadSearchChrome();
     // CHANGE #298 — FCM. Started after the first frame so a Firebase failure
     // can never sit in front of the shell's own build (BOOT RESILIENCE RULE);
     // PushService itself swallows every error for the same reason.
@@ -345,7 +364,6 @@ class _HomeShellState extends State<HomeShell> {
     // parallel with auth/session resolution below, never behind it. Renders
     // instantly from cache when one exists; refreshes in the background with
     // retry, and never wipes a good cache on a failed refresh.
-    _bootstrapHomeCategories();
     // CHANGE #630 — the bottom bar's slots, their order and their audience.
     CustomerNav.load();
     StaffNav.load(); // CHANGE #1016 — staff_nav(): tabs, redirects, layout
@@ -510,7 +528,36 @@ class _HomeShellState extends State<HomeShell> {
 
   // ── URL helpers ─────────────────────────────────────────────────────────────
 
-  String _urlForState() => ShellRoutes.urlForState(_index, _category);
+  /// CMD #1906 item 4 — the search lives in the URL.
+  ///
+  /// Query, filters and page are appended with the SAME parameter names the
+  /// Catalogue uses (`SearchQueryState.toParams`), so `/?q=dolo&sort=name` and
+  /// `/catalogue?q=dolo&sort=name` are the same search on two screens — moving
+  /// between them keeps it, and so does a reload or a shared link.
+  String _urlForState() {
+    final base = ShellRoutes.urlForState(_index, _category);
+    if (_index != 0) return base;
+    final qs = _search.toQueryString();
+    if (qs.isEmpty) return base;
+    return base.contains('?') ? '$base&$qs' : '$base?$qs';
+  }
+
+  /// Applies a new search state: the screen, the box and the URL all move
+  /// together, so there is never a URL that describes a different search from
+  /// the one on screen.
+  void _applySearch(SearchQueryState next, {bool push = true}) {
+    setState(() {
+      _search = next;
+      _query = next.query;
+      _category = next.category;
+      _browseAll = false;
+      _index = 0;
+      _cartOpen = false;
+      if (_searchCtrl.text != next.query) _searchCtrl.text = next.query;
+      if (!next.hasQuery) _searchPayload = null;
+    });
+    if (push) replaceUrl(_urlForState());
+  }
 
   // Read the URL on first load and set initial shell state.
   void _initFromUrl() {
@@ -561,6 +608,17 @@ class _HomeShellState extends State<HomeShell> {
       _category = ShellRoutes.slugToCat(path.substring(3));
     } else if (CatalogueRoute.matches(path)) {
       _index = 12; // #747 — the screen parses its own query string
+    }
+    // CMD #1906 — a link carrying a search opens ON that search, filters and
+    // page included. initialSearch(), not Uri.base: boot's rewrite erases the
+    // query string (#747).
+    final s = SearchQueryState.fromLocation('?${initialSearch().replaceFirst('?', '')}');
+    if (s.hasQuery) {
+      _search = s;
+      _query = s.query;
+      _category = s.category;
+      _searchCtrl.text = s.query;
+      _index = 0;
     }
   }
 
@@ -714,40 +772,6 @@ class _HomeShellState extends State<HomeShell> {
     pushUrl('/');
   }
 
-  void _onMetaLoaded(CatalogMeta meta) {
-    if (mounted) setState(() => _desktopMeta = meta);
-  }
-
-  /// CHANGE #497: cache-first, parallel, retrying category fetch for the
-  /// homepage chip row (`_MobileCategoryChips`, fed by `_desktopMeta`). This
-  /// fires from `initState()` — i.e. immediately on home load, racing
-  /// auth/session resolution rather than waiting for it — because the old
-  /// path only fetched categories once `StorefrontScreen` mounted, which the
-  /// CHANGE #308 auth-loading gate above delays until profile resolution
-  /// finishes. See CHANGE #497 for the full root-cause writeup.
-  Future<void> _bootstrapHomeCategories() async {
-    final cached = _repo.cachedCatalogMeta ?? await _repo.loadCachedCatalogMeta();
-    if (cached != null) {
-      if (mounted) setState(() => _desktopMeta = cached);
-      RenderLog.write('c497_home_cat_cache_hit', 'true');
-    } else {
-      RenderLog.write('c497_home_cat_cache_miss', 'true');
-    }
-
-    final fresh = await retryWithBackoff<CatalogMeta>(
-      () => _repo.fetchCatalogMeta(),
-      onRetry: (attempt) =>
-          RenderLog.write('c497_home_cat_fetch_retry', 'attempt=$attempt'),
-    );
-    if (fresh != null) {
-      if (mounted) setState(() => _desktopMeta = fresh);
-      RenderLog.write('c497_home_cat_fetch_ok', 'true');
-    } else {
-      // All retries failed — keep whatever's already showing (cache or
-      // null); never wipe the chip row to blank on a failed refresh.
-      RenderLog.write('c497_home_cat_fallback', 'true');
-    }
-  }
 
   // Admin section indices in the pages list: 3=Dashboard, 4=AddMedicine,
   // 5=Suppliers, 6=Customers
@@ -1433,31 +1457,58 @@ class _HomeShellState extends State<HomeShell> {
     _searchCtrl.text = _searchCtrl.text + ch;
     _searchCtrl.selection =
         TextSelection.fromPosition(TextPosition(offset: _searchCtrl.text.length));
-    _handleDesktopSearch(_searchCtrl.text);
+    _handleSearchSubmit(_searchCtrl.text);
     return true;
   }
 
   // Desktop web search trigger — shared by _DesktopSearchRow's onChanged
   // debounce and the type-anywhere global key handler above (CHANGE #440).
-  void _handleDesktopSearch(String v) {
-    setState(() {
-      final q = v.trim().replaceAll(RegExp(r'[^a-zA-Z0-9]'), '');
-      _category = 'All';
-      _browseAll = false;
-      _index = 0;
-      if (q.length >= 3) {
-        _query = v;
-      } else {
-        _query = '';
-        _scrollToTopTrigger++;
-      }
-    });
+  /// CMD #1906 — one submit handler for both breakpoints. A query REPLACES the
+  /// search; clearing the box returns to the browse feed and clears the URL
+  /// with it.
+  void _handleSearchSubmit(String v) {
+    _suggest.close();
+    _searchDebounce.cancel();
+    final q = v.trim();
+    if (q.isEmpty) {
+      _applySearch(SearchQueryState.blank);
+      setState(() => _scrollToTopTrigger++);
+      return;
+    }
+    // The filters the shopper already set survive a new query — they narrowed
+    // the catalogue, not that one word.
+    _applySearch(_search.copy(query: q, page: 0));
+    setState(() => _scrollTrigger++);
+  }
+
+  /// Every keystroke: the suggestion panel asks the backend, and nothing else
+  /// happens until the shopper submits or taps a suggestion.
+  void _handleSearchChanged(String v) {
+    _suggest.onQueryChanged(v);
+    if (v.trim().isEmpty && _search.hasQuery) {
+      _applySearch(SearchQueryState.blank);
+    }
+  }
+
+  /// One option tap on the shared chip row. The group and the option are the
+  /// backend's own; the state change is the only thing decided here.
+  void _handleFilterPick(SearchFilterGroup g, SearchOption o) {
+    final next = _search.withOption(g, o);
+    if (!next.hasQuery && g.key == 'category') {
+      // No query yet: the category chips are still the browse filter they
+      // always were.
+      _selectCategory(o.key);
+      return;
+    }
+    _applySearch(next);
   }
 
   void _selectCategory(String c) {
     setState(() {
       _category = c;
       _query = '';
+      _search = SearchQueryState.blank;
+      _searchPayload = null;
       _browseAll = false;
       _searchCtrl.clear();
       _index = 0;
@@ -1472,12 +1523,108 @@ class _HomeShellState extends State<HomeShell> {
     setState(() {
       _category = 'All';
       _query = '';
+      _search = SearchQueryState.blank;
+      _searchPayload = null;
       _browseAll = true;
       _searchCtrl.clear();
       _index = 0;
       _cartOpen = false;
       _scrollToTopTrigger++;
     });
+  }
+
+  /// The header's own payload, for the state where nothing has been searched
+  /// yet. Best-effort: a dead call simply leaves the chip row unbuilt, exactly
+  /// as a dead category-count call used to.
+  Future<void> _loadSearchChrome() async {
+    // CHANGE #497's cache-first chip row, carried over: the last chrome this
+    // device saw paints immediately, then the live one replaces it. A failed
+    // refresh never wipes the row back to blank.
+    try {
+      final cached = await _repo.cachedSearchChrome();
+      if (cached != null && mounted && _searchPayload == null) {
+        setState(() => _searchPayload = cached);
+        RenderLog.write('c1906_search_chrome', 'cache=hit');
+      }
+    } catch (_) {}
+    try {
+      final p = await _repo.searchPage(SearchQueryState.blank);
+      if (!mounted || _search.hasQuery) return;
+      setState(() => _searchPayload = p);
+      RenderLog.write('c1906_search_chrome',
+          'groups=${p.filters.groups.length};'
+          'cats=${p.filters.chipRowGroup?.options.length ?? 0};'
+          'recent=${p.recent.has ? p.recent.items.length : 0}');
+    } catch (_) {
+      // Whatever the cache painted stays; never chips this file invented.
+    }
+  }
+
+  /// CMD #1906 — THE search header, and the only one.
+  ///
+  /// Home used to wear a solid `Ds.c.brand` band behind its field and its
+  /// chips while the Catalogue used a white header with a grey field; same
+  /// app, two headers. This is the Catalogue's header, drawn on Home: white
+  /// ground, grey rounded field, outlined grey chips with the selected chip in
+  /// brand green, the backend's placeholder, and the suggestion panel both
+  /// screens now share.
+  ///
+  /// The chip row, the recent strip and the results are all one payload.
+  Widget _searchHeader({Widget? trailing}) {
+    final p = _searchPayload;
+    final filters = p?.filters ?? SearchFilters.empty;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SearchHeaderBar(
+          controller: _searchCtrl,
+          focusNode: _searchFocus,
+          placeholder:
+              p?.placeholder ?? c('home_shell.search_for_medicines'),
+          isLoading: _searchLoading,
+          onChanged: _handleSearchChanged,
+          onSubmit: _handleSearchSubmit,
+          onClear: () => _applySearch(SearchQueryState.blank),
+          trailing: trailing,
+        ),
+        // The suggestion popup, from the SAME `search_suggest()` the Catalogue
+        // calls. Tapping a row searches the BACKEND's query for it, which for
+        // a Hindi word is the salt and not the word.
+        AnimatedBuilder(
+          animation: _suggest,
+          builder: (_, __) => _suggest.isOpen
+              ? Padding(
+                  padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+                  child: SearchSuggestions(
+                    payload: _suggest.payload,
+                    onPick: (q) {
+                      _suggest.close();
+                      _searchCtrl.text = q;
+                      _handleSearchSubmit(q);
+                    },
+                  ),
+                )
+              : const SizedBox.shrink(),
+        ),
+        SearchFilterChips(
+          filters: filters,
+          showSheetGroups: _search.hasQuery,
+          onPick: _handleFilterPick,
+        ),
+        SearchRecentStrip(
+          recent: p?.recent ?? SearchRecent.empty,
+          onPick: (q) {
+            _searchCtrl.text = q;
+            _handleSearchSubmit(q);
+          },
+          onClear: () async {
+            await _repo.clearRecentSearches();
+            if (mounted && _search.hasQuery) _applySearch(_search, push: false);
+          },
+        ),
+      ],
+    );
   }
 
   @override
@@ -1642,14 +1789,13 @@ class _HomeShellState extends State<HomeShell> {
           StorefrontScreen(
             query: _query,
             category: _category,
+            search: _search,
+            onSearchPayload: (p) {
+              if (mounted) setState(() => _searchPayload = p);
+            },
+            onSearchChanged: _applySearch,
             onCategorySelected: _selectCategory,
-            onSuggestionTap: (s) => setState(() {
-              _query = s;
-              _searchCtrl.text = s;
-              _category = 'All';
-              _browseAll = false;
-              _index = 0;
-            }),
+            onSuggestionTap: (s) => _applySearch(_search.copy(query: s)),
             repo: _repo,
             browseAll: _browseAll,
             onBrowseAll: _browseAllProducts,
@@ -1661,7 +1807,6 @@ class _HomeShellState extends State<HomeShell> {
               }
             },
             showCategoryTiles: false,
-            onMetaLoaded: _onMetaLoaded,
             onFooterSearch: () => setState(() => _scrollToTopTrigger++),
             onFooterBulkUpload: () => _setIndex(2),
             onFooterOrders: () => _setIndex(1),
@@ -1820,30 +1965,11 @@ class _HomeShellState extends State<HomeShell> {
                   RenderLog.write('c455_banners', 0);
                   return const SizedBox.shrink();
                 }),
-                // Search + chips: storefront only (index 0)
-                if (_index == 0)
-                  _MobileSearchBar(
-                    controller: _searchCtrl,
-                    isLoading: _searchLoading,
-                    onSearch: (v) => setState(() {
-                      final q = v.trim();
-                      _category = 'All';
-                      _index = 0;
-                      if (q.length >= 2) {
-                        _query = v;
-                      } else {
-                        _query = '';
-                        _scrollToTopTrigger++;
-                      }
-                    }),
-                    onScrollToResults: () => setState(() => _scrollTrigger++),
-                  ),
-                if (_index == 0)
-                  _MobileCategoryChips(
-                    meta: _desktopMeta,
-                    selected: _category,
-                    onCategoryTap: (key) => _selectCategory(key),
-                  ),
+                // CMD #1906 — ONE search header, on both breakpoints and on
+                // both screens. The brand band that used to sit behind the
+                // field and the chips is gone with the two widgets that drew
+                // it; this is the Catalogue's header, verbatim.
+                if (_index == 0) _searchHeader(),
                 Expanded(
                   child: IndexedStack(
                     index: _index,
@@ -1930,20 +2056,7 @@ class _HomeShellState extends State<HomeShell> {
                 ),
               // ── Search + chips: storefront only (index 0) ─────────────────
               shellStaffChrome(isAdmin), // CHANGE #1017
-              if (_index == 0)
-                _DesktopSearchRow(
-                  controller: _searchCtrl,
-                  focusNode: _searchFocus,
-                  isLoading: _searchLoading,
-                  onSearch: _handleDesktopSearch,
-                  onScrollToResults: () => setState(() => _scrollTrigger++),
-                ),
-              if (_index == 0)
-                _MobileCategoryChips(
-                  meta: _desktopMeta,
-                  selected: _category,
-                  onCategoryTap: (key) => _selectCategory(key),
-                ),
+              if (_index == 0) _searchHeader(),
               Expanded(
                 child: NotificationListener<ScrollNotification>(
                   onNotification: (n) {

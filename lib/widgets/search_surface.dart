@@ -1,11 +1,14 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import '../data/medicine_repository.dart';
 import '../design_tokens.dart';
 import '../models/search_page.dart';
 import 'product_row_card.dart';
 import 'scan_mic_search_controls.dart';
+import 'search_typeahead.dart';
 
 /// CMD #1906 — the ONE search surface, drawn the same way on Home and on the
 /// Catalogue.
@@ -245,7 +248,7 @@ class SearchFilterChips extends StatelessWidget {
         padding: EdgeInsets.fromLTRB(
             Ds.space.x16, Ds.space.x4, Ds.space.x16, Ds.space.x12),
         itemCount: children.length,
-        separatorBuilder: (_, __) => SizedBox(width: Ds.space.x8),
+        separatorBuilder: (_, _) => SizedBox(width: Ds.space.x8),
         itemBuilder: (_, i) => children[i],
       ),
     );
@@ -549,7 +552,7 @@ class SearchResultsView extends StatelessWidget {
           physics: physics ?? const NeverScrollableScrollPhysics(),
           padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
           itemCount: payload.items.length,
-          separatorBuilder: (_, __) => SizedBox(height: Ds.space.x12),
+          separatorBuilder: (_, _) => SizedBox(height: Ds.space.x12),
           itemBuilder: (context, i) => ProductRowCard(
             key: ValueKey(payload.items[i].id),
             product: payload.items[i],
@@ -654,4 +657,209 @@ class SearchDebouncer {
 
   void cancel() => _timer?.cancel();
   void dispose() => _timer?.cancel();
+}
+
+/// CMD #1906 — THE search header, and the only one in the app.
+///
+/// Home used to wear a solid `Ds.c.brand` band behind its field and its chips
+/// while the Catalogue wore a white header with a grey field: same app, two
+/// headers, two behaviours. This is ONE component — white ground, grey rounded
+/// field, the backend's placeholder, the suggestion panel, the backend's own
+/// filter chips in the backend's own order, and the recent strip — mounted by
+/// both screens so they cannot drift apart again.
+///
+/// It owns the typing machinery (the suggestion controller and the debounce)
+/// because that is chrome, not state a screen should have to carry. What it
+/// never owns is the SEARCH: the query, the filters and the page live in the
+/// screen's [SearchQueryState] and travel in the URL.
+class SearchChrome extends StatefulWidget {
+  const SearchChrome({
+    super.key,
+    required this.controller,
+    required this.focusNode,
+    required this.hasQuery,
+    required this.onSubmit,
+    required this.onFilterPick,
+    required this.onClear,
+    this.payload,
+    this.isLoading = false,
+    this.trailing,
+    this.onRecentCleared,
+    this.repo,
+  });
+
+  /// The live `search_page()` answer, when the screen has one. Its filter
+  /// groups and recent strip are what the header draws, so the chips above the
+  /// list and the list itself can never be two different answers.
+  final SearchPagePayload? payload;
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final bool hasQuery;
+  final bool isLoading;
+  final Widget? trailing;
+  final void Function(String query) onSubmit;
+  final void Function(SearchFilterGroup group, SearchOption option) onFilterPick;
+  final VoidCallback onClear;
+  final VoidCallback? onRecentCleared;
+  final MedicineRepository? repo;
+
+  @override
+  State<SearchChrome> createState() => _SearchChromeState();
+}
+
+class _SearchChromeState extends State<SearchChrome> {
+  final SearchSuggestController _suggest = SearchSuggestController();
+  final SearchDebouncer _debounce = SearchDebouncer();
+  late final MedicineRepository _repo = widget.repo ?? MedicineRepository();
+
+  /// The idle chrome: what the header shows before anything has been searched.
+  /// Loaded here rather than by every screen, so a screen that mounts the
+  /// header gets the chips and the recent strip for free.
+  SearchPagePayload? _chrome;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadChrome();
+  }
+
+  @override
+  void dispose() {
+    _debounce.cancel();
+    _suggest.dispose();
+    super.dispose();
+  }
+
+  /// Best-effort, cache-first (CHANGE #497's instant chip row, carried over):
+  /// the last chrome this device saw paints immediately, then the live one
+  /// replaces it. A failed refresh never wipes the row back to blank.
+  Future<void> _loadChrome() async {
+    try {
+      final cached = await _repo.cachedSearchChrome();
+      if (cached != null && mounted && _chrome == null) {
+        setState(() => _chrome = cached);
+      }
+    } catch (_) {}
+    try {
+      final p = await _repo.searchPage(SearchQueryState.blank);
+      if (!mounted) return;
+      setState(() => _chrome = p);
+    } catch (_) {
+      // Whatever the cache painted stays; never chips this file invented.
+    }
+  }
+
+  void _submit(String q) {
+    _suggest.close();
+    _debounce.cancel();
+    widget.onSubmit(q);
+  }
+
+  /// Every keystroke: the suggestion panel asks the backend, and nothing else
+  /// happens until the shopper submits or taps a suggestion.
+  void _changed(String v) {
+    _suggest.onQueryChanged(v);
+    if (v.trim().isEmpty && widget.hasQuery) widget.onClear();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = widget.payload ?? _chrome;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SearchHeaderBar(
+          controller: widget.controller,
+          focusNode: widget.focusNode,
+          placeholder: p?.placeholder ?? '',
+          isLoading: widget.isLoading,
+          onChanged: _changed,
+          onSubmit: _submit,
+          onClear: widget.onClear,
+          trailing: widget.trailing,
+        ),
+        // The suggestion popup, from the SAME `search_suggest()` both screens
+        // call. Tapping a row searches the BACKEND's query for it, which for a
+        // Hindi word is the salt and not the word.
+        AnimatedBuilder(
+          animation: _suggest,
+          builder: (_, _) => _suggest.isOpen
+              ? Padding(
+                  padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+                  child: SearchSuggestions(
+                    payload: _suggest.payload,
+                    onPick: (q) {
+                      widget.controller.text = q;
+                      _submit(q);
+                    },
+                  ),
+                )
+              : const SizedBox.shrink(),
+        ),
+        SearchFilterChips(
+          filters: p?.filters ?? SearchFilters.empty,
+          showSheetGroups: widget.hasQuery,
+          onPick: widget.onFilterPick,
+        ),
+        SearchRecentStrip(
+          recent: p?.recent ?? SearchRecent.empty,
+          onPick: (q) {
+            widget.controller.text = q;
+            _submit(q);
+          },
+          onClear: () async {
+            await _repo.clearRecentSearches();
+            if (!mounted) return;
+            setState(() => _chrome = _chrome?.withoutRecent());
+            widget.onRecentCleared?.call();
+          },
+        ),
+      ],
+    );
+  }
+}
+
+/// CHANGE #440, moved here by CMD #1906 — "type anywhere to search".
+///
+/// Pressing a letter or a digit with no text field focused seeds the search box
+/// with that character and submits, the way Gmail and YouTube do. It lived in
+/// the shell, where it was the only piece of search machinery left in a file
+/// whose one job is boot and routing; it belongs with the field it types into.
+///
+/// [enabled] is the shell's own verdict — desktop web, storefront tab, nothing
+/// open on top — because only the shell knows that.
+bool searchTypeAnywhere(
+  KeyEvent event, {
+  required bool enabled,
+  required TextEditingController controller,
+  required FocusNode focusNode,
+  required void Function(String query) onSubmit,
+}) {
+  if (!enabled) return false;
+  if (event is! KeyDownEvent) return false;
+  if (focusNode.hasFocus) return false;
+
+  final primary = FocusManager.instance.primaryFocus;
+  if (primary != null && primary.context?.widget is EditableText) return false;
+
+  final keys = HardwareKeyboard.instance.logicalKeysPressed;
+  final hasModifier = keys.contains(LogicalKeyboardKey.controlLeft) ||
+      keys.contains(LogicalKeyboardKey.controlRight) ||
+      keys.contains(LogicalKeyboardKey.metaLeft) ||
+      keys.contains(LogicalKeyboardKey.metaRight) ||
+      keys.contains(LogicalKeyboardKey.altLeft) ||
+      keys.contains(LogicalKeyboardKey.altRight);
+  if (hasModifier) return false;
+
+  final ch = event.character;
+  if (ch == null || ch.isEmpty) return false;
+  if (!RegExp(r'^[a-zA-Z0-9]$').hasMatch(ch)) return false;
+
+  focusNode.requestFocus();
+  controller.text = controller.text + ch;
+  controller.selection =
+      TextSelection.fromPosition(TextPosition(offset: controller.text.length));
+  onSubmit(controller.text);
+  return true;
 }

@@ -93,7 +93,6 @@ import 'orders_screen.dart';
 import '../services/pos_api.dart'; // CMD #411 — pos_entry() at boot
 import '../services/customer_nav.dart'; // #630 — the bottom bar registry
 import 'pharmacy/pos_screen.dart'; // CMD #411 — the pharmacy counter
-import '../widgets/scan_mic_search_controls.dart'; // #409 — used by the shell part files
 import '../services/pharmacy_stock_api.dart'; // CMD #412 — pharmacy_stock_entry() at boot
 import 'pharmacy/pharmacy_vault_screen.dart'; // CMD #423 — /admin/go/pharmacy_vault
 import 'pharmacy/pharmacy_stock_screen.dart'; // CMD #412 — the pharmacy's shelf
@@ -283,8 +282,6 @@ class _HomeShellState extends State<HomeShell> {
   /// are drawn from it, so the filters above the list and the list itself can
   /// never be two different answers.
   SearchPagePayload? _searchPayload;
-  final SearchSuggestController _suggest = SearchSuggestController();
-  final SearchDebouncer _searchDebounce = SearchDebouncer();
   // When true, the storefront shows the full product grid for 'All' (the
   // "Show all products" / "Browse catalogue" target) instead of the home feed.
   bool _browseAll = false;
@@ -345,11 +342,6 @@ class _HomeShellState extends State<HomeShell> {
     kOpenCartRequest.addListener(_onOpenCartRequested);
     _initFromUrl();
     listenPopState(_applyPath);
-    // CMD #1906 — the header's chip row and recent strip come out of the SAME
-    // payload as the rows. With no query yet there are no rows, so this asks
-    // for the chrome alone: `search_page('')` skips the ranking pass entirely
-    // and answers with the filter set, the recent strip and the empty state.
-    _loadSearchChrome();
     // CHANGE #298 — FCM. Started after the first frame so a Firebase failure
     // can never sit in front of the shell's own build (BOOT RESILIENCE RULE);
     // PushService itself swallows every error for the same reason.
@@ -1416,49 +1408,27 @@ class _HomeShellState extends State<HomeShell> {
     if (mounted) setState(() {});
   }
 
-  // CHANGE #440: pressing any letter/number key with no text field focused
-  // (desktop web, storefront tab only) focuses the search box and seeds it
-  // with that character, like Gmail/YouTube search-anywhere.
+  /// CHANGE #440 — type-anywhere search. The shell decides WHETHER (desktop
+  /// web, storefront tab, nothing open on top of it); [searchTypeAnywhere]
+  /// does the typing, next to the field it types into.
   bool _globalKeyHandler(KeyEvent event) {
-    if (!kIsWeb) return false;
-    if (event is! KeyDownEvent) return false;
     if (!mounted) return false;
-    // This handler is registered on the global HardwareKeyboard singleton,
-    // so it keeps firing even when a screen/dialog is pushed on top of the
-    // shell (e.g. an admin sub-screen, or a form dialog inside one) — the
-    // storefront search box underneath isn't even visible then, so never
-    // steal keystrokes meant for whatever IS on top.
+    // Registered on the global HardwareKeyboard singleton, so it keeps firing
+    // while a screen or dialog is pushed on top of the shell — never steal
+    // keystrokes meant for whatever IS on top.
     final route = ModalRoute.of(context);
-    if (route != null && !route.isCurrent) return false;
-    // Search box only exists on the storefront tab, and only while no
-    // overlay (cart/login) with its own fields is open on top of it.
-    if (_index != 0 || _cartOpen || _loginOpen) return false;
-    // Desktop layout only — narrow/mobile web layout keeps click-to-search.
-    if (MediaQuery.sizeOf(context).width < 900) return false;
-
-    final primary = FocusManager.instance.primaryFocus;
-    if (primary != null && primary.context?.widget is EditableText) return false;
-    if (_searchFocus.hasFocus) return false;
-
-    final keys = HardwareKeyboard.instance.logicalKeysPressed;
-    final hasModifier = keys.contains(LogicalKeyboardKey.controlLeft) ||
-        keys.contains(LogicalKeyboardKey.controlRight) ||
-        keys.contains(LogicalKeyboardKey.metaLeft) ||
-        keys.contains(LogicalKeyboardKey.metaRight) ||
-        keys.contains(LogicalKeyboardKey.altLeft) ||
-        keys.contains(LogicalKeyboardKey.altRight);
-    if (hasModifier) return false;
-
-    final ch = event.character;
-    if (ch == null || ch.isEmpty) return false;
-    if (!RegExp(r'^[a-zA-Z0-9]$').hasMatch(ch)) return false;
-
-    _searchFocus.requestFocus();
-    _searchCtrl.text = _searchCtrl.text + ch;
-    _searchCtrl.selection =
-        TextSelection.fromPosition(TextPosition(offset: _searchCtrl.text.length));
-    _handleSearchSubmit(_searchCtrl.text);
-    return true;
+    return searchTypeAnywhere(
+      event,
+      enabled: kIsWeb &&
+          (route == null || route.isCurrent) &&
+          _index == 0 &&
+          !_cartOpen &&
+          !_loginOpen &&
+          MediaQuery.sizeOf(context).width >= 900,
+      controller: _searchCtrl,
+      focusNode: _searchFocus,
+      onSubmit: _handleSearchSubmit,
+    );
   }
 
   // Desktop web search trigger — shared by _DesktopSearchRow's onChanged
@@ -1467,8 +1437,6 @@ class _HomeShellState extends State<HomeShell> {
   /// search; clearing the box returns to the browse feed and clears the URL
   /// with it.
   void _handleSearchSubmit(String v) {
-    _suggest.close();
-    _searchDebounce.cancel();
     final q = v.trim();
     if (q.isEmpty) {
       _applySearch(SearchQueryState.blank);
@@ -1479,15 +1447,6 @@ class _HomeShellState extends State<HomeShell> {
     // the catalogue, not that one word.
     _applySearch(_search.copy(query: q, page: 0));
     setState(() => _scrollTrigger++);
-  }
-
-  /// Every keystroke: the suggestion panel asks the backend, and nothing else
-  /// happens until the shopper submits or taps a suggestion.
-  void _handleSearchChanged(String v) {
-    _suggest.onQueryChanged(v);
-    if (v.trim().isEmpty && _search.hasQuery) {
-      _applySearch(SearchQueryState.blank);
-    }
   }
 
   /// One option tap on the shared chip row. The group and the option are the
@@ -1531,100 +1490,6 @@ class _HomeShellState extends State<HomeShell> {
       _cartOpen = false;
       _scrollToTopTrigger++;
     });
-  }
-
-  /// The header's own payload, for the state where nothing has been searched
-  /// yet. Best-effort: a dead call simply leaves the chip row unbuilt, exactly
-  /// as a dead category-count call used to.
-  Future<void> _loadSearchChrome() async {
-    // CHANGE #497's cache-first chip row, carried over: the last chrome this
-    // device saw paints immediately, then the live one replaces it. A failed
-    // refresh never wipes the row back to blank.
-    try {
-      final cached = await _repo.cachedSearchChrome();
-      if (cached != null && mounted && _searchPayload == null) {
-        setState(() => _searchPayload = cached);
-        RenderLog.write('c1906_search_chrome', 'cache=hit');
-      }
-    } catch (_) {}
-    try {
-      final p = await _repo.searchPage(SearchQueryState.blank);
-      if (!mounted || _search.hasQuery) return;
-      setState(() => _searchPayload = p);
-      RenderLog.write('c1906_search_chrome',
-          'groups=${p.filters.groups.length};'
-          'cats=${p.filters.chipRowGroup?.options.length ?? 0};'
-          'recent=${p.recent.has ? p.recent.items.length : 0}');
-    } catch (_) {
-      // Whatever the cache painted stays; never chips this file invented.
-    }
-  }
-
-  /// CMD #1906 — THE search header, and the only one.
-  ///
-  /// Home used to wear a solid `Ds.c.brand` band behind its field and its
-  /// chips while the Catalogue used a white header with a grey field; same
-  /// app, two headers. This is the Catalogue's header, drawn on Home: white
-  /// ground, grey rounded field, outlined grey chips with the selected chip in
-  /// brand green, the backend's placeholder, and the suggestion panel both
-  /// screens now share.
-  ///
-  /// The chip row, the recent strip and the results are all one payload.
-  Widget _searchHeader({Widget? trailing}) {
-    final p = _searchPayload;
-    final filters = p?.filters ?? SearchFilters.empty;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        SearchHeaderBar(
-          controller: _searchCtrl,
-          focusNode: _searchFocus,
-          placeholder:
-              p?.placeholder ?? c('home_shell.search_for_medicines'),
-          isLoading: _searchLoading,
-          onChanged: _handleSearchChanged,
-          onSubmit: _handleSearchSubmit,
-          onClear: () => _applySearch(SearchQueryState.blank),
-          trailing: trailing,
-        ),
-        // The suggestion popup, from the SAME `search_suggest()` the Catalogue
-        // calls. Tapping a row searches the BACKEND's query for it, which for
-        // a Hindi word is the salt and not the word.
-        AnimatedBuilder(
-          animation: _suggest,
-          builder: (_, __) => _suggest.isOpen
-              ? Padding(
-                  padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-                  child: SearchSuggestions(
-                    payload: _suggest.payload,
-                    onPick: (q) {
-                      _suggest.close();
-                      _searchCtrl.text = q;
-                      _handleSearchSubmit(q);
-                    },
-                  ),
-                )
-              : const SizedBox.shrink(),
-        ),
-        SearchFilterChips(
-          filters: filters,
-          showSheetGroups: _search.hasQuery,
-          onPick: _handleFilterPick,
-        ),
-        SearchRecentStrip(
-          recent: p?.recent ?? SearchRecent.empty,
-          onPick: (q) {
-            _searchCtrl.text = q;
-            _handleSearchSubmit(q);
-          },
-          onClear: () async {
-            await _repo.clearRecentSearches();
-            if (mounted && _search.hasQuery) _applySearch(_search, push: false);
-          },
-        ),
-      ],
-    );
   }
 
   @override
@@ -1969,7 +1834,7 @@ class _HomeShellState extends State<HomeShell> {
                 // both screens. The brand band that used to sit behind the
                 // field and the chips is gone with the two widgets that drew
                 // it; this is the Catalogue's header, verbatim.
-                if (_index == 0) _searchHeader(),
+                if (_index == 0) _shellSearchHeader(this),
                 Expanded(
                   child: IndexedStack(
                     index: _index,
@@ -2056,7 +1921,7 @@ class _HomeShellState extends State<HomeShell> {
                 ),
               // ── Search + chips: storefront only (index 0) ─────────────────
               shellStaffChrome(isAdmin), // CHANGE #1017
-              if (_index == 0) _searchHeader(),
+              if (_index == 0) _shellSearchHeader(this),
               Expanded(
                 child: NotificationListener<ScrollNotification>(
                   onNotification: (n) {

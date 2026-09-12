@@ -316,6 +316,24 @@ class SearchPagePayload {
         paging: next.paging,
         items: [...items, ...next.items],
       );
+
+  /// The same payload with the recent strip emptied. "Clear" is answered by
+  /// the backend (search_recent_clear), but the strip must go the moment it is
+  /// tapped rather than on the next fetch.
+  SearchPagePayload withoutRecent() => SearchPagePayload(
+        ok: ok,
+        query: query,
+        hasQuery: hasQuery,
+        placeholder: placeholder,
+        headerLabel: headerLabel,
+        total: total,
+        filters: filters,
+        filtersActive: filtersActive,
+        empty: empty,
+        recent: SearchRecent.empty,
+        paging: paging,
+        items: items,
+      );
 }
 
 /// The search STATE — query, filters, page — as one value.

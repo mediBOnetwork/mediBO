@@ -191,207 +191,13 @@ class _DesktopHeader extends StatelessWidget {
   }
 }
 
-// ─────────────────────── Desktop search row ─────────────────────────────
-
-class _DesktopSearchRow extends StatefulWidget {
-  final TextEditingController controller;
-  final FocusNode? focusNode;
-  final bool isLoading;
-  final ValueChanged<String> onSearch;
-  final VoidCallback onScrollToResults;
-
-  const _DesktopSearchRow({
-    required this.controller,
-    this.focusNode,
-    required this.isLoading,
-    required this.onSearch,
-    required this.onScrollToResults,
-  });
-
-  @override
-  State<_DesktopSearchRow> createState() => _DesktopSearchRowState();
-}
-
-class _DesktopSearchRowState extends State<_DesktopSearchRow> {
-  Timer? _debounce;
-  bool _hasText = false;
-
-  // CHANGE #790 — the typeahead. The controller owns the debounce and the
-  // round trip; the panel below prints what search_suggest() returned and
-  // nothing else.
-  final SearchSuggestController _suggest = SearchSuggestController();
-
-  @override
-  void initState() {
-    super.initState();
-    widget.controller.addListener(_onControllerChange);
-    _hasText = widget.controller.text.isNotEmpty;
-    _suggest.addListener(_onSuggest);
-  }
-
-  void _onSuggest() {
-    if (mounted) setState(() {});
-  }
-
-  @override
-  void dispose() {
-    widget.controller.removeListener(_onControllerChange);
-    _suggest.removeListener(_onSuggest);
-    _suggest.dispose();
-    _debounce?.cancel();
-    super.dispose();
-  }
-
-  /// A tapped suggestion carries the BACKEND's own query for it — for a Hindi
-  /// word that is the salt, not the word — so the field is filled with that
-  /// and the search runs on it.
-  void _pickSuggestion(String query) {
-    _suggest.close();
-    if (query.isEmpty) return;
-    widget.controller.text = query;
-    _submitNow();
-  }
-
-  void _onControllerChange() {
-    final hasText = widget.controller.text.isNotEmpty;
-    if (hasText != _hasText) setState(() => _hasText = hasText);
-  }
-
-  void _onChanged(String v) {
-    _suggest.onQueryChanged(v);
-    _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 150), () {
-      widget.onSearch(v);
-    });
-  }
-
-  void _submitNow() {
-    _debounce?.cancel();
-    _suggest.close();
-    final text = widget.controller.text;
-    widget.onSearch(text);
-    if (text.trim().length >= 2) widget.onScrollToResults();
-    FocusManager.instance.primaryFocus?.unfocus();
-  }
-
-  void _clearSearch() {
-    _debounce?.cancel();
-    _suggest.close();
-    widget.controller.clear();
-    widget.onSearch('');
-    FocusManager.instance.primaryFocus?.unfocus();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      // CHANGE #274 — the desktop search sits on the SAME brand band as the
-      // mobile one and the chip row directly under it. Leaving it on white
-      // while the chips moved onto the band split the header into two
-      // unrelated strips, which is the exact "unfinished" look this command
-      // set out to remove.
-      color: Ds.c.brand,
-      padding: EdgeInsets.symmetric(
-          horizontal: Ds.space.x24, vertical: Ds.space.x12),
-      // CHANGE #790 — the field and its suggestion panel are one column, so
-      // the panel sits directly under the bar at every width instead of being
-      // positioned against a guess.
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-      Container(
-        height: 46,
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(Ds.r.button),
-        ),
-        child: Row(
-          children: [
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 14),
-              child: Icon(Icons.search, color: Color(0xFF9CA3AF), size: 20),
-            ),
-            Expanded(
-              child: TextField(
-                controller: widget.controller,
-                focusNode: widget.focusNode,
-                onChanged: _onChanged,
-                onSubmitted: (_) => _submitNow(),
-                textInputAction: TextInputAction.search,
-                autocorrect: false,
-                enableSuggestions: false,
-                keyboardType: TextInputType.text,
-                style: const TextStyle(fontSize: 14, color: Brand.ink),
-                decoration: InputDecoration(
-                  border: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                  hintText: c('home_shell.search_for_medicines'),
-                  hintStyle: const TextStyle(color: Brand.inkMuted, fontSize: 14),
-                  isDense: true,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 14),
-                  filled: false,
-                ),
-              ),
-            ),
-            if (widget.isLoading)
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 10),
-                child: SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: Brand.green),
-                ),
-              )
-            else if (_hasText)
-              IconButton(
-                onPressed: _clearSearch,
-                icon: const Icon(Icons.close, size: 18, color: Color(0xFF6B7280)),
-                visualDensity: VisualDensity.compact,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-              ),
-            // CMD #409 — scan and voice, in the search bar itself. Both hand
-            // back a QUERY or a product the backend resolved; neither one
-            // decides anything here.
-            ScanSearchButton(color: Ds.c.textSecondary),
-            VoiceSearchButton(
-              color: Ds.c.textSecondary,
-              onQuery: (q) {
-                widget.controller.text = q;
-                _submitNow();
-              },
-            ),
-            SizedBox(width: Ds.space.x4),
-            GestureDetector(
-              onTap: _submitNow,
-              child: Container(
-                height: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 22),
-                // The parent clips, so the button just fills its corner.
-                decoration: BoxDecoration(color: Ds.c.brand),
-                child: Center(
-                  child: Text(
-                    c('home_shell.search'),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-      if (_suggest.isOpen) ...[
-        SizedBox(height: Ds.space.x8),
-        SearchSuggestions(payload: _suggest.payload, onPick: _pickSuggestion),
-      ],
-      ]),
-    );
-  }
-}
+// CMD #1906 — the desktop search row is gone. `_DesktopSearchRow` was the
+// desktop's OWN search field: its own debounce, its own placeholder, its own
+// chips, inside a solid green band, while the Catalogue had a white header
+// with a grey field. Two search boxes in one app is the drift this command
+// ends. Both breakpoints of the shell now mount `_shellSearchHeader(this)` —
+// the single SearchChrome the Catalogue mounts — so there is nothing left to
+// keep in sync. The component itself lives in lib/widgets/search_surface.dart.
 
 // ─────────────────────── Profile buttons ────────────────────────────────
 
@@ -770,3 +576,30 @@ class _MobileProfileButton extends StatelessWidget {
 }
 
 // ─────────────────────── Admin desktop header ────────────────────────────────
+
+/// CMD #1906 — THE search header, and the only one in the app.
+///
+/// Home used to wear a solid `Ds.c.brand` band behind its field and its chips
+/// while the Catalogue wore a white header with a grey field: same app, two
+/// headers. [SearchChrome] IS the Catalogue's header, and both breakpoints of
+/// the shell now mount that very widget — white ground, grey rounded field,
+/// outlined grey chips with the selected chip in brand green, the backend's
+/// placeholder, the shared suggestion panel and the shared recent strip.
+///
+/// The chip row, the recent strip and the rows are all one `search_page()`
+/// payload, so the filters above the list can never disagree with the list.
+Widget _shellSearchHeader(_HomeShellState s, {Widget? trailing}) => SearchChrome(
+      controller: s._searchCtrl,
+      focusNode: s._searchFocus,
+      payload: s._searchPayload,
+      hasQuery: s._search.hasQuery,
+      isLoading: s._searchLoading,
+      repo: s._repo,
+      trailing: trailing,
+      onSubmit: s._handleSearchSubmit,
+      onFilterPick: s._handleFilterPick,
+      onClear: () => s._applySearch(SearchQueryState.blank),
+      onRecentCleared: () {
+        if (s._search.hasQuery) s._applySearch(s._search, push: false);
+      },
+    );

@@ -65,6 +65,26 @@ export '../customer/order_feedback_sheet.dart' show maybeAskOrderFeedback;
 export '../../widgets/search_typeahead.dart'
     show SearchSuggestions, SearchSuggestController;
 
+/// CMD #1912 — /cart is a real URL.
+///
+/// The cart is a PANEL inside the shell, not a pushed route, so until now the
+/// only way into it was a tap on the pill: nothing in a push notification, a
+/// mail, a shared link or a proof run could land a buyer on their own basket.
+/// The door lives here rather than inline because the shell is held under
+/// 2,000 lines by its own guard — twelve lines in `home_shell.dart` took it to
+/// 2,009 and turned that guard red, which is the exact failure this file was
+/// created to stop (see the header above).
+///
+/// Returns true when the path was ours, so the caller can stop looking. The
+/// panel opens after the first frame for the same reason every other door in
+/// this file does: the navigator does not exist yet while the shell builds.
+bool shellOpenCartOnPath(String path, VoidCallback open) {
+  if (path != '/cart') return false;
+  RenderLog.write('c1912_cart_deeplink', path);
+  WidgetsBinding.instance.addPostFrameCallback((_) => open());
+  return true;
+}
+
 /// The screen a route_key opens, or null when this table does not own it —
 /// null means "keep looking", never "broken", so the shell's own switch and
 /// its backend-worded default branch stay in charge of an unknown route.

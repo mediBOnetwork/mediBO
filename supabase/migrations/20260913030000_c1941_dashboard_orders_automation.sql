@@ -402,9 +402,48 @@ begin
 end
 $function$;
 
+-- The Bundle chip's extra affordance (re-optimise), so the Dashboard never
+-- composes that sentence either.
+create or replace function public.dashboard_automation_action(p_key text)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path to 'public'
+as $function$
+declare
+  v_res jsonb;
+begin
+  if coalesce(public.get_my_role(),'none') not in ('admin','super_admin') then
+    return jsonb_build_object('ok', false, 'error', 'not_authorized',
+                              'message', public._c('access.denied_view'));
+  end if;
+  if p_key <> 'bundle' then
+    return jsonb_build_object('ok', false, 'error', 'unknown_action',
+                              'message', public._c('dashboard_home.automation_failed'),
+                              'automation', public._dashboard_automation());
+  end if;
+  v_res := public.run_fewest_baskets_allocation();
+  if coalesce(v_res->>'status','') <> 'ok' then
+    return jsonb_build_object('ok', false,
+      'error', coalesce(v_res->>'error','unknown'),
+      'message', public._cf('admin_supplier.error_detail',
+                   jsonb_build_object('a', coalesce(v_res->>'error','unknown'))),
+      'automation', public._dashboard_automation());
+  end if;
+  return jsonb_build_object('ok', true,
+    'toast', public._cf('admin_supplier.re_optimized', jsonb_build_object(
+               'a', coalesce(v_res->>'items_assigned','0'),
+               'b', coalesce(v_res->>'baskets','0'))),
+    'automation', public._dashboard_automation());
+end
+$function$;
+
 revoke all on function public._dashboard_automation()                    from public, anon;
 revoke all on function public.dashboard_automation_set(text, boolean)    from public, anon;
+revoke all on function public.dashboard_automation_action(text)          from public, anon;
 grant execute on function public._dashboard_automation()                 to authenticated, service_role;
 grant execute on function public.dashboard_automation_set(text, boolean) to authenticated, service_role;
+grant execute on function public.dashboard_automation_action(text)       to authenticated, service_role;
 
 commit;

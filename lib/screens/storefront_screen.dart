@@ -12,6 +12,7 @@ import '../data/medicine_repository.dart';
 import '../data/storefront_labels.dart';
 import '../design_tokens.dart';
 import '../models/product.dart';
+import '../models/search_page.dart';
 import '../services/ui_copy.dart';
 import '../services/payload_cache.dart';
 import '../theme.dart';
@@ -20,6 +21,8 @@ import '../utils/render_log.dart';
 import '../widgets/animations.dart';
 import '../widgets/compact_product_card.dart';
 import '../widgets/product_row_card.dart';
+import '../widgets/search_surface.dart';
+import 'catalogue_extras.dart';
 import '../widgets/recently_viewed_rail.dart';
 import '../widgets/home_sections_view.dart'; // C637
 
@@ -35,6 +38,22 @@ const double _kMaxContent = 1200;
 class StorefrontScreen extends StatefulWidget {
   final String query;
   final String category;
+
+  /// CMD #1906 — the search state (query, filters, page) this screen is
+  /// showing. It is the SAME value the Catalogue carries and the same value
+  /// that lives in the URL, so moving between the two screens keeps the
+  /// search. When it has no query this screen browses exactly as before.
+  final SearchQueryState search;
+
+  /// Hands the shell the payload this screen just fetched, so the header's
+  /// filter chips and recent strip are drawn from the SAME answer as the rows
+  /// — one round trip, one source of truth for both halves of the surface.
+  final ValueChanged<SearchPagePayload>? onSearchPayload;
+
+  /// A search-state change made from inside the results body — today that is
+  /// the empty state's "Clear all" button, whose `kind` the backend sent.
+  final ValueChanged<SearchQueryState>? onSearchChanged;
+
   final ValueChanged<String> onCategorySelected;
   final ValueChanged<String> onSuggestionTap;
   final MedicineRepository repo;
@@ -70,6 +89,9 @@ class StorefrontScreen extends StatefulWidget {
     super.key,
     required this.query,
     required this.category,
+    this.search = SearchQueryState.blank,
+    this.onSearchPayload,
+    this.onSearchChanged,
     required this.onCategorySelected,
     required this.onSuggestionTap,
     required this.repo,
@@ -105,6 +127,13 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   CatalogMeta? _meta;
   Object? _metaError;
   bool _metaNetworkError = false;
+
+  // CMD #1906 — the ONE search answer, when a query is being shown. Its rows,
+  // its header line, its filters, its empty state and its paging all come from
+  // `search_page()`; nothing about a search is decided in this file.
+  SearchPagePayload? _searchPayload;
+  bool _searchLoadingMore = false;
+  Object? _searchError;
 
   // Paginated product list for the current filter.
   final List<Product> _items = [];
@@ -245,6 +274,10 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   @override
   void didUpdateWidget(StorefrontScreen old) {
     super.didUpdateWidget(old);
+    if (old.search.toQueryString() != widget.search.toQueryString()) {
+      _resetAndLoad();
+      return;
+    }
     if (old.category != widget.category ||
         old.query != widget.query ||
         old.browseAll != widget.browseAll) {
@@ -383,6 +416,12 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   }
 
   Future<void> _resetAndLoad() async {
+    // CMD #1906 — a query goes through search_page(), the one entry the
+    // Catalogue uses too. The browse path below is untouched.
+    if (widget.search.hasQuery) {
+      await _loadSearch();
+      return;
+    }
     // Home does not render the paged grid any more, so fetching a page of
     // storefront_page() for it would be a round trip nobody displays.
     if (_isHome) {
@@ -585,6 +624,71 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     return s.length <= 140 ? s : '${s.substring(0, 140)}…';
   }
 
+  /// CMD #1906 — one search, one RPC, the same one the Catalogue calls.
+  Future<void> _loadSearch() async {
+    final token = ++_loadToken;
+    widget.onLoadingChanged?.call(true);
+    setState(() {
+      _loadingFirst = true;
+      _searchError = null;
+      _searchLoadingMore = false;
+      if (widget.search.page == 0) _searchPayload = null;
+    });
+    try {
+      final p = await widget.repo.searchPage(widget.search);
+      if (token != _loadToken || !mounted) return;
+      setState(() {
+        _searchPayload = p;
+        _loadingFirst = false;
+      });
+      widget.onSearchPayload?.call(p);
+      RenderLog.write(
+        'c1906_search_page',
+        'q=${widget.search.query};rows=${p.items.length};total=${p.total};'
+        'filters=${p.filtersActive};groups=${p.filters.groups.length};'
+        'recent=${p.recent.has ? p.recent.items.length : 0};'
+        'more=${p.paging.hasMore};surface=home',
+      );
+      widget.onLoadingChanged?.call(false);
+    } catch (e) {
+      if (token != _loadToken || !mounted) return;
+      setState(() {
+        _searchError = e;
+        _loadingFirst = false;
+      });
+      widget.onLoadingChanged?.call(false);
+    }
+  }
+
+  /// The next page of the SAME search. The later payload wins for every label
+  /// and count, because the backend recomputed them for the page it answered.
+  Future<void> _loadMoreSearch() async {
+    final current = _searchPayload;
+    if (current == null || _searchLoadingMore || !current.paging.hasMore) return;
+    final token = _loadToken;
+    setState(() => _searchLoadingMore = true);
+    try {
+      final next = await widget.repo
+          .searchPage(SearchQueryState(
+            query: widget.search.query,
+            category: widget.search.category,
+            packTypes: widget.search.packTypes,
+            rx: widget.search.rx,
+            flags: widget.search.flags,
+            sort: widget.search.sort,
+            page: current.paging.nextPage,
+          ));
+      if (token != _loadToken || !mounted) return;
+      setState(() {
+        _searchPayload = current.appended(next);
+        _searchLoadingMore = false;
+      });
+    } catch (_) {
+      if (token != _loadToken || !mounted) return;
+      setState(() => _searchLoadingMore = false);
+    }
+  }
+
   Future<void> _loadSuggestions() async {
     final suggestions = await widget.repo.fetchSuggestions(widget.query);
     if (!mounted) return;
@@ -686,8 +790,76 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       _meta?.categories.map((c) => c.name).toList(growable: false) ??
       const <String>[];
 
+  /// CMD #1906 — the empty state's buttons are the backend's, and so is what
+  /// they do: `clear_filters` clears exactly what the shopper narrowed, and
+  /// `request` opens the SAME request sheet the Catalogue opens, with the same
+  /// `catalogue_extras()` config behind it. Anything else the backend sends in
+  /// a later release is ignored rather than guessed at.
+  Future<void> _onEmptyAction(String kind) async {
+    if (kind == 'clear_filters') {
+      widget.onSearchChanged?.call(widget.search.cleared());
+      return;
+    }
+    if (kind != 'request') return;
+    try {
+      final ex = await widget.repo.catalogueExtras();
+      final cfg = ex['request'];
+      if (!mounted || cfg is! Map) return;
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Ds.c.surface,
+        shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+        builder: (_) =>
+            CatalogueRequestSheet(config: Map<String, dynamic>.from(cfg)),
+      );
+    } catch (_) {
+      // The sheet is an offer, not a promise: a dead config opens nothing
+      // rather than an error the shopper cannot act on.
+    }
+  }
+
+  /// CMD #1906 — the search body, identical to the Catalogue's: the backend's
+  /// header line, [ProductRowCard] rows, its Load more, and its empty state.
+  Widget _searchBody() {
+    if (_loadingFirst && _searchPayload == null) {
+      return const SearchResultsSkeleton();
+    }
+    final p = _searchPayload;
+    if (p == null || (!p.ok && _searchError != null)) {
+      return _InlineError(onRetry: _resetAndLoad);
+    }
+    return SearchResultsView(
+      payload: p,
+      loadingMore: _searchLoadingMore,
+      onOpenProduct: (id) =>
+          Navigator.of(context).pushNamed('/product/$id'),
+      onLoadMore: _loadMoreSearch,
+      onEmptyAction: _onEmptyAction,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    // CMD #1906 — a query is a SEARCH, and a search looks the same here as it
+    // does on the Catalogue: the shared surface, nothing else on the page.
+    if (widget.search.hasQuery) {
+      return MouseRegion(
+        onEnter: (_) { if (kIsWeb) _focusNode.requestFocus(); },
+        child: Focus(
+          focusNode: _focusNode,
+          onKeyEvent: _onKeyEvent,
+          child: Container(
+            color: Ds.c.bg,
+            child: SingleChildScrollView(
+              controller: _scroll,
+              physics: platformScrollPhysics(),
+              child: _searchBody(),
+            ),
+          ),
+        ),
+      );
+    }
     // CHANGE #637 — HOME is now the sectioned feed from storefront_home_v2().
     // Category listing and search results still render _ProductsSection below,
     // unchanged; the only discriminator was always these two values.

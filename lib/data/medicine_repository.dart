@@ -9,6 +9,7 @@ import '../models/product.dart';
 import '../models/product_detail.dart';
 import '../models/product_reviews.dart';
 import '../models/product_compare.dart';
+import '../models/search_page.dart';
 import '../models/storefront_p3.dart';
 import 'storefront_labels.dart';
 
@@ -708,6 +709,57 @@ class MedicineRepository {
       );
     } catch (_) {
       return (items: <Product>[], nextOffset: offset, hasMore: false);
+    }
+  }
+
+  /// CMD #1906 — SEARCH is ONE RPC, for Home and for the Catalogue.
+  ///
+  /// `search_page(q, filters, page)` ranks with the same matcher Home has
+  /// always used, applies the Catalogue's filter vocabulary on top and returns
+  /// every string either screen prints: the placeholder, the header line, the
+  /// filter groups in the order they are drawn, the empty state with its
+  /// buttons, the paging labels and the recent-search strip.
+  ///
+  /// THROWS on a dead call rather than swallowing it: the two screens tell an
+  /// empty result from an unreachable backend, and only the second one keeps
+  /// the last good list on screen.
+  Future<SearchPagePayload> searchPage(
+    SearchQueryState state, {
+    int? pageSize,
+  }) async {
+    final res = await _rpc('search_page', params: {
+      'p_q': state.query,
+      'p_filters': state.toFilters(),
+      'p_page': state.page,
+      'p_page_size': pageSize,
+    });
+    if (res is! Map) return SearchPagePayload.failed;
+    return SearchPagePayload.fromMap(Map<String, dynamic>.from(res));
+  }
+
+  /// CMD #1906 — the catalogue's extras block, which carries the "Request this
+  /// product" form the empty state offers. Home's search opens the SAME sheet,
+  /// so the empty state is one behaviour rather than two.
+  ///
+  /// Best-effort: a dead call returns an empty map and the sheet simply is not
+  /// offered, exactly as it behaves on the Catalogue.
+  Future<Map<String, dynamic>> catalogueExtras() async {
+    try {
+      final res = await _rpc('catalogue_extras');
+      if (res is! Map) return const {};
+      return Map<String, dynamic>.from(res);
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  /// Empties this viewer's recent-search strip. The backend owns the toast it
+  /// answers with; a failure leaves the strip exactly where it was.
+  Future<void> clearRecentSearches() async {
+    try {
+      await _rpc('search_recent_clear');
+    } catch (_) {
+      // The strip is a convenience; a dead call is not worth a banner.
     }
   }
 

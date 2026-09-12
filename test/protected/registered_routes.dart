@@ -6,7 +6,7 @@
 // surface_route INSERTs are in
 // supabase/migrations/20260906060000_c639_triage_loop.sql,
 // supabase/migrations/20260912204000_c1910_conditions_nav.sql and
-// supabase/migrations/20260912120800_payment_alerts_nav.sql; the next
+// supabase/migrations/20260912120000_cmd1929_payment_alerts.sql; the next
 // regeneration after deploy produces this same file.
 //
 // The #639 note, verbatim, because it is the rule: The generator reads

@@ -109,10 +109,17 @@ class CompactProductCard extends StatelessWidget {
   /// measuring the tappable image area).
   static const double cardHeight = tileH;
 
+  /// The frame's hairline, as a named constant: `Border.all` eats it out of
+  /// the box's CONTENT height, so leaving it out of [_frameH] overflowed the
+  /// inner Column by exactly 2 px (one hairline top, one bottom) on the first
+  /// build of this change.
+  static const double _frameBorderW = 1;
+
   /// CMD #1926 — the bordered block: artwork, then the pack-type + ADD row,
   /// with the frame's own bottom padding under it. Everything inside ONE
   /// border, which is the whole point of this change.
-  static const double _frameH = tileH + _gapM + _actionH + _gapL; // 200
+  static const double _frameH =
+      tileH + _gapM + _actionH + _gapL + _frameBorderW * 2; // 202
 
   /// The grid's mainAxisExtent and the rail's height. Summed from the parts
   /// above so a change to the card can never silently overflow its container
@@ -277,7 +284,10 @@ class _Frame extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(Rad.card),
-        border: Border.all(color: Brand.border),
+        border: Border.all(
+          color: Brand.border,
+          width: CompactProductCard._frameBorderW,
+        ),
         boxShadow: Ds.elevation.e1,
       ),
       child: Column(

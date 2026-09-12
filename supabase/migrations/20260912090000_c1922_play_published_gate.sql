@@ -317,6 +317,32 @@ begin
     end if;
   end loop;
 
+  -- Play is serving a version we have no row for. That is not a reason to keep
+  -- the prompt pointing at an older build (on 12 Sep production was on 1.3.26
+  -- (41) while app_releases stopped at 1.3.25 (39) — an APK upload had failed,
+  -- so the prompt named a version Play no longer served). Play's own answer is
+  -- the record: adopt it, published, and log where it came from.
+  if v_codes is not null and v_status is not null then
+    insert into app_releases(platform, version_name, version_code, play_track,
+                             play_status, rollout_pct, submitted_at, play_published_at,
+                             play_checked_at)
+    select v_plat, coalesce(nullif(v_name,''), c::text), c, v_gate, v_status, v_roll, now(),
+           case when v_status = 'published' then now() end, now()
+      from unnest(v_codes) c
+     where not exists (select 1 from app_releases a
+                        where a.platform = v_plat and a.version_code = c);
+    if found then
+      insert into app_release_play_log(platform, version_name, version_code, track,
+                                       from_status, to_status, rollout_pct, source, note)
+      select v_plat, coalesce(nullif(v_name,''), c::text), c, v_gate, null, v_status, v_roll,
+             coalesce(p_source,'poller'), 'Play reported a release mediBO had no row for'
+        from unnest(v_codes) c
+       where not exists (select 1 from app_release_play_log l
+                          where l.platform = v_plat and l.version_code = c);
+      v_changes := v_changes + 1;
+    end if;
+  end if;
+
   return jsonb_build_object(
     'ok', true,
     'gate_track', v_gate,

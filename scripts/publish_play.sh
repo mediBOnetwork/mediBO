@@ -210,6 +210,20 @@ refresh_tracks() {
     jq -c '{p_tracks:.tracks}' "$o" > "$o.rpc"
     "$DEVCMD" rpc play_tracks_write "$(cat "$o.rpc")" >/dev/null 2>&1
     log "track state refreshed: $(jq -rc '[.tracks[]|"\(.track)=\(.version_codes|join(","))"]|join(" ")' "$o")"
+    # CHANGE #1922 — this same read is the in-app update prompt's ONLY switch.
+    # app_release_publish() (further down) records an upload as SUBMITTED; the
+    # prompt keeps offering the version Play actually serves until THIS call
+    # says the production track has published a newer one. The RPC is on
+    # PRODUCTION (where app_releases and app_update_check live), refuses an
+    # empty payload, and writes every status change to app_release_play_log.
+    # The timer runs this every ~2 min, so review clearing is picked up within
+    # one interval with no extra cron.
+    sync=$("$DEVCMD" rpc app_release_play_sync "$(cat "$o.rpc")" 2>/dev/null || true)
+    if [ "$(jq -r '.ok // false' <<<"$sync" 2>/dev/null)" = "true" ]; then
+      log "update prompt: offering $(jq -r '.published_name // "nothing"' <<<"$sync") ($(jq -r '.published_code // "-"' <<<"$sync")) · production=$(jq -r '.live_status // "?"' <<<"$sync") · $(jq -r '.transitions // 0' <<<"$sync") transition(s)"
+    else
+      log "WARNING: app_release_play_sync did not apply — $(jq -rc '.' <<<"$sync" 2>/dev/null | head -c 160)"
+    fi
     rm -f "$o.rpc"
   else
     jq -nc --arg err "$(cat "$e")" '{p_tracks:[],p_error:$err}' > "$o.rpc"

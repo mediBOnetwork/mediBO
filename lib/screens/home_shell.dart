@@ -537,6 +537,7 @@ class _HomeShellState extends State<HomeShell> {
     // need to: an unknown path already falls through to this shell, which
     // reads the URL here. The screen is pushed after the first frame because
     // the navigator does not exist yet inside initState.
+    if (shellOpenCartOnPath(path, () => mounted ? _openCart() : null)) return;
     if (path == '/admin/order-alerts') {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _handleAdminNav('order_alerts');

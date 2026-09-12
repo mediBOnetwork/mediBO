@@ -1456,6 +1456,17 @@ class _ItemListState extends State<_ItemList> {
     // scroll-to target can be tagged as it is built.
     final firstUnavailable = filtered.indexWhere((l) => l.unavailable);
 
+    // CMD #1912 — the render-log proof for this rebuild. A screenshot shows
+    // one cart; this says how many compact rows the list actually painted,
+    // how many carried a backend row payload at all, and how many of those
+    // are still waiting on a supplier quote. Every number is read off the
+    // payload — the screen counts what it was handed, it decides nothing.
+    RenderLog.write(
+        'c1912_cart_rows',
+        'rows=${filtered.length}'
+        ';payload=${filtered.where((l) => l.row.isNotEmpty).length}'
+        ';pending=${filtered.where((l) => l.rowMap('price_badge')['priced'] == false).length}');
+
     return ListView.builder(
       physics: platformScrollPhysics(),
       controller: _scrollController,

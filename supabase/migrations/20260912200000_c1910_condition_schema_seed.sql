@@ -560,4 +560,26 @@ revoke all on function public.condition_seed_run(text[]) from public, anon, auth
 -- Run it once, here, so the door has products the moment it ships. Every
 -- condition it touches is stamped `seeded_at`, so a replay of this file is a
 -- no-op and an admin's later edits are never overwritten.
-select public.condition_seed_run();
+-- CMD #1929 — the seed pass scans public."MEDICINE" four times and builds a
+-- DISTINCT value set over four more scans. On live that runs past the default
+-- 120 s statement_timeout, and because migration_replay.sh applies this file
+-- with ON_ERROR_STOP the cancel failed the WHOLE live replay: #1929 and #1912
+-- both died here at `canceling statement due to statement timeout`, with the
+-- schema above already applied and only the seed outstanding.
+--
+-- The pass is a single statement, so a cancel rolls it back whole and leaves
+-- `seeded_at` null — nothing is ever half-seeded. So it is given room, and if
+-- it still cannot finish it DEFERS with a warning instead of taking every
+-- other command's deploy down with it. The conditions simply stay unseeded
+-- until `condition_seed_run()` is called again; an admin's rows are untouched
+-- either way.
+set statement_timeout = '600s';
+
+do $seed$
+begin
+  perform public.condition_seed_run();
+exception when others then
+  raise warning 'condition_seed_run deferred (%) — conditions stay unseeded (seeded_at null); re-run select public.condition_seed_run();', sqlerrm;
+end $seed$;
+
+reset statement_timeout;

@@ -700,14 +700,27 @@ class CatEmptyAction {
   final bool has;
   final String kind;
   final String label;
-  const CatEmptyAction({required this.has, required this.kind, required this.label});
 
-  static CatEmptyAction fromMap(Object? raw) {
+  /// CMD #1905 — 'primary' | 'secondary', the backend's own word for how
+  /// loudly this way out should be offered. It is never inferred from the
+  /// kind: when filters are on, Clear is the primary and Request the quiet
+  /// one, and only the payload knows that.
+  final String tone;
+
+  const CatEmptyAction({
+    required this.has,
+    required this.kind,
+    required this.label,
+    this.tone = 'primary',
+  });
+
+  static CatEmptyAction fromMap(Object? raw, {String tone = 'primary'}) {
     final m = raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
     return CatEmptyAction(
       has: m['has'] == true,
       kind: (m['kind'] ?? '').toString(),
       label: (m['label'] ?? '').toString(),
+      tone: (m['tone'] ?? tone).toString(),
     );
   }
 }
@@ -719,11 +732,21 @@ class CatEmptyState {
   final CatEmptyAction action;
   final CatEmptyAction clear;
 
+  /// CMD #1905 — the ways out IN THE ORDER THEY ARE DRAWN. "Clear filters"
+  /// comes first when filters are on, because the shopper's own filter is the
+  /// likelier reason the scope is blank; the screen does not re-decide that.
+  /// A payload from before this change carries no `buttons`, so the list is
+  /// rebuilt as `action` then `clear` — exactly the order that payload was
+  /// drawn in. A compat shim reproduces the old behaviour; it never invents
+  /// the new one on a payload that did not ask for it.
+  final List<CatEmptyAction> buttons;
+
   const CatEmptyState({
     required this.label,
     required this.hint,
     required this.action,
     required this.clear,
+    this.buttons = const [],
   });
 
   static const CatEmptyState none = CatEmptyState(
@@ -735,11 +758,24 @@ class CatEmptyState {
   static CatEmptyState fromMap(Object? raw, {String fallbackLabel = ''}) {
     final m = raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
     final label = (m['label'] ?? '').toString();
+    final action = CatEmptyAction.fromMap(m['action']);
+    final clear = CatEmptyAction.fromMap(m['clear'], tone: 'secondary');
+    final sent = (m['buttons'] as List<dynamic>?)
+        ?.whereType<Map>()
+        .map((e) => CatEmptyAction.fromMap(
+            {...Map<String, dynamic>.from(e), 'has': true}))
+        .where((b) => b.label.isNotEmpty)
+        .toList(growable: false);
     return CatEmptyState(
       label: label.isEmpty ? fallbackLabel : label,
       hint: (m['hint'] ?? '').toString(),
-      action: CatEmptyAction.fromMap(m['action']),
-      clear: CatEmptyAction.fromMap(m['clear']),
+      action: action,
+      clear: clear,
+      buttons: sent ??
+          [
+            if (action.has) action,
+            if (clear.has) clear,
+          ],
     );
   }
 }

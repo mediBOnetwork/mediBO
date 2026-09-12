@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 import '../app_state.dart';
 import '../design_tokens.dart';
 import '../models/product.dart';
-import 'compact_product_card.dart' show showPriceLockedSheet;
+import 'compact_product_card.dart' show AvailabilityLine, showPriceLockedSheet;
 import 'product_image.dart';
 
 /// CMD #1903 — ONE row per product, and the one card every list draws.
@@ -76,8 +76,17 @@ class ProductRowCard extends StatefulWidget {
   static const double _metaH = 16;
 
   /// The row's tallest column.
+  /// CMD #1926 — the catalogue/search row carries the SAME zone availability
+  /// line as the storefront card, from the same payload block, so the two
+  /// surfaces can never word one verdict two ways.
   static double get contentHeight =>
-      _nameH + Ds.space.x4 + _metaH + Ds.space.x4 + _metaH;
+      _nameH +
+      Ds.space.x4 +
+      _metaH +
+      Ds.space.x4 +
+      _metaH +
+      Ds.space.x4 +
+      _metaH;
 
   /// The row's own laid-out height: the tallest column plus the card's
   /// padding.
@@ -112,20 +121,24 @@ class _ProductRowCardState extends State<ProductRowCard> {
     if (messenger == null) return;
     messenger
       ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(
-        content: Text(widget.addedLabel,
-            style: Ds.t.body.copyWith(color: Ds.c.surface)),
-        backgroundColor: Ds.c.text,
-        behavior: SnackBarBehavior.floating,
-        duration: Ds.motion.standard * 20,
-        action: widget.undoLabel.isEmpty
-            ? null
-            : SnackBarAction(
-                label: widget.undoLabel,
-                textColor: Ds.c.surface,
-                onPressed: () => cart.decrementId(widget.product.id),
-              ),
-      ));
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            widget.addedLabel,
+            style: Ds.t.body.copyWith(color: Ds.c.surface),
+          ),
+          backgroundColor: Ds.c.text,
+          behavior: SnackBarBehavior.floating,
+          duration: Ds.motion.standard * 20,
+          action: widget.undoLabel.isEmpty
+              ? null
+              : SnackBarAction(
+                  label: widget.undoLabel,
+                  textColor: Ds.c.surface,
+                  onPressed: () => cart.decrementId(widget.product.id),
+                ),
+        ),
+      );
   }
 
   /// The pack line: the two pack strings the backend already worded, joined by
@@ -209,8 +222,9 @@ class _ProductRowCardState extends State<ProductRowCard> {
                           p.manufacturer,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style:
-                              Ds.t.caption.copyWith(color: Ds.c.textSecondary),
+                          style: Ds.t.caption.copyWith(
+                            color: Ds.c.textSecondary,
+                          ),
                         ),
                       ),
                       SizedBox(height: Ds.space.x4),
@@ -222,9 +236,19 @@ class _ProductRowCardState extends State<ProductRowCard> {
                                 pack,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: Ds.t.caption
-                                    .copyWith(color: Ds.c.textSecondary),
+                                style: Ds.t.caption.copyWith(
+                                  color: Ds.c.textSecondary,
+                                ),
                               ),
+                      ),
+                      SizedBox(height: Ds.space.x4),
+                      // CMD #1926 — "Available · Raipur Zone" / "Not available
+                      // · Raipur Zone", printed verbatim in the backend's tone.
+                      // The slot is reserved whether or not a line arrived, so
+                      // one row is never a different height from the next.
+                      SizedBox(
+                        height: ProductRowCard._metaH,
+                        child: AvailabilityLine(availability: p.availability),
                       ),
                     ],
                   ),
@@ -278,7 +302,8 @@ class _RowPrice extends StatelessWidget {
     final p = price;
     if (p == null) {
       return SizedBox(
-          height: ProductRowCard._mrpH + ProductRowCard._priceH + Ds.space.x4);
+        height: ProductRowCard._mrpH + ProductRowCard._priceH + Ds.space.x4,
+      );
     }
     final sale = Text(
       p.priceDisplay,
@@ -322,20 +347,23 @@ class _RowPrice extends StatelessWidget {
           child: p.priceDisplay.isEmpty
               ? const SizedBox.shrink()
               : (p.priceLocked
-                  ? InkWell(
-                      onTap: () => showPriceLockedSheet(context, p),
-                      borderRadius: Ds.r.rChip,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Flexible(child: sale),
-                          SizedBox(width: Ds.space.x4),
-                          Icon(Icons.lock_outline_rounded,
-                              size: Ds.space.x12, color: Ds.c.brand),
-                        ],
-                      ),
-                    )
-                  : Align(alignment: Alignment.centerRight, child: sale)),
+                    ? InkWell(
+                        onTap: () => showPriceLockedSheet(context, p),
+                        borderRadius: Ds.r.rChip,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Flexible(child: sale),
+                            SizedBox(width: Ds.space.x4),
+                            Icon(
+                              Icons.lock_outline_rounded,
+                              size: Ds.space.x12,
+                              color: Ds.c.brand,
+                            ),
+                          ],
+                        ),
+                      )
+                    : Align(alignment: Alignment.centerRight, child: sale)),
         ),
       ],
     );
@@ -368,8 +396,11 @@ class _RowAddButton extends StatelessWidget {
         borderRadius: Ds.r.rButton,
         child: Center(
           child: ticked
-              ? Icon(Icons.check_rounded,
-                  size: Ds.space.x16, color: Ds.c.surface)
+              ? Icon(
+                  Icons.check_rounded,
+                  size: Ds.space.x16,
+                  color: Ds.c.surface,
+                )
               : Text(
                   label,
                   maxLines: 1,
@@ -391,25 +422,27 @@ class _RowQtyBar extends StatelessWidget {
   final int qty;
   final VoidCallback onMinus;
   final VoidCallback onPlus;
-  const _RowQtyBar(
-      {required this.qty, required this.onMinus, required this.onPlus});
+  const _RowQtyBar({
+    required this.qty,
+    required this.onMinus,
+    required this.onPlus,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: BoxDecoration(
-        color: Ds.c.brand,
-        borderRadius: Ds.r.rButton,
-      ),
+      decoration: BoxDecoration(color: Ds.c.brand, borderRadius: Ds.r.rButton),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           _Step(icon: Icons.remove_rounded, onTap: onMinus),
-          Text('$qty',
-              style: Ds.t.caption.copyWith(
-                color: Ds.c.surface,
-                fontWeight: FontWeight.w700,
-              )),
+          Text(
+            '$qty',
+            style: Ds.t.caption.copyWith(
+              color: Ds.c.surface,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
           _Step(icon: Icons.add_rounded, onTap: onPlus),
         ],
       ),

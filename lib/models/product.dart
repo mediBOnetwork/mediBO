@@ -43,6 +43,21 @@ class Availability {
   final int? bg;
   final int? fg;
 
+  /// CMD #1926 — the ZONE availability line, printed verbatim under the sale
+  /// price on every customer surface.
+  ///
+  /// "Available" for a viewer with no zone (anonymous, or signed in but not an
+  /// approved customer); "Available · Raipur Zone" / "Not available · Raipur
+  /// Zone" for a buyer who has one. The rule, the count, the zone name and the
+  /// wording are all `storefront_availability()`'s in Postgres — the app owns
+  /// none of them. Empty means the payload carried no line (a build from
+  /// before #1926, or an unresolved cart row): render nothing, guess nothing.
+  final String availabilityLabel;
+
+  /// The tone NAME for [availabilityLabel] — 'success' or 'neutral' — resolved
+  /// to a colour by the app's one tone lookup, never by a switch on the text.
+  final String availabilityTone;
+
   const Availability({
     required this.ctaLabel,
     this.ctaShort = '',
@@ -53,6 +68,8 @@ class Availability {
     this.note,
     this.bg,
     this.fg,
+    this.availabilityLabel = '',
+    this.availabilityTone = 'neutral',
   });
 
   /// Parses the `availability` object attached to every storefront/cart row.
@@ -77,6 +94,8 @@ class Availability {
       note: (noteRaw == null || noteRaw.isEmpty) ? null : noteRaw,
       bg: _argb(c['bg']),
       fg: _argb(c['fg']),
+      availabilityLabel: (m['availability_label'] ?? '').toString(),
+      availabilityTone: (m['availability_tone'] ?? 'neutral').toString(),
     );
   }
 
@@ -92,18 +111,20 @@ class Availability {
   }
 
   Map<String, dynamic> toJson() => {
-        'cta_label': ctaLabel,
-        'cta_short': ctaShort,
-        'can_add': canAdd,
-        'is_available': isAvailable,
-        'gated': gated,
-        'unresolved': unresolved,
-        if (note != null) 'note': note,
-        'colors': {
-          if (bg != null) 'bg': _hex(bg!),
-          if (fg != null) 'fg': _hex(fg!),
-        },
-      };
+    'cta_label': ctaLabel,
+    'cta_short': ctaShort,
+    'can_add': canAdd,
+    'is_available': isAvailable,
+    'gated': gated,
+    'unresolved': unresolved,
+    if (note != null) 'note': note,
+    'availability_label': availabilityLabel,
+    'availability_tone': availabilityTone,
+    'colors': {
+      if (bg != null) 'bg': _hex(bg!),
+      if (fg != null) 'fg': _hex(fg!),
+    },
+  };
 
   static String _hex(int argb) =>
       '#${(argb & 0xFFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}';
@@ -272,7 +293,8 @@ class Pricing {
       schemeBadge: PricingChip.fromMap(m['scheme_badge']),
       marginChip: PricingChip.fromMap(m['margin_chip']),
       gst: GstBreakup.fromMap(m['gst']),
-      cardPrice: CardPrice.fromMap(m['card_price']) ??
+      cardPrice:
+          CardPrice.fromMap(m['card_price']) ??
           CardPrice.fallbackFrom(
             hasPrice: m['has_price'] == true,
             priceDisplay: (m['price_display'] ?? '').toString(),
@@ -288,33 +310,33 @@ class Pricing {
   }
 
   Map<String, dynamic> toJson() => {
-        'has_price': hasPrice,
-        'price_display': priceDisplay,
-        'mrp_display': mrpDisplay,
-        'discount_label': discountLabel,
-        'has_discount': hasDiscount,
-        'sale_price': salePrice,
-        'mrp': mrp,
-        'price_caption': priceCaption,
-        'ribbon_top': ribbonTop,
-        'ribbon_bottom': ribbonBottom,
-        'margin_label': marginLabel,
-        'display_mode': displayMode,
-        'has_struck_mrp': hasStruckMrp,
-        'has_ptr': hasPtr,
-        'ptr_display': ptrDisplay,
-        'ptr_caption': ptrCaption,
-        'has_net': hasNet,
-        'net_display': netDisplay,
-        'net_caption': netCaption,
-        'scheme_text': schemeText,
-        'has_scheme': hasSchemeBadge,
-        'scheme_badge': schemeBadge?.toJson(),
-        'margin_chip': marginChip?.toJson(),
-        'gst': gst?.toJson(),
-        'card_price': cardPrice?.toJson(),
-        'price_locked': priceLocked,
-      };
+    'has_price': hasPrice,
+    'price_display': priceDisplay,
+    'mrp_display': mrpDisplay,
+    'discount_label': discountLabel,
+    'has_discount': hasDiscount,
+    'sale_price': salePrice,
+    'mrp': mrp,
+    'price_caption': priceCaption,
+    'ribbon_top': ribbonTop,
+    'ribbon_bottom': ribbonBottom,
+    'margin_label': marginLabel,
+    'display_mode': displayMode,
+    'has_struck_mrp': hasStruckMrp,
+    'has_ptr': hasPtr,
+    'ptr_display': ptrDisplay,
+    'ptr_caption': ptrCaption,
+    'has_net': hasNet,
+    'net_display': netDisplay,
+    'net_caption': netCaption,
+    'scheme_text': schemeText,
+    'has_scheme': hasSchemeBadge,
+    'scheme_badge': schemeBadge?.toJson(),
+    'margin_chip': marginChip?.toJson(),
+    'gst': gst?.toJson(),
+    'card_price': cardPrice?.toJson(),
+    'price_locked': priceLocked,
+  };
 }
 
 /// CHANGE #174 — a small coloured chip the backend fully specifies: the words
@@ -395,17 +417,16 @@ class GstBreakup {
   }
 
   Map<String, dynamic> toJson() => {
-        'title': title,
-        'pct_display': pctDisplay,
-        'taxable_display': taxableDisplay,
-        'amount_display': amountDisplay,
-        'net_display': netDisplay,
-        'lines': [
-          for (final l in lines) {'label': l.label, 'value': l.value},
-        ],
-      };
+    'title': title,
+    'pct_display': pctDisplay,
+    'taxable_display': taxableDisplay,
+    'amount_display': amountDisplay,
+    'net_display': netDisplay,
+    'lines': [
+      for (final l in lines) {'label': l.label, 'value': l.value},
+    ],
+  };
 }
-
 
 /// CHANGE #274 — the card's own two-line B2B price block, rendered verbatim.
 ///
@@ -548,8 +569,7 @@ class CardPrice {
   }
 
   /// 0xFF1B7A43 → "ff1b7a43". The cache's own dialect, not a display string.
-  static String _hex(int argb) =>
-      argb.toRadixString(16).padLeft(8, '0');
+  static String _hex(int argb) => argb.toRadixString(16).padLeft(8, '0');
 
   static CardPrice? fromMap(Object? raw) {
     if (raw is! Map) return null;
@@ -560,7 +580,9 @@ class CardPrice {
       mrpDisplay: (m['mrp_display'] ?? '').toString(),
       strikeMrp: m['strike_mrp'] == true,
       // Absent key and false both mean "no trade price for this viewer".
-      hasPtr: m['has_ptr'] == true && (m['ptr_display'] ?? '').toString().isNotEmpty,
+      hasPtr:
+          m['has_ptr'] == true &&
+          (m['ptr_display'] ?? '').toString().isNotEmpty,
       ptrLabel: (m['ptr_label'] ?? '').toString(),
       ptrDisplay: (m['ptr_display'] ?? '').toString(),
       ptrBg: Availability._argb(m['ptr_bg']),
@@ -573,9 +595,10 @@ class CardPrice {
       // prints a sale line. There is deliberately no fallback for the LOCKED
       // shape: an old payload's word would have to be typed here, and the app
       // does not own that word.
-      priceDisplay: (m['price_display'] ??
-              ((m['has_ptr'] == true) ? (m['ptr_display'] ?? '') : ''))
-          .toString(),
+      priceDisplay:
+          (m['price_display'] ??
+                  ((m['has_ptr'] == true) ? (m['ptr_display'] ?? '') : ''))
+              .toString(),
       priceLocked: m['price_locked'] == true,
       saleLabel: (m['sale_label'] ?? '').toString(),
       saleBg: Availability._argb(m['sale_bg']),
@@ -588,27 +611,27 @@ class CardPrice {
   }
 
   Map<String, dynamic> toJson() => {
-        'has_mrp': hasMrp,
-        'mrp_label': mrpLabel,
-        'mrp_display': mrpDisplay,
-        'strike_mrp': strikeMrp,
-        'has_ptr': hasPtr,
-        if (hasPtr) 'ptr_label': ptrLabel,
-        if (hasPtr) 'ptr_display': ptrDisplay,
-        'has_note': hasNote,
-        'note': note,
-        'price_display': priceDisplay,
-        'price_locked': priceLocked,
-        'sale_label': saleLabel,
-        // 8-digit hex, because that is what [Availability._argb] reads back.
-        // Writing the raw int would round-trip to null through the cache.
-        if (saleBg != null) 'sale_bg': _hex(saleBg!),
-        if (saleFg != null) 'sale_fg': _hex(saleFg!),
-        if (priceLocked) 'locked_title': lockedTitle,
-        if (priceLocked) 'locked_note': lockedNote,
-        if (priceLocked) 'locked_cta': lockedCta,
-        if (priceLocked) 'locked_route': lockedRoute,
-      };
+    'has_mrp': hasMrp,
+    'mrp_label': mrpLabel,
+    'mrp_display': mrpDisplay,
+    'strike_mrp': strikeMrp,
+    'has_ptr': hasPtr,
+    if (hasPtr) 'ptr_label': ptrLabel,
+    if (hasPtr) 'ptr_display': ptrDisplay,
+    'has_note': hasNote,
+    'note': note,
+    'price_display': priceDisplay,
+    'price_locked': priceLocked,
+    'sale_label': saleLabel,
+    // 8-digit hex, because that is what [Availability._argb] reads back.
+    // Writing the raw int would round-trip to null through the cache.
+    if (saleBg != null) 'sale_bg': _hex(saleBg!),
+    if (saleFg != null) 'sale_fg': _hex(saleFg!),
+    if (priceLocked) 'locked_title': lockedTitle,
+    if (priceLocked) 'locked_note': lockedNote,
+    if (priceLocked) 'locked_cta': lockedCta,
+    if (priceLocked) 'locked_route': lockedRoute,
+  };
 }
 
 /// A pharmaceutical product sold to business buyers (pharmacies, clinics).
@@ -726,7 +749,8 @@ class Product {
   String get rxLabel => (rx?['label'] ?? '').toString();
   String get rxTitle => (rx?['title'] ?? '').toString();
   String get rxNote => (rx?['note'] ?? '').toString();
-  Map<String, dynamic>? get rxTone => (rx?['tone'] as Map?)?.cast<String, dynamic>();
+  Map<String, dynamic>? get rxTone =>
+      (rx?['tone'] as Map?)?.cast<String, dynamic>();
 
   const Product({
     this.rx,
@@ -765,37 +789,37 @@ class Product {
   /// Returns a copy carrying [availability] — used to graft a cart line's
   /// backend verdict (from `cart_availability`) onto the stored product.
   Product withAvailability(Availability? a) => Product(
-        id: id,
-        name: name,
-        genericName: genericName,
-        manufacturer: manufacturer,
-        category: category,
-        therapeuticClass: therapeuticClass,
-        imageUrl: imageUrl,
-        imageUrls: imageUrls,
-        packSize: packSize,
-        formChip: formChip,
-        packTypeLabel: packTypeLabel,
-        packQtyLabel: packQtyLabel,
-        mrp: mrp,
-        b2bPrice: b2bPrice,
-        gstPercent: gstPercent,
-        moq: moq,
-        stock: stock,
-        buyable: buyable,
-        schedule: schedule,
-        requiresPrescription: requiresPrescription,
-        discount: discount,
-        scheme: scheme,
-        supplierLabel: supplierLabel,
-        supplierCount: supplierCount,
-        availability: a,
-        pricing: pricing,
-        mrpText: mrpText,
-        hasOffer: hasOffer,
-        offerChip: offerChip,
-        rx: rx,
-      );
+    id: id,
+    name: name,
+    genericName: genericName,
+    manufacturer: manufacturer,
+    category: category,
+    therapeuticClass: therapeuticClass,
+    imageUrl: imageUrl,
+    imageUrls: imageUrls,
+    packSize: packSize,
+    formChip: formChip,
+    packTypeLabel: packTypeLabel,
+    packQtyLabel: packQtyLabel,
+    mrp: mrp,
+    b2bPrice: b2bPrice,
+    gstPercent: gstPercent,
+    moq: moq,
+    stock: stock,
+    buyable: buyable,
+    schedule: schedule,
+    requiresPrescription: requiresPrescription,
+    discount: discount,
+    scheme: scheme,
+    supplierLabel: supplierLabel,
+    supplierCount: supplierCount,
+    availability: a,
+    pricing: pricing,
+    mrpText: mrpText,
+    hasOffer: hasOffer,
+    offerChip: offerChip,
+    rx: rx,
+  );
 
   /// CHANGE #287 — read one backend label, honouring the difference between a
   /// key that is ABSENT and one that is EMPTY.
@@ -806,10 +830,10 @@ class Product {
   /// Empty = the backend looked and the catalogue has no such string: print
   /// nothing. Inventing one here is the app deciding wording.
   static String _packLabel(
-          Map<String, dynamic> map, String key, String fallback) =>
-      map.containsKey(key)
-          ? ((map[key] as String?) ?? '').trim()
-          : fallback;
+    Map<String, dynamic> map,
+    String key,
+    String fallback,
+  ) => map.containsKey(key) ? ((map[key] as String?) ?? '').trim() : fallback;
 
   /// CHANGE #637 — one card from `storefront_home_v2()`.
   ///
@@ -907,13 +931,19 @@ class Product {
       packSize: (map['pack_qty'] as String?)?.isNotEmpty == true
           ? map['pack_qty'] as String
           : (map['pack_size'] as String?)?.isNotEmpty == true
-              ? map['pack_size'] as String
-              : (map['pack_type'] as String?) ?? '',
+          ? map['pack_size'] as String
+          : (map['pack_type'] as String?) ?? '',
       formChip: (map['pack_type'] as String?)?.trim() ?? '',
       packTypeLabel: _packLabel(
-          map, 'pack_type_label', (map['pack_type'] as String?)?.trim() ?? ''),
+        map,
+        'pack_type_label',
+        (map['pack_type'] as String?)?.trim() ?? '',
+      ),
       packQtyLabel: _packLabel(
-          map, 'pack_qty_label', (map['pack_qty'] as String?)?.trim() ?? ''),
+        map,
+        'pack_qty_label',
+        (map['pack_qty'] as String?)?.trim() ?? '',
+      ),
       mrp: mrp,
       b2bPrice: b2bPrice,
       gstPercent: (map['gst_percent'] as num?)?.toDouble() ?? 12.0,
@@ -925,7 +955,8 @@ class Product {
       requiresPrescription: isPrescription,
       discount: 0.0,
       scheme: (map['scheme'] as String?)?.trim() ?? '',
-      supplierLabel: (map['supplier_label'] as String?)?.trim().isNotEmpty == true
+      supplierLabel:
+          (map['supplier_label'] as String?)?.trim().isNotEmpty == true
           ? (map['supplier_label'] as String).trim()
           : null,
       supplierCount: (map['supplier_count'] as num?)?.toInt(),
@@ -940,34 +971,34 @@ class Product {
   }
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'genericName': genericName,
-        'manufacturer': manufacturer,
-        'category': category,
-        'therapeuticClass': therapeuticClass,
-        'imageUrl': imageUrl,
-        'imageUrls': imageUrls,
-        'packSize': packSize,
-        'formChip': formChip,
-        'packTypeLabel': packTypeLabel,
-        'packQtyLabel': packQtyLabel,
-        'mrp': mrp,
-        'b2bPrice': b2bPrice,
-        'gstPercent': gstPercent,
-        'moq': moq,
-        'stock': stock,
-        'buyable': buyable,
-        'schedule': schedule,
-        'requiresPrescription': requiresPrescription,
-        'discount': discount,
-        'scheme': scheme,
-        'supplierLabel': supplierLabel,
-        'supplierCount': supplierCount,
-        'availability': availability?.toJson(),
-        'pricing': pricing?.toJson(),
-        'rx': rx,
-      };
+    'id': id,
+    'name': name,
+    'genericName': genericName,
+    'manufacturer': manufacturer,
+    'category': category,
+    'therapeuticClass': therapeuticClass,
+    'imageUrl': imageUrl,
+    'imageUrls': imageUrls,
+    'packSize': packSize,
+    'formChip': formChip,
+    'packTypeLabel': packTypeLabel,
+    'packQtyLabel': packQtyLabel,
+    'mrp': mrp,
+    'b2bPrice': b2bPrice,
+    'gstPercent': gstPercent,
+    'moq': moq,
+    'stock': stock,
+    'buyable': buyable,
+    'schedule': schedule,
+    'requiresPrescription': requiresPrescription,
+    'discount': discount,
+    'scheme': scheme,
+    'supplierLabel': supplierLabel,
+    'supplierCount': supplierCount,
+    'availability': availability?.toJson(),
+    'pricing': pricing?.toJson(),
+    'rx': rx,
+  };
 
   factory Product.fromJson(Map<String, dynamic> map) {
     return Product(
@@ -978,16 +1009,23 @@ class Product {
       category: (map['category'] as String?) ?? 'Other',
       therapeuticClass: (map['therapeuticClass'] as String?) ?? '',
       imageUrl: (map['imageUrl'] as String?) ?? '',
-      imageUrls: (map['imageUrls'] as List<dynamic>?)
+      imageUrls:
+          (map['imageUrls'] as List<dynamic>?)
               ?.map((e) => e as String)
               .toList() ??
           [],
       packSize: (map['packSize'] as String?) ?? '',
       formChip: (map['formChip'] as String?) ?? '',
       packTypeLabel: _packLabel(
-          map, 'packTypeLabel', (map['formChip'] as String?) ?? ''),
+        map,
+        'packTypeLabel',
+        (map['formChip'] as String?) ?? '',
+      ),
       packQtyLabel: _packLabel(
-          map, 'packQtyLabel', (map['packSize'] as String?) ?? ''),
+        map,
+        'packQtyLabel',
+        (map['packSize'] as String?) ?? '',
+      ),
       mrp: (map['mrp'] as num?)?.toDouble() ?? 0.0,
       b2bPrice: (map['b2bPrice'] as num?)?.toDouble() ?? 0.0,
       gstPercent: (map['gstPercent'] as num?)?.toDouble() ?? 12.0,
@@ -1093,7 +1131,6 @@ class Product {
   bool get isBuyable => buyable == true;
 }
 
-
 /// CMD #791 — "Last ordered 12 Aug · 3× last month · usual qty 9".
 ///
 /// Every part of that sentence is `purchase_overlay_map()`'s: the date is
@@ -1144,16 +1181,16 @@ class PurchaseOverlay {
   });
 
   const PurchaseOverlay.absent()
-      : has = false,
-        title = '',
-        label = '',
-        chips = const [],
-        shortLabel = '',
-        lastLabel = '',
-        usualQty = 0,
-        canAdd = false,
-        addLabel = '',
-        tone = const {};
+    : has = false,
+      title = '',
+      label = '',
+      chips = const [],
+      shortLabel = '',
+      lastLabel = '',
+      usualQty = 0,
+      canAdd = false,
+      addLabel = '',
+      tone = const {};
 
   factory PurchaseOverlay.fromMap(Object? raw) {
     if (raw is! Map) return const PurchaseOverlay.absent();

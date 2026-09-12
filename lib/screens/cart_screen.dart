@@ -3023,7 +3023,10 @@ class C572TotalsBlock extends StatelessWidget {
     // CMD #1912 — the line only earns its place next to an amount. The BACKEND
     // answers that (`show_line`): on a basket with nothing payable yet the
     // rows below already say the item count, and the line said it again.
-    final showLine = selectedTotal != null || s['show_line'] == true;
+    // ABSENCE IS NOT A NO: a payload that never heard of `show_line` (an older
+    // cached cart_render, a caller that builds the block itself) keeps the
+    // #572 behaviour and prints the line. Only an explicit false suppresses it.
+    final showLine = selectedTotal != null || s['show_line'] != false;
     final rows = selectedTotal != null
         ? const <Map<String, dynamic>>[]
         : ((s['rows'] as List?) ?? const [])

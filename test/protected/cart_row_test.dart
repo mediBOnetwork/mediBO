@@ -16,6 +16,11 @@
 //      strings and an empty detail list; the screen never falls back to a
 //      locally assembled string.
 //
+//   2b. The badge's colours are the payload's and follow `priced`: a line
+//      whose trade rate is not confirmed yet arrives in the pending pair
+//      saying "Rate on quote", never in the success pair saying it has a sale
+//      price. The row re-derives neither.
+//
 //   3. The Rx chip is `row.rx_chip.has` — a per-line flag, not a count the
 //      footer used to print once ("5 prescription items in this order").
 //
@@ -45,6 +50,9 @@ Map<String, dynamic> _row({
   String mrpLine = 'MRP ₹944.80 × 4',
   bool rx = false,
   bool badge = true,
+  bool priced = true,
+  String badgeLabel = 'Sale price: ₹82.50',
+  Map<String, dynamic> badgeTone = const {'bg': '#D1FAE5', 'fg': '#065F46'},
   List<Map<String, dynamic>> details = const [
     {'key': 'company', 'label': 'Company', 'value': 'Micro Labs Ltd'},
     {'key': 'pack', 'label': 'Pack', 'value': '1 Strip of 15 Tablets'},
@@ -57,9 +65,9 @@ Map<String, dynamic> _row({
       'mrp_line': mrpLine,
       'price_badge': {
         'has': badge,
-        'label': 'Sale price: PTR',
-        'priced': false,
-        'tone': {'bg': '#D1FAE5', 'fg': '#065F46'},
+        'label': badgeLabel,
+        'priced': priced,
+        'tone': badgeTone,
       },
       'rx_chip': {
         'has': rx,
@@ -142,8 +150,26 @@ void main() {
     test('the price line and the badge are verbatim', () async {
       final line = await _line(_row());
       expect(line.rows('mrp_line'), 'MRP ₹944.80 × 4');
-      expect(line.rowMap('price_badge')['label'], 'Sale price: PTR');
+      expect(line.rowMap('price_badge')['label'], 'Sale price: ₹82.50');
       expect(line.rowMap('price_badge')['has'], isTrue);
+    });
+
+    // QA round 1 of this same command: cart_row_block() painted EVERY badge in
+    // the success pair, so a line with no trade rate arrived green saying
+    // "Sale price: PTR" while the summary said it was awaiting a quote. The
+    // tone belongs to the payload and follows `priced` — the row must not
+    // re-derive either, and must never assume the success colour.
+    test("a pending badge keeps the payload's own tone and words", () async {
+      final line = await _line(_row(
+        priced: false,
+        badgeLabel: 'Rate on quote',
+        badgeTone: const {'bg': '#FEF3C7', 'fg': '#92400E'},
+      ));
+      final badge = line.rowMap('price_badge');
+      expect(badge['label'], 'Rate on quote');
+      expect(badge['priced'], isFalse);
+      expect((badge['tone'] as Map)['bg'], '#FEF3C7');
+      expect((badge['tone'] as Map)['fg'], '#92400E');
     });
 
     test('no row payload means empty strings, never a local fallback',

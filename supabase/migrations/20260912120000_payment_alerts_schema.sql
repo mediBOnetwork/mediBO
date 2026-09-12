@@ -216,8 +216,11 @@ with k as (
   select
     -- The rupee figure. Every app prints one and it never moves.
     $$(?:₹|Rs\.?|INR)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)$$ as amount_re,
-    -- The UPI reference under any of its printed names.
-    $$(?:UTR|UPI\s*(?:transaction\s*)?(?:Ref(?:erence)?|ID)|UPI\s*Ref(?:erence)?\s*(?:No\.?)?|Ref\s*No\.?|RRN|Transaction\s*ID|Txn\s*ID|Order\s*ID)[:\s#-]*([0-9]{9,22}|[A-Za-z0-9]{12,22})$$ as utr_re,
+    -- The UPI reference under any of its printed names. Six digits is the
+    -- floor, not nine: a notification that prints only the TAIL of the UTR
+    -- ('UTR: 223344') must still be captured — the matcher, not the regex,
+    -- is what decides a short reference may only match with the amount.
+    $$(?:UTR|UPI\s*(?:transaction\s*)?(?:Ref(?:erence)?|ID)|UPI\s*Ref(?:erence)?\s*(?:No\.?)?|Ref\s*No\.?|RRN|Transaction\s*ID|Txn\s*ID|Order\s*ID)[:\s#-]*([0-9]{6,22}|[A-Za-z0-9]{12,22})$$ as utr_re,
     -- The payer handle.
     $$([A-Za-z0-9._-]{2,64}@[A-Za-z]{2,32})$$ as vpa_re,
     -- The payer NAME as printed, in either word order ("X paid you" /

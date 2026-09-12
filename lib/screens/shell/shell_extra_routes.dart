@@ -62,8 +62,17 @@ export '../customer/order_feedback_sheet.dart' show maybeAskOrderFeedback;
 // CHANGE #790 — the typeahead panel and its controller, re-exported so the
 // shell's PART files (shell_header_chrome.dart) can see them without adding a
 // line to home_shell.dart, which sits at 1,998 of a hard 2,000-line guard.
+// CMD #1905 — SearchSuggestion / SearchChip / SearchBoxChip joined the list
+// when a suggestion stopped being a string. A type used by a PART file must be
+// re-exported here or the part cannot name it, and `dart analyze` on one file
+// will not say so — it compiles only when the whole library does.
 export '../../widgets/search_typeahead.dart'
-    show SearchSuggestions, SearchSuggestController;
+    show
+        SearchSuggestions,
+        SearchSuggestController,
+        SearchSuggestion,
+        SearchChip,
+        SearchBoxChip;
 
 /// The screen a route_key opens, or null when this table does not own it —
 /// null means "keep looking", never "broken", so the shell's own switch and

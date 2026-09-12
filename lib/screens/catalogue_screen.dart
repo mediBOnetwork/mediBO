@@ -205,6 +205,12 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
   // owns the debounce and the last payload; the panel renders it verbatim.
   final _suggest = SearchSuggestController();
 
+  // CMD #1905 — what the search box is showing instead of raw text. A tapped
+  // suggestion opened a COMPANY, a salt or a class; leaving its name sitting
+  // in a product-search field was the lie the whole command exists to end.
+  // Both strings are the backend's (`chip_label`, `clear_label`).
+  SearchChip _chip = SearchChip.none;
+
   final List<CatRow> _rows = [];
   int _nextOffset = 0;
   bool _rowsHaveMore = false;
@@ -353,21 +359,71 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
   // packs" strip on the PRODUCT PAGE, which is the one place a buyer is
   // choosing between packs rather than scanning for one.
 
-  /// The typeahead's own answer: the BACKEND's query for the tapped
-  /// suggestion, which for a Hindi word is the salt and not the word.
-  void _pickSuggestion(String query) {
+  /// CMD #1905 — a tapped suggestion opens WHAT IT IS.
+  ///
+  /// The backend named the destination in the item's `nav` block; this method
+  /// only knows which screen renders which kind, which is the one thing the
+  /// app owns (the URL is the browser's, not the database's). Nothing here
+  /// re-runs a text query — that is what pasted "SUN PHARMACEUTICAL
+  /// INDUSTRIES LTD" into a product-name search and found nothing.
+  void _pickSuggestion(SearchSuggestion s) {
     _suggest.close();
     _searchFocus.unfocus();
-    _searchCtrl.text = query;
-    // A search is a PRODUCT search, so it opens the grid — the same scope the
-    // full catalogue uses, narrowed by the backend's own query string.
-    _go(_route.copy(tab: 'browse', path: const [], listKind: 'search',
-        listKey: query, query: query));
+    RenderLog.write('c1905_suggest_nav', '${s.navKind}:${s.navId}');
+    switch (s.navKind) {
+      case 'product':
+        _showChip(s);
+        Navigator.of(context).pushNamed('/product/${s.navId}');
+      case 'company':
+        _showChip(s);
+        Navigator.of(context)
+            .pushNamed('/company/${Uri.encodeComponent(s.navId)}');
+      case 'salt':
+        _showChip(s);
+        _go(_route.copy(tab: 'salts', path: const [], listKind: 'salt',
+            listKey: s.navId, query: '', letter: null));
+      case 'category':
+        _showChip(s);
+        _go(_route.copy(tab: 'browse', path: [s.navId], listKind: 'tree',
+            listKey: null, query: '', letter: null));
+      case 'tab':
+        // "See all companies" / "See all salts": the tab, narrowed by what
+        // was typed. Still not a product-name search.
+        _clearChip();
+        _searchCtrl.text = s.navQuery;
+        _go(_route.copy(tab: s.navTab, path: const [], listKind: null,
+            listKey: null, query: s.navQuery, letter: null));
+      default:
+        // 'search' — the one nav that IS a text query, because the backend
+        // said so: a product family whose name really is a prefix of its own
+        // products' names, or "See all products" for what was typed.
+        _clearChip();
+        _searchCtrl.text = s.navId;
+        _go(_route.copy(tab: 'browse', path: const [], listKind: 'search',
+            listKey: s.navId, query: s.navId, letter: null));
+    }
+  }
+
+  /// Put the backend's chip in the box. The raw text goes with it: the field
+  /// is showing a scope now, not a phrase that was typed.
+  void _showChip(SearchSuggestion s) {
+    if (s.chipLabel.isEmpty) return;
+    setState(() {
+      _chip = SearchChip(label: s.chipLabel, clearLabel: _suggest.clearLabel);
+      _searchCtrl.text = '';
+    });
+  }
+
+  void _clearChip() {
+    if (_chip.has) setState(() => _chip = SearchChip.none);
   }
 
   void _go(CatalogueRoute next, {bool push = true}) {
     setState(() {
       _route = next;
+      // CMD #1905 — a chip names ONE scope. Any other navigation leaves it
+      // behind rather than letting it describe a screen it did not open.
+      if (next.query.isNotEmpty) _chip = SearchChip.none;
       _searchCtrl.text = next.query;
       _rows.clear();
       _cursor = null;
@@ -508,10 +564,12 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
             controller: _searchCtrl,
             focus: _searchFocus,
             suggest: _suggest,
+            chip: _chip,
             onSubmit: (q) {
               final t = q.trim();
               if (t.isEmpty) return;
               _suggest.close();
+              _clearChip();
               _go(_route.copy(tab: 'browse', path: const [], listKind: 'search',
                   listKey: t, query: t, letter: null));
             },
@@ -519,8 +577,13 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
             onClear: () {
               _searchCtrl.clear();
               _suggest.close();
-              if (_route.listKind == 'search') {
-                _go(_route.copy(listKind: null, listKey: null, query: ''));
+              // CMD #1905 — the × on the chip is the same × as the field's:
+              // it puts the shopper back on the catalogue they came from.
+              final hadChip = _chip.has;
+              _clearChip();
+              if (hadChip || _route.listKind == 'search') {
+                _go(_route.copy(tab: 'browse', path: const [], listKind: null,
+                    listKey: null, query: '', letter: null));
               }
             },
           ),
@@ -853,8 +916,11 @@ class _SearchHero extends StatelessWidget {
   final FocusNode focus;
   final SearchSuggestController suggest;
   final ValueChanged<String> onSubmit;
-  final ValueChanged<String> onPick;
+  final ValueChanged<SearchSuggestion> onPick;
   final VoidCallback onClear;
+
+  /// CMD #1905 — the scope a tapped suggestion opened, or [SearchChip.none].
+  final SearchChip chip;
 
   const _SearchHero({
     required this.home,
@@ -864,6 +930,7 @@ class _SearchHero extends StatelessWidget {
     required this.onSubmit,
     required this.onPick,
     required this.onClear,
+    required this.chip,
   });
 
   @override
@@ -876,7 +943,13 @@ class _SearchHero extends StatelessWidget {
           children: [
             SizedBox(
               height: Ds.touch.minTarget,
-              child: TextField(
+              // CMD #1905 — while a chip is up, the box IS the chip. A field
+              // still holding "SUN PHARMACEUTICAL INDUSTRIES LTD" under a
+              // company page said the shopper had searched for that phrase,
+              // which is exactly what they had not done.
+              child: chip.has
+                  ? SearchBoxChip(chip: chip, onClear: onClear)
+                  : TextField(
                 controller: controller,
                 focusNode: focus,
                 textInputAction: TextInputAction.search,
@@ -1393,8 +1466,10 @@ class _CatEmpty extends StatelessWidget {
 }
 
 /// CHANGE #799 — an empty scope names itself, says why it is empty, and offers
-/// the two ways out: request the product, or clear the filters. Which of those
-/// is offered is the payload's `has` flag, never a guess made here.
+/// the ways out. WHICH ones, in WHICH order and how loudly are all the
+/// payload's `buttons`, never a guess made here — CMD #1905 moved "Clear
+/// filters" ahead of "Request this product" when filters are on, and that is
+/// a backend edit, not a layout one.
 class _CatEmptyState extends StatelessWidget {
   final CatEmptyState empty;
   final VoidCallback onAction;
@@ -1404,6 +1479,14 @@ class _CatEmptyState extends StatelessWidget {
     required this.onAction,
     required this.onClear,
   });
+
+  /// The button's `kind` is the backend's word for what it does. Two kinds
+  /// exist; an unknown one is drawn and does nothing rather than guessing.
+  VoidCallback? _onTap(String kind) => switch (kind) {
+        'request' => onAction,
+        'clear_filters' => onClear,
+        _ => null,
+      };
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -1417,28 +1500,24 @@ class _CatEmptyState extends StatelessWidget {
               SizedBox(height: Ds.space.x8),
               Text(empty.hint, textAlign: TextAlign.center, style: Ds.t.caption),
             ],
-            if (empty.action.has) ...[
-              SizedBox(height: Ds.space.x24),
+            for (var i = 0; i < empty.buttons.length; i++) ...[
+              SizedBox(height: i == 0 ? Ds.space.x24 : Ds.space.x12),
               SizedBox(
                 height: Ds.touch.minTarget,
                 width: double.infinity,
-                child: FilledButton(
-                  onPressed: onAction,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: Ds.c.brand,
-                    shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
-                  ),
-                  child: Text(empty.action.label),
-                ),
-              ),
-            ],
-            if (empty.clear.has) ...[
-              SizedBox(height: Ds.space.x12),
-              SizedBox(
-                height: Ds.touch.minTarget,
-                width: double.infinity,
-                child: OutlinedButton(
-                    onPressed: onClear, child: Text(empty.clear.label)),
+                child: empty.buttons[i].tone == 'primary'
+                    ? FilledButton(
+                        onPressed: _onTap(empty.buttons[i].kind),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Ds.c.brand,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: Ds.r.rButton),
+                        ),
+                        child: Text(empty.buttons[i].label),
+                      )
+                    : OutlinedButton(
+                        onPressed: _onTap(empty.buttons[i].kind),
+                        child: Text(empty.buttons[i].label)),
               ),
             ],
           ],

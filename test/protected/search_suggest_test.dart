@@ -4,8 +4,13 @@
 //
 //   * the typeahead computes NOTHING. Groups render in payload order with the
 //     backend's own titles; every label, sub-label and "N variants" counter is
-//     a string from search_suggest(); a tap hands back the payload's `query`
-//     (for a Hindi word that is the SALT, never the word the shopper typed);
+//     a string from search_suggest();
+//   * CMD #1905 CHANGED what a tap hands back, and it is the one assertion in
+//     this file that moved. A tap used to hand back the payload's `query`
+//     STRING, which the caller pasted into a product-name search — the bug
+//     that made tapping a company with 2,461 products say "Nothing here in
+//     this view". It now hands back the typed item, and what a caller does
+//     with it is held down by search_typed_suggestions_test.dart;
 //   * "not enough letters" is `ready:false` plus the backend's sentence, never
 //     a length test written here, and an empty result prints the backend's
 //     empty line;
@@ -179,21 +184,29 @@ void main() {
       expect(find.text('842'), findsNothing);
     });
 
-    testWidgets('a tap hands back the payload query, not the label',
-        (t) async {
-      String? picked;
+    testWidgets('a tap hands back the TYPED item, not a string', (t) async {
+      // CMD #1905 — this assertion replaced "a tap hands back the payload
+      // query". The old contract is the bug: a string cannot say whether it
+      // names a product, a company or a salt, so every tap became a
+      // product-name search and a company suggestion matched nothing.
+      SearchSuggestion? picked;
       final p = _suggest(hinglish: true);
-      // The salt group's query is what a Hindi word must search for.
       await t.pumpWidget(MaterialApp(
         home: Scaffold(
-          body: SearchSuggestions(payload: p, onPick: (q) => picked = q),
+          body: SearchSuggestions(payload: p, onPick: (s) => picked = s),
         ),
       ));
       await t.pumpAndSettle();
 
       await t.tap(find.text('Montelukast'));
       await t.pumpAndSettle();
-      expect(picked, 'Montelukast');
+      expect(picked, isNotNull);
+      expect(picked!.kind, 'salt');
+      // A payload with no `nav` block predates #1905. It only ever knew how
+      // to search for text, so that is still all it claims to do — the app
+      // never invents a route the backend did not name.
+      expect(picked!.navKind, 'search');
+      expect(picked!.navId, 'Montelukast');
     });
 
     testWidgets('the Hinglish line is the backend sentence, under its prefix',

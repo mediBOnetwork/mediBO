@@ -492,6 +492,17 @@ declare
   v_conds int    := 0;
   f       text;
 begin
+  -- A generous budget, set locally: the pass is one-time and it scans MEDICINE
+  -- four times. The default role timeout is what turns a 90-second seed into a
+  -- failed migration on a catalogue this size.
+  set local statement_timeout = '900s';
+
+  -- Dropped first, not just ON COMMIT DROP: a second call inside the SAME
+  -- transaction (an admin re-seed, a test) would otherwise hit a temp table
+  -- that already exists.
+  drop table if exists _cs_target;
+  drop table if exists _cs_val;
+
   create temp table _cs_target on commit drop as
     select c.id, c.condition_key
       from public.condition c

@@ -8,6 +8,8 @@ import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
 import '../../../widgets/payment_proof_image.dart';
 import 'dev_queue_common.dart';
+import 'dev_queue_android.dart';
+import 'restart_safety.dart';
 import 'dev_queue_image_tray.dart';
 import 'dev_queue_qa.dart';
 import 'dev_queue_service.dart';
@@ -38,8 +40,16 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
   Map<String, dynamic> _row = const {};
   Map<String, dynamic> _spec = const {};
   List<Map<String, dynamic>> _leases = const [];
+  Map<String, dynamic> _specItems = const {}; // CHANGE #571 — the spec checklist
   bool _loading = true;
   bool _busy = false;
+  // CHANGE #656: dev_model_options() — the picker's options, labels and titles.
+  Map<String, dynamic> _mo = const {};
+  // CMD #1863 — dev_lessons_get(area, id): the standing constraints every
+  // runner is handed for this command's area. Read ONCE per open, never on the
+  // 5s poll: the RPC stamps last_used_at and writes a dev_lesson_read row, and
+  // a screen that re-read it every five seconds would forge that ledger.
+  List<Map<String, dynamic>> _lessons = const [];
   Timer? _tick; // 1s ticker for the live ATR countdown while building
   DateTime _now = DateTime.now();
 
@@ -54,6 +64,8 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
       _loading = false;
     }
     _load();
+    _loadModelOptions();
+    _loadLessons();
     _poll = Timer.periodic(const Duration(seconds: 5), (_) {
       if (_active) _load(silent: true);
     });
@@ -74,14 +86,21 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
     try {
       final results = await Future.wait([
         _svc.spec(widget.id),
-        _svc.list(limit: 500),
+        // CHANGE #643 — dev_cmd_get(id), not dev_cmd_list(limit: 500). This
+        // screen used to pull EVERY command (2.4 MB, most of it other
+        // commands' build logs) and then search it for one id, on every
+        // refresh while a build was live. It now reads the one row it is
+        // showing, and merges it over the card it was opened from.
+        _svc.get(widget.id),
+        // CHANGE #571 — the spec checklist rides the same refresh as the row,
+        // so "why was this refused?" is answered on the screen, not in a log.
+        _svc.specItems(widget.id),
       ]);
       final spec = results[0];
-      final rows = ((results[1]['rows'] as List?) ?? const [])
-          .whereType<Map>()
-          .map((e) => Map<String, dynamic>.from(e));
-      final row = rows.firstWhere((r) => asInt(r['id']) == widget.id,
-          orElse: () => _row);
+      final detail = results[1];
+      final row = detail['ok'] == true && detail['row'] is Map
+          ? <String, dynamic>{..._row, ...Map<String, dynamic>.from(detail['row'] as Map)}
+          : _row;
       // While building, the row holds file leases — show them as path chips so
       // Om can see exactly what this worker has locked (and any conflict note).
       List<Map<String, dynamic>> leases = _leases;
@@ -97,6 +116,7 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
         _spec = spec;
         _row = row;
         _leases = leases;
+        _specItems = Map<String, dynamic>.from(results[2]);
         _loading = false;
       });
     } catch (_) {
@@ -163,12 +183,24 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
                 if (_spec['has_tokens'] == true || _status == 'building')
                   _tokensCard(),
                 _timerCard(),
+                if (asInt(_row['steps_total']) > 0) _stepsCard(),
+                // CHANGE #1802 — the Android release, and the sentence that
+                // refuses to let this row close without one. has:false on a
+                // command that never asked for a build, so it costs nothing.
+                AndroidReleaseCard(row: _row, onOpen: _open),
                 if (_status == 'needs_input') _needsInputBanner(),
+                if (_row['is_waiting'] == true) _waitingBanner(),
+                // CHANGE #1856 — the cost of the waiting, whether or not the
+                // command is still waiting. A row that cold-resumed four times
+                // has to say so after it finishes, or the price stays invisible.
+                _resumeCostLine(),
                 const SizedBox(height: 12),
                 _targets(),
                 if (_status == 'building') _filesLocked(),
                 const SizedBox(height: 12),
                 _actions(),
+                _specChecklist(),
+                _lessonsCard(),
                 QaJourneySection(id: widget.id, svc: _svc),
                 const SizedBox(height: 12),
                 _chat(),
@@ -279,12 +311,41 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
                 label: (_spec['route_label']).toString(),
                 tone: toneByName((_spec['route_tone'] ?? 'neutral').toString()),
                 icon: routeIcon((_spec['route'] ?? '').toString())),
+          // CHANGE #656: the model this row will build on. The label is a
+          // backend string (model_label) — Dart never maps a model id to a
+          // name. The effort chip is the one #198 already draws below, from
+          // the same _dev_effort_label.
+          if ((_row['model_label'] ?? '').toString().isNotEmpty)
+            ToneChip(
+                label: (_row['model_label']).toString(),
+                tone: statusTone('pending'),
+                icon: Icons.memory),
           if ((_spec['area_label'] ?? '').toString().isNotEmpty)
             ToneChip(
                 label: (_spec['area_label']).toString(),
                 tone: statusTone('paused'),
                 icon: Icons.category_outlined),
+          // CHANGE #198 — the size + effort the backend picked for this row.
+          // Both strings are pre-worded server-side (_dev_size_label /
+          // _dev_effort_label) and printed verbatim.
+          if ((_spec['size_label'] ?? '').toString().isNotEmpty)
+            ToneChip(
+                label: (_spec['size_label']).toString(),
+                tone: statusTone('paused'),
+                icon: Icons.straighten_outlined),
+          if ((_spec['effort_label'] ?? '').toString().isNotEmpty)
+            ToneChip(
+                label: (_spec['effort_label']).toString(),
+                tone: statusTone('paused'),
+                icon: Icons.speed_outlined),
         ]),
+        // CHANGE #198 — WHY this command landed on that lane, in the backend's
+        // own words. A misroute is now visible on the command instead of buried
+        // in a log, which is the whole point of logging route decisions.
+        if (_spec['has_route_reason'] == true) ...[
+          SizedBox(height: Ds.space.x8),
+          Text((_spec['route_reason']).toString(), style: Ds.t.caption),
+        ],
         const SizedBox(height: 12),
         Text(title,
             style: const TextStyle(
@@ -514,6 +575,111 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
         ]),
       );
 
+  /// CHANGE #571 — WAITING IS NOT FAILING. A parked command is not broken: its
+  /// work is committed, its session was released on purpose, and the harness
+  /// resumes it when the blocker clears. Every word here — the chip, the
+  /// reason, the reassurance — is the backend's own string, and every measure
+  /// is a Ds token.
+  Widget _waitingBanner() {
+    final w = WaitView.fromRow(_row);
+    if (!w.waiting) return const SizedBox.shrink();
+    return Container(
+      margin: EdgeInsets.only(top: Ds.space.x12),
+      padding: EdgeInsets.all(Ds.space.x12),
+      decoration: BoxDecoration(color: w.tone.bg, borderRadius: Ds.r.rButton),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(Icons.pause_circle_outline,
+            size: Ds.space.x16 + Ds.space.x4, color: w.tone.fg),
+        SizedBox(width: Ds.space.x8),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(w.chip, style: Ds.t.subtitle.copyWith(color: w.tone.fg)),
+            if (w.hint.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x4),
+              Text(w.hint, style: Ds.t.body.copyWith(color: w.tone.fg)),
+            ],
+          ]),
+        ),
+      ]),
+    );
+  }
+
+  /// CHANGE #1856 — WHAT THE WAITING COST, on the command that paid it.
+  ///
+  /// A hold keeps the session alive and costs nothing; a cold resume tears it
+  /// down and the next session re-reads the whole context. #1848 did the second
+  /// one four times and spent 9.7M tokens. The sentence, the counts and the
+  /// tone are all `dev_cmd_list`'s — this widget pluralises nothing and adds up
+  /// nothing, and an empty line draws nothing at all rather than a zero.
+  Widget _resumeCostLine() {
+    final w = WaitView.fromRow(_row);
+    if (w.costLine.isEmpty) return const SizedBox.shrink();
+    return Container(
+      margin: EdgeInsets.only(top: Ds.space.x12),
+      padding: EdgeInsets.all(Ds.space.x12),
+      decoration:
+          BoxDecoration(color: w.costTone.bg, borderRadius: Ds.r.rButton),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(Icons.hourglass_bottom,
+            size: Ds.space.x16 + Ds.space.x4, color: w.costTone.fg),
+        SizedBox(width: Ds.space.x8),
+        Expanded(
+          child: Text(w.costLine,
+              style: Ds.t.body.copyWith(color: w.costTone.fg)),
+        ),
+      ]),
+    );
+  }
+
+  /// CHANGE #571 — the command's own spec checklist. #536 declared success
+  /// with core spec items unbuilt; this is the surface that makes that
+  /// impossible to miss, and the same list the finish gate reads. Items,
+  /// status labels and tones are all the backend's — nothing is computed here.
+  Widget _specChecklist() {
+    final items = SpecItemView.listOf(_specItems);
+    if (items.isEmpty) return const SizedBox.shrink();
+    final open = SpecItemView.openCount(_specItems);
+    return _sectionRaw(
+      (_specItems['title'] ?? '').toString(),
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if ((_specItems['chip'] ?? '').toString().isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x12),
+            child: ToneChip(
+                label: (_specItems['chip']).toString(),
+                tone: toneByName(open > 0 ? 'warning' : 'success'),
+                icon: Icons.checklist_rtl),
+          ),
+        for (final it in items)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x12),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Icon(
+                  it.status == 'done'
+                      ? Icons.check_circle
+                      : it.status == 'dropped'
+                          ? Icons.remove_circle_outline
+                          : Icons.radio_button_unchecked,
+                  size: Ds.space.x16 + Ds.space.x4,
+                  color: it.tone.fg),
+              SizedBox(width: Ds.space.x8),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(it.text, style: Ds.t.body),
+                  if (it.note.isNotEmpty) ...[
+                    SizedBox(height: Ds.space.x4),
+                    Text(it.note, style: Ds.t.caption),
+                  ],
+                ]),
+              ),
+              SizedBox(width: Ds.space.x8),
+              ToneChip(label: it.statusLabel, tone: it.tone),
+            ]),
+          ),
+      ]),
+    );
+  }
+
   // ── Targets ──────────────────────────────────────────────────────────────
   Widget _targets() {
     final deploy = _row['web_deploy_no'];
@@ -591,6 +757,19 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
   }
 
   Widget _androidChip(String android) {
+    // CHANGE #1802 — the Targets row read 'Not built' under an Android release
+    // block that said "Published to Play", because this switch had no case for
+    // the two states the gate added and everything unknown fell to `default`.
+    // Two mappings of the same status to two different words is how that
+    // happens, so there is now one: when the backend sent the release block,
+    // the chip prints ITS label and tone, exactly like the block above does.
+    final rel = AndroidRelease.fromRow(_row);
+    if (rel.has && rel.label.isNotEmpty) {
+      final chip =
+          ToneChip(label: rel.label, tone: toneByName(rel.tone), icon: Icons.android);
+      if (rel.url.isEmpty) return chip;
+      return GestureDetector(onTap: () => _open(rel.url), child: chip);
+    }
     switch (android) {
       case 'built':
         final url = (_row['android_artifact_url'] ?? '').toString();
@@ -646,15 +825,19 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
   // also from the Targets chips) so there are no duplicate buttons.
   Widget _actions() {
     final btns = <Widget>[];
-    void add(String key, VoidCallback onTap,
+    void addLabel(String label, VoidCallback onTap,
         {Color? color, IconData? icon, bool primary = false}) {
       btns.add(_ActionBtn(
-          label: c(key),
+          label: label,
           onTap: _busy ? null : onTap,
           color: color,
           icon: icon,
           primary: primary));
     }
+
+    void add(String key, VoidCallback onTap,
+            {Color? color, IconData? icon, bool primary = false}) =>
+        addLabel(c(key), onTap, color: color, icon: icon, primary: primary);
 
     Future<void> apk() => _run(() => _svc.requestAndroid(widget.id, buildType: 'apk'));
     Future<void> aab() => _run(() => _svc.requestAndroid(widget.id, buildType: 'aab'));
@@ -662,13 +845,17 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
     switch (_status) {
       case 'pending':
         add('dev_queue.btn_edit', _editSpec, icon: Icons.edit_outlined, primary: true);
+        add('dev_queue.btn_model', _editModel, icon: Icons.memory);
         add('dev_queue.btn_pause', () => _run(() => _svc.pause(widget.id)));
+        addLabel(cf('dev_queue.v3_drain', {'id': '${widget.id}'}), _drainAfter,
+            icon: Icons.stop_circle_outlined);
         add('dev_queue.btn_cancel', () => _cancel(), color: const Color(0xFF991B1B));
         break;
       case 'paused':
         add('dev_queue.btn_resume', () => _run(() => _svc.resume(widget.id)),
             color: kBrand, primary: true);
         add('dev_queue.btn_edit', _editSpec, icon: Icons.edit_outlined);
+        add('dev_queue.btn_model', _editModel, icon: Icons.memory);
         add('dev_queue.btn_cancel', () => _cancel(), color: const Color(0xFF991B1B));
         break;
       case 'awaiting_approval':
@@ -676,10 +863,17 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
             color: kBrand, primary: true);
         add('dev_queue.btn_reject', _reject, color: const Color(0xFF991B1B));
         add('dev_queue.btn_edit', _editSpec, icon: Icons.edit_outlined);
+        add('dev_queue.btn_model', _editModel, icon: Icons.memory);
         break;
       case 'building':
         add('dev_queue.btn_debug', _debug, icon: Icons.bug_report_outlined, primary: true);
         add('dev_queue.btn_pause', () => _run(() => _svc.pause(widget.id)));
+        // CMD #1863 — "Stop after #N": let the fleet finish THIS command and
+        // claim nothing more. The label is ui_copy's own template, so the
+        // number in the button and the number in the Runners card's
+        // "Draining: will stop after #N" are the same string from the same row.
+        addLabel(cf('dev_queue.v3_drain', {'id': '${widget.id}'}), _drainAfter,
+            icon: Icons.stop_circle_outlined);
         break;
       case 'completed':
         add('dev_queue.btn_build_apk', apk, icon: Icons.android, color: kBrand, primary: true);
@@ -758,6 +952,92 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
       _run(() => _svc.reject(widget.id, reason));
     }
   }
+
+  Future<void> _loadModelOptions() async {
+    try {
+      final o = await _svc.modelOptions();
+      if (mounted) setState(() => _mo = o);
+    } catch (_) {}
+  }
+
+  /// CMD #1863 — the area's standing lessons. A card, never the page: the
+  /// screen has to open with its result and its log even when this read is
+  /// refused, so a failure leaves the list empty and draws nothing.
+  Future<void> _loadLessons() async {
+    try {
+      final l = await _svc.lessons(
+          area: (widget.initialRow?['area'] ?? _row['area'] ?? '').toString(),
+          cmd: widget.id);
+      if (mounted) setState(() => _lessons = l);
+    } catch (_) {}
+  }
+
+  /// CHANGE #656 — change the model / effort of a row that has not started.
+  /// The options, their labels and the sheet's own titles are all fields of
+  /// dev_model_options(); the sheet writes back through dev_cmd_update, which
+  /// refuses anything but Opus 5 / Fable 5 and high / extra.
+  Future<void> _editModel() async {
+    final models = (_mo['models'] as List?) ?? const [];
+    final efforts = (_mo['efforts'] as List?) ?? const [];
+    if (models.isEmpty && efforts.isEmpty) return;
+    var model = (_row['model'] ?? _mo['default_model'] ?? '').toString();
+    var effort = (_row['effort'] ?? _mo['default_effort'] ?? '').toString();
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => Padding(
+          padding: EdgeInsets.all(Ds.space.x16),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text((_mo['title'] ?? '').toString(), style: Ds.t.subtitle),
+            if ((_mo['hint'] ?? '').toString().isNotEmpty)
+              Text((_mo['hint'] ?? '').toString(), style: Ds.t.caption),
+            SizedBox(height: Ds.space.x16),
+            _pickRow((_mo['model_title'] ?? '').toString(), models, model,
+                (v) => setSheet(() => model = v)),
+            SizedBox(height: Ds.space.x16),
+            _pickRow((_mo['effort_title'] ?? '').toString(), efforts, effort,
+                (v) => setSheet(() => effort = v)),
+            SizedBox(height: Ds.space.x24),
+            SizedBox(
+              width: double.infinity,
+              height: Ds.touch.minTarget,
+              child: FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                style: FilledButton.styleFrom(backgroundColor: kBrand),
+                child: Text(c('dev_queue.btn_save_edit')),
+              ),
+            ),
+            SizedBox(height: Ds.space.x8),
+          ]),
+        ),
+      ),
+    );
+    if (saved == true) {
+      await _run(() => _svc.update(widget.id, {'model': model, 'effort': effort}));
+    }
+  }
+
+  Widget _pickRow(String title, List options, String selected, void Function(String) onPick) =>
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (title.isNotEmpty) Text(title, style: Ds.t.caption),
+        SizedBox(height: Ds.space.x8),
+        Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x8, children: [
+          for (final o in options.whereType<Map>())
+            ChoiceChip(
+              label: Text((o['label'] ?? '').toString()),
+              selected: selected == (o['value'] ?? '').toString(),
+              onSelected: (_) => onPick((o['value'] ?? '').toString()),
+              selectedColor: Ds.c.brandSoft,
+              backgroundColor: Ds.c.bg,
+              showCheckmark: false,
+              side: BorderSide(
+                  color: selected == (o['value'] ?? '').toString() ? kBrand : kBorder),
+            ),
+        ]),
+      ]);
 
   Future<void> _editSpec() async {
     final ctl = TextEditingController(text: (_spec['spec'] ?? '').toString());
@@ -1119,6 +1399,77 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
   }
 
   // ── Decisions ────────────────────────────────────────────────────────────
+  // ── Checkpoint plan (CHANGE #233C) ─────────────────────────────────────────
+  // "Steps done versus total" — the answer to "did the restart cost me the
+  // build?". The header line and every step title come from dev_cmd_list; the
+  // only local decision is the tick glyph for a done step.
+  Widget _stepsCard() {
+    final steps = ((_row['steps'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    final header = (_row['steps_chip'] ?? '').toString();
+    final resumed = (_row['resume_chip'] ?? '').toString();
+    final branch = (_row['resume_branch'] ?? '').toString();
+    // CHANGE #350 — when the backend says this checklist stopped being
+    // reported, say so ABOVE the list rather than letting Om read a stale
+    // "Step 0 of 7" as fact. Both strings are the backend's; absent is silence.
+    final live = RowLiveness(_row);
+    final staleChip = (_row['steps_stale_chip'] ?? '').toString();
+    return _sectionRaw(
+      header,
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (staleChip.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x12),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Icon(safetyChipIcon(SafetyChipKind.stepsStale),
+                  size: Ds.space.x16, color: Ds.c.warning),
+              SizedBox(width: Ds.space.x8),
+              Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(staleChip,
+                          style: Ds.t.caption.copyWith(color: Ds.c.warning)),
+                      if (live.stepsStaleHint.isNotEmpty)
+                        Text(live.stepsStaleHint,
+                            style: Ds.t.caption
+                                .copyWith(color: Ds.c.textSecondary)),
+                    ]),
+              ),
+            ]),
+          ),
+        for (final st in steps)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x8),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Icon(
+                  (st['status'] ?? '') == 'done'
+                      ? Icons.check_circle
+                      : Icons.radio_button_unchecked,
+                  size: Ds.space.x16,
+                  color: (st['status'] ?? '') == 'done'
+                      ? Ds.c.success
+                      : Ds.c.textSecondary),
+              SizedBox(width: Ds.space.x8),
+              Expanded(
+                child: Text('${st['n'] ?? ''}. ${st['title'] ?? ''}',
+                    style: Ds.t.caption.copyWith(
+                        color: (st['status'] ?? '') == 'done'
+                            ? Ds.c.text
+                            : Ds.c.textSecondary)),
+              ),
+            ]),
+          ),
+        if (resumed.isNotEmpty || branch.isNotEmpty)
+          Text(
+              [resumed, branch].where((e) => e.isNotEmpty).join(' · '),
+              style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+      ]),
+    );
+  }
+
   Widget _decisions() {
     final ds = ((_row['decisions'] as List?) ?? const [])
         .whereType<Map>()
@@ -1290,6 +1641,74 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
           kv(c('dev_queue.label_finished'), istShort(_row['finished_at'].toString())),
       ]),
     );
+  }
+
+  /// CMD #1863 — `dev_lessons_get(area, id)`, printed verbatim.
+  ///
+  /// These are the standing constraints the RUNNER is handed before it starts
+  /// this command ("treat every lesson as a HARD constraint"), and until now
+  /// the only way to read them was to run devcmd.sh on the VM. The card
+  /// computes nothing: the heading, the empty line, each title, each lesson
+  /// body and the area chip are all backend strings, and the order is the
+  /// backend's. An area this build has never heard of still draws.
+  Widget _lessonsCard() {
+    if (_lessons.isEmpty) return const SizedBox.shrink();
+    return _section(
+      c('dev_queue.gcp_lessons'),
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        for (final l in _lessons)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x12),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Icon(Icons.lightbulb_outline,
+                    size: Ds.space.x12 + Ds.space.x4, color: Ds.c.brand),
+                SizedBox(width: Ds.space.x8),
+                Expanded(
+                  child: Text((l['title'] ?? '').toString(),
+                      style: Ds.t.body.copyWith(
+                          fontWeight: FontWeight.w700, color: Ds.c.text)),
+                ),
+                if ((l['area'] ?? '').toString().isNotEmpty)
+                  ToneChip(
+                      label: (l['area']).toString(),
+                      tone: statusTone('paused'),
+                      icon: Icons.category_outlined),
+              ]),
+              if ((l['lesson'] ?? '').toString().isNotEmpty)
+                Padding(
+                  padding:
+                      EdgeInsets.only(left: Ds.space.x24, top: Ds.space.x4),
+                  child: Text((l['lesson']).toString(),
+                      style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+                ),
+            ]),
+          ),
+      ]),
+    );
+  }
+
+  /// CMD #1863 — "stop after this command", the only setter `drain_after` has
+  /// ever had.
+  ///
+  /// The Runners card has printed `drain_label` ("Draining: will stop after
+  /// #N") since #1367 and nothing could write it, so the fleet could only be
+  /// stopped mid-build. `strip_v3_drain_set(p_id)` takes THIS row's id — no
+  /// parsing, no guessing which command is live — and returns
+  /// `strip_v3_card()`, whose own `drain_label` is the toast. A backend that
+  /// declines simply sends an empty label and nothing is claimed on its behalf.
+  Future<void> _drainAfter() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    String label = '';
+    try {
+      label = (await _svc.drainAfter(widget.id))['drain_label']?.toString() ?? '';
+    } catch (_) {
+      // Same rule as every other action here: the backend's own words or none.
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    if (mounted && label.isNotEmpty) showToast(context, label);
   }
 
   // ── Section scaffolding ────────────────────────────────────────────────────

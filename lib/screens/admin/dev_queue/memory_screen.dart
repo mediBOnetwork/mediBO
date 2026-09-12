@@ -33,6 +33,12 @@ class _MemoryScreenState extends State<MemoryScreen> {
   String _query = '';
   bool _loading = true;
 
+  /// Ids of the rules the reader has expanded. A card shows the backend's
+  /// `preview` until then — the rule bodies are the full CLAUDE.md (#189), so
+  /// 32 of them printed in full is a scroll nobody reads. Which text is short
+  /// enough to print whole is the BACKEND's call (`is_long`), never ours.
+  final Set<String> _expanded = <String>{};
+
   @override
   void initState() {
     super.initState();
@@ -82,6 +88,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
   Widget build(BuildContext context) {
     final title = (_payload['screen_title'] ?? '').toString();
     final subtitle = (_payload['subtitle'] ?? '').toString();
+    final countLabel = (_payload['count_label'] ?? '').toString();
     final visible = _visible;
     return Scaffold(
       backgroundColor: kPageBg,
@@ -117,7 +124,10 @@ class _MemoryScreenState extends State<MemoryScreen> {
                         Ds.space.x16, Ds.space.x12, Ds.space.x16, 0),
                     child: Align(
                       alignment: Alignment.centerLeft,
-                      child: Text(subtitle,
+                      child: Text(
+                          countLabel.isEmpty
+                              ? subtitle
+                              : '$subtitle · $countLabel',
                           style: Ds.t.caption.copyWith(color: kTextLo)),
                     ),
                   ),
@@ -165,11 +175,16 @@ class _MemoryScreenState extends State<MemoryScreen> {
   }
 
   Widget _ruleCard(Map<String, dynamic> r) {
+    final id = (r['id'] ?? '').toString();
     final scope = (r['scope'] ?? '').toString();
     final section = (r['section'] ?? '').toString();
     final body = (r['body'] ?? '').toString();
+    final isLong = r['is_long'] == true;
+    final open = _expanded.contains(id);
+    final shown = (isLong && !open) ? (r['preview'] ?? body).toString() : body;
     final metaLabel = (r['meta_label'] ?? '').toString();
     final updated = (r['updated_label'] ?? '').toString();
+    final sizeLabel = (r['size_label'] ?? '').toString();
     final enabled = r['enabled'] == true;
     final priority = r['priority'];
 
@@ -192,15 +207,39 @@ class _MemoryScreenState extends State<MemoryScreen> {
             ToneChip(label: scope, tone: tone, icon: Icons.public),
           ]),
           SizedBox(height: Ds.space.x8),
-          Text(body,
+          Text(shown,
               style: Ds.t.body.copyWith(color: kTextHi, height: 1.35)),
+          if (isLong) ...[
+            SizedBox(height: Ds.space.x8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: InkWell(
+                borderRadius: Ds.r.rButton,
+                onTap: () => setState(
+                    () => open ? _expanded.remove(id) : _expanded.add(id)),
+                child: Padding(
+                  padding: EdgeInsets.symmetric(
+                      horizontal: Ds.space.x8, vertical: Ds.space.x12),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Text(_lbl(open ? 'collapse' : 'expand'),
+                        style: Ds.t.caption.copyWith(
+                            color: kBrand, fontWeight: FontWeight.w600)),
+                    SizedBox(width: Ds.space.x4),
+                    Icon(open ? Icons.expand_less : Icons.expand_more,
+                        size: Ds.space.x16, color: kBrand),
+                  ]),
+                ),
+              ),
+            ),
+          ],
           SizedBox(height: Ds.space.x12),
           Row(children: [
             Icon(enabled ? Icons.check_circle_outline : Icons.pause_circle_outline,
                 size: Ds.space.x16, color: enabled ? kBrand : kTextLo),
             SizedBox(width: Ds.space.x4),
             Expanded(
-              child: Text('$metaLabel · ${_lbl('priority')} $priority',
+              child: Text(
+                  '$metaLabel · ${_lbl('priority')} $priority · $sizeLabel',
                   style: Ds.t.caption.copyWith(color: kTextLo)),
             ),
           ]),

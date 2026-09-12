@@ -43,6 +43,7 @@ import 'package:pharma_b2b/screens/company_screen.dart';
 import 'package:pharma_b2b/screens/product_detail_screen.dart';
 import 'package:pharma_b2b/widgets/compact_product_card.dart';
 import 'package:pharma_b2b/widgets/home_sections_view.dart';
+import 'package:pharma_b2b/utils/render_log.dart';
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
@@ -126,6 +127,12 @@ Future<void> _pumpCompany(
 }
 
 void main() {
+  // CHANGE #274 — the feed now posts a render-log line counting the cards it
+  // painted (the only evidence a canvas screen can produce). Its 800ms flush
+  // is a real Timer that would outlive these tests and try to reach Supabase,
+  // so it is disabled here exactly as CLAUDE.md's protected-suite note says.
+  setUpAll(() => RenderLog.flushEnabled = false);
+
   setUp(() {
     CartModel.rpcTransport = (fn, params) async =>
         {'ok': true, 'message': '', 'cart': <String, dynamic>{}};
@@ -153,7 +160,10 @@ void main() {
       );
 
       // Title appears in the app bar AND the body header, both from the payload.
-      expect(find.text('SUN PHARMACEUTICAL INDUSTRIES LTD'), findsNWidgets(2));
+      // CHANGED BY #274 — three, not two: the page title, the count line, and
+      // now the manufacturer line the rebuilt product card prints under the
+      // name. Same one backend string in all three places.
+      expect(find.text('SUN PHARMACEUTICAL INDUSTRIES LTD'), findsNWidgets(3));
       expect(find.text('2,510 products'), findsOneWidget);
       expect(find.text('Diprovate Plus G Cream'), findsOneWidget);
     });

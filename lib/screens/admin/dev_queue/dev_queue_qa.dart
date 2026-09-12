@@ -58,6 +58,13 @@ class _QaJourneySectionState extends State<QaJourneySection> {
     final runs = _list(_d['runs']);
     final canWaive = _d['can_waive'] == true;
     final previewLabel = (_d['preview_label'] ?? '').toString();
+    // CMD #368 — how big a QA pass this row actually earned. The label, the
+    // tone and the sentence explaining the grade are built by dev_qa_scope();
+    // a two-row defect fix is graded 'targeted · 1 round' instead of inheriting
+    // the multi-round hostile pass every command used to get.
+    final scopeLabel = (_d['scope_label'] ?? '').toString();
+    final scopeWhy = (_d['scope_why'] ?? '').toString();
+    final roundsLabel = (_d['rounds_label'] ?? '').toString();
 
     return Container(
       margin: EdgeInsets.only(top: Ds.space.x12),
@@ -81,6 +88,23 @@ class _QaJourneySectionState extends State<QaJourneySection> {
             tone: toneByName((_d['qa_status_tone'] ?? 'neutral').toString()),
           ),
         ]),
+        if (scopeLabel.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x8),
+          Row(children: [
+            ToneChip(
+              label: scopeLabel,
+              tone: toneByName((_d['scope_tone'] ?? 'neutral').toString()),
+              icon: Icons.straighten_outlined,
+            ),
+            SizedBox(width: Ds.space.x8),
+            Expanded(
+              child: Text(roundsLabel,
+                  style: Ds.t.caption.copyWith(color: kTextLo)),
+            ),
+          ]),
+          SizedBox(height: Ds.space.x4),
+          Text(scopeWhy, style: Ds.t.caption.copyWith(color: kTextLo)),
+        ],
         if (previewLabel.isNotEmpty) ...[
           SizedBox(height: Ds.space.x8),
           Align(

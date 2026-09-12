@@ -5,11 +5,15 @@ import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 
 import '../data/medicine_repository.dart';
 import '../models/home_sections.dart';
+import '../services/payload_cache.dart';
+import 'stale_payload.dart';
 import '../models/storefront_p3.dart';
-import '../services/ui_copy.dart';
+import '../utils/render_log.dart';
 import '../theme.dart';
 import 'animations.dart';
 import 'compact_product_card.dart';
+import 'customer_surface_widgets.dart'; // CHANGE #745 — the home chip strip
+import 'product_image.dart';
 
 /// CHANGE #637 — the sectioned customer home feed.
 ///
@@ -76,6 +80,20 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
   BackInStock _backInStock = BackInStock.empty;
   bool _seenSent = false;
 
+  /// CMD #1813 — the feed's last SUCCESSFUL payload, kept on the device.
+  ///
+  /// The session memo below already survived a failed refetch, but it lives in
+  /// RAM: a cold start with a slow database had nothing, and the feed painted a
+  /// bare Retry button in front of a customer. This controller paints the last
+  /// good feed off disk first, refreshes behind it, and retries on the
+  /// backend's own backoff. It is bypassed entirely when a test supplies
+  /// [widget.loader].
+  PayloadController? _payload;
+
+  /// Null until the controller says something. A test that supplies its own
+  /// loader has no controller and therefore no status line.
+  PayloadState? _payloadState;
+
   /// CHANGE #678 — paging happens sideways, not downwards.
   ///
   /// A rail grows as you scroll RIGHT, up to the ceiling the backend set. The
@@ -90,8 +108,35 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
 
   @override
   void dispose() {
+    _payload?.removeListener(_onPayload);
+    _payload?.dispose();
     _scroll.dispose();
     super.dispose();
+  }
+
+  /// The controller moved: adopt its payload if it has one, and always adopt
+  /// its status so the quiet line above the feed stays truthful.
+  void _onPayload() {
+    final c = _payload;
+    if (c == null || !mounted) return;
+    final st = c.state;
+    final raw = st.data;
+    HomeSections? parsed;
+    if (raw != null) {
+      try {
+        parsed = HomeSections.fromMap(raw);
+      } catch (_) {
+        parsed = null;
+      }
+    }
+    setState(() {
+      _payloadState = st;
+      if (parsed != null && parsed.ok) {
+        HomeSectionsView._memo = parsed;
+        _data = parsed;
+      }
+    });
+    if (parsed != null && parsed.ok) _reportSeen();
   }
 
   @override
@@ -105,7 +150,35 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
     if (memo != null) {
       _data = memo;
     }
-    _load();
+    if (widget.loader == null) {
+      // Production path: disk cache first, then network, then backoff.
+      final ctl = PayloadController(
+        cacheKey: 'storefront_home_v2',
+        fetch: () => MedicineRepository().fetchHomeSectionsRaw(),
+      );
+      _payload = ctl;
+      ctl.addListener(_onPayload);
+      unawaited(ctl.start());
+      // The strip and the labels are not part of the feed payload.
+      unawaited(_loadSideCars());
+    } else {
+      _load();
+    }
+  }
+
+  /// The back-in-stock strip and the storefront labels — fetched alongside the
+  /// feed, never per card, and never able to blank the feed if they fail.
+  Future<void> _loadSideCars() async {
+    unawaited(MedicineRepository().loadStorefrontLabels());
+    try {
+      final strip = await (widget.notificationsLoader ??
+          () => MedicineRepository().myStockNotifications())();
+      if (!mounted) return;
+      setState(() => _backInStock = strip);
+      _reportSeen();
+    } catch (_) {
+      // No strip is a missing strip, never a missing feed.
+    }
   }
 
   Future<void> _load() async {
@@ -160,6 +233,37 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
     }
 
     _reportSeen();
+    _reportRender();
+  }
+
+  /// CHANGE #274 — the card's own render-log line.
+  ///
+  /// The storefront is a canvas: no browser tool can read a Flutter widget, and
+  /// "the string is in the bundle" only proves the code compiled. So the feed
+  /// counts what it actually painted and posts it, which is the only evidence
+  /// a deploy of this screen can produce (see the VERIFICATION RULE in
+  /// CLAUDE.md).
+  ///
+  /// It counts, it never decides: `rails` is how many sections came back with
+  /// the rail layout, `cards` is how many product cards those sections carry,
+  /// and `ptr` is how many of them arrived with a trade price the viewer is
+  /// entitled to — 0 for an anonymous visitor, which is itself the entitlement
+  /// gate showing up in the log.
+  void _reportRender() {
+    final d = _data;
+    if (d == null || !d.ok) return;
+    var rails = 0;
+    var cards = 0;
+    var ptr = 0;
+    for (final s in d.sections) {
+      if (s.layout == HomeSectionLayout.rail) rails++;
+      for (final c in s.cards) {
+        cards++;
+        if (c.pricing?.cardPrice?.hasPtr == true) ptr++;
+      }
+    }
+    RenderLog.write('c274_home_cards',
+        'rails=$rails cards=$cards ptr=$ptr sections=${d.sections.length}');
   }
 
   /// Appends one page to [id]. Called by a rail that has been scrolled near
@@ -236,13 +340,23 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
   Widget build(BuildContext context) {
     final d = _data;
 
-    // Nothing yet — first load. A refresh keeps the old feed on screen
-    // instead of flashing back to a skeleton.
-    if (d == null) return const _FeedSkeleton();
-
-    // ok:false — the search bar and chips above this widget stay put; this
-    // block is the only thing that changes. Never a blank page, never a throw.
-    if (!d.ok) return _Retry(onRetry: () => _load());
+    // CMD #1813 — three states, and none of them is a dead end.
+    //
+    // Nothing yet: the skeleton, with the quiet line saying we are still
+    // trying. ok:false or a failed refresh: the LAST GOOD feed stays exactly
+    // where it is and the line turns amber. There is no Retry button in any of
+    // them — [PayloadController] is already retrying on the backend's schedule,
+    // and pull-to-refresh below is still there for an impatient thumb.
+    if (d == null || !d.ok) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          PayloadStatusLine(state: _payloadState),
+          const Flexible(child: _FeedSkeleton()),
+        ],
+      );
+    }
 
     // CHANGE #673 — the hero is the first row of the feed rather than a
     // separate widget above it, so it scrolls with the content and costs no
@@ -254,10 +368,26 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
     // products for it.
     final strip = _backInStock.show ? 1 : 0;
 
-    final lead = hero + strip;
+    // CHANGE #745 — the customer strip: the wishlist chip and the rewards
+    // badge, placed by customer_feature_placement rather than by this file.
+    // It rides as a feed row for the same reason the hero does (one
+    // scrollable), and it draws nothing at all — not even a gap — when the
+    // backend placed nothing on 'home_chip'/'home_badge' or when the caller
+    // has no pharmacy account.
+    const lane = 1;
 
-    return RefreshIndicator(
-      onRefresh: () => _load(),
+    final lead = hero + strip + lane;
+
+    // The loaded feed carries the same quiet line: a slow or failing refresh
+    // says so above the content instead of replacing it.
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        PayloadStatusLine(state: _payloadState),
+        Flexible(
+          child: RefreshIndicator(
+      onRefresh: () => _payload == null ? _load() : _payload!.refresh(),
       child: ListView.builder(
         key: const PageStorageKey('home-sections'),
         controller: _scroll,
@@ -288,6 +418,7 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
           if (strip == 1 && i == hero) {
             return _StripBlock(strip: _backInStock);
           }
+          if (i == hero + strip) return const CustomerHomeStrip();
           final si = i - lead;
           if (si >= d.sections.length) return widget.footer!;
           final section = d.sections[si];
@@ -305,6 +436,9 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
           );
         },
       ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -334,6 +468,11 @@ class HomeHeroBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final accent = Brand.hex(hero.accent, Brand.accent);
+    // CHANGE #678 — the hero number is the viewer's count (zone for an
+    // approved customer, catalogue for anyone else), formatted by the backend
+    // and printed verbatim. The log carries every prop label so the live
+    // render can be checked against the payload without a screenshot.
+    RenderLog.write('c678_hero_props', hero.props.map((p) => p.label).join('|'));
 
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 10, 12, 22),
@@ -568,6 +707,14 @@ class _SectionBlock extends StatelessWidget {
               child: _SeeAllBar(
                 label: section.seeAllLabel,
                 accent: accent,
+                // CHANGE #274 — three product photos from THIS section, the
+                // way the reference storefront previews what is behind the
+                // button. They are the same cards already on screen, so the
+                // bar can never advertise something the section does not hold.
+                thumbs: [
+                  for (final p in section.cards.take(3))
+                    if (p.imageUrl.isNotEmpty) p.imageUrl,
+                ],
                 onTap: () => _navigate(context, seeAll),
               ),
             ),
@@ -744,8 +891,18 @@ class _Rail extends StatefulWidget {
 
   const _Rail({required this.section, required this.onNeedMore});
 
+  /// CHANGE #274 — the rail's card width is DERIVED from the viewport, so the
+  /// next card always peeks past the right edge. The rule and the reasoning
+  /// live in [HomeSectionMetrics], which is where the test can reach them.
+  static const double gap = HomeSectionMetrics.gap;
+  static const double gutter = HomeSectionMetrics.gutter;
+
+  /// Kept as the reference width for the skeleton and the back-in-stock strip,
+  /// which do not lay out under a LayoutBuilder.
   static const double cardW = 156;
-  static const double gap = 12;
+
+  static double cardWFor(double viewport) =>
+      HomeSectionMetrics.railCardWidth(viewport);
 
   @override
   State<_Rail> createState() => _RailState();
@@ -796,21 +953,27 @@ class _RailState extends State<_Rail> {
       // Fixed height derived from the card's own constant — the rail never
       // measures its children, so scrolling it costs no layout.
       height: CompactProductCard.extent,
-      child: ListView.builder(
-        controller: _c,
-        scrollDirection: Axis.horizontal,
-        physics: const ClampingScrollPhysics(),
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        itemExtent: _Rail.cardW + _Rail.gap,
-        itemCount: cards.length,
-        itemBuilder: (context, i) {
-          final p = cards[i];
-          return Padding(
-            padding: const EdgeInsets.only(right: _Rail.gap),
-            child: CompactProductCard(
-              product: p,
-              onTap: () => Navigator.of(context).pushNamed('/product/${p.id}'),
-            ),
+      child: LayoutBuilder(
+        builder: (context, c) {
+          final w = _Rail.cardWFor(c.maxWidth);
+          return ListView.builder(
+            controller: _c,
+            scrollDirection: Axis.horizontal,
+            physics: const ClampingScrollPhysics(),
+            padding: const EdgeInsets.symmetric(horizontal: _Rail.gutter),
+            itemExtent: w + _Rail.gap,
+            itemCount: cards.length,
+            itemBuilder: (context, i) {
+              final p = cards[i];
+              return Padding(
+                padding: const EdgeInsets.only(right: _Rail.gap),
+                child: CompactProductCard(
+                  product: p,
+                  onTap: () =>
+                      Navigator.of(context).pushNamed('/product/${p.id}'),
+                ),
+              );
+            },
           );
         },
       ),
@@ -892,12 +1055,22 @@ class _ProductGrid extends StatelessWidget {
 class _SeeAllBar extends StatelessWidget {
   final String label;
   final Color accent;
+
+  /// Up to three product photos from the section this bar closes. Empty when
+  /// none of the cards carried an image — the bar then reads as a plain CTA
+  /// rather than showing placeholder art.
+  final List<String> thumbs;
   final VoidCallback onTap;
   const _SeeAllBar({
     required this.label,
     required this.accent,
     required this.onTap,
+    this.thumbs = const [],
   });
+
+  static const double _thumb = 30;
+  static const double _overlap = 20;
+  static const double _padV = 12;
 
   @override
   Widget build(BuildContext context) => Material(
@@ -907,15 +1080,35 @@ class _SeeAllBar extends StatelessWidget {
       borderRadius: BorderRadius.circular(Rad.pill),
       onTap: onTap,
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 15),
+        padding: const EdgeInsets.symmetric(vertical: _padV),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(
-              label,
-              style: AppType.l4.copyWith(
-                color: Colors.white,
-                fontWeight: FontWeight.w700,
+            if (thumbs.isNotEmpty) ...[
+              SizedBox(
+                height: _thumb,
+                width: _thumb + _overlap * (thumbs.length - 1),
+                child: Stack(
+                  children: [
+                    for (var i = 0; i < thumbs.length; i++)
+                      Positioned(
+                        left: i * _overlap,
+                        child: _ThumbDisc(url: thumbs[i]),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+            ],
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppType.l4.copyWith(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ),
             const SizedBox(width: 8),
@@ -929,6 +1122,31 @@ class _SeeAllBar extends StatelessWidget {
       ),
     ),
   );
+}
+
+/// One circular product photo on the Show-all bar. White ring so overlapping
+/// discs stay separable against the accent fill.
+class _ThumbDisc extends StatelessWidget {
+  final String url;
+  const _ThumbDisc({required this.url});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: _SeeAllBar._thumb,
+        height: _SeeAllBar._thumb,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white, width: 2),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: ProductImage(
+          url: url,
+          width: _SeeAllBar._thumb,
+          height: _SeeAllBar._thumb,
+          radius: BorderRadius.circular(Rad.pill),
+        ),
+      );
 }
 
 // ── icon_grid / brand_grid ───────────────────────────────────────────────────
@@ -1084,30 +1302,11 @@ class _Tile extends StatelessWidget {
 
 // ── states ───────────────────────────────────────────────────────────────────
 
-class _Retry extends StatelessWidget {
-  final VoidCallback onRetry;
-  const _Retry({required this.onRetry});
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 48),
-    child: Column(
-      children: [
-        const Icon(Icons.cloud_off_rounded, size: 34, color: Brand.inkFaint),
-        const SizedBox(height: 14),
-        OutlinedButton(
-          onPressed: onRetry,
-          style: OutlinedButton.styleFrom(
-            foregroundColor: Brand.green,
-            side: const BorderSide(color: Brand.green),
-            shape: const StadiumBorder(),
-          ),
-          child: Text(c('home_sections_view.retry')),
-        ),
-      ],
-    ),
-  );
-}
+// CMD #1813 — the _Retry widget that used to live here is gone on purpose.
+//
+// It was the bare Retry button a customer met when every RPC stalled together
+// at ~13.9 s. The feed now keeps its last good payload and retries itself on
+// the backend's backoff, so there is no state left for that button to occupy.
 
 /// Two headers and one rail of card skeletons — the same geometry the loaded
 /// feed uses, so nothing shifts when the payload lands.

@@ -3,6 +3,7 @@ import 'package:pharma_b2b/utils/toast.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../design_tokens.dart';
+import '../models/reorder_view.dart';
 import '../utils/render_log.dart';
 
 /// CHANGE #173 — B2B repeat-buying / reorder suite.
@@ -151,9 +152,11 @@ class _ReorderScreenState extends State<ReorderScreen> {
     if (p['has_history'] != true) {
       return _empty(_s(p, 'empty_title'), _s(p, 'empty_note'));
     }
-    final items = (p['items'] as List?) ?? const [];
-    final due = items.where((e) => (e as Map)['due'] == true).toList();
-    final rest = items.where((e) => (e as Map)['due'] != true).toList();
+    // Sections come from ReorderSuggestions so the partition (and the "no
+    // client-side sort" rule) is pinned by the protected test.
+    final view = ReorderSuggestions(Map<String, dynamic>.from(p));
+    final due = view.due;
+    final rest = view.rest;
     final hasDue = due.isNotEmpty;
 
     return ListView(
@@ -223,6 +226,11 @@ class _ReorderScreenState extends State<ReorderScreen> {
                   SizedBox(height: Ds.space.x4),
                   Text(_s(it, 'predicted_label'), style: Ds.t.caption),
                 ],
+                // CHANGE #173 — the low-stock reminder for THIS item. Whether
+                // it is on, what it is called and the shelf level it holds all
+                // come from the payload; the tap opens the backend's own copy.
+                SizedBox(height: Ds.space.x4),
+                _remindChip(it, p),
               ],
             ),
           ),
@@ -249,6 +257,132 @@ class _ReorderScreenState extends State<ReorderScreen> {
         ],
       ),
     );
+  }
+
+  // ─── Low-stock reminder (feature 3's customer control) ─────────────────────
+  /// The chip states the CURRENT reminder, worded by the backend
+  /// (`remind_label`, plus `shelf_label` when the pharmacy set a shelf level).
+  /// It never derives its own text from the boolean.
+  Widget _remindChip(Map it, Map p) {
+    final on = it['remind_on'] == true;
+    final shelf = _s(it, 'shelf_label');
+    return InkWell(
+      borderRadius: Ds.r.rChip,
+      onTap: _busy ? null : () => _openRemind(it, p),
+      child: Padding(
+        // Keeps the tap target at 44 px tall without growing the card's own
+        // rhythm — the chip itself stays visually small.
+        padding: EdgeInsets.symmetric(vertical: Ds.space.x8),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(on ? Icons.notifications_active : Icons.notifications_none,
+              size: 16, color: on ? Ds.c.brand : Ds.c.textSecondary),
+          SizedBox(width: Ds.space.x4),
+          Text(_s(it, 'remind_label'),
+              style: Ds.t.caption
+                  .copyWith(color: on ? Ds.c.brand : Ds.c.textSecondary)),
+          if (shelf.isNotEmpty) ...[
+            SizedBox(width: Ds.space.x8),
+            Text(shelf, style: Ds.t.caption),
+          ],
+        ]),
+      ),
+    );
+  }
+
+  /// The reminder sheet. Every word is from the suggestions payload; the only
+  /// thing the app contributes is the number the pharmacy typed.
+  Future<void> _openRemind(Map it, Map p) async {
+    final ctl = TextEditingController(
+        text: (it['shelf_level'] ?? '').toString());
+    var on = it['remind_on'] == true;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Ds.c.surface,
+      isScrollControlled: true,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (sheetCtx) => Padding(
+        padding: EdgeInsets.only(
+          left: Ds.space.x16,
+          right: Ds.space.x16,
+          top: Ds.space.x16,
+          bottom: MediaQuery.of(sheetCtx).viewInsets.bottom + Ds.space.x16,
+        ),
+        child: StatefulBuilder(
+          builder: (innerCtx, setSheet) => Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(_s(p, 'remind_title'), style: Ds.t.title),
+              SizedBox(height: Ds.space.x4),
+              Text(_s(it, 'name'), style: Ds.t.caption),
+              SizedBox(height: Ds.space.x12),
+              Text(_s(p, 'remind_note'), style: Ds.t.caption),
+              SizedBox(height: Ds.space.x16),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                activeColor: Ds.c.brand,
+                title: Text(_s(it, 'remind_label'), style: Ds.t.body),
+                value: on,
+                onChanged: (v) => setSheet(() => on = v),
+              ),
+              SizedBox(height: Ds.space.x8),
+              TextField(
+                controller: ctl,
+                keyboardType: TextInputType.number,
+                style: Ds.t.body,
+                decoration: InputDecoration(
+                  hintText: _s(p, 'shelf_hint'),
+                  hintStyle: Ds.t.caption,
+                  filled: true,
+                  fillColor: Ds.c.bg,
+                  border: OutlineInputBorder(
+                      borderRadius: Ds.r.rButton,
+                      borderSide: BorderSide(color: Ds.c.divider)),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: Ds.r.rButton,
+                      borderSide: BorderSide(color: Ds.c.divider)),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: Ds.r.rButton,
+                      borderSide: BorderSide(color: Ds.c.brand)),
+                ),
+              ),
+              SizedBox(height: Ds.space.x16),
+              _primaryButton(
+                on ? _s(p, 'remind_save') : _s(p, 'remind_clear'),
+                onTap: () {
+                  Navigator.of(sheetCtx).pop();
+                  _savePref(_s(it, 'product_id'), ctl.text, on);
+                },
+              ),
+              SizedBox(height: Ds.space.x8),
+            ],
+          ),
+        ),
+      ),
+    );
+    ctl.dispose();
+  }
+
+  /// prefs_set answers with the whole refreshed screen, so the list re-renders
+  /// from the server's new truth rather than from a local guess.
+  Future<void> _savePref(String productId, String shelfText, bool on) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final res = await _sb.rpc('reorder_prefs_set',
+          params: ReorderPrefsRequest.build(
+              productId: productId, shelfText: shelfText, notify: on));
+      final m = (res is Map) ? Map<String, dynamic>.from(res) : const {};
+      final fresh = m['suggestions'];
+      if (fresh is Map) _p = Map<String, dynamic>.from(fresh);
+      if (mounted) {
+        showToast(context, _s(m, 'message'), isError: m['ok'] != true);
+      }
+    } catch (_) {
+      if (mounted) showToast(context, _genericError, isError: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   // ─── Smart basket diff ──────────────────────────────────────────────────────

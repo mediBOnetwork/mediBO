@@ -20,12 +20,16 @@ FN="https://swojhmarmaijkshsbeih.supabase.co/functions/v1/apk-upload-url"
 
 echo "→ APK: $APK ($(du -h "$APK" | cut -f1))"
 
-# Refuse to publish a debug-signed build: it installs for nobody.
-CERT=$("$HOME/Android/Sdk/build-tools/36.0.0/apksigner" verify --print-certs "$APK" | grep -m1 'DN:')
-echo "→ $CERT"
-case "$CERT" in *"CN=mediBO"*) ;; *) echo "NOT release-signed — refusing" >&2; exit 1;; esac
+# Refuse to publish anything not signed with the original upload key: it
+# installs for nobody, and an APK that does not match the previous release's
+# signature cannot update over it.
+#
+# CHANGE #283 replaced a DN string match ("CN=mediBO") with a fingerprint
+# assertion. A DN is a self-declared label — `keytool -genkey -dname "CN=mediBO"`
+# mints a fresh key that passes a DN check and is still the wrong identity.
+bash "$(dirname "$0")/verify_signing.sh" "$APK"
 
-RES=$(curl -fsS -X POST "$FN" \
+RES=$(curl --max-time 60 -fsS -X POST "$FN" \
         -H "x-notify-secret: $SECRET" \
         -H 'content-type: application/json' \
         -d "{\"path\":\"medibo-$VER.apk\"}")
@@ -34,7 +38,7 @@ UPLOAD_URL=$(printf '%s' "$RES" | python3 -c 'import json,sys; print(json.load(s
 PUBLIC_URL=$(printf '%s' "$RES" | python3 -c 'import json,sys; print(json.load(sys.stdin)["public_url"])')
 
 echo "→ uploading…"
-curl -fsS -X PUT "$UPLOAD_URL" \
+curl --max-time 900 -fsS -X PUT "$UPLOAD_URL" \
   -H 'content-type: application/vnd.android.package-archive' \
   --data-binary "@$APK" >/dev/null
 

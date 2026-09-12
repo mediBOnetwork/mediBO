@@ -1,0 +1,1621 @@
+// CHANGE #747 — the Catalogue tab.
+//
+// Om: "the Catalogue bottom-nav button is dead." It has been since #630, which
+// built the bottom bar from `customer_nav_slot` and gave the Catalogue row
+// page_index 0 — a registry entry aimed at Home, because there was no screen
+// to aim it at. This is the screen.
+//
+// WHAT THIS FILE IS ALLOWED TO DO: ask and paint. Every word on it — the tab
+// names, the breadcrumbs, the counts, the filter chips, the sort names, the
+// zone switch's own label and note, every empty state — arrives already worded
+// from `catalogue_home` / `catalogue_tree` / `catalogue_companies` /
+// `catalogue_salts` / `catalogue_list`. There is not one `'...'` of display
+// text below, no count is formatted here and no plural is decided here. The
+// one thing this file owns is the deep link, because the URL is the browser's
+// and not the database's.
+//
+// The grid is [CompactProductCard] verbatim, fed by [Product.fromHomeCard],
+// because `_cat_cards()` returns the same card `_sf_cards()` returns. A
+// catalogue row and a home rail row are the same product, so they must be the
+// same widget reading the same parser — otherwise the two surfaces eventually
+// disagree about a price.
+
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../design_tokens.dart';
+import '../models/catalogue.dart';
+import '../models/product.dart';
+import '../services/ui_copy.dart';
+import '../url_sync.dart';
+import '../utils/render_log.dart';
+import '../widgets/catalogue_alphabet_rail.dart';
+import '../widgets/catalogue_product_card.dart';
+import '../widgets/product_row_card.dart';
+import '../widgets/product_image.dart';
+import '../widgets/search_typeahead.dart';
+import 'admin/nav_registry_view.dart' show NavGlyph;
+import 'catalogue_extras.dart'; // CHANGE #748
+
+/// Test seam: production goes to Supabase, a test hands back a payload.
+typedef CatalogueRpc = Future<Map<String, dynamic>> Function(
+    String fn, Map<String, dynamic> args);
+
+/// Where the catalogue currently is. One immutable value, so the URL, the
+/// fetch and the back stack are three readings of the SAME thing rather than
+/// three pieces of state that have to be kept in agreement.
+class CatalogueRoute {
+  /// 'browse' | 'companies' | 'salts' | a tab key the backend sent.
+  final String tab;
+
+  /// The browse trail: [] | [therapeutic] | [therapeutic, chemical].
+  final List<String> path;
+
+  /// Set when a product LIST is open: the scope the backend lists by.
+  final String? listKind;
+  final String? listKey;
+
+  final CatFilterState filters;
+  final String sort;
+  final String query;
+
+  /// CMD #1908 — the A–Z letter, or null for the whole list. It lives in the
+  /// ROUTE and not in a field beside it, so the back button and a pasted link
+  /// land on the same letter the strip was showing.
+  final String? letter;
+
+  const CatalogueRoute({
+    this.tab = 'browse',
+    this.path = const [],
+    this.listKind,
+    this.listKey,
+    this.filters = const CatFilterState(),
+    this.sort = 'name',
+    this.query = '',
+    this.letter,
+  });
+
+  bool get showsList => listKind != null;
+
+  CatalogueRoute copy({
+    String? tab,
+    List<String>? path,
+    Object? listKind = _keep,
+    Object? listKey = _keep,
+    CatFilterState? filters,
+    String? sort,
+    String? query,
+    Object? letter = _keep,
+  }) =>
+      CatalogueRoute(
+        tab: tab ?? this.tab,
+        path: path ?? this.path,
+        listKind: identical(listKind, _keep) ? this.listKind : listKind as String?,
+        listKey: identical(listKey, _keep) ? this.listKey : listKey as String?,
+        filters: filters ?? this.filters,
+        sort: sort ?? this.sort,
+        query: query ?? this.query,
+        letter: identical(letter, _keep) ? this.letter : letter as String?,
+      );
+
+  static const Object _keep = Object();
+
+  /// The URL this state is. Restoring is [parse]'s job and the two are
+  /// deliberately adjacent: a link that cannot be read back is not a deep link.
+  String get url {
+    final q = <String>[];
+    if (tab != 'browse') q.add('tab=$tab');
+    if (path.isNotEmpty) q.add('p=${path.map(Uri.encodeComponent).join('/')}');
+    if (listKind != null) q.add('lk=$listKind');
+    if (listKey != null) q.add('k=${Uri.encodeComponent(listKey!)}');
+    if (sort != 'name') q.add('sort=$sort');
+    if (query.isNotEmpty) q.add('q=${Uri.encodeComponent(query)}');
+    if (letter != null) q.add('l=${Uri.encodeComponent(letter!)}');
+    final f = filters.toQuery();
+    if (f.isNotEmpty) q.add(f);
+    return q.isEmpty ? '/catalogue' : '/catalogue?${q.join('&')}';
+  }
+
+  /// True for any URL this screen owns, so the shell's one route check stays
+  /// one line no matter how many parameters the catalogue grows.
+  static bool matches(String path) =>
+      path == '/catalogue' || path.startsWith('/catalogue?') || path.startsWith('/catalogue/');
+
+  static CatalogueRoute parse(String search) {
+    final q = Uri.splitQueryString(search.startsWith('?') ? search.substring(1) : search);
+    final raw = q['p'] ?? '';
+    return CatalogueRoute(
+      tab: (q['tab'] ?? 'browse'),
+      path: raw.isEmpty
+          ? const []
+          : raw.split('/').where((s) => s.isNotEmpty).map(Uri.decodeComponent).toList(),
+      listKind: q['lk'],
+      listKey: q['k'] == null ? null : Uri.decodeComponent(q['k']!),
+      filters: CatFilterState.fromQuery(q),
+      // CMD #1909 — `zone=0` is read and DROPPED, not honoured: an old link
+      // or a bookmark from when the switch existed still opens, it just opens
+      // the whole list like every other link does now.
+      sort: q['sort'] == 'newest' ? 'newest' : 'name',
+      query: q['q'] == null ? '' : Uri.decodeComponent(q['q']!),
+      letter: q['l'] == null ? null : Uri.decodeComponent(q['l']!),
+    );
+  }
+
+  /// CMD #1908 — a breadcrumb tap. The crumb carries the four values this
+  /// route is made of; applying it is a copy, never a computation.
+  CatalogueRoute applyCrumb(CatCrumb c) => CatalogueRoute(
+        tab: c.tab,
+        path: c.path,
+        listKind: c.listKind,
+        listKey: c.listKey,
+        filters: filters,
+        sort: sort,
+        query: '',
+        letter: null,
+      );
+}
+
+class CatalogueScreen extends StatefulWidget {
+  /// True while this is the visible shell page. The screen lives inside an
+  /// IndexedStack, so it is BUILT whether or not anyone is looking at it —
+  /// firing five RPCs for a visitor who tapped Orders is the mistake #633
+  /// fixed for the admin pages, and this screen does not repeat it.
+  final bool active;
+
+  /// Test seam.
+  final CatalogueRpc? rpc;
+
+  /// The initial deep link. Null in production means "read the browser URL".
+  final CatalogueRoute? initialRoute;
+
+  const CatalogueScreen({super.key, this.active = false, this.rpc, this.initialRoute});
+
+  @override
+  State<CatalogueScreen> createState() => _CatalogueScreenState();
+}
+
+class _CatalogueScreenState extends State<CatalogueScreen> {
+  late CatalogueRoute _route;
+
+  CatHome? _home;
+  CatBrowse? _browse;
+  CatList? _list;
+  // CHANGE #748 — Recently added / Missing product / Export. The payload says
+  // whether each is offered at all, so an empty map simply draws none of them.
+  Map<String, dynamic> _extras = const {};
+
+  // CMD #1908 — the breadcrumb and the letter strip are HEADER state: they
+  // survive a reload, because a trail that blinks out while the next payload
+  // is in flight is a trail that "disappeared after changing a filter".
+  CatTrail _trail = CatTrail.empty;
+  CatRail _rail = CatRail.empty;
+
+  bool _booted = false;
+  bool _loading = false;
+  bool _loadingMore = false;
+  String _error = '';
+
+  final _scroll = ScrollController();
+  final _searchCtrl = TextEditingController();
+  final _searchFocus = FocusNode();
+
+  // CHANGE #799 — the typeahead panel under the hero search. The controller
+  // owns the debounce and the last payload; the panel renders it verbatim.
+  final _suggest = SearchSuggestController();
+
+  // CMD #1905 — what the search box is showing instead of raw text. A tapped
+  // suggestion opened a COMPANY, a salt or a class; leaving its name sitting
+  // in a product-search field was the lie the whole command exists to end.
+  // Both strings are the backend's (`chip_label`, `clear_label`).
+  SearchChip _chip = SearchChip.none;
+
+  final List<CatRow> _rows = [];
+  int _nextOffset = 0;
+  bool _rowsHaveMore = false;
+  String? _cursor;
+
+  static const int _pageSize = 24;
+  static const int _rowPage = 40;
+
+  @override
+  void initState() {
+    super.initState();
+    // initialSearch(), not currentSearch(): boot's usePathUrlStrategy rewrite
+    // has already erased the live query string by the time this runs.
+    _route = widget.initialRoute ?? CatalogueRoute.parse(initialSearch());
+    _searchCtrl.text = _route.query;
+    _scroll.addListener(_onScroll);
+    _suggest.addListener(_onSuggest);
+    if (widget.active) _boot();
+  }
+
+  @override
+  void didUpdateWidget(covariant CatalogueScreen old) {
+    super.didUpdateWidget(old);
+    // First time the tab is actually opened — not at shell boot.
+    if (widget.active && !old.active && !_booted) _boot();
+  }
+
+  @override
+  void dispose() {
+    _scroll.removeListener(_onScroll);
+    _scroll.dispose();
+    _searchCtrl.dispose();
+    _searchFocus.dispose();
+    _suggest.removeListener(_onSuggest);
+    _suggest.dispose();
+    super.dispose();
+  }
+
+  Future<Map<String, dynamic>> _call(String fn, Map<String, dynamic> args) async {
+    if (widget.rpc != null) return widget.rpc!(fn, args);
+    final raw = await Supabase.instance.client.rpc(fn, params: args);
+    final m = raw is List ? (raw.isEmpty ? null : raw.first) : raw;
+    return m is Map ? Map<String, dynamic>.from(m) : <String, dynamic>{};
+  }
+
+  Future<void> _boot() async {
+    _booted = true;
+    setState(() => _loading = true);
+    try {
+      final home = CatHome.fromMap(await _call('catalogue_home', const {}));
+      if (!mounted) return;
+      setState(() => _home = home);
+      // CHANGE #748 — best-effort: the three extras must never be able to stop
+      // the catalogue itself from booting.
+      try {
+        final ex = await _call('catalogue_extras', const {});
+        if (mounted) setState(() => _extras = ex);
+      } catch (_) {}
+      RenderLog.write('c747_catalogue_tabs',
+          '${home.tabs.map((t) => t.key).join('>')};'
+          'zone=${home.zone.has ? 'switch' : 'none'}');
+      await _fetch();
+    } catch (e) {
+      if (mounted) setState(() { _loading = false; _error = e.toString(); });
+    }
+  }
+
+  /// Load whatever the current route points at. Every navigation in this screen
+  /// is "change the route, then call this" — there is no second code path.
+  Future<void> _fetch() async {
+    setState(() { _loading = true; _error = ''; });
+    try {
+      if (_route.showsList) {
+        final p = await _call('catalogue_list', {
+          'p_kind': _route.listKind,
+          'p_key': _route.listKey,
+          'p_path': _route.path,
+          'p_filters': _route.filters.toRpc(),
+          'p_sort': _route.sort,
+          'p_cursor': null,
+          'p_limit': _pageSize,
+        });
+        if (!mounted) return;
+        final list = CatList.fromMap(p);
+        setState(() {
+          _list = list;
+          _cursor = list.nextCursor;
+          if (!list.trail.isEmpty) _trail = list.trail;
+          _rail = CatRail.empty;
+          _loading = false;
+        });
+        RenderLog.write('c747_catalogue_list',
+            '${_route.listKind}:${_route.listKey ?? _route.path.join('/')};'
+            'items=${list.rows.length};more=${list.hasMore};filters=${list.filtersActive};'
+            'grouped=${list.grouped};'
+            'dividers=${list.rows.where((r) => r.dividerLabel.isNotEmpty).length}');
+      } else {
+        final fn = switch (_route.tab) {
+          'companies' => 'catalogue_companies',
+          'salts' => 'catalogue_salts',
+          _ => 'catalogue_tree',
+        };
+        // CMD #1908 — companies, salts and classes all take the same letter,
+        // because they all draw the same strip.
+        final args = switch (_route.tab) {
+          'companies' => {
+              'p_letter': _route.query.isEmpty ? _route.letter : null,
+              'p_q': _route.query.isEmpty ? null : _route.query,
+              'p_offset': 0, 'p_limit': _rowPage,
+            },
+          'salts' => {
+              'p_letter': _route.query.isEmpty ? _route.letter : null,
+              'p_q': _route.query.isEmpty ? null : _route.query,
+              'p_offset': 0, 'p_limit': _rowPage,
+            },
+          _ => {
+              'p_path': _route.path,
+              'p_letter': _route.letter,
+            },
+        };
+        final b = CatBrowse.fromMap(await _call(fn, args));
+        if (!mounted) return;
+        setState(() {
+          _browse = b;
+          _rows
+            ..clear()
+            ..addAll(b.rows);
+          _rowsHaveMore = b.hasMore;
+          _nextOffset = b.nextOffset;
+          if (!b.trail.isEmpty) _trail = b.trail;
+          _rail = b.rail;
+          _loading = false;
+        });
+        RenderLog.write('c747_catalogue_browse',
+            '${_route.tab};depth=${_route.path.length};rows=${b.rows.length};more=${b.hasMore}');
+      }
+    } catch (e) {
+      if (mounted) setState(() { _loading = false; _error = e.toString(); });
+    }
+  }
+
+  void _onSuggest() { if (mounted) setState(() {}); }
+
+  // CMD #1903 — `catalogue_variants` is no longer called from here. The pack
+  // family was a chip row on every card in every list; it is now the "Other
+  // packs" strip on the PRODUCT PAGE, which is the one place a buyer is
+  // choosing between packs rather than scanning for one.
+
+  /// CMD #1905 — a tapped suggestion opens WHAT IT IS.
+  ///
+  /// The backend named the destination in the item's `nav` block; this method
+  /// only knows which screen renders which kind, which is the one thing the
+  /// app owns (the URL is the browser's, not the database's). Nothing here
+  /// re-runs a text query — that is what pasted "SUN PHARMACEUTICAL
+  /// INDUSTRIES LTD" into a product-name search and found nothing.
+  void _pickSuggestion(SearchSuggestion s) {
+    _suggest.close();
+    _searchFocus.unfocus();
+    RenderLog.write('c1905_suggest_nav', '${s.navKind}:${s.navId}');
+    switch (s.navKind) {
+      case 'product':
+        _showChip(s);
+        Navigator.of(context).pushNamed('/product/${s.navId}');
+      case 'company':
+        _showChip(s);
+        Navigator.of(context)
+            .pushNamed('/company/${Uri.encodeComponent(s.navId)}');
+      case 'salt':
+        _showChip(s);
+        _go(_route.copy(tab: 'salts', path: const [], listKind: 'salt',
+            listKey: s.navId, query: '', letter: null));
+      case 'category':
+        _showChip(s);
+        _go(_route.copy(tab: 'browse', path: [s.navId], listKind: 'tree',
+            listKey: null, query: '', letter: null));
+      case 'tab':
+        // "See all companies" / "See all salts": the tab, narrowed by what
+        // was typed. Still not a product-name search.
+        _clearChip();
+        _searchCtrl.text = s.navQuery;
+        _go(_route.copy(tab: s.navTab, path: const [], listKind: null,
+            listKey: null, query: s.navQuery, letter: null));
+      default:
+        // 'search' — the one nav that IS a text query, because the backend
+        // said so: a product family whose name really is a prefix of its own
+        // products' names, or "See all products" for what was typed.
+        _clearChip();
+        _searchCtrl.text = s.navId;
+        _go(_route.copy(tab: 'browse', path: const [], listKind: 'search',
+            listKey: s.navId, query: s.navId, letter: null));
+    }
+  }
+
+  /// Put the backend's chip in the box. The raw text goes with it: the field
+  /// is showing a scope now, not a phrase that was typed.
+  void _showChip(SearchSuggestion s) {
+    if (s.chipLabel.isEmpty) return;
+    setState(() {
+      _chip = SearchChip(label: s.chipLabel, clearLabel: _suggest.clearLabel);
+      _searchCtrl.text = '';
+    });
+  }
+
+  void _clearChip() {
+    if (_chip.has) setState(() => _chip = SearchChip.none);
+  }
+
+  void _go(CatalogueRoute next, {bool push = true}) {
+    setState(() {
+      _route = next;
+      // CMD #1905 — a chip names ONE scope. Any other navigation leaves it
+      // behind rather than letting it describe a screen it did not open.
+      if (next.query.isNotEmpty) _chip = SearchChip.none;
+      _searchCtrl.text = next.query;
+      _rows.clear();
+      _cursor = null;
+      _list = null;
+      _browse = null;
+    });
+    _suggest.close();
+    if (push) pushUrl(next.url);
+    _fetch();
+  }
+
+  void _onScroll() {
+    if (!_scroll.hasClients || _loadingMore) return;
+    if (_scroll.position.pixels < _scroll.position.maxScrollExtent - 600) return;
+    if (_route.showsList) {
+      if (_list?.hasMore == true && _cursor != null) _moreProducts();
+    } else if (_rowsHaveMore) {
+      _moreRows();
+    }
+  }
+
+  Future<void> _moreProducts() async {
+    setState(() => _loadingMore = true);
+    try {
+      final p = CatList.fromMap(await _call('catalogue_list', {
+        'p_kind': _route.listKind,
+        'p_key': _route.listKey,
+        'p_path': _route.path,
+        'p_filters': _route.filters.toRpc(),
+        'p_sort': _route.sort,
+        'p_cursor': _cursor,
+        'p_limit': _pageSize,
+      }));
+      if (!mounted) return;
+      final cur = _list;
+      setState(() {
+        _loadingMore = false;
+        if (cur == null || !p.ok) return;
+        _list = CatList(
+          ok: cur.ok, title: cur.title, subtitle: cur.subtitle,
+          countLabel: cur.countLabel, emptyLabel: cur.emptyLabel,
+          moreLabel: cur.moreLabel, endLabel: cur.endLabel, sort: cur.sort,
+          filtersActive: cur.filtersActive, filtersActiveLabel: cur.filtersActiveLabel,
+          zone: cur.zone, filters: cur.filters,
+          sentence: cur.sentence, empty: cur.empty, trail: cur.trail,
+          // The groups come back on every page — the counts are the SCOPE's,
+          // not the page's, so the later payload is as good as the first and
+          // taking it keeps a changed count honest.
+          grouped: p.grouped, groups: p.groups,
+          rows: [...cur.rows, ...p.rows],
+          // Paging stops when the BACKEND says so, never when a page comes back
+          // short — that is wrong on an exact boundary.
+          hasMore: p.hasMore, nextCursor: p.nextCursor,
+        );
+        _cursor = p.nextCursor;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loadingMore = false);
+    }
+  }
+
+  Future<void> _moreRows() async {
+    setState(() => _loadingMore = true);
+    try {
+      final fn = _route.tab == 'companies' ? 'catalogue_companies' : 'catalogue_salts';
+      final args = {
+        'p_letter': _route.query.isEmpty ? _route.letter : null,
+        'p_q': _route.query.isEmpty ? null : _route.query,
+        'p_offset': _nextOffset, 'p_limit': _rowPage,
+      };
+      final b = CatBrowse.fromMap(await _call(fn, args));
+      if (!mounted) return;
+      final seen = _rows.map((r) => r.key).toSet();
+      setState(() {
+        _loadingMore = false;
+        _rows.addAll(b.rows.where((r) => seen.add(r.key)));
+        _rowsHaveMore = b.hasMore;
+        _nextOffset = b.nextOffset;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loadingMore = false);
+    }
+  }
+
+  // ── taps ──────────────────────────────────────────────────────────────────
+
+  void _tapTab(CatTab t) {
+    if (t.kind == 'list') {
+      _go(_route.copy(tab: t.key, path: const [], listKind: t.listKind,
+          listKey: t.listKey, query: '', letter: null));
+    } else {
+      _go(_route.copy(tab: t.key, path: const [], listKind: null,
+          listKey: null, query: '', letter: null));
+    }
+  }
+
+  void _tapRow(CatRow r) {
+    switch (_route.tab) {
+      case 'companies':
+        _go(_route.copy(listKind: 'company', listKey: r.key));
+      case 'salts':
+        _go(_route.copy(listKind: 'salt', listKey: r.key));
+      default:
+        final b = _browse;
+        final next = [..._route.path, r.key];
+        // WHERE the next tap goes is the BACKEND's answer (`child_opens`), not
+        // a depth this screen counts for itself.
+        if (b != null && b.childOpens == 'products') {
+          _go(_route.copy(path: next, listKind: 'tree', listKey: null));
+        } else {
+          _go(_route.copy(path: next, listKind: null, listKey: null));
+        }
+    }
+  }
+
+  // ── build ─────────────────────────────────────────────────────────────────
+
+  /// The catalogue's own front page: no tab chosen, no list open, no crumb.
+  /// Only here do the doors and the recently-viewed strip appear — inside a
+  /// tab they would be furniture in the way of the thing you came for.
+  bool get _isHome => !_route.showsList && _route.tab == 'browse' && _route.path.isEmpty;
+
+  @override
+  Widget build(BuildContext context) {
+    final home = _home;
+    if (!_booted || (home == null && _loading)) return const _CatSkeleton();
+    if (home == null) return _CatError(message: _error, onRetry: _boot);
+
+    return Container(
+      color: Ds.c.bg,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 1. The search bar IS the screen's hero — one field, at the top,
+          //    above everything else, on every state of this tab.
+          _SearchHero(
+            home: home,
+            controller: _searchCtrl,
+            focus: _searchFocus,
+            suggest: _suggest,
+            chip: _chip,
+            onSubmit: (q) {
+              final t = q.trim();
+              if (t.isEmpty) return;
+              _suggest.close();
+              _clearChip();
+              _go(_route.copy(tab: 'browse', path: const [], listKind: 'search',
+                  listKey: t, query: t, letter: null));
+            },
+            onPick: _pickSuggestion,
+            onClear: () {
+              _searchCtrl.clear();
+              _suggest.close();
+              // CMD #1905 — the × on the chip is the same × as the field's:
+              // it puts the shopper back on the catalogue they came from.
+              final hadChip = _chip.has;
+              _clearChip();
+              if (hadChip || _route.listKind == 'search') {
+                _go(_route.copy(tab: 'browse', path: const [], listKind: null,
+                    listKey: null, query: '', letter: null));
+              }
+            },
+          ),
+          // 2. CMD #1908 — the breadcrumb. Sticky under the search on EVERY
+          //    state of this tab, outside the scroll view, so it cannot
+          //    scroll away, and held across a reload so it cannot blink out
+          //    while the next payload is in flight.
+          _TrailBar(
+            trail: _trail,
+            onTap: (c) => _go(_route.applyCrumb(c)),
+          ),
+          // 3. The A–Z strip, directly under the breadcrumb. The backend sends
+          //    a rail on the company, salt and class lists and none on a
+          //    product grid, so there is nothing here to decide.
+          if (!_rail.isEmpty)
+            CatalogueAlphabetRail(
+              rail: _rail,
+              active: _route.letter,
+              onPick: (l) => _go(_route.copy(letter: l, query: '')),
+            ),
+          // 4. The narrowing sentence. It belongs to a SEARCH and to the
+          //    catalogue's own front page; inside a company, a salt or a class
+          //    the backend sends an empty one and this row is simply absent.
+          _SentenceRow(
+            sentence: _route.showsList
+                ? (_list?.sentence ?? CatSentence.empty)
+                : (_isHome ? home.sentence : (_browse?.sentence ?? CatSentence.empty)),
+            state: _route.filters,
+            onToggle: (g, k, single) {
+              // CMD #1909 — 'zone' was a chip that filtered the list. The
+              // backend stopped sending it; an unknown group is skipped in
+              // silence rather than guessed at.
+              if (g == 'zone') return;
+              final next = _route.filters.toggle(g, k, single: single);
+              // A chip tapped on the front page has to have somewhere to land:
+              // it opens the whole-catalogue grid already narrowed by it.
+              _go(_route.showsList
+                  ? _route.copy(filters: next)
+                  : _route.copy(filters: next, listKind: 'tree', listKey: null));
+            },
+            onClear: () => _go(_route.copy(filters: const CatFilterState())),
+          ),
+          if (_route.showsList)
+            _ListToolbar(
+              list: _list,
+              route: _route,
+              onSort: (k) => _go(_route.copy(sort: k)),
+              onToggle: (g, k, single) =>
+                  _go(_route.copy(filters: _route.filters.toggle(g, k, single: single))),
+              onClear: () => _go(_route.copy(filters: const CatFilterState())),
+            ),
+          // CHANGE #1362 — the catalogue export ("Make the PDF") is GONE, on
+          // purpose: it let anyone bulk-download the product list a competitor
+          // would otherwise have to scrape. There is no export widget, no
+          // `export` block in catalogue_extras() and no catalogue_export_*
+          // RPC left to call. Do not reintroduce one here.
+          Expanded(child: _body()),
+        ],
+      ),
+    );
+  }
+
+  Widget _body() {
+    // CHANGE #748 — the Recently-added tab is its own body, fetched by its own
+    // RPC. It is reached the same way every other tab is: the backend put a tab
+    // in the strip whose `kind` this build knows.
+    if (_route.tab == 'recent') return const CatalogueRecent();
+    if (_loading) return const _CatSkeleton();
+    if (_error.isNotEmpty) return _CatError(message: _error, onRetry: _fetch);
+    return _route.showsList ? _productGrid() : _rowList();
+  }
+
+  /// CHANGE #748 — the request sheet. A sheet, not a dialog, per DESIGN.md, and
+  /// it is only ever offered when the payload said `show`.
+  void _openRequest() {
+    final cfg = _extras['request'];
+    if (cfg is! Map) return;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (_) =>
+          CatalogueRequestSheet(config: Map<String, dynamic>.from(cfg)),
+    );
+  }
+
+  /// Long-press on a card. Everything the sheet prints is already on the card's
+  /// own payload, so a peek costs no round trip — which is the whole point of
+  /// it on a slow connection.
+  void _openPeek(Product p) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (_) => CataloguePeekSheet(
+        product: p,
+        title: _peek('title'),
+        openLabel: _peek('open_label'),
+        onOpen: () {
+          Navigator.of(context).pop();
+          Navigator.of(context).pushNamed('/product/${p.id}');
+        },
+      ),
+    );
+  }
+
+  Widget _rowList() {
+    final b = _browse;
+    if (b == null) return const _CatSkeleton();
+
+    final list = CustomScrollView(
+      controller: _scroll,
+      slivers: [
+        // The front page: recently viewed, then the three doors, then the tree.
+        if (_isHome && (_home?.hasRecentViewed ?? false))
+          SliverToBoxAdapter(
+            child: _RecentStrip(
+              title: _home!.recentViewedTitle,
+              items: _home!.recentViewed,
+              onTap: (p) => Navigator.of(context).pushNamed('/product/${p.id}'),
+            ),
+          ),
+        if (_isHome && (_home?.doors.isNotEmpty ?? false))
+          SliverToBoxAdapter(
+            child: _Doors(
+              title: _home!.doorsTitle,
+              doors: _home!.doors,
+              onTap: (d) => _go(_route.copy(tab: d.tab, path: const [],
+                  listKind: null, listKey: null, query: '', letter: null)),
+            ),
+          ),
+        if (_isHome) SliverToBoxAdapter(child: _tabStrip()),
+        // CMD #1909 — the zone SWITCH used to sit here. Nothing replaces it:
+        // a catalogue list hides nothing any more, so there is no setting to
+        // offer. What was a filter is now the order the list arrives in, and
+        // the divider rows inside the list say so in the backend's words.
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x24, Ds.space.x16, Ds.space.x8),
+            child: Row(
+              children: [
+                Expanded(child: Text(b.title, style: Ds.t.title)),
+                Text(b.countLabel, style: Ds.t.caption),
+              ],
+            ),
+          ),
+        ),
+        if (b.leadLabel.isNotEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(Ds.space.x16, 0, Ds.space.x16, Ds.space.x8),
+              child: Text(b.leadLabel, style: Ds.t.caption),
+            ),
+          ),
+        // A level with no children of its own still has products behind it —
+        // the backend says so, and this is the way through.
+        if (_rows.isEmpty && b.hasProducts)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.all(Ds.space.x16),
+              child: _OpenProducts(
+                label: b.productsLabel,
+                onTap: () => _go(_route.copy(listKind: 'tree', listKey: null)),
+              ),
+            ),
+          ),
+        if (_rows.isEmpty && !b.hasProducts)
+          SliverToBoxAdapter(child: _CatEmpty(label: b.emptyLabel)),
+        SliverList.separated(
+          itemCount: _rows.length,
+          separatorBuilder: (_, _) => Divider(height: 1, color: Ds.c.divider),
+          itemBuilder: (context, i) => _BrowseRow(row: _rows[i], onTap: () => _tapRow(_rows[i])),
+        ),
+        if (b.hasProducts && _rows.isNotEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.all(Ds.space.x16),
+              child: _OpenProducts(
+                label: b.productsLabel,
+                onTap: () => _go(_route.copy(listKind: 'tree', listKey: null)),
+              ),
+            ),
+          ),
+        SliverToBoxAdapter(child: _Tail(loading: _loadingMore)),
+      ],
+    );
+
+    // CMD #1908 — nothing rides over the rows any more. The A–Z index is the
+    // horizontal strip in the header, above this scroll view, where it is the
+    // same component on companies, salts and classes.
+    return list;
+  }
+
+  /// The tabs #747/#748 shipped — Schemes, Cold chain, Recently added — now a
+  /// quiet chip row under the doors instead of the screen's main navigation.
+  Widget _tabStrip() {
+    final home = _home;
+    if (home == null) return const SizedBox.shrink();
+    const known = {'list', 'recent'};
+    final tabs = home.tabs.where((t) => known.contains(t.kind)).toList();
+    final recent = _extras['recent'];
+    if (recent is Map && recent['show'] == true) {
+      tabs.add(CatTab.fromMap(Map<String, dynamic>.from(recent)));
+    }
+    if (tabs.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.only(top: Ds.space.x24),
+      child: SizedBox(
+        height: Ds.touch.minTarget,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+          itemCount: tabs.length,
+          separatorBuilder: (_, _) => SizedBox(width: Ds.space.x8),
+          itemBuilder: (context, i) => Center(
+            // Label and count are two payload strings and stay two Texts.
+            // Joining them into one is the app writing a sentence.
+            child: _Chip(
+              label: tabs[i].label,
+              count: tabs[i].countLabel,
+              selected: tabs[i].key == _route.tab,
+              onTap: () => _tapTab(tabs[i]),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _productGrid() {
+    final l = _list;
+    if (l == null) return const _CatSkeleton();
+    if (l.rows.isEmpty) {
+      return CustomScrollView(controller: _scroll, slivers: [
+        SliverToBoxAdapter(
+          child: _CatEmptyState(
+            empty: l.empty,
+            onAction: _openRequest,
+            onClear: () => _go(_route.copy(filters: const CatFilterState())),
+          ),
+        ),
+      ]);
+    }
+    // CMD #1903 — a product LIST, one row per product, and the same
+    // [ProductRowCard] the search results draw. It is a sliver list, so only
+    // the rows on screen are built and a 5.6-lakh scope costs the same as a
+    // 24-row one on a low-end phone.
+    return CustomScrollView(
+        controller: _scroll,
+        slivers: [
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(l.title, style: Ds.t.title),
+                  if (l.subtitle.isNotEmpty) ...[
+                    SizedBox(height: Ds.space.x4),
+                    Text(l.subtitle, style: Ds.t.caption),
+                  ],
+                  SizedBox(height: Ds.space.x4),
+                  Text(l.countLabel, style: Ds.t.caption),
+                ],
+              ),
+            ),
+          ),
+          SliverPadding(
+            padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+            sliver: SliverList(
+              delegate: SliverChildBuilderDelegate(
+                // CMD #1909 — the divider is drawn from the ROW's own
+                // `divider_label`, so it costs no lookahead, no grouping pass
+                // and no comparison between pages. An empty label is simply a
+                // row with no header above it.
+                (context, i) => Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (l.rows[i].dividerLabel.isNotEmpty)
+                      _GroupDivider(label: l.rows[i].dividerLabel, first: i == 0),
+                    Padding(
+                      padding: EdgeInsets.only(bottom: Ds.space.x12),
+                      child: ProductRowCard(
+                        product: l.rows[i].product,
+                        addedLabel: _addedLabel,
+                        undoLabel: _undoLabel,
+                        onTap: () => Navigator.of(context)
+                            .pushNamed('/product/${l.rows[i].product.id}'),
+                        onPeek: () => _openPeek(l.rows[i].product),
+                      ),
+                    ),
+                  ],
+                ),
+                childCount: l.rows.length,
+              ),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.all(Ds.space.x16),
+              child: Center(
+                child: _loadingMore
+                    ? const _MoreSkeleton()
+                    : Text(l.hasMore ? l.moreLabel : l.endLabel, style: Ds.t.caption),
+              ),
+            ),
+          ),
+        ],
+    );
+  }
+
+  /// The add toast and its undo word, from the payload the extras call
+  /// returned. Absent means no snackbar — never a sentence written here.
+  String get _addedLabel =>
+      (_extras['added'] is Map ? (_extras['added'] as Map)['label'] : '')?.toString() ?? '';
+  String get _undoLabel =>
+      (_extras['added'] is Map ? (_extras['added'] as Map)['undo_label'] : '')?.toString() ?? '';
+  String _peek(String k) =>
+      (_extras['peek'] is Map ? (_extras['peek'] as Map)[k] : '')?.toString() ?? '';
+}
+
+// ── pieces ────────────────────────────────────────────────────────────────
+
+/// CHANGE #799 — the hero. One field, at the top, on every state of the tab,
+/// with the typeahead panel #790 built hanging under it.
+class _SearchHero extends StatelessWidget {
+  final CatHome home;
+  final TextEditingController controller;
+  final FocusNode focus;
+  final SearchSuggestController suggest;
+  final ValueChanged<String> onSubmit;
+  final ValueChanged<SearchSuggestion> onPick;
+  final VoidCallback onClear;
+
+  /// CMD #1905 — the scope a tapped suggestion opened, or [SearchChip.none].
+  final SearchChip chip;
+
+  const _SearchHero({
+    required this.home,
+    required this.controller,
+    required this.focus,
+    required this.suggest,
+    required this.onSubmit,
+    required this.onPick,
+    required this.onClear,
+    required this.chip,
+  });
+
+  @override
+  Widget build(BuildContext context) => Container(
+        color: Ds.c.surface,
+        padding: EdgeInsets.fromLTRB(
+            Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SizedBox(
+              height: Ds.touch.minTarget,
+              // CMD #1905 — while a chip is up, the box IS the chip. A field
+              // still holding "SUN PHARMACEUTICAL INDUSTRIES LTD" under a
+              // company page said the shopper had searched for that phrase,
+              // which is exactly what they had not done.
+              child: chip.has
+                  ? SearchBoxChip(chip: chip, onClear: onClear)
+                  : TextField(
+                controller: controller,
+                focusNode: focus,
+                textInputAction: TextInputAction.search,
+                onChanged: suggest.onQueryChanged,
+                onSubmitted: onSubmit,
+                decoration: InputDecoration(
+                  // The placeholder is the payload's. There is no second
+                  // sentence under this field: the field IS the instruction.
+                  hintText: home.searchPlaceholder,
+                  prefixIcon: const Icon(Icons.search),
+                  isDense: true,
+                  suffixIcon: ValueListenableBuilder<TextEditingValue>(
+                    valueListenable: controller,
+                    builder: (context, v, _) => v.text.isEmpty
+                        ? const SizedBox.shrink()
+                        : IconButton(
+                            tooltip: home.searchClearLabel,
+                            icon: const Icon(Icons.close),
+                            onPressed: onClear,
+                          ),
+                  ),
+                ),
+              ),
+            ),
+            // The panel is part of the header, not an overlay: an overlay over
+            // a canvas app is one more layer to composite on a low-end phone,
+            // and this list is already the thing under the finger.
+            ListenableBuilder(
+              listenable: suggest,
+              builder: (context, _) => suggest.isOpen
+                  ? Padding(
+                      padding: EdgeInsets.only(top: Ds.space.x8),
+                      child: SearchSuggestions(
+                          payload: suggest.payload, onPick: onPick),
+                    )
+                  : const SizedBox.shrink(),
+            ),
+          ],
+        ),
+      );
+}
+
+/// CHANGE #799 — "Showing · Tablets · Rx · In my zone".
+///
+/// Chips, never a menu. The lead word, the dot between the chips, which chips
+/// are worth offering and whether each is on are all `catalogue_sentence()`'s
+/// answers — this row lays them out and hands taps back.
+class _SentenceRow extends StatelessWidget {
+  final CatSentence sentence;
+  final CatFilterState state;
+  final void Function(String group, String key, bool single) onToggle;
+  final VoidCallback onClear;
+
+  const _SentenceRow({
+    required this.sentence,
+    required this.state,
+    required this.onToggle,
+    required this.onClear,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (sentence.isEmpty) return const SizedBox.shrink();
+    return Container(
+      color: Ds.c.surface,
+      padding: EdgeInsets.only(bottom: Ds.space.x8),
+      child: SizedBox(
+        height: Ds.touch.minTarget,
+        child: ListView(
+          scrollDirection: Axis.horizontal,
+          padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+          children: [
+            if (sentence.lead.isNotEmpty)
+              Center(
+                child: Padding(
+                  padding: EdgeInsets.only(right: Ds.space.x8),
+                  child: Text(
+                      sentence.hasSelection
+                          ? sentence.lead
+                          : '${sentence.lead} ${sentence.allLabel}'.trim(),
+                      style: Ds.t.caption),
+                ),
+              ),
+            for (final part in sentence.parts)
+              _Chip(
+                label: part.label,
+                selected: part.selected,
+                onTap: () => onToggle(part.group, part.key, part.isSingle),
+              ),
+            if (sentence.hasSelection && sentence.clearLabel.isNotEmpty)
+              _Chip(label: sentence.clearLabel, selected: false, onTap: onClear),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// CMD #1909 — the grey rule that names an availability group.
+///
+/// It prints ONE string and decides nothing: the label already carries its own
+/// count, because a count assembled here ("Available in your zone" + " (" + n)
+/// would be this widget writing a sentence.
+///
+/// The rule sits ABOVE the label, and only when there is something above to
+/// separate from — [first] is the top of the whole list, not the top of a
+/// page, so an appended page never draws a stray line under nothing. The label
+/// is a left-aligned caption on its own line rather than centred between two
+/// rules: "Not available in your zone (2,95,412)" is 34 characters, and
+/// squeezed between two Expanded dividers on a 360 px phone it overflowed by
+/// 50 px — a header that hides the number it exists to show.
+class _GroupDivider extends StatelessWidget {
+  final String label;
+  final bool first;
+  const _GroupDivider({required this.label, required this.first});
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: EdgeInsets.only(
+            top: first ? 0 : Ds.space.x24, bottom: Ds.space.x12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (!first) ...[
+              Divider(height: 1, color: Ds.c.divider),
+              SizedBox(height: Ds.space.x16),
+            ],
+            Text(label, style: Ds.t.caption, textAlign: TextAlign.left),
+          ],
+        ),
+      );
+}
+
+/// CHANGE #799 — three doors, large and calm: a glyph, a name, a count in
+/// grey. Nothing else on the tile, which is the whole instruction.
+class _Doors extends StatelessWidget {
+  final String title;
+  final List<CatDoor> doors;
+  final ValueChanged<CatDoor> onTap;
+  const _Doors({required this.title, required this.doors, required this.onTap});
+
+  // 120, not 104: the count is a SENTENCE the backend wrote ("1,06,571
+  // salts", "3,35,273 products"), and at three tiles across a 390pt phone one
+  // line of it ellipsised to "18,563 comp…". A tile that hides the number it
+  // exists to show is the truncation the design contract forbids, so the tile
+  // grew and the count wraps to two lines instead.
+  static const double _tileH = 120;
+  static const double _glyphBox = 32;
+  static const double _glyph = 20;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: EdgeInsets.fromLTRB(
+            Ds.space.x16, Ds.space.x24, Ds.space.x16, 0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (title.isNotEmpty) ...[
+              Text(title, style: Ds.t.caption),
+              SizedBox(height: Ds.space.x8),
+            ],
+            Row(
+              children: [
+                for (var i = 0; i < doors.length; i++) ...[
+                  if (i > 0) SizedBox(width: Ds.space.x12),
+                  Expanded(
+                    child: InkWell(
+                      onTap: () => onTap(doors[i]),
+                      borderRadius: Ds.r.rCard,
+                      child: Ink(
+                        height: _tileH,
+                        decoration: BoxDecoration(
+                          color: Ds.c.surface,
+                          borderRadius: Ds.r.rCard,
+                          border: Border.all(color: Ds.c.divider),
+                        ),
+                        padding: EdgeInsets.all(Ds.space.x12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            NavGlyph(
+                              row: doors[i].glyphRow,
+                              box: _glyphBox,
+                              glyph: _glyph,
+                              color: Ds.c.brand,
+                            ),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(doors[i].label,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Ds.t.bodyStrong),
+                                Text(doors[i].countLabel,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Ds.t.caption),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
+      );
+}
+
+/// CHANGE #799 — the horizontal strip above the doors. Present only when the
+/// BACKEND said this viewer has one (`recent_viewed.has`), so an anonymous
+/// visitor and a buyer with no history both simply get no strip.
+class _RecentStrip extends StatelessWidget {
+  final String title;
+  final List<Product> items;
+  final ValueChanged<Product> onTap;
+  const _RecentStrip({required this.title, required this.items, required this.onTap});
+
+  static const double _tile = 88;
+  static const double _row = 132;
+
+  @override
+  Widget build(BuildContext context) {
+    if (items.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.only(top: Ds.space.x12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: EdgeInsets.fromLTRB(Ds.space.x16, 0, Ds.space.x16, Ds.space.x8),
+            child: Text(title, style: Ds.t.caption),
+          ),
+          SizedBox(
+            height: _row,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+              itemCount: items.length,
+              separatorBuilder: (_, _) => SizedBox(width: Ds.space.x12),
+              itemBuilder: (context, i) => InkWell(
+                onTap: () => onTap(items[i]),
+                borderRadius: Ds.r.rCard,
+                child: SizedBox(
+                  width: _tile,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        height: _tile,
+                        width: _tile,
+                        clipBehavior: Clip.antiAlias,
+                        decoration: BoxDecoration(
+                          color: Ds.c.surface,
+                          borderRadius: Ds.r.rCard,
+                          border: Border.all(color: Ds.c.divider),
+                        ),
+                        child: Padding(
+                          padding: EdgeInsets.all(Ds.space.x8),
+                          child: ProductImage(
+                            url: items[i].imageUrl,
+                            width: _tile,
+                            height: _tile,
+                            radius: Ds.r.rChip,
+                          ),
+                        ),
+                      ),
+                      SizedBox(height: Ds.space.x4),
+                      Expanded(
+                        child: Text(items[i].name,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: Ds.t.caption.copyWith(color: Ds.c.text)),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ListToolbar extends StatelessWidget {
+  final CatList? list;
+  final CatalogueRoute route;
+  final ValueChanged<String> onSort;
+  final void Function(String group, String key, bool single) onToggle;
+  final VoidCallback onClear;
+
+  const _ListToolbar({
+    required this.list,
+    required this.route,
+    required this.onSort,
+    required this.onToggle,
+    required this.onClear,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final f = list?.filters ?? CatFilters.empty;
+    if (f.groups.isEmpty && f.sortOptions.isEmpty) return const SizedBox.shrink();
+    return Container(
+      color: Ds.c.surface,
+      padding: EdgeInsets.symmetric(vertical: Ds.space.x8),
+      child: SizedBox(
+        height: Ds.touch.minTarget,
+        child: ListView(
+          scrollDirection: Axis.horizontal,
+          padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+          children: [
+            for (final s in f.sortOptions)
+              _Chip(
+                label: s.label,
+                selected: route.sort == s.key,
+                onTap: () => onSort(s.key),
+              ),
+            for (final g in f.groups)
+              for (final o in g.options)
+                _Chip(
+                  label: o.label,
+                  selected: route.filters.isOn(g.key, o.key),
+                  onTap: () => onToggle(g.key, o.key, !g.isMulti),
+                ),
+            if (route.filters.isEmpty == false)
+              _Chip(label: f.clearLabel, selected: false, onTap: onClear),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Chip extends StatelessWidget {
+  final String label;
+
+  /// A second payload string beside the label — a tab's count. Two strings,
+  /// two Texts: joining them here would be the app writing a sentence.
+  final String count;
+  final bool selected;
+  final VoidCallback onTap;
+  const _Chip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.count = '',
+  });
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: EdgeInsets.only(right: Ds.space.x8),
+        child: Center(
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: Ds.r.rChip,
+            child: Container(
+              padding: EdgeInsets.symmetric(
+                  horizontal: Ds.space.x12, vertical: Ds.space.x8),
+              decoration: BoxDecoration(
+                color: selected ? Ds.c.brandSoft : Ds.c.bg,
+                borderRadius: Ds.r.rChip,
+                border: Border.all(color: selected ? Ds.c.brand : Ds.c.divider),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Text(label,
+                    style: Ds.t.caption
+                        .copyWith(color: selected ? Ds.c.brand : Ds.c.text)),
+                if (count.isNotEmpty) ...[
+                  SizedBox(width: Ds.space.x8),
+                  Text(count, style: Ds.t.caption),
+                ],
+              ]),
+            ),
+          ),
+        ),
+      );
+}
+
+/// CMD #1908 — the breadcrumb, sticky under the search bar.
+///
+/// "Catalogue › Company › SUN PHARMA". Every word and every separator is a
+/// value `catalogue_trail()` sent, and every step carries the route it goes
+/// back to, so this widget neither writes a word nor works out a destination.
+/// It scrolls sideways rather than wrapping: a trail that grows to two lines
+/// pushes the list down by a row every time you go one level deeper.
+class _TrailBar extends StatelessWidget {
+  final CatTrail trail;
+  final ValueChanged<CatCrumb> onTap;
+  const _TrailBar({required this.trail, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    if (trail.isEmpty) return const SizedBox.shrink();
+    final pad = Ds.space.x16;
+    return Container(
+      color: Ds.c.surface,
+      child: Semantics(
+        label: trail.label,
+        child: SizedBox(
+          height: Ds.touch.minTarget,
+          // A trail reads left to right, so it is LEFT-aligned whenever it
+          // fits — the min-width box is what stops `reverse` from pinning a
+          // short trail to the right edge. Only once the trail OVERFLOWS does
+          // `reverse` matter, and then it keeps the step you are on in view.
+          child: LayoutBuilder(
+            builder: (context, c) => SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              reverse: true,
+              padding: EdgeInsets.symmetric(horizontal: pad),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                    minWidth: (c.maxWidth - pad * 2).clamp(0.0, double.infinity)),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.start,
+                  children: [
+                    for (var i = 0; i < trail.items.length; i++) ...[
+                      if (i > 0 && trail.separator.isNotEmpty)
+                        Padding(
+                          padding: EdgeInsets.symmetric(horizontal: Ds.space.x4),
+                          child: Text(trail.separator,
+                              style: Ds.t.caption
+                                  .copyWith(color: Ds.c.textSecondary)),
+                        ),
+                      InkWell(
+                        onTap: () => onTap(trail.items[i]),
+                        borderRadius: Ds.r.rChip,
+                        child: Container(
+                          constraints:
+                              BoxConstraints(minHeight: Ds.touch.minTarget),
+                          padding: EdgeInsets.symmetric(horizontal: Ds.space.x4),
+                          alignment: Alignment.center,
+                          child: Text(
+                            trail.items[i].label,
+                            style: Ds.t.caption.copyWith(
+                                color: trail.items[i].current
+                                    ? Ds.c.text
+                                    : Ds.c.brand),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _BrowseRow extends StatelessWidget {
+  final CatRow row;
+  final VoidCallback onTap;
+  const _BrowseRow({required this.row, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => InkWell(
+        onTap: onTap,
+        child: Container(
+          color: Ds.c.surface,
+          constraints: BoxConstraints(minHeight: Ds.touch.listRowMinHeight),
+          padding: EdgeInsets.symmetric(
+              horizontal: Ds.space.x16, vertical: Ds.space.x12),
+          child: Row(
+            children: [
+              Expanded(child: Text(row.label, style: Ds.t.body)),
+              SizedBox(width: Ds.space.x12),
+              Text(row.countLabel, style: Ds.t.caption),
+              Icon(Icons.chevron_right, color: Ds.c.textSecondary),
+            ],
+          ),
+        ),
+      );
+}
+
+class _OpenProducts extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  const _OpenProducts({required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        height: Ds.touch.minTarget,
+        width: double.infinity,
+        child: FilledButton(
+          onPressed: onTap,
+          style: FilledButton.styleFrom(
+            backgroundColor: Ds.c.brand,
+            shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+          ),
+          child: Text(label),
+        ),
+      );
+}
+
+class _CatEmpty extends StatelessWidget {
+  final String label;
+  const _CatEmpty({required this.label});
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: EdgeInsets.all(Ds.space.x32),
+        child: Center(child: Text(label, textAlign: TextAlign.center, style: Ds.t.bodySecondary)),
+      );
+}
+
+/// CHANGE #799 — an empty scope names itself, says why it is empty, and offers
+/// the ways out. WHICH ones, in WHICH order and how loudly are all the
+/// payload's `buttons`, never a guess made here — CMD #1905 moved "Clear
+/// filters" ahead of "Request this product" when filters are on, and that is
+/// a backend edit, not a layout one.
+class _CatEmptyState extends StatelessWidget {
+  final CatEmptyState empty;
+  final VoidCallback onAction;
+  final VoidCallback onClear;
+  const _CatEmptyState({
+    required this.empty,
+    required this.onAction,
+    required this.onClear,
+  });
+
+  /// The button's `kind` is the backend's word for what it does. Two kinds
+  /// exist; an unknown one is drawn and does nothing rather than guessing.
+  VoidCallback? _onTap(String kind) => switch (kind) {
+        'request' => onAction,
+        'clear_filters' => onClear,
+        _ => null,
+      };
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: EdgeInsets.all(Ds.space.x32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(empty.label,
+                textAlign: TextAlign.center, style: Ds.t.bodyStrong),
+            if (empty.hint.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x8),
+              Text(empty.hint, textAlign: TextAlign.center, style: Ds.t.caption),
+            ],
+            for (var i = 0; i < empty.buttons.length; i++) ...[
+              SizedBox(height: i == 0 ? Ds.space.x24 : Ds.space.x12),
+              SizedBox(
+                height: Ds.touch.minTarget,
+                width: double.infinity,
+                child: empty.buttons[i].tone == 'primary'
+                    ? FilledButton(
+                        onPressed: _onTap(empty.buttons[i].kind),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Ds.c.brand,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: Ds.r.rButton),
+                        ),
+                        child: Text(empty.buttons[i].label),
+                      )
+                    : OutlinedButton(
+                        onPressed: _onTap(empty.buttons[i].kind),
+                        child: Text(empty.buttons[i].label)),
+              ),
+            ],
+          ],
+        ),
+      );
+}
+
+/// One more row of card skeletons while the next page lands. A skeleton, never
+/// a spinner — the design QA gate's rule six, and the honest shape of what is
+/// arriving.
+class _MoreSkeleton extends StatelessWidget {
+  const _MoreSkeleton();
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        height: ProductRowCard.extent,
+        child: const CatalogueCardSkeleton(),
+      );
+}
+
+class _Tail extends StatelessWidget {
+  final bool loading;
+  const _Tail({required this.loading});
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        height: Ds.space.x48,
+        child: Center(
+          child: loading ? const CircularProgressIndicator(strokeWidth: 2) : null,
+        ),
+      );
+}
+
+/// A skeleton, not a bare spinner — the design QA gate's loading rule.
+class _CatSkeleton extends StatelessWidget {
+  const _CatSkeleton();
+
+  @override
+  Widget build(BuildContext context) => Container(
+        color: Ds.c.bg,
+        padding: EdgeInsets.all(Ds.space.x16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (var i = 0; i < 8; i++)
+              Padding(
+                padding: EdgeInsets.only(bottom: Ds.space.x12),
+                child: Container(
+                  height: Ds.touch.listRowMinHeight,
+                  decoration: BoxDecoration(
+                    color: Ds.c.surface,
+                    borderRadius: Ds.r.rCard,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      );
+}
+
+/// The error state prints the BACKEND's copy plus Retry — never a Dart apology.
+///
+/// It used to be handed `e.toString()`, and on 4 Sep a cold anon visit painted
+/// "PostgrestException(message: canceling statement due to statement timeout,
+/// code: 57014, details: , hint: null)" across the middle of the catalogue.
+/// The sentence is `catalogue.load_error` and the button is `catalogue.retry`;
+/// the exception text is kept for the render log and never shown.
+class _CatError extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+  const _CatError({required this.message, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    if (message.isNotEmpty) {
+      RenderLog.write('c799_catalogue_error',
+          message.length > 120 ? message.substring(0, 120) : message);
+    }
+    return Container(
+      color: Ds.c.bg,
+      padding: EdgeInsets.all(Ds.space.x24),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(c('catalogue.load_error'),
+                key: const Key('c799_catalogue_error_copy'),
+                textAlign: TextAlign.center,
+                style: Ds.t.bodySecondary),
+            SizedBox(height: Ds.space.x16),
+            OutlinedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh),
+              label: Text(c('catalogue.retry')),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

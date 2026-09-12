@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../design_tokens.dart';
 import 'product_image.dart';
 
 /// CHANGE #641 — one item card for the customer's Orders → Items list.
@@ -11,6 +12,11 @@ import 'product_image.dart';
 ///   * `qty_label`  — "2 Tubes", unit word and plural chosen server-side
 ///   * `rate_label` — "₹69.38", currency symbol and rounding server-side
 ///   * `line_label` — "₹138.76"
+///   * `batch_label` — "Batch B413A  ·  Exp 12/2026" (CMD #451, register row
+///     129). The words "Batch" and "Exp", the separator and the date format are
+///     all backend copy; `batch_block.has` is the ONLY thing that decides
+///     whether the line appears, and `batch_hint` is the backend's own sentence
+///     for a line whose pack has not been received yet.
 ///   * `status_label` — "Available" / "Confirmation Pending" /
 ///     "No Supplier Available", printed VERBATIM. Nothing here substitutes a
 ///     word, and nothing maps a status to a colour: the chip's hexes travel
@@ -30,6 +36,9 @@ class CustomerOrderItem {
   final String statusTone;
   final String statusBg;
   final String statusFg;
+  final bool hasBatch;
+  final String batchLabel;
+  final String batchHint;
 
   const CustomerOrderItem({
     this.name = '',
@@ -43,6 +52,9 @@ class CustomerOrderItem {
     this.statusTone = '',
     this.statusBg = '',
     this.statusFg = '',
+    this.hasBatch = false,
+    this.batchLabel = '',
+    this.batchHint = '',
   });
 
   /// The ONE parser for an item row. `lines` and `unfulfilled_lines` carry an
@@ -54,6 +66,12 @@ class CustomerOrderItem {
   factory CustomerOrderItem.fromPayload(Map<String, dynamic> j) {
     final colors = j['status_colors'] is Map
         ? (j['status_colors'] as Map).cast<String, dynamic>()
+        : const <String, dynamic>{};
+    // CMD #451 row 129. A payload written before #451 simply has no
+    // batch_block, and an absent key must read as "we do not know yet" — never
+    // as an empty chip and never as a word invented here.
+    final batch = j['batch_block'] is Map
+        ? (j['batch_block'] as Map).cast<String, dynamic>()
         : const <String, dynamic>{};
     return CustomerOrderItem(
       name: (j['name'] ?? '').toString(),
@@ -70,6 +88,9 @@ class CustomerOrderItem {
       statusTone: (j['status_tone'] ?? '').toString(),
       statusBg: (colors['bg'] ?? '').toString(),
       statusFg: (colors['fg'] ?? '').toString(),
+      hasBatch: batch['has'] == true,
+      batchLabel: (batch['label'] ?? '').toString(),
+      batchHint: (batch['hint'] ?? '').toString(),
     );
   }
 }
@@ -173,6 +194,27 @@ class CustomerOrderItemCard extends StatelessWidget {
                             fontWeight: FontWeight.w700,
                             color: Color(0xFF111827))),
                 ]),
+            // CMD #451 row 129 — batch and expiry. A pharmacy cannot legally
+            // receive or resell stock without them, and cannot process a
+            // near-expiry return without them either. `hasBatch` is the
+            // backend's flag: true prints the batch line, false prints the
+            // backend's own hint, and a payload carrying neither prints
+            // nothing at all.
+            if (l.hasBatch && l.batchLabel.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x8),
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Icon(Icons.inventory_2_outlined,
+                    size: Ds.space.x12, color: Ds.c.textSecondary),
+                SizedBox(width: Ds.space.x4),
+                Expanded(
+                  child: Text(l.batchLabel,
+                      style: Ds.t.caption.copyWith(color: Ds.c.text)),
+                ),
+              ]),
+            ] else if (l.batchHint.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x8),
+              Text(l.batchHint, style: Ds.t.caption),
+            ],
             // The status chip sits on its own line below the money row. Its
             // words are status_label verbatim and its colours came with the
             // line, so "Available" is never substituted for anything else.

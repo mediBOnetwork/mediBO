@@ -759,6 +759,15 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         try { RenderLog.write('c312_camera_got', '1'); } catch (_) {}
         await _processPickedFile(page.name, page.bytes);
       },
+      // CHANGE #225: the camera itself failing is the one case with nothing left
+      // to fall back to, so it is said out loud — in the backend's words.
+      onProblem: (code) async {
+        try { RenderLog.write('c225_camera_problem', code); } catch (_) {}
+        if (!mounted) return;
+        final msg = c(code);
+        if (msg.isEmpty) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      },
     );
   }
 

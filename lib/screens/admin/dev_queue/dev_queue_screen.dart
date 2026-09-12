@@ -3,18 +3,37 @@ import 'package:flutter/material.dart';
 
 import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
+import '../../../utils/render_log.dart';
 import '../../../utils/toast.dart';
 import 'dev_queue_common.dart';
 import 'dev_queue_service.dart';
+import 'restart_safety.dart';
 import 'dev_queue_bulk_add.dart';
 import 'dev_queue_detail.dart';
 import 'dev_queue_control.dart';
+import 'dev_queue_ops.dart';
 import 'dev_queue_gcp.dart';
 import 'dev_queue_qa.dart';
 import 'dev_queue_questions.dart';
+import 'cron_health_screen.dart';
+import 'runner_ops/runner_ops_card.dart';
+import 'strip_v3/strip_v3_card.dart';
+import '../admin_heartbeat_screen.dart';        // CHANGE #468
+import '../test_mode_screen.dart';             // CHANGE #573, wired #468
 import 'journey_library_screen.dart';
+import 'token_dashboard_screen.dart';
+import 'build_intelligence_screen.dart';
+import 'triage_inbox_screen.dart';
+import 'test_coverage_screen.dart';   // CHANGE #634
+import 'journey_bot_screen.dart';     // CHANGE #635
+import 'visual_baselines_screen.dart'; // CHANGE #637
+import 'play_store_screen.dart';
+import 'signin_diag_screen.dart';
 import 'memory_screen.dart';
 import 'threads_screen.dart';
+import '../ops_runbooks_screen.dart';           // CHANGE #474
+import 'chaos_lab_screen.dart';
+import 'dev_tools_sheet.dart';
 
 /// The Dev Queue registry — the permanent development record, rendered from
 /// `dev_cmd_list` verbatim. Om pastes specs here; the VM runner claims and
@@ -39,6 +58,10 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
   String? _batch;
   List<Map<String, dynamic>> _rows = const [];
   Map<String, int> _counts = const {};
+  /// CHANGE #887 — the list is BOUNDED (list_limits.cards_max, then a 48 kB
+  /// payload budget), so a page is the top of the list, not all of it. The
+  /// backend words the line; this renders it verbatim, or nothing when empty.
+  String _truncNote = '';
   Timer? _tick; // 1s ticker for live ATR countdown on building rows
   DateTime _now = DateTime.now();
 
@@ -57,8 +80,11 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
     super.initState();
     _load();
     _loadDrafts();
-    _poll = Timer.periodic(const Duration(seconds: 5), (_) {
-      if (_hasActive) _load(silent: true);
+    // CHANGE #643 — 30 s, and a DELTA. At 5 s this screen was re-reading every
+    // command in the queue twelve times a minute; the poll is now both slower
+    // and much smaller, and a row that has not moved is not sent at all.
+    _poll = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (_hasActive) _load(silent: true, delta: true);
     });
     _draftPoll = Timer.periodic(const Duration(seconds: 8), (_) {
       _loadDrafts();
@@ -66,6 +92,53 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
     _tick = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && _hasActive) setState(() => _now = DateTime.now());
     });
+    _openDeepLinkedCommand();
+    _openDeepLinkedTool();
+  }
+
+  /// CHANGE #1802 — `/admin/dev-queue?cmd=1802` opens that command's detail.
+  ///
+  /// A command's detail screen had no address. Every proof of something built
+  /// there — the QA section, the spec checklist, the Android release block —
+  /// had to be reached by TAPPING a card, and a Flutter canvas cannot be
+  /// tapped by the headless capture the runner uses, so the one screen that
+  /// carries the evidence was the one screen that could not be photographed.
+  /// The id travels in the query string, which #1365 already taught the router
+  /// not to throw away.
+  Future<void> _openDeepLinkedCommand() async {
+    final raw = Uri.base.queryParameters['cmd'];
+    final id = int.tryParse(raw ?? '');
+    if (id == null || id <= 0) return;
+    // After the first frame, and after the list has loaded, so the detail
+    // opens over a populated screen rather than a spinner.
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    Map<String, dynamic> row = const {};
+    try {
+      final hit = _rows.firstWhere((r) => asInt(r['id']) == id,
+          orElse: () => const <String, dynamic>{});
+      row = Map<String, dynamic>.from(hit);
+    } catch (_) {/* the detail reads the row itself */}
+    if (!mounted) return;
+    await _openDetail({'id': id, ...row});
+  }
+
+  /// CHANGE #637 — `/admin/dev-queue?tool=visual_baselines` opens that dev
+  /// tool.
+  ///
+  /// The same hole #1802 closed for a command's detail, one level down: every
+  /// dev tool is behind the tools sheet, which is behind a header tap, and a
+  /// Flutter canvas cannot be tapped by the headless capture the runner uses.
+  /// So a tool screen was reachable by a human and by nothing else, and the
+  /// reachability proof §11 demands could never be a picture of the screen.
+  /// The key travels in the query string; a key this build does not know opens
+  /// nothing, exactly as `openDevTool` already reports for one it cannot route.
+  Future<void> _openDeepLinkedTool() async {
+    final key = (Uri.base.queryParameters['tool'] ?? '').trim();
+    if (key.isEmpty || !kDevToolKeys.contains(key)) return;
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    openDevTool(context, key, service: _svc, onDraftsQueued: _loadDrafts);
   }
 
   @override
@@ -93,29 +166,58 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
     } catch (_) {}
   }
 
-  Future<void> _load({bool silent = false}) async {
+  /// The cursor the backend handed back on the last read. A delta poll asks for
+  /// "what has moved since this", and the backend answers with its own clock —
+  /// the client never invents a timestamp.
+  String? _since;
+
+  Future<void> _load({bool silent = false, bool delta = false}) async {
     if (!silent && mounted) setState(() => _loading = true);
     try {
       final p = await _svc.list(
         status: _status,
         search: _searchCtl.text.trim(),
         batch: _batch,
+        limit: _pageSize,
+        updatedSince: delta ? _since : null,
       );
       if (!mounted) return;
+      final incoming = ((p['rows'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
       setState(() {
         _title = (p['screen_title'] as String?) ?? _title;
-        _rows = ((p['rows'] as List?) ?? const [])
-            .whereType<Map>()
-            .map((e) => Map<String, dynamic>.from(e))
-            .toList();
+        _since = (p['server_time'] as String?) ?? _since;
+        if (p['is_delta'] == true) {
+          // Patch in place, in the order we already have. A row the backend
+          // did not send did not move, so it stays exactly as it was.
+          for (final r in incoming) {
+            final id = asInt(r['id']);
+            final i = _rows.indexWhere((x) => asInt(x['id']) == id);
+            if (i >= 0) {
+              _rows[i] = r;
+            } else {
+              _rows.insert(0, r);
+            }
+          }
+        } else {
+          _rows = incoming;
+        }
         _counts = ((p['counts'] as Map?) ?? const {})
             .map((k, v) => MapEntry(k.toString(), asInt(v)));
+        _truncNote = (p['truncated_note'] as String?) ?? '';
         _loading = false;
       });
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
   }
+
+  /// One page. The rg guard `c643_dev_cmd_list_payload_small` asserts this page
+  /// stays under 50 kB, so a detail field added back to the card turns the
+  /// regression guard red in the command that added it.
+  static const _pageSize = 25;
 
   void _onSearch(String _) {
     _debounce?.cancel();
@@ -197,6 +299,8 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
   @override
   Widget build(BuildContext context) {
     final reorderable = _status == 'pending';
+    // CHANGE #349 — one entry point where nine bare glyphs used to be.
+    RenderLog.write('c349_tools_button', 1);
     return Scaffold(
       backgroundColor: kPageBg,
       appBar: AppBar(
@@ -207,86 +311,33 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
             style: const TextStyle(
                 fontSize: 18, fontWeight: FontWeight.w700, color: kTextHi)),
         actions: [
-          if (_draftBadge > 0)
-            Semantics(
-              identifier: 'devq_drafts_inbox',
+          // CHANGE #349 — ONE entry point, not nine bare glyphs.
+          //
+          // This row used to hold nine IconButtons. `actions:` is a Row: it
+          // does not wrap and it does not scroll, so on a phone the last tools
+          // were rendered past the right edge and could not be reached at all,
+          // and the ones that fitted carried no label. Every tool now lives in
+          // the registry and opens from the labelled sheet below, where the
+          // list scrolls and each row is the full width of the sheet.
+          Padding(
+            padding: EdgeInsets.only(right: Ds.space.x8),
+            child: Semantics(
+              identifier: 'devq_tools',
               button: true,
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  IconButton(
-                    tooltip: c('dev_queue.drafts_inbox_title'),
-                    icon: const Icon(Icons.drafts_outlined, color: kBrand),
-                    onPressed: () => _showDraftsInbox(context),
-                  ),
-                  Positioned(
-                    top: Ds.space.x8,
-                    right: Ds.space.x8,
-                    child: Container(
-                      padding: EdgeInsets.all(Ds.space.x4 - 1),
-                      decoration: BoxDecoration(
-                        color: Ds.c.danger,
-                        shape: BoxShape.circle,
-                      ),
-                      constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
-                      child: Text('$_draftBadge',
-                          textAlign: TextAlign.center,
-                          style: Ds.t.caption.copyWith(
-                              fontSize: Ds.t.caption.fontSize! - 4,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white)),
-                    ),
-                  ),
-                ],
+              child: SizedBox(
+                height: Ds.space.x48,
+                child: TextButton.icon(
+                  onPressed: _openTools,
+                  icon: _draftBadge > 0
+                      ? Badge(
+                          label: Text('$_draftBadge'),
+                          child: const Icon(Icons.handyman_outlined,
+                              color: kBrand))
+                      : const Icon(Icons.handyman_outlined, color: kBrand),
+                  label: Text(c('dev_tools.button'),
+                      style: Ds.t.bodyStrong.copyWith(color: kBrand)),
+                ),
               ),
-            ),
-          Semantics(
-            identifier: 'devq_report_bug',
-            button: true,
-            child: IconButton(
-              tooltip: c('dev_queue.bug_report_tooltip'),
-              icon: const Icon(Icons.bug_report_outlined, color: kBrand),
-              onPressed: () => showBugReportSheet(context, _svc),
-            ),
-          ),
-          Semantics(
-            identifier: 'devq_journey_library',
-            button: true,
-            child: IconButton(
-              tooltip: c('dev_queue.journey_nav_label'),
-              icon: const Icon(Icons.map_outlined, color: kBrand),
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => JourneyLibraryScreen(service: _svc))),
-            ),
-          ),
-          Semantics(
-            identifier: 'devq_gcp_open',
-            button: true,
-            child: IconButton(
-              tooltip: c('dev_queue.gcp_open'),
-              icon: const Icon(Icons.cloud_outlined, color: kBrand),
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => GcpControlScreen(service: _svc))),
-            ),
-          ),
-          Semantics(
-            identifier: 'devq_memory_open',
-            button: true,
-            child: IconButton(
-              tooltip: c('dev_queue.memory_nav_label'),
-              icon: const Icon(Icons.memory_outlined, color: kBrand),
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => MemoryScreen(service: _svc))),
-            ),
-          ),
-          Semantics(
-            identifier: 'devq_threads_open',
-            button: true,
-            child: IconButton(
-              tooltip: c('dev_queue.threads_nav_label'),
-              icon: const Icon(Icons.forum_outlined, color: kBrand),
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => ThreadsScreen(service: _svc))),
             ),
           ),
         ],
@@ -315,11 +366,65 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
               // CHANGE #73 — the GCP Control banner card was removed; the AppBar
               // cloud icon is now the single entry point (the card was a
               // duplicate that ate screen space).
-              SliverToBoxAdapter(child: DevQueueControl(service: _svc)),
+              SliverToBoxAdapter(
+                child: Column(children: [
+                  // CHANGE #1570 — ONE runner card.
+                  //
+                  // #1367 stacked the v3 strip ABOVE the v2 control card
+                  // rather than replacing it, because v2 owned surfaces v3
+                  // did not (the breaker, usage, health, the worker grid,
+                  // context economy) and swapping it out wholesale would have
+                  // cost a day's working screen. The consequence was two
+                  // runner cards at the top of Dev Queue with two sets of the
+                  // same three toggles. Neither had to go: v2 is EMBEDDED in
+                  // v3 now, as its footer, minus its own chrome and minus the
+                  // three toggles v3 already draws with `actual` beside
+                  // `desired`. Same surfaces, one card.
+                  StripV3Card(
+                    // CMD #1862 — the strip reads the control plane through
+                    // the same router every other Dev Queue card uses. It was
+                    // calling production, where its RPCs do not exist, which is
+                    // why the three toggles disappeared.
+                    service: _svc,
+                    footer: (stripHasToggles) => DevQueueControl(
+                      service: _svc,
+                      embedded: true,
+                      // Exactly one of the two cards draws the switches, and
+                      // it is decided by what the strip ACTUALLY drew.
+                      showToggles: !stripHasToggles,
+                      // CHANGE #1197 — ?panel=runner lands with the runner
+                      // panel already open, so its contents can be
+                      // photographed and can write their render-log keys at
+                      // all.
+                      startExpanded:
+                          Uri.base.queryParameters['panel'] == 'runner',
+                    ),
+                  ),
+                  // CHANGE #1368 — the policies sit directly under the strip,
+                  // and in that order on purpose: the strip answers "is it
+                  // running?", this answers "should it be, right now?". A
+                  // blocked claim is meaningless until you can see which
+                  // policy is doing the blocking, so the two are read together.
+                  // (#1570 folded the old control card INTO the strip above;
+                  // this one stays its own card because it answers a different
+                  // question.)
+                  const RunnerOpsCard(),
+                ]),
+              ),
+              // CMD #1843 — the runner ops / lane / intelligence panel: the
+              // reads that had backends and no screen (health, autoscale,
+              // disk, boot, the build branch, the deploy lane and its batches,
+              // context economy, cloud waste, agent sessions, RC health). It
+              // sits under the strip because it answers the same question at
+              // more depth. Policies stay in RunnerOpsCard above — one set of
+              // toggles, per #1570.
+              SliverToBoxAdapter(child: DevQueueOps(service: _svc)),
               if (_draftBadge > 0)
                 SliverToBoxAdapter(child: _draftsStrip()),
               SliverToBoxAdapter(child: _header()),
               SliverToBoxAdapter(child: _filters()),
+              if (!_loading && _truncNote.isNotEmpty)
+                SliverToBoxAdapter(child: _truncBanner()),
               if (_status == 'cancelled' && _rows.isNotEmpty)
                 SliverToBoxAdapter(child: _clearBar()),
               if (_loading)
@@ -369,6 +474,23 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  /// CHANGE #349 — the labelled tools sheet. `dev_tools()` decides what may
+  /// appear; [kDevToolKeys] decides what this build can open. A tool that
+  /// fails either gate simply is not on the sheet.
+  void _openTools() {
+    showDevToolsSheet(
+      context,
+      load: _svc.devTools,
+      available: kDevToolKeys,
+      onOpen: (tool) => openDevTool(
+        context,
+        (tool['tool_key'] ?? '').toString(),
+        service: _svc,
+        onDraftsQueued: _load,
       ),
     );
   }
@@ -481,6 +603,17 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
         ),
       );
 
+  /// The bound, said out loud. The list is capped by list_limits.cards_max and
+  /// then by the payload budget, so a page is the TOP of the registry, not all
+  /// of it. `truncated_note` is composed in the backend (ui_copy
+  /// `dev_queue.list_truncated`) and printed here verbatim — the app never
+  /// counts rows and never words this sentence.
+  Widget _truncBanner() => Padding(
+        padding: EdgeInsets.fromLTRB(
+            Ds.space.x16, Ds.space.x4, Ds.space.x16, Ds.space.x8),
+        child: Text(_truncNote, style: Ds.t.caption),
+      );
+
   Widget _empty() => Padding(
         padding: const EdgeInsets.only(top: 80, bottom: 40),
         child: Column(children: [
@@ -566,7 +699,7 @@ class _Row extends StatelessWidget {
       // CHANGE #68 — Claude's estimate (has_eta) drives the countdown, anchored
       // to the backend's eta_at. Rows not reporting an estimate show plain
       // elapsed — never a fake countdown from elapsed time.
-      final hasEta = row['has_eta'] == true;
+      final hasEta = RowLiveness(row).showCountdown;
       final eta = DateTime.tryParse((row['eta_at'] ?? '').toString());
       if (hasEta && eta != null) {
         final rem = eta.difference(now);
@@ -609,9 +742,14 @@ class _Row extends StatelessWidget {
     final tone = statusTone(status);
 
     final claimedBy = (row['claimed_by'] ?? '').toString();
+    final live = RowLiveness(row);
+    final finish = RowFinish(row);
     final timing = _timingChip(status);
     final footer = <Widget>[
-      if (status == 'building' && claimedBy.isNotEmpty)
+      // A worker name next to a dead heartbeat is the exact lie #229/#230 told
+      // for hours after a VM restart. RowLiveness.showWorker gates it on the
+      // backend's is_live verdict — see restart_safety.dart (CHANGE #233).
+      if (live.showWorker)
         ToneChip(
             label: claimedBy,
             tone: statusTone('building'),
@@ -655,7 +793,9 @@ class _Row extends StatelessWidget {
             label: '${row['tokens_display'] ?? ''} · ${row['cost_display'] ?? ''}',
             tone: statusTone('paused'),
             icon: Icons.data_usage),
-      if (row['has_tokens'] == true && priceModelChip(row).isNotEmpty)
+      // CHANGE #656: the model/effort chip is on EVERY card, not only one that
+      // has spent tokens — a pending row has to show what it will build on.
+      if (priceModelChip(row).isNotEmpty)
         ToneChip(
             label: priceModelChip(row),
             tone: statusTone('building'),
@@ -665,11 +805,37 @@ class _Row extends StatelessWidget {
             label: '$msgs',
             tone: statusTone('awaiting_approval'),
             icon: Icons.chat_bubble_outline),
+      // CHANGE #233 — restart-safety chips, in RowLiveness's order (worst news
+      // first). Every string, including the pluralisation and the age, is
+      // composed by dev_cmd_list from ui_copy; Dart picks only the glyph.
+      for (final ch in live.chips)
+        ToneChip(
+            label: ch.label,
+            tone: toneByName(ch.tone),
+            icon: safetyChipIcon(ch.kind)),
       // Bug-Loop Prevention chips — all rendered verbatim from dev_cmd_list.
       if ((row['qa_chip'] ?? '').toString().isNotEmpty)
         ToneChip(
             label: (row['qa_chip']).toString(),
             tone: toneByName((row['qa_tone'] ?? 'neutral').toString())),
+      // CHANGE #1674 — the GRADE. Every command was xlarge because size_class
+      // was read off the spec's character count, so a two-file fix bought the
+      // same hostile QA as a schema rewrite and nothing on the card said so.
+      // dev_cmd_grade re-grades from the real diff and composes this sentence;
+      // Dart prints it and picks the glyph.
+      if ((row['grade_chip'] ?? '').toString().isNotEmpty)
+        ToneChip(
+            label: (row['grade_chip']).toString(),
+            tone: toneByName((row['grade_tone'] ?? 'info').toString()),
+            icon: Icons.straighten),
+      // CMD #1820 — this build cost far more than its size class usually does.
+      // dev_token_anomaly_scan() decides that and writes the sentence; the card
+      // prints it so the anomaly is seen without opening the Token dashboard.
+      if ((row['anomaly_chip'] ?? '').toString().isNotEmpty)
+        ToneChip(
+            label: (row['anomaly_chip']).toString(),
+            tone: toneByName((row['anomaly_tone'] ?? 'danger').toString()),
+            icon: Icons.local_fire_department_outlined),
       if ((row['preview_chip'] ?? '').toString().isNotEmpty)
         ToneChip(
             label: (row['preview_chip']).toString(),
@@ -678,6 +844,40 @@ class _Row extends StatelessWidget {
         ToneChip(
             label: (row['journey_chip']).toString(),
             tone: statusTone('completed')),
+      // CHANGE #369 — the finish gate. While a build sits with every condition
+      // observed the card says it is closing itself; afterwards it says the
+      // harness, not the model, closed it. Both sentences are composed by
+      // dev_cmd_list from ui_copy — Dart adds only the glyph.
+      if (finish.show)
+        ToneChip(
+            label: finish.label,
+            tone: toneByName(finish.tone),
+            icon: Icons.task_alt),
+      // CHANGE #327 — the auto-chain. A pending command whose predicted files
+      // collide with something in flight says so on its own card: it is queued
+      // behind that command, not parked mid-build against a lease. The sentence
+      // (and the id list inside it) is composed by dev_cmd_autochain from
+      // ui_copy; Dart adds only the glyph.
+      if ((row['chain_chip'] ?? '').toString().isNotEmpty)
+        ToneChip(
+            label: (row['chain_chip']).toString(),
+            tone: toneByName((row['chain_tone'] ?? 'info').toString()),
+            icon: Icons.link),
+      // CHANGE #571 — a parked command is WAITING, not failed. The chip, its
+      // wording and its tone all come from dev_cmd_list; the card just prints
+      // them, so a wait can never read as a failure again.
+      if (WaitView.fromRow(row).chip.isNotEmpty)
+        ToneChip(
+            label: WaitView.fromRow(row).chip,
+            tone: WaitView.fromRow(row).tone,
+            icon: Icons.pause_circle_outline),
+      // CHANGE #571 — the command's own spec checklist, so an unbuilt spec
+      // item is visible on the queue instead of hiding inside a summary.
+      if ((row['spec_chip'] ?? '').toString().isNotEmpty)
+        ToneChip(
+            label: (row['spec_chip']).toString(),
+            tone: toneByName((row['spec_tone'] ?? 'neutral').toString()),
+            icon: Icons.checklist_rtl),
     ];
 
     return DqCard(
@@ -998,4 +1198,177 @@ class _DraftsInboxSheetState extends State<_DraftsInboxSheet> {
           ),
         ),
       );
+}
+
+
+/// CHANGE #349 — every Dev Queue tool this build can open, by the registry's
+/// own `route_key`.
+///
+/// It is the SECOND half of the gate. `dev_tools()` says which tools the
+/// registry admits; this set says which of those the running app actually has
+/// a screen for. A key in neither place cannot be reached, and a labelled row
+/// that would do nothing is never drawn.
+const Set<String> kDevToolKeys = <String>{
+  'journey_library',
+  // CHANGE #639 — Triage. The chaos lab, the visual bot and the safety net all
+  // FIND things; this is the one screen where a person says which of them are
+  // real. Approving here is what generates the fix command.
+  'triage',
+  // CHANGE #634 — the coverage ledger. It sits in the same group as the
+  // Journey Library on purpose: journeys are what the bot runs, coverage is
+  // the list of what it has never run.
+  'test_coverage',
+  // CHANGE #635 — the journey bot: what the coverage ledger says has never
+  // been tested is the list; this is the run that tests it, every role and
+  // every hostile variant, with the gaps it filed.
+  'journey_bot',
+  // CHANGE #637 — the visual-regression review queue: what every registered
+  // screen looks like now, beside the picture Om approved.
+  'visual_baselines',
+  // CHANGE #638 — the chaos lab: seven scripted failures, and Om's own
+  // walkthroughs turned into permanent tests.
+  'chaos_lab',
+  'bug_report',
+  'drafts_inbox',
+  'cron_health',
+  'test_mode',
+  'heartbeat',
+  'signin_diag',
+  'gcp_control',
+  'memory',
+  'threads',
+  'play_store',
+  // CHANGE #474 — Failure drills. It belongs to this family, beside Cron
+  // health, Test mode and the daily heartbeat: the things that tell an
+  // operator whether the platform is still standing up.
+  'runbooks',
+  // CMD #1820 — where every token and rupee went. It sits with Cron health
+  // and the heartbeat because it answers the same kind of question: what is
+  // this fleet doing with what it is being given.
+  'token_dashboard',
+  // CMD #1824 — what the registry has learned and is now enforcing: calibrated
+  // ETAs, repeat causes promoted to constraints, waste classes with their
+  // knobs, open proposals and the lessons that have stopped earning their place.
+  'build_intelligence',
+};
+
+/// Open one registered tool. Returns false for a key this build does not know,
+/// so a caller can render the backend's `dev_tools.not_registered` copy rather
+/// than doing nothing silently.
+bool openDevTool(
+  BuildContext context,
+  String toolKey, {
+  DevQueueService? service,
+  VoidCallback? onDraftsQueued,
+}) {
+  final svc = service ?? DevQueueService();
+  void push(Widget screen) {
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
+  }
+
+  switch (toolKey) {
+    case 'journey_library':
+      push(JourneyLibraryScreen(service: svc));
+      return true;
+    case 'token_dashboard':
+      push(TokenDashboardScreen(service: svc));
+      return true;
+    case 'build_intelligence':
+      push(BuildIntelligenceScreen(service: svc));
+      return true;
+    case 'triage':
+      push(TriageInboxScreen(service: svc));
+      return true;
+    case 'test_coverage':
+      push(TestCoverageScreen(service: svc));
+      return true;
+    case 'journey_bot':
+      push(JourneyBotScreen(service: svc));
+      return true;
+    case 'visual_baselines':
+      push(VisualBaselinesScreen(service: svc));
+      return true;
+    case 'chaos_lab':
+      push(ChaosLabScreen(service: svc));
+      return true;
+    case 'bug_report':
+      showBugReportSheet(context, svc);
+      return true;
+    case 'drafts_inbox':
+      showDraftsInboxSheet(context, svc, onQueued: onDraftsQueued);
+      return true;
+    case 'cron_health':
+      push(CronHealthScreen(service: svc));
+      return true;
+    // CHANGE #468 — devtool.test_mode has been in the registry since #573 with
+    // no case here, so the tools sheet DROPPED it every time (an unopenable
+    // key is never drawn) and it was reachable only from the admin shell. The
+    // widened registry test found it; this is the missing door.
+    case 'test_mode':
+      push(const TestModeScreen());
+      return true;
+    // CHANGE #468 — the daily canary: one synthetic order walking the whole
+    // pipeline, every stage with its own timeout, the first failure alerting.
+    case 'heartbeat':
+      push(const AdminHeartbeatScreen());
+      return true;
+    case 'signin_diag':
+      push(SignInDiagScreen(service: svc));
+      return true;
+    case 'gcp_control':
+      push(GcpControlScreen(service: svc));
+      return true;
+    case 'memory':
+      push(MemoryScreen(service: svc));
+      return true;
+    case 'threads':
+      push(ThreadsScreen(service: svc));
+      return true;
+    case 'play_store':
+      push(PlayStoreScreen(service: svc));
+      return true;
+    // CHANGE #474 — the six external dependencies mediBO does not own, what
+    // happens by itself when each one breaks, and the last time the fallback
+    // was proved by deliberately breaking it. Authorisation is not the door:
+    // ops_runbooks_home() and ops_runbook_drill() gate on _ops_admin() and
+    // answer anyone else with their own refusal sentence.
+    case 'runbooks':
+      push(const OpsRunbooksScreen());
+      return true;
+  }
+  return false;
+}
+
+/// The drafts inbox, opened from anywhere (the tools sheet, the command
+/// palette) rather than only from inside the Dev Queue screen's own state.
+Future<void> showDraftsInboxSheet(
+  BuildContext context,
+  DevQueueService svc, {
+  VoidCallback? onQueued,
+}) async {
+  Map<String, dynamic> p = const <String, dynamic>{};
+  try {
+    p = await svc.draftsInbox();
+  } catch (_) {}
+  if (!context.mounted) return;
+  List<Map<String, dynamic>> l(String k) => ((p[k] as List?) ?? const [])
+      .whereType<Map>()
+      .map((e) => Map<String, dynamic>.from(e))
+      .toList();
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (sheetCtx) => _DraftsInboxSheet(
+      service: svc,
+      generating: l('generating'),
+      ready: l('ready'),
+      failed: l('failed'),
+      onRefresh: () {},
+      onQueued: () {
+        Navigator.of(sheetCtx).pop();
+        onQueued?.call();
+      },
+    ),
+  );
 }

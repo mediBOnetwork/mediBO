@@ -34,6 +34,8 @@ import 'package:pharma_b2b/app_state.dart';
 import 'package:pharma_b2b/models/cart_model.dart';
 import 'package:pharma_b2b/models/product_detail.dart';
 import 'package:pharma_b2b/screens/product_detail_screen.dart';
+import 'package:pharma_b2b/theme.dart';
+import 'package:pharma_b2b/utils/render_log.dart';
 
 /// The labels product_detail() attaches to every response, ok:true or not.
 const _labels = <String, dynamic>{
@@ -58,14 +60,28 @@ Map<String, dynamic> _payload({
   bool buyable = true,
   bool hasSupplierLabel = true,
   bool rxRequired = false,
+  Map<String, dynamic>? rx,
+  Map<String, dynamic>? rxLicence,
   bool hasHistory = false,
   bool showWishlist = false,
   bool isWishlisted = false,
   List<Map<String, dynamic>> similar = const [],
+  Map<String, dynamic>? supply,
+  Map<String, dynamic>? priceLines,
 }) =>
     {
       'ok': true,
       'id': 176026,
+      // CMD #1826 — the supply-confidence band and the two price lines, exactly
+      // as product_detail() attaches them. Absent by default: an older backend
+      // (or an untouched pack) sends neither, and the page must stay quiet.
+      if (supply != null) 'supply': supply,
+      if (priceLines != null) 'price_lines': priceLines,
+      // CMD #1825 — rx_badge()'s block and the buyer's licence state, exactly
+      // as product_detail() sends them side by side. Absent when null, which
+      // is what an anonymous visitor or a pack with no class gets.
+      if (rx != null) 'rx': rx,
+      if (rxLicence != null) 'rx_licence': rxLicence,
       'labels': _labels,
       'header': {
         'name': 'Alkacel 100mg Injection',
@@ -96,12 +112,21 @@ Map<String, dynamic> _payload({
         'has_price': hasMrp,
         'has_discount': false,
       },
+      // CHANGE #640 — the verdict now FOLLOWS `buyable` in this fixture instead
+      // of being pinned to available. It used to say "available" while
+      // stock.buyable said false, i.e. the fixture reproduced the live bug:
+      // one payload, two answers. The page reads the verdict as its one source
+      // now, so a fixture that contradicts itself no longer describes anything
+      // real. The assertion below is unchanged — an unavailable product still
+      // prints the backend's own out-of-stock label.
       'availability': {
-        'is_available': true,
-        'can_add': true,
-        'cta_label': 'Add to cart',
+        'is_available': buyable,
+        'can_add': buyable,
+        'cta_label': buyable ? 'Add to cart' : 'Unavailable',
         'gated': true,
-        'colors': {'bg': '#1B7A43', 'fg': '#FFFFFF'},
+        'colors': buyable
+            ? {'bg': '#1B7A43', 'fg': '#FFFFFF'}
+            : {'bg': '#F3F4F6', 'fg': '#9CA3AF'},
       },
       'stock': {
         'buyable': buyable,
@@ -129,6 +154,104 @@ Map<String, dynamic> _payload({
       'is_wishlisted': isWishlisted,
     };
 
+/// CMD #1826 — a band whose `band` key says green while its label, tone and
+/// sub-line say red. The page must print the words and paint the tone; any
+/// Dart that re-derived either from `band` paints it green and fails. The two
+/// decoy keys are what a leaky parser would print — the contract is silence.
+const Map<String, dynamic> _contraryBand = {
+  'has': true,
+  'band': 'green',
+  'tone': 'danger',
+  'label': 'Checked recently, not confirmed',
+  'has_sub': true,
+  'sub': 'Last checked 3 days ago',
+  'has_speed': false,
+  'speed': 'Usually confirmed within 2 hours',
+  'supplier_names': ['Zydus Distributors', 'Apex Pharma'],
+  'supplier_count': 3,
+};
+
+/// price_lines with a pricing_ready row: the sale value deliberately differs
+/// from the fixture's legacy `pricing.price_display` (₹2,597.00) so a page
+/// that still printed the old single price as the hero is caught.
+const Map<String, dynamic> _pricedLines = {
+  'has': true,
+  'mrp': {
+    'caption': 'MRP',
+    'value': '₹69.96',
+    'has_amount': true,
+    // CMD #1896 — the ceiling sentence is no longer a printed line. The
+    // backend sends has_note:false and puts the same words on `info`, which
+    // the page hangs off an (i). The note key is left here deliberately: a
+    // page that still printed `note` would be caught by the assertion below.
+    'has_note': false,
+    'note': 'Printed pack ceiling — not the selling price',
+    'strike': true,
+    'info': {
+      'has': true,
+      'label': 'About MRP',
+      'text': 'Printed pack ceiling — not the selling price',
+    },
+    'tone': 'secondary',
+  },
+  'sale': {
+    'caption': 'Sale price (PTR)',
+    'value': '₹58.20',
+    'has_amount': true,
+    'has_note': true,
+    'note': 'PTR ₹55.43 · GST 5%',
+    'per_unit': {'has': true, 'label': '₹5.82 / tablet'},
+    'tone': 'primary',
+  },
+  'discount': {'has': true, 'label': '17% off', 'tone': 'success'},
+  'sticky': {
+    'main': '₹58.20',
+    'main_caption': 'Sale price',
+    'main_tone': 'primary',
+    'has_side': true,
+    'side': 'MRP ₹69.96',
+  },
+};
+
+/// price_lines with NO pricing_ready row: the sale slot carries the backend's
+/// literal "PTR" value (Om amendment 3) — never a note, a dash, a zero or the MRP repeated.
+const Map<String, dynamic> _quoteLines = {
+  'has': true,
+  'mrp': {
+    'caption': 'MRP',
+    'value': '₹69.96',
+    'has_amount': true,
+    'has_note': false,
+    'note': 'Printed pack ceiling — not the selling price',
+    'strike': true,
+    'info': {
+      'has': true,
+      'label': 'About MRP',
+      'text': 'Printed pack ceiling — not the selling price',
+    },
+    'tone': 'secondary',
+  },
+  'sale': {
+    'caption': 'Sale price',
+    'value': 'PTR',
+    'has_amount': false,
+    'has_note': false,
+    'note': '',
+    // CMD #1896 — an unapproved viewer gets no per-unit rate and no discount:
+    // both are derived from a trade price this payload does not carry.
+    'per_unit': {'has': false, 'label': ''},
+    'tone': 'secondary',
+  },
+  'discount': {'has': false, 'label': '', 'tone': 'success'},
+  'sticky': {
+    'main': 'PTR',
+    'main_caption': 'Sale price',
+    'main_tone': 'secondary',
+    'has_side': true,
+    'side': 'MRP ₹69.96',
+  },
+};
+
 /// Distinguishes successive pumps in one test. Without a fresh key Flutter
 /// reuses the existing State, `initState` never runs again and the second
 /// payload is silently ignored — which makes a "the label changed" assertion
@@ -140,6 +263,33 @@ int _pumpSeq = 0;
 /// The surface is deliberately tall: the page is a ListView, so a short
 /// viewport simply would not build the lower sections and the assertions below
 /// would pass or fail on scroll position rather than on what the page renders.
+/// rx_badge('Rx') as CMD #1825 sends it: soft-info tone, never danger red.
+/// `title` and `note` are still in the payload (other surfaces may want
+/// them) — the assertions below prove the PDP does not print them.
+const Map<String, dynamic> _rxTag = {
+  'has': true,
+  'is_rx': true,
+  'label': 'Rx',
+  'title': 'Prescription medicine',
+  'note': 'Schedule H / H1 stock. Your pharmacy drug licence must be on file to order this.',
+  'tone': {'bg': '#EFF6FF', 'fg': '#1E40AF'},
+};
+
+const Map<String, dynamic> _otcTag = {
+  'has': true,
+  'is_rx': false,
+  'label': 'OTC',
+  'title': 'Over the counter',
+  'note': 'No prescription needed for this pack.',
+  'tone': {'bg': '#D1FAE5', 'fg': '#065F46'},
+};
+
+/// Every Container painted in the danger-red the old block used.
+Finder _dangerContainers(WidgetTester tester) => find.byWidgetPredicate((w) =>
+    w is Container &&
+    w.decoration is BoxDecoration &&
+    (w.decoration as BoxDecoration).color == const Color(0xFFFEE2E2));
+
 Future<void> _pump(WidgetTester tester, Map<String, dynamic> payload) async {
   tester.view.physicalSize = const Size(1200, 4000);
   tester.view.devicePixelRatio = 1.0;
@@ -154,6 +304,14 @@ Future<void> _pump(WidgetTester tester, Map<String, dynamic> payload) async {
           key: ValueKey('pdp-${_pumpSeq++}'),
           productId: '176026',
           loader: (_) async => ProductDetail.fromMap(payload),
+          // CHANGE #640 — the seam existed but was never wired here. It did not
+          // matter while the fixture's verdict was pinned to "available": the
+          // page only asks about a Notify subscription for a product it cannot
+          // sell, so the unavailable branch was unreachable and the real
+          // MedicineRepository (and its uninitialised Supabase) was never
+          // constructed. Now that an unavailable fixture is actually
+          // unavailable, the probe runs — and it must stay network-free.
+          notifyStatusLoader: (_) async => false,
         ),
       ),
     ),
@@ -163,6 +321,14 @@ Future<void> _pump(WidgetTester tester, Map<String, dynamic> payload) async {
 }
 
 void main() {
+  // CMD #410 — the page now writes `c410_reviews_block` to the render log so
+  // the live build can PROVE the reviews block reached a real browser (canvas
+  // cannot be clicked by a tool). RenderLog's 800 ms flush is a real Timer
+  // that would outlive every test here and try to reach Supabase, so it is
+  // disabled — exactly the setUpAll CLAUDE.md prescribes. No assertion below
+  // is touched: this is the harness, not the contract.
+  setUpAll(() => RenderLog.flushEnabled = false);
+
   group('the page prints the payload verbatim', () {
     testWidgets('header, company and pack come straight from the payload',
         (tester) async {
@@ -180,13 +346,13 @@ void main() {
         (tester) async {
       await _pump(tester, _payload());
 
-      // CHANGE #638 — the price row and the sticky buy bar both read
-      // pricing.price_display, the SAME block the cards read. One price
-      // source everywhere.
-      expect(find.text('₹2,597.00'), findsNWidgets(2),
-          reason: 'price_display verbatim, in the price row and the sticky bar');
-      expect(find.text('MRP'), findsOneWidget,
-          reason: 'mrp_note survives only under the sticky bar price');
+      // CHANGE #638 — the price row reads pricing.price_display, the SAME
+      // block the cards read. One price source everywhere.
+      // CMD #1896 — and it is printed ONCE. The sticky bar that reprinted it a
+      // thumb's width below is gone, so a second copy of this string on the
+      // page means something started duplicating the price again.
+      expect(find.text('₹2,597.00'), findsOneWidget,
+          reason: 'price_display verbatim, exactly once on the page');
       expect(find.text('GST 12%'), findsOneWidget, reason: 'gst_label verbatim');
     });
 
@@ -269,13 +435,101 @@ void main() {
           reason: 'the sentence is composed in Postgres, printed here');
     });
 
-    testWidgets('rx_required gates the Rx banner and uses the backend wording',
-        (tester) async {
-      await _pump(tester, _payload());
-      expect(find.text('Prescription required'), findsNothing);
+  });
 
+  // CMD #1825 — Om's decision, 6 Sep 2026: the product page shows Rx or OTC
+  // ONLY. mediBO's buyers are licence-verified pharmacies, so the CHANGE #461
+  // full-width red "your drug licence must be on file" block (and the older
+  // `pdp_rx_banner` fallback under it) was a warning aimed at nobody, and a
+  // red that fires on every Schedule H pack is a red nobody reads. The
+  // licence RULE is untouched — it still speaks at the cart — this file only
+  // pins where the class is shown and that nothing else is.
+  //
+  // This is the one command allowed to edit these assertions: it explicitly
+  // changes the protected behaviour they held down.
+  group('prescription class (CMD #1825)', () {
+    testWidgets('an Rx product prints the backend label as a tag and nothing else',
+        (tester) async {
+      await _pump(
+        tester,
+        _payload(
+          rxRequired: true,
+          rx: _rxTag,
+          rxLicence: const {
+            'has': true,
+            'reason': 'ok',
+            'licence': 'MH-MUM-20B-1234',
+            'ok_note': 'Licence MH-MUM-20B-1234 on file',
+          },
+        ),
+      );
+      expect(find.text('Rx'), findsOneWidget,
+          reason: 'the label is rx_badge()\'s, printed verbatim');
+      // No sentence of any kind: not the block title, not the licence note,
+      // not the ok-note, not the legacy banner.
+      expect(find.text('Prescription medicine'), findsNothing);
+      expect(find.textContaining('drug licence must be on file'), findsNothing);
+      expect(find.textContaining('Licence MH-MUM-20B-1234'), findsNothing);
+      expect(find.text('Prescription required'), findsNothing);
+      expect(find.byIcon(Icons.receipt_long_outlined), findsNothing);
+
+      // The tag wears the payload's own tone — and it is not the danger red
+      // the block used to paint.
+      final tag = tester.widget<Container>(find.ancestor(
+        of: find.text('Rx'),
+        matching: find.byType(Container),
+      ).first);
+      final deco = tag.decoration as BoxDecoration;
+      expect(deco.color, const Color(0xFFEFF6FF),
+          reason: 'tone.bg is the backend\'s, applied verbatim');
+      expect(_dangerContainers(tester), findsNothing,
+          reason: 'no #FEE2E2 surface anywhere on the page');
+      // A tag, not a block: it is no wider than its text plus padding.
+      expect(tester.getSize(find.byWidget(tag)).width, lessThan(80));
+    });
+
+    testWidgets('an OTC product prints its own label the same way',
+        (tester) async {
+      await _pump(tester, _payload(rx: _otcTag));
+      expect(find.text('OTC'), findsOneWidget);
+      expect(find.text('Rx'), findsNothing);
+      expect(find.text('Over the counter'), findsNothing);
+      expect(find.text('No prescription needed for this pack.'), findsNothing);
+      expect(_dangerContainers(tester), findsNothing);
+    });
+
+    testWidgets('the label is printed verbatim, never mapped in Dart',
+        (tester) async {
+      // A label this build has never seen: if the page decided what an Rx
+      // class is called, it would print "Rx" (or nothing). It prints this.
+      await _pump(
+        tester,
+        _payload(rx: {..._rxTag, 'label': 'Sch. H1'}),
+      );
+      expect(find.text('Sch. H1'), findsOneWidget);
+      expect(find.text('Rx'), findsNothing);
+    });
+
+    testWidgets('rx.has false draws nothing at all, even when rx_required is set',
+        (tester) async {
+      await _pump(
+        tester,
+        _payload(
+          rxRequired: true,
+          rx: const {'has': false, 'is_rx': false},
+        ),
+      );
+      expect(find.text('Rx'), findsNothing);
+      expect(find.text('OTC'), findsNothing);
+      expect(find.text('Prescription required'), findsNothing,
+          reason: 'the pdp_rx_banner fallback is gone: header.rx_required '
+              'alone no longer draws anything');
+      expect(_dangerContainers(tester), findsNothing);
+
+      // And an absent block is the same as has:false.
       await _pump(tester, _payload(rxRequired: true));
-      expect(find.text('Prescription required'), findsOneWidget);
+      expect(find.text('Rx'), findsNothing);
+      expect(find.text('Prescription required'), findsNothing);
     });
   });
 
@@ -416,6 +670,408 @@ void main() {
       await _pump(tester, _payload(showWishlist: true, isWishlisted: true));
       expect(find.byIcon(Icons.favorite), findsOneWidget);
       expect(find.byIcon(Icons.favorite_border), findsNothing);
+    });
+  });
+
+  // CMD #1835 — the Supply record block is a chip, and only a chip.
+  //
+  // It used to print the chip and then say the same thing again in longhand:
+  // "100% fill rate" followed by "Filled 4 of 4 asks · last 180 days" — two
+  // raw tallies and a window the buyer never chose, which is the exposure
+  // CMD #1826 took out of the supply block next to it. The sentence was
+  // deleted at the source (product_trust_strip no longer builds a `note` for
+  // the fill-rate chip, and app_settings no longer holds `fill_note_fmt`), so
+  // what is pinned here is that the PAGE does not put one back: a chip whose
+  // payload carried no note renders nothing beside it, while a chip that DID
+  // carry one — cold chain — still prints it verbatim.
+  group('the Supply record block prints a chip, never a sentence', () {
+    Map<String, dynamic> withTrust(List<Map<String, dynamic>> chips) =>
+        _payload()..['trust'] = {
+          'has': true,
+          'title': 'Supply record',
+          'chips': chips,
+        };
+
+    testWidgets('a fill-rate chip with no note shows the chip alone',
+        (tester) async {
+      await _pump(
+          tester,
+          withTrust([
+            {'key': 'fill_rate', 'label': '100% fill rate', 'tone': 'success'},
+          ]));
+
+      // The title and the chip — the whole block.
+      expect(find.text('Supply record'), findsOneWidget);
+      expect(find.text('100% fill rate'), findsOneWidget);
+
+      // And nothing that counts, tallies or dates it. These are the exact
+      // shapes of the sentence that was removed; a Dart fallback that
+      // re-derived any of them from the chip would land here.
+      expect(find.textContaining('asks'), findsNothing);
+      expect(find.textContaining('Filled'), findsNothing);
+      expect(find.textContaining('180'), findsNothing);
+      expect(find.textContaining('last '), findsNothing);
+      // Not even an empty caption holding the space open.
+      expect(find.text(''), findsNothing);
+    });
+
+    testWidgets('a chip that DID send a note still prints it verbatim',
+        (tester) async {
+      await _pump(
+          tester,
+          withTrust([
+            {'key': 'fill_rate', 'label': '100% fill rate', 'tone': 'success'},
+            {
+              'key': 'cold_chain',
+              'label': 'Cold chain',
+              'note': 'Moved in a cold box',
+              'tone': 'info',
+            },
+          ]));
+
+      expect(find.text('Cold chain'), findsOneWidget);
+      expect(find.text('Moved in a cold box'), findsOneWidget);
+      // The fill-rate chip beside it is still bare.
+      expect(find.text('100% fill rate'), findsOneWidget);
+      expect(find.textContaining('asks'), findsNothing);
+    });
+
+    testWidgets('has:false draws no block at all', (tester) async {
+      await _pump(
+          tester,
+          _payload()
+            ..['trust'] = {'has': false, 'title': 'Supply record', 'chips': []});
+
+      expect(find.text('Supply record'), findsNothing);
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // CMD #1826 — the page never implies a price or a supply it does not have.
+  // Every word below is the payload's; the fixtures are built to catch a page
+  // that computes, re-derives or leaks anything.
+  // ───────────────────────────────────────────────────────────────────────────
+  group('supply confidence is a band, never a count (CMD #1826)', () {
+    testWidgets(
+        'the band prints label, tone and sub-line verbatim even when they '
+        'contradict the band key', (tester) async {
+      await _pump(tester, _payload(supply: _contraryBand));
+
+      expect(find.text('Checked recently, not confirmed'), findsOneWidget,
+          reason: 'the label is printed, not looked up from band');
+      expect(find.text('Last checked 3 days ago'), findsOneWidget);
+      expect(find.text('Supply confirmed recently'), findsNothing,
+          reason: 'band:"green" must not summon the green copy');
+
+      final band = tester.widget<Container>(
+          find.byKey(const ValueKey('pdp-supply-band')));
+      final color = (band.decoration as BoxDecoration).color;
+      expect(color, Brand.negativeBg,
+          reason: 'colour follows tone:"danger", never band:"green"');
+      expect(color, isNot(Brand.positiveBg));
+    });
+
+    testWidgets('the speed line is drawn only when has_speed is true',
+        (tester) async {
+      await _pump(tester, _payload(supply: _contraryBand));
+      expect(find.text('Usually confirmed within 2 hours'), findsNothing,
+          reason: 'a speed string under has_speed:false is not a guess the '
+              'page may print');
+
+      await _pump(
+          tester,
+          _payload(supply: {
+            ..._contraryBand,
+            'has_speed': true,
+          }));
+      expect(find.text('Usually confirmed within 2 hours'), findsOneWidget);
+    });
+
+    testWidgets('has:false draws nothing at all', (tester) async {
+      await _pump(
+          tester,
+          _payload(supply: const {
+            'has': false,
+            // Decoys: an older or buggy backend might still send words under
+            // has:false. The contract is that they are not printed.
+            'label': 'Supply confirmed recently',
+            'sub': 'Last confirmed today',
+            'tone': 'success',
+          }));
+      expect(find.byKey(const ValueKey('pdp-supply-band')), findsNothing);
+      expect(find.text('Supply confirmed recently'), findsNothing);
+      expect(find.text('Last confirmed today'), findsNothing);
+    });
+
+    testWidgets('an absent block is the same as has:false', (tester) async {
+      await _pump(tester, _payload());
+      expect(find.byKey(const ValueKey('pdp-supply-band')), findsNothing);
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // CMD #1896 — the price block Om sketched on 08-Sep: MRP small, struck and
+  // grey ON TOP; the sale price large below it; the discount beside that; the
+  // per-unit rate under it; and NO sticky bar reprinting any of them.
+  //
+  // The group name still says #1826 because the contract it defends is the
+  // same one: every number and every word on this block is a string the
+  // backend rendered. #1896 changed which of them are on screen and where.
+  // ───────────────────────────────────────────────────────────────────────────
+  group('two price lines, the sale price as hero (CMD #1826)', () {
+    testWidgets('with a trade rate the page prints each backend string exactly '
+        'once and MRP is the struck ceiling', (tester) async {
+      await _pump(tester, _payload(priceLines: _pricedLines));
+
+      // CMD #1896 — ONCE. The sticky bar that printed the sale value a second
+      // time is gone; a second copy means the price is being duplicated again.
+      expect(find.text('₹58.20'), findsOneWidget);
+      expect(find.text('Sale price (PTR)'), findsNothing,
+          reason: 'the sale caption left the block — the big number IS the '
+              'sale price, and the MRP above it is captioned');
+      expect(find.text('PTR ₹55.43 · GST 5%'), findsOneWidget,
+          reason: 'the sub-line is the backend sentence, not a Dart join');
+      expect(find.text('₹69.96'), findsOneWidget,
+          reason: 'the MRP row prints the backend rupee string');
+      expect(find.text('MRP'), findsOneWidget,
+          reason: 'the MRP caption, once, on the line above the sale price');
+
+      // The ceiling sentence is NOT printed any more — it is the tooltip.
+      expect(find.text('Printed pack ceiling — not the selling price'),
+          findsNothing,
+          reason: 'has_note:false — the words moved onto the (i)');
+      expect(find.byKey(const ValueKey('pdp-mrp-info')), findsOneWidget);
+      expect(
+          tester
+              .widget<Tooltip>(find.byKey(const ValueKey('pdp-mrp-info')))
+              .message,
+          'Printed pack ceiling — not the selling price',
+          reason: 'the tooltip carries the backend sentence verbatim');
+
+      // MRP is struck because the BACKEND said strike, not because the page
+      // compared two numbers it was handed.
+      final mrp = tester.widget<Text>(find.descendant(
+          of: find.byKey(const ValueKey('pdp-mrp-line')),
+          matching: find.text('₹69.96')));
+      expect(mrp.style?.decoration, TextDecoration.lineThrough);
+
+      // The two derived lines, both printed verbatim, neither computed here.
+      expect(find.text('17% off'), findsOneWidget);
+      expect(find.text('₹5.82 / tablet'), findsOneWidget);
+
+      // The sticky bar and everything it printed are gone.
+      expect(find.byKey(const ValueKey('pdp-sticky-main')), findsNothing);
+      expect(find.text('MRP ₹69.96'), findsNothing,
+          reason: 'the sticky side line went with the bar');
+      // The CHANGE #638 single price is deliberately a different number in
+      // this fixture: if the page still printed it as the hero, this fails.
+      expect(find.text('₹2,597.00'), findsNothing);
+    });
+
+    testWidgets('with no trade rate the sale row prints the literal PTR, MRP '
+        'stays the struck ceiling and Add to cart stays enabled',
+        (tester) async {
+      await _pump(tester, _payload(priceLines: _quoteLines));
+
+      // Om amendment 3: the VALUE is the literal "PTR" — a backend string,
+      // printed once now that the sticky bar is gone, never re-worded.
+      expect(find.text('PTR'), findsOneWidget);
+      expect(find.text('Sale price'), findsNothing,
+          reason: 'no caption competes with the value on the sale row');
+      // has_note:false — no on-quote sentence, no dash, no zero, no blank.
+      expect(find.text('Trade rate is confirmed when suppliers quote'),
+          findsNothing);
+      expect(find.text('On quote'), findsNothing);
+      expect(find.text('—'), findsNothing);
+      expect(find.text('₹69.96'), findsOneWidget);
+      expect(find.text('MRP ₹69.96'), findsNothing);
+      expect(find.text('Printed pack ceiling — not the selling price'),
+          findsNothing);
+      expect(find.text('₹2,597.00'), findsNothing,
+          reason: 'MRP is never presented as the price any more');
+
+      // CMD #1896 — nothing derived from a trade rate this viewer cannot see.
+      expect(find.byKey(const ValueKey('pdp-discount')), findsNothing);
+      expect(find.byKey(const ValueKey('pdp-per-unit')), findsNothing);
+      expect(find.textContaining('% off'), findsNothing);
+      expect(find.textContaining('/ tablet'), findsNothing);
+
+      expect(find.text('Add to cart'), findsOneWidget,
+          reason: 'a quote-driven B2B buyer orders before the rate is fixed');
+      expect(find.text('Unavailable'), findsNothing);
+    });
+
+    testWidgets('has_amount decides the ink: a phrase is never painted as a '
+        'price, a rupee amount is', (tester) async {
+      await _pump(tester, _payload(priceLines: _quoteLines));
+      final phrase = tester.widget<Text>(find.descendant(
+          of: find.byKey(const ValueKey('pdp-sale-line')),
+          matching: find.text('PTR')));
+      expect(phrase.style?.color, isNot(Brand.price),
+          reason: 'has_amount:false is the secondary ink, never the price ink');
+
+      await _pump(tester, _payload(priceLines: _pricedLines));
+      final amount = tester.widget<Text>(find.descendant(
+          of: find.byKey(const ValueKey('pdp-sale-line')),
+          matching: find.text('₹58.20')));
+      expect(amount.style?.color, Brand.price);
+    });
+
+    testWidgets('without the block an older backend still gets the '
+        'CHANGE #638 single price', (tester) async {
+      await _pump(tester, _payload());
+      expect(find.text('₹2,597.00'), findsWidgets);
+      expect(find.text('On quote'), findsNothing);
+      expect(find.byKey(const ValueKey('pdp-sale-line')), findsNothing);
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // CMD #1896 — the rest of the redesign, pinned the same way: every visible
+  // string is the payload's, and every "is it there?" is a backend boolean.
+  // ───────────────────────────────────────────────────────────────────────────
+  group('the title block is the backend\'s (CMD #1896)', () {
+    Map<String, dynamic> withTitle(Map<String, dynamic> title) =>
+        _payload()..['title'] = title;
+
+    testWidgets('the pill, the name, the company and ONE pack line, all from '
+        'the title block', (tester) async {
+      await _pump(
+          tester,
+          withTitle({
+            'has': true,
+            'name': 'Azithral 500 Tablet',
+            'company': 'Alembic Ltd',
+            'form_chip': {'has': true, 'label': 'Strip', 'tone': 'success'},
+            'pack_line': {'has': true, 'label': 'Strip of 5 tablets'},
+          }));
+
+      expect(find.text('Azithral 500 Tablet'), findsOneWidget);
+      expect(find.text('ALEMBIC LTD'), findsOneWidget);
+      expect(find.byKey(const ValueKey('pdp-form-chip')), findsOneWidget);
+      expect(find.text('Strip'), findsOneWidget);
+      expect(find.text('Strip of 5 tablets'), findsOneWidget);
+
+      // The header's own strings lost the argument — one pack line, not two.
+      expect(find.text('Vial'), findsNothing);
+      expect(find.text('Vial of 1 Injection'), findsNothing);
+      expect(find.text('Alkacel 100mg Injection'), findsNothing);
+    });
+
+    testWidgets('an absent title block falls back to header, so a cached '
+        'payload still renders', (tester) async {
+      await _pump(tester, _payload());
+
+      expect(find.text('Alkacel 100mg Injection'), findsOneWidget);
+      expect(find.text('Vial'), findsOneWidget);
+      expect(find.text('Vial of 1 Injection'), findsOneWidget);
+    });
+
+    testWidgets('form_chip has:false draws no pill at all', (tester) async {
+      await _pump(
+          tester,
+          withTitle({
+            'has': true,
+            'name': 'Azithral 500 Tablet',
+            'company': 'Alembic Ltd',
+            'form_chip': {'has': false, 'label': '', 'tone': 'success'},
+            'pack_line': {'has': false, 'label': ''},
+          }));
+
+      expect(find.byKey(const ValueKey('pdp-form-chip')), findsNothing);
+      expect(find.byKey(const ValueKey('pdp-pack-line')), findsNothing);
+      expect(find.text('Azithral 500 Tablet'), findsOneWidget);
+    });
+  });
+
+  group('the gallery is one hero shot (CMD #1896)', () {
+    Map<String, dynamic> withGallery(int n) => _payload()
+      ..['gallery'] = {
+        'has': n > 0,
+        'count': n,
+        'zoom_hint': 'Tap to zoom',
+        'close_label': 'Close',
+        'images': [
+          for (var i = 1; i <= n; i++)
+            {'url': 'https://img/$i.jpg', 'counter_label': '$i / $n'},
+        ],
+      };
+
+    testWidgets('no thumbnail strip and no counter caption under the hero',
+        (tester) async {
+      await _pump(tester, withGallery(5));
+
+      // The counter still exists in the payload — the ZOOM viewer prints it.
+      // It is not page furniture any more.
+      expect(find.text('1 / 5'), findsNothing);
+      expect(find.text('Tap to zoom'), findsNothing);
+      expect(find.byKey(const ValueKey('pdp-gallery-dots')), findsOneWidget);
+    });
+
+    testWidgets('one image draws no dots at all', (tester) async {
+      await _pump(tester, withGallery(1));
+      expect(find.byKey(const ValueKey('pdp-gallery-dots')), findsNothing);
+    });
+
+    testWidgets('no images is still a page, not a crash', (tester) async {
+      await _pump(tester, withGallery(0));
+      expect(find.byKey(const ValueKey('pdp-gallery-dots')), findsNothing);
+      expect(find.text('Alkacel 100mg Injection'), findsOneWidget);
+    });
+  });
+
+  group('nothing about sourcing leaks (CMD #1826)', () {
+    testWidgets('no supplier name or supplier count appears anywhere in the '
+        'rendered page', (tester) async {
+      await _pump(
+          tester,
+          _payload(
+            hasSupplierLabel: false,
+            supply: _contraryBand,
+            priceLines: _pricedLines,
+          ));
+
+      final rendered = tester
+          .widgetList<Text>(find.byType(Text, skipOffstage: false))
+          .map((t) => t.data ?? t.textSpan?.toPlainText() ?? '')
+          .join('\n');
+      expect(rendered, isNot(contains('Zydus Distributors')));
+      expect(rendered, isNot(contains('Apex Pharma')));
+      expect(RegExp(r'\b\d+\s+(supplier|source)s?\b', caseSensitive: false)
+              .hasMatch(rendered),
+          isFalse,
+          reason: 'a number of suppliers is a promise the page never makes');
+      expect(find.text('3'), findsNothing,
+          reason: 'the decoy supplier_count:3 must not surface as text');
+      expect(rendered, isNot(contains('supplier_count')));
+    });
+  });
+
+  group('the CMD #1826 parser', () {
+    test('supply and price_lines carry the payload through untouched', () {
+      final s = PdSupply.fromMap(_contraryBand);
+      expect(s.has, isTrue);
+      expect(s.band, 'green');
+      expect(s.tone, 'danger');
+      expect(s.label, 'Checked recently, not confirmed');
+      expect(s.hasSpeed, isFalse);
+
+      final pl = PdPriceLines.fromMap(_pricedLines);
+      expect(pl.has, isTrue);
+      expect(pl.sale.value, '₹58.20');
+      expect(pl.sale.hasAmount, isTrue);
+      expect(pl.mrp.hasAmount, isTrue);
+      expect(pl.sticky.side, 'MRP ₹69.96');
+    });
+
+    test('absence parses to has:false with nothing invented', () {
+      expect(PdSupply.fromMap(null).has, isFalse);
+      expect(PdSupply.fromMap(const {'has': false, 'label': 'x'}).label, '');
+      expect(PdPriceLines.fromMap(null).has, isFalse);
+      expect(PdPriceLines.fromMap(const {'has': false}).sale.value, '');
+      final d = ProductDetail.fromMap(_payload());
+      expect(d.supply.has, isFalse);
+      expect(d.priceLines.has, isFalse);
     });
   });
 }

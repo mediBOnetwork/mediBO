@@ -34,6 +34,13 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
   bool _debug = false;
   bool _busy = false;
 
+  // CHANGE #656: model and effort travel with the command. Both the OPTIONS
+  // and the DEFAULTS come from dev_model_options() — nothing here knows a
+  // model id, a label or which one is the default until the backend says so.
+  Map<String, dynamic> _mo = const {};
+  String _model = '';
+  String _effort = '';
+
   // Generate-Command (ask-doubt-before-building). OFF = today's fire-and-forget
   // Add. ON = the paste becomes ONE request the runner asks doubts about, then
   // builds to the answers.
@@ -48,6 +55,8 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
   bool _mediaPending = false;
 
   List<Map<String, dynamic>> _templates = const [];
+  // CMD #1843 — the picked template, so `dev_cmd_template_delete` has a subject.
+  Map<String, dynamic>? _pickedTemplate;
   List<Map<String, dynamic>> _warnings = const [];
 
   @override
@@ -55,6 +64,7 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
     super.initState();
     _paste.addListener(_reparse);
     _loadTemplates();
+    _loadModelOptions();
   }
 
   @override
@@ -62,6 +72,19 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
     _paste.dispose();
     _batch.dispose();
     super.dispose();
+  }
+
+  // CHANGE #656: the picker's options AND its defaults are the backend's.
+  Future<void> _loadModelOptions() async {
+    try {
+      final o = await widget.service.modelOptions();
+      if (!mounted) return;
+      setState(() {
+        _mo = o;
+        _model = (o['default_model'] ?? '').toString();
+        _effort = (o['default_effort'] ?? '').toString();
+      });
+    } catch (_) {}
   }
 
   Future<void> _loadTemplates() async {
@@ -99,6 +122,9 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
           'android_aab': _aab,
           'targets_ios': _ios,
           'debug': _debug,
+          // CHANGE #656: per-command model and effort
+          if (_model.isNotEmpty) 'model': _model,
+          if (_effort.isNotEmpty) 'effort': _effort,
           // CHANGE #72 — media attaches to the FIRST spec only (there is no
           // per-spec attach UI yet); the sheet shows a one-line hint saying so.
           if (i == 0 && _images.isNotEmpty) 'images': _images,
@@ -116,6 +142,9 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
         'targets_web': true,
         'targets_android': _apk || _aab,
         'targets_ios': _ios,
+        // CHANGE #656: per-command model and effort
+        if (_model.isNotEmpty) 'model': _model,
+        if (_effort.isNotEmpty) 'effort': _effort,
       };
 
   // Generate ON → fire-and-leave: create the draft and immediately return Om
@@ -228,6 +257,38 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
     } catch (_) {}
   }
 
+  /// CMD #1843 — templates could be listed and saved but never removed.
+  /// Deleting one is `dev_cmd_template_delete(id)`; the confirm reuses the
+  /// backend's own Delete / Cancel copy, and the list is re-read afterwards.
+  Future<void> _deleteTemplate() async {
+    final t = _pickedTemplate;
+    if (t == null) return;
+    final id = asInt(t['id']);
+    if (id == 0) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        content: Text((t['name'] ?? '').toString(), style: Ds.t.body),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(c('dev_queue.btn_cancel'))),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(c('dev_queue.btn_delete'))),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await widget.service.templateDelete(id);
+      if (mounted) setState(() => _pickedTemplate = null);
+      await _loadTemplates();
+    } catch (e) {
+      if (mounted) showToast(context, '$e', isError: true);
+    }
+  }
+
   void _insertTemplate(Map<String, dynamic> t) {
     final spec = (t['spec'] ?? t['spec_template'] ?? '').toString();
     if (spec.isEmpty) return;
@@ -302,6 +363,8 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
                 const SizedBox(height: 10),
                 _toggles(),
                 const SizedBox(height: 10),
+                _modelEffortSection(),
+                const SizedBox(height: 10),
                 _generateSection(),
                 _batchField(),
                 if (n > 0) ...[
@@ -311,10 +374,12 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
                         size: 18, color: kBrand),
                     const SizedBox(width: 8),
                     Text(
+                        // CHANGE #686 — c() fills no slots, so this had to
+                        // substitute the template by hand. cf() is the one
+                        // place substitution belongs.
                         n == 1
                             ? c('dev_queue.bulk_count_one')
-                            : c('dev_queue.bulk_count_many')
-                                .replaceFirst('{n}', '$n'),
+                            : cf('dev_queue.bulk_count_many', {'n': '$n'}),
                         style: const TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.w700,
@@ -376,11 +441,21 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
                       overflow: TextOverflow.ellipsis),
                 ),
             ],
+            value: _pickedTemplate,
             onChanged: (t) {
-              if (t != null) _insertTemplate(t);
+              if (t == null) return;
+              setState(() => _pickedTemplate = t);
+              _insertTemplate(t);
             },
           ),
         ),
+        if (_pickedTemplate != null)
+          IconButton(
+            tooltip: c('dev_queue.btn_delete'),
+            onPressed: _deleteTemplate,
+            icon: Icon(Icons.delete_outline,
+                size: Ds.t.subtitleSize, color: Ds.c.danger),
+          ),
         const SizedBox(width: 8),
         OutlinedButton.icon(
           onPressed: _saveTemplate,
@@ -437,6 +512,63 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
         style: const TextStyle(fontSize: 14),
         decoration: _fieldDeco(c('dev_queue.label_batch')),
       );
+
+  // CHANGE #656: Model and Effort. Every string on this card — the heading, the
+  // hint, the two column titles and each chip label — is a field of
+  // dev_model_options(). Changing "Fable 5" to something else is an UPDATE, not
+  // a deploy, and this widget renders nothing at all until the payload lands.
+  Widget _modelEffortSection() {
+    final models = (_mo['models'] as List?) ?? const [];
+    final efforts = (_mo['efforts'] as List?) ?? const [];
+    if (models.isEmpty && efforts.isEmpty) return const SizedBox.shrink();
+    return Container(
+      margin: EdgeInsets.only(bottom: Ds.space.x12),
+      padding: EdgeInsets.all(Ds.space.x12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: Ds.r.rChip,
+        border: Border.all(color: kBorder),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text((_mo['title'] ?? '').toString(), style: Ds.t.body),
+        if ((_mo['hint'] ?? '').toString().isNotEmpty)
+          Text((_mo['hint'] ?? '').toString(), style: Ds.t.caption),
+        SizedBox(height: Ds.space.x12),
+        _optionColumn(
+          title: (_mo['model_title'] ?? '').toString(),
+          options: models,
+          selected: _model,
+          onPick: (v) => setState(() => _model = v),
+        ),
+        SizedBox(height: Ds.space.x12),
+        _optionColumn(
+          title: (_mo['effort_title'] ?? '').toString(),
+          options: efforts,
+          selected: _effort,
+          onPick: (v) => setState(() => _effort = v),
+        ),
+      ]),
+    );
+  }
+
+  Widget _optionColumn({
+    required String title,
+    required List options,
+    required String selected,
+    required void Function(String) onPick,
+  }) =>
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (title.isNotEmpty) Text(title, style: Ds.t.caption),
+        SizedBox(height: Ds.space.x8),
+        Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x8, children: [
+          for (final o in options.whereType<Map>())
+            _choice(
+              (o['label'] ?? '').toString(),
+              selected == (o['value'] ?? '').toString(),
+              () => onPick((o['value'] ?? '').toString()),
+            ),
+        ]),
+      ]);
 
   // Generate-Command controls. OFF by default so Add stays fire-and-forget.
   Widget _generateSection() => Container(

@@ -51,6 +51,7 @@ import 'package:pharma_b2b/models/product.dart';
 import 'package:pharma_b2b/models/storefront_p3.dart';
 import 'package:pharma_b2b/widgets/compact_product_card.dart';
 import 'package:pharma_b2b/widgets/home_sections_view.dart';
+import 'package:pharma_b2b/utils/render_log.dart';
 
 /// One card in the exact shape storefront_home_v2 / storefront_home_more send.
 Map<String, dynamic> _card(int id, String name) => {
@@ -173,6 +174,12 @@ HomeSection _parse(Map<String, dynamic> raw) {
 }
 
 void main() {
+  // CHANGE #274 — the feed now posts a render-log line counting the cards it
+  // painted (the only evidence a canvas screen can produce). Its 800ms flush
+  // is a real Timer that would outlive these tests and try to reach Supabase,
+  // so it is disabled here exactly as CLAUDE.md's protected-suite note says.
+  setUpAll(() => RenderLog.flushEnabled = false);
+
   setUp(() {
     CartModel.rpcTransport = (fn, params) async => {
       'ok': true,

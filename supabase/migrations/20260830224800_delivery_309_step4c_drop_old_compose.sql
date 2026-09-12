@@ -1,0 +1,13 @@
+-- CHANGE #309 step 4c — drop the SUPERSEDED 6-argument _bill_compose.
+--
+-- Trap worth recording: `create or replace function` with two extra DEFAULTED
+-- parameters does not replace anything — it creates an OVERLOAD. Both then
+-- match every existing 6-argument call, so PostgreSQL refuses with
+-- "function ... is not unique" and EVERY bill on the platform stops rendering.
+-- Caught within a minute here by calling customer_bill_sample(); the fix is to
+-- drop the old arity so the widened one is the only candidate.
+--
+-- Safe because the new definition is the old one plus two parameters that
+-- default to NULL, and NULL delivery + NULL credits reproduce the previous
+-- totals exactly (proved by the probe in this command's build log).
+drop function if exists public._bill_compose(jsonb, jsonb, numeric, numeric, boolean, jsonb);

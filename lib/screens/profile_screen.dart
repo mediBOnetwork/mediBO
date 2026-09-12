@@ -1,18 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'kyc/kyc_panel.dart';
+
 import '../models/account_registration.dart';
 import '../models/app_session.dart';
 import '../models/user_profile.dart';
 import '../services/ui_copy.dart';
-import '../user_state.dart';
 import '../utils/render_log.dart';
 import '../view_as_state.dart';
-import '../widgets/delete_account_section.dart';
-import '../design_tokens.dart';
 import 'auth/business_details_screen.dart';
 import 'admin/view_as_picker_dialog.dart';
-import 'wishlist_screen.dart';
+import 'customer/profile_account_menu.dart'; // CHANGE #745 — the registry menu
+import '../services/customer_surfaces.dart'; // CHANGE #745
+// CHANGE #536 — the four pharmacy screens this file used to import are gone.
+// My Profile is profile things only now: the shop's details, its wishlist, its
+// rewards, its staff logins and Logout. Every counter, shelf, parcel and GST
+// surface is a My Shop tile, registered on surface='customer_shop'.
 
 class ProfileScreen extends StatefulWidget {
   // CHANGE #374 — when set (View As Customer), load the impersonated
@@ -54,6 +58,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   void initState() {
     super.initState();
+    // CHANGE #745 — the Account group and the Account setup values are one
+    // backend answer. Asking here as well as at shell boot is deliberate: a
+    // customer who signs in AFTER the shell booted must not open a profile
+    // whose menu was resolved for a signed-out visitor.
+    CustomerSurfaces.ensureLoaded();
     if (widget.viewAsUserId != null) {
       _fetchViewAsProfile();
     } else {
@@ -205,6 +214,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // CHANGE #536 — four pharmacy tiles used to sit HERE, above
+                // the avatar: the counter, the shelf, the GST pack and the
+                // parcel count, stacked as bare rows before the shop had even
+                // seen its own name. They were put at the top because a
+                // customer's avatar opens this screen directly and there was
+                // nowhere else to reach them from. There is now: My Shop, a
+                // bottom-bar tab, where all nineteen live in four named
+                // sections. My Profile is profile things only again.
                 // Avatar + pharmacy name header
                 Container(
                   color: Colors.white,
@@ -463,6 +480,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                   ),
 
+                  // CHANGE #705 — the licence-and-documents panel. Same
+                  // widget the supplier sees; kyc_my_panel() resolves which
+                  // account is asking and words every line, so this is one
+                  // constructor and no configuration.
+                  const KycPanel(),
+
                   // Business details
                   _SectionCard(
                     icon: Icons.storefront_outlined,
@@ -576,87 +599,55 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ],
                   ),
 
-                  // Account Setup
-                  _SectionCard(
-                    icon: Icons.manage_accounts_outlined,
-                    title: c('profile.sec_account_setup'),
-                    children: [
-                      _InfoRow(
-                        label: c('profile.row_payment_term'),
-                        value: profile?.paymentTerm,
-                        icon: Icons.payments_outlined,
-                      ),
-                      _InfoRow(
-                        label: c('profile.row_customer_code'),
-                        value: profile?.customerCode,
-                        icon: Icons.tag_outlined,
-                        isLast: true,
-                      ),
-                    ],
-                  ),
+                  // Account Setup — CHANGE #745. Payment term and Customer
+                  // code both printed an em-dash, because THIS screen wrote the
+                  // dash in Dart over columns that are NULL on a shop nobody has
+                  // filled in yet. customer_surfaces().account_setup resolves
+                  // both server-side (the platform default term; a customer code
+                  // that is now assigned on insert and backfilled) and hands
+                  // over finished strings with an explicit `has` flag.
+                  if (!isViewAs) const AccountSetupCard(),
                 ],
 
-                // My Wishlist — approved customers only (gated:true per backend decision)
-                if (!isViewAs && isRegistered)
-                  _WishlistEntryCard(),
+                // CHANGE #745 — the Account group, and ONLY the Account
+                // group. Om: the profile dropdown had become a dumping ground —
+                // My Wishlist, Rewards and "Deliver with mediBO" sat next to
+                // Edit my details and Logout, each one a hardcoded `if (...)`
+                // right here, which made the PLACEMENT of a customer feature a
+                // Dart decision.
+                //
+                // It is registry data now (feature_registry surface
+                // 'customer_menu' + customer_feature_placement, read through
+                // customer_surfaces()). The wishlist moved to the catalogue app
+                // bar and a home chip; rewards moved to the Orders tab and a
+                // home badge; rider signup left the customer app altogether and
+                // keeps its own door at /delivery-register for the public site.
+                // None of those three moves needed a line of Dart to be
+                // deleted twice — they are placement rows.
+                //
+                // Logout and the delete zone are entries too (render_kind
+                // 'action' / 'danger_zone'), so their ORDER inside Account is
+                // the backend's as well, and delete stays last.
+                // Round 1 QA blocker: this used to be gated on `isRegistered`,
+                // which took Logout away from exactly the account that needs it
+                // most — someone who signed in with the wrong login, landed on
+                // the registration form and wanted back out. The menu itself
+                // decides what a caller is offered (the backend's payload, plus
+                // a guaranteed sign-out), so the gate belongs there, not here.
+                ProfileAccountMenu(interactive: !isViewAs),
+
+                // CHANGE #745 — the loyalty control panel used to be gated
+                // right here on `session.isSuperAdmin`, a second source of
+                // truth next to the registry. It is a registry row now
+                // (roles_allowed = {super_admin}), so a pharmacy's payload
+                // simply does not contain it and ProfileAccountMenu above
+                // draws whatever the backend sent. View As stays below because
+                // it is a compile-flag dev tool, not a nav entry.
 
                 // View As (Dev) — super-admin only, build-phase gated; hidden in viewAs mode
                 // RULE 1 — the role gating this comes from my_session() too.
                 if (!isViewAs && kEnableViewAs && (session?.isSuperAdmin ?? false))
                   _ViewAsCard(),
-
-                // Delete account / data — a logged-in registered customer only.
-                // request_account_deletion() itself refuses anyone who is not a
-                // customer, so this mirrors the backend gate rather than
-                // inventing one.
-                // Logout — a normal action, ABOVE the delete zone and styled
-                // neutral (not red) so it never reads as destructive. This is
-                // the tap target a leaving customer reaches for.
-                if (!isViewAs)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                    child: OutlinedButton.icon(
-                      onPressed: () async {
-                        await UserState.read(context).signOut();
-                        if (context.mounted) {
-                          Navigator.of(context).popUntil((r) => r.isFirst);
-                        }
-                      },
-                      icon: const Icon(Icons.logout,
-                          size: 18, color: Color(0xFF374151)),
-                      label: Text(c('profile.btn_logout')),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: const Color(0xFF374151),
-                        side: const BorderSide(
-                            color: Color(0xFFD1D5DB), width: 1.5),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10)),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        textStyle: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ),
-
-                // Delete account / data — the destructive danger zone, kept at
-                // the very bottom, below Logout and collapsed, so a tap meant
-                // for Logout can never land on it.
-                if (!isViewAs && isRegistered) ...[
-                  const SizedBox(height: 8),
-                  DeleteAccountSection(
-                    rpc: (scope, reason) async {
-                      final raw = await Supabase.instance.client.rpc(
-                        'request_account_deletion',
-                        params: {'p_scope': scope, 'p_reason': reason},
-                      );
-                      return Map<String, dynamic>.from(
-                          (raw is List ? raw.first : raw) as Map);
-                    },
-                  ),
-                  const SizedBox(height: 40),
-                ],
               ],
             ),
           ),
@@ -982,46 +973,6 @@ class _ViewAsChip extends StatelessWidget {
   }
 }
 
-class _WishlistEntryCard extends StatelessWidget {
-  const _WishlistEntryCard();
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-          Ds.space.x16, Ds.space.x8, Ds.space.x16, 0),
-      child: GestureDetector(
-        onTap: () => Navigator.of(context).push(
-          MaterialPageRoute<void>(
-              builder: (_) => const WishlistScreen()),
-        ),
-        child: Container(
-          padding: EdgeInsets.symmetric(
-              horizontal: Ds.space.x16, vertical: Ds.space.x16),
-          decoration: BoxDecoration(
-            color: Ds.c.surface,
-            borderRadius: Ds.r.rCard,
-            border: Border.all(color: Ds.c.divider),
-            boxShadow: Ds.elevation.e1,
-          ),
-          child: Row(
-            children: [
-              Icon(Icons.favorite_border_rounded,
-                  size: 22, color: Ds.c.brand),
-              SizedBox(width: Ds.space.x12),
-              Expanded(
-                child: Text(
-                  c('profile.row_wishlist'),
-                  style: Ds.t.body
-                      .copyWith(fontWeight: FontWeight.w600),
-                ),
-              ),
-              Icon(Icons.chevron_right,
-                  size: 20, color: Ds.c.textSecondary),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
+/// CHANGE #176 — one shape for both new profile rows, so a second entry cannot
+/// drift from the first. Modelled on [_WishlistEntryCard]; label text comes from
+/// ui_copy, never a Dart literal.

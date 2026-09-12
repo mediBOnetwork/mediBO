@@ -312,8 +312,6 @@ insert into public.ui_copy(key, value) values
   ('pay_alert.count_zero', to_jsonb('No alerts'::text))
 on conflict (key) do nothing;
 
--- The nav label lives with the other overflow entries, not with this feature's
--- own keys, because that is the namespace admin_nav_entries.dart reads.
-insert into public.ui_copy(key, value)
-values ('admin_nav.overflow_payment_alerts', to_jsonb('Payment alerts'::text))
-on conflict (key) do nothing;
+-- NOTE: this feature's nav LABEL is not here. The admin nav is nav_registry()
+-- over feature_registry, so the row and its label are registered in
+-- 20260912120800_payment_alerts_nav.sql — one source, no ui_copy twin.

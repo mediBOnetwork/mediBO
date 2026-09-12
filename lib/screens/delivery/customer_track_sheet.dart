@@ -21,8 +21,12 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../fulfill/fulfill_lookups.dart';
+import '../../services/live_feed.dart';
 import '../../utils/render_log.dart';
 import 'delivery_tracking_view.dart';
+import 'reschedule_sheet.dart';
+import '../../design_tokens.dart';
+import '../../widgets/order_stage_strip.dart';
 
 String _ui(String k) => FulfillLookups.instance.ui(k);
 
@@ -50,12 +54,66 @@ class _CustomerTrackSheetState extends State<_CustomerTrackSheet> {
   DeliveryTrackingData? _data;
   bool _loading = true;
 
+  // CMD #452 — feature_gaps #133. Tracking used to be one sentence:
+  // customer_track_order() returned {status, tracking, status_label} and
+  // nothing else — no steps, no timestamps, no expected delivery. The RPC now
+  // carries `timeline`, built server-side in IST, and this sheet prints it.
+  Map<String, dynamic> _timeline = const {};
+
+  // CHANGE #309 (7) — the rating prompt. The BACKEND decides whether to offer
+  // it (delivered, and not already rated); this sheet only draws what it says.
+  Map<String, dynamic> _rate = const {};
+  int _stars = 0;
+  final _commentCtrl = TextEditingController();
+  bool _rateBusy = false;
+  String _rateDone = '';
+
+  // CMD #1839 — the fifteen stages advance ON SCREEN. The three tables a stage
+  // is made of are watched through LiveFeed, narrowed to THIS order, which is
+  // what the backend's registry requires of them before it will bind live at
+  // all. Whether that ends up as a realtime binding or a poll is the
+  // registry's call, not this sheet's.
+  LiveFeedHandle? _live;
+
   @override
   void initState() {
     super.initState();
     FulfillLookups.instance.ensureLoaded();
     _load();
+    _watch();
   }
+
+  Future<void> _watch() async {
+    PostgresChangeFilter eq(String col) => PostgresChangeFilter(
+          type: PostgresChangeFilterType.eq,
+          column: col,
+          value: widget.orderId,
+        );
+    try {
+      final h = await LiveFeed.instance.watch(
+        channelPrefix: 'cust_track_${widget.orderId}',
+        tables: const ['orders', 'order_items', 'deliveries'],
+        filters: {
+          'orders': eq('id'),
+          'order_items': eq('order_id'),
+          'deliveries': eq('order_id'),
+        },
+        onChange: (changed) {
+          if (!mounted) return;
+          RenderLog.write('c1839_track_live', changed.join(','));
+          _load();
+        },
+      );
+      if (!mounted) {
+        h.unsubscribe();
+        return;
+      }
+      _live = h;
+    } catch (_) {
+      // A feed that will not open is not a reason to show no tracking.
+    }
+  }
+
 
   Future<void> _load() async {
     try {
@@ -72,14 +130,152 @@ class _CustomerTrackSheetState extends State<_CustomerTrackSheet> {
         }
         setState(() {
           _data = DeliveryTrackingData.fromCustomer(m);
+          _timeline = m['timeline'] is Map
+              ? Map<String, dynamic>.from(m['timeline'] as Map)
+              : const {};
           _loading = false;
         });
+        RenderLog.write('c452_track_timeline',
+            (_timeline['steps'] as List?)?.length ?? 0);
+        RenderLog.write('c689_cust_timeline',
+            'access=${_timeline['access'] ?? ''};events=${_timeline['event_count'] ?? 0}');
+        // CMD #1839 — the popup's own proof: how many stages painted, which one
+        // is current, whether it carried a count and whether a line is held.
+        // events must read 0 here: the buyer's event log was retired.
+        RenderLog.write(
+            'c1839_track_stages',
+            'stages:${(_timeline['steps'] as List?)?.length ?? 0}'
+            ';cur:${_timeline['current'] ?? ''}'
+            ';cap:${(_timeline['caption'] ?? '').toString().isEmpty ? 0 : 1}'
+            ';drop:${_timeline['dropped_count'] ?? 0}'
+            ';disp:${_timeline['disputed_count'] ?? 0}'
+            ';events:${_timeline['event_count'] ?? 0}');
+        await _loadRatePrompt();
         return;
       }
       setState(() => _loading = false);
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  Future<void> _loadRatePrompt() async {
+    try {
+      final res = await Supabase.instance.client
+          .rpc('delivery_rating_prompt', params: {'p_order_id': widget.orderId});
+      if (!mounted || res is! Map) return;
+      setState(() => _rate = Map<String, dynamic>.from(res));
+      if (_rate['show'] == true) RenderLog.write('c309_rate_prompt', 1);
+    } catch (_) {}
+  }
+
+  Future<void> _submitRating() async {
+    if (_stars < 1 || _rateBusy) return;
+    setState(() => _rateBusy = true);
+    try {
+      final res = await Supabase.instance.client.rpc('delivery_rate', params: {
+        'p_delivery_id': _rate['delivery_id']?.toString() ?? '',
+        'p_stars': _stars,
+        'p_comment': _commentCtrl.text.trim().isEmpty ? null : _commentCtrl.text.trim(),
+      });
+      if (!mounted) return;
+      // The confirmation sentence is the backend's, in both the happy case and
+      // the already-rated case. Nothing is worded here.
+      setState(() {
+        _rateDone = (res is Map ? res['message']?.toString() : null) ?? '';
+        _rateBusy = false;
+      });
+      RenderLog.write('c309_rate_submit', _stars);
+    } catch (_) {
+      if (mounted) setState(() => _rateBusy = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _live?.unsubscribe();
+    _commentCtrl.dispose();
+    super.dispose();
+  }
+
+  // CHANGE #309 (7) — five taps, each a 44x44 target.
+  Widget _ratingCard() {
+    if (_rateDone.isNotEmpty) {
+      return Container(
+        margin: EdgeInsets.only(top: Ds.space.x24),
+        padding: EdgeInsets.all(Ds.space.x16),
+        decoration: BoxDecoration(
+          color: Ds.c.successSoft,
+          borderRadius: Ds.r.rCard,
+        ),
+        child: Text(_rateDone,
+            style: Ds.t.body.copyWith(
+                fontWeight: FontWeight.w600, color: Ds.c.success)),
+      );
+    }
+    if (_rate['show'] != true) return const SizedBox.shrink();
+
+    return Container(
+      margin: EdgeInsets.only(top: Ds.space.x24),
+      padding: EdgeInsets.all(Ds.space.x16),
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        border: Border.all(color: Ds.c.divider),
+        borderRadius: Ds.r.rCard,
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(_rate['title']?.toString() ?? '', style: Ds.t.subtitle),
+        SizedBox(height: Ds.space.x4),
+        Text(_rate['hint']?.toString() ?? '', style: Ds.t.caption),
+        SizedBox(height: Ds.space.x12),
+        Row(children: [
+          for (var i = 1; i <= 5; i++)
+            InkWell(
+              onTap: () => setState(() => _stars = i),
+              child: SizedBox(
+                width: 44,
+                height: 44,
+                child: Icon(
+                  i <= _stars ? Icons.star_rounded : Icons.star_outline_rounded,
+                  size: 30,
+                  color: i <= _stars ? Ds.c.brand : Ds.c.textSecondary,
+                ),
+              ),
+            ),
+        ]),
+        SizedBox(height: Ds.space.x12),
+        TextField(
+          controller: _commentCtrl,
+          maxLines: 2,
+          decoration: InputDecoration(
+            hintText: _rate['comment_hint']?.toString() ?? '',
+            filled: true,
+            fillColor: Ds.c.bg,
+            border: OutlineInputBorder(
+              borderRadius: Ds.r.rButton,
+              borderSide: BorderSide(color: Ds.c.divider),
+            ),
+          ),
+        ),
+        SizedBox(height: Ds.space.x16),
+        SizedBox(
+          width: double.infinity,
+          height: 48,
+          child: ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Ds.c.brand,
+              foregroundColor: Ds.c.surface,
+              disabledBackgroundColor: Ds.c.divider,
+            ),
+            // Disabled until a star is chosen: a rating with no stars is not a
+            // rating, and the backend would refuse it anyway.
+            onPressed: (_stars > 0 && !_rateBusy) ? _submitRating : null,
+            child: Text(_rate['submit_label']?.toString() ?? '',
+                style: const TextStyle(fontWeight: FontWeight.w700)),
+          ),
+        ),
+      ]),
+    );
   }
 
   @override
@@ -118,9 +314,80 @@ class _CustomerTrackSheetState extends State<_CustomerTrackSheet> {
               )
             else if (d != null)
               DeliveryTrackingView(data: d, onRefetch: _load),
+            // CHANGE #406 — reschedule, offered by the backend only after a
+            // failed attempt. Same widget and same payload shape as the public
+            // /track page; only the door differs.
+            // CMD #452 — the timeline sits directly under the live tracking
+            // view: placed -> sourcing -> packed -> dispatched -> delivered,
+            // with the backend's own IST stamps and its own expected-delivery
+            // sentence. Which step is current is the payload's `state`, never
+            // a comparison this sheet makes.
+            if (!_loading) OrderTimelineCard(timeline: _timeline),
+            // CMD #1839 — the "Order timeline" event log is GONE from the
+            // customer's popup, and so is the "supplier details are kept
+            // private" apology that went with it. The fifteen stages above
+            // answer "where is my order", and no supplier name reaches this
+            // screen because the backend sends the buyer none: order_timeline()
+            // returns events:[] for access 'customer'.
+            if (!_loading)
+              RescheduleCard(
+                key_: widget.orderId,
+                door: RescheduleDoor.order,
+                onChanged: _load,
+              ),
+            if (!_loading) _ratingCard(),
           ],
         ),
       ),
+    );
+  }
+}
+
+
+/// CMD #452, rebuilt by CMD #1839 — the Track popup's stage list.
+///
+/// Renders `order_timeline()` verbatim: every stage the backend sent, in the
+/// order it sent them, with its own IST stamp, its partial-progress count
+/// ("Packing 14 of 15") and the re-sourcing note when a line is held. Which
+/// stage is current is the payload's `state`, never a comparison made here,
+/// and an empty payload renders nothing rather than an invented "no data".
+class OrderTimelineCard extends StatelessWidget {
+  final Map<String, dynamic> timeline;
+  const OrderTimelineCard({super.key, required this.timeline});
+
+  @override
+  Widget build(BuildContext context) {
+    final stages = OrderStage.listFrom(timeline['steps']);
+    if (stages.isEmpty) return const SizedBox.shrink();
+
+    String s(String k) => (timeline[k] ?? '').toString();
+
+    return Container(
+      margin: EdgeInsets.only(top: Ds.space.x24),
+      padding: EdgeInsets.all(Ds.space.x16),
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        border: Border.all(color: Ds.c.divider),
+        borderRadius: Ds.r.rCard,
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(s('heading'), style: Ds.t.subtitle),
+        SizedBox(height: Ds.space.x16),
+        OrderStageList(stages: stages, note: s('dispute_note')),
+        if (s('eta_display').isNotEmpty) ...[
+          SizedBox(height: Ds.space.x16),
+          Divider(color: Ds.c.divider, height: 1),
+          SizedBox(height: Ds.space.x12),
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(child: Text(s('eta_label'), style: Ds.t.bodyStrong)),
+            SizedBox(width: Ds.space.x12),
+            Expanded(
+              child: Text(s('eta_display'),
+                  textAlign: TextAlign.right, style: Ds.t.caption),
+            ),
+          ]),
+        ],
+      ]),
     );
   }
 }

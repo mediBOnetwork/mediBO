@@ -34,6 +34,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../fulfill/fulfill_lookups.dart';
+import '../../services/ui_copy.dart';
 import '../../utils/doc_scan.dart';
 import '../../utils/doc_capture.dart';
 import '../../utils/render_log.dart';
@@ -127,6 +128,16 @@ class _DeliveryIdScanCardState extends State<DeliveryIdScanCard> {
         },
         handlePage: (page) =>
             _scan(page.bytes, _mimeFor(page.name), page.name),
+        // CHANGE #225: the camera itself failing is the one case with nothing
+        // left to fall back to, so it is said out loud — in the backend's words.
+        onProblem: (code) async {
+          try { RenderLog.write('c225_camera_problem', code); } catch (_) {}
+          if (!mounted) return;
+          final msg = c(code);
+          if (msg.isEmpty) return;
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(msg)));
+        },
       );
     } catch (e) {
       RenderLog.write('c630_scan_camera_err', e.toString());

@@ -4,6 +4,7 @@
 // formatting (remaining.bill_total/due are raw numbers) and the pre-bill
 // progress-bar fill (a 0.75×MRP estimate, never displayed as text).
 // ignore_for_file: use_build_context_synchronously
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -27,6 +28,9 @@ import 'native_signed_image.dart';
 // #642 — C330CopyRow moved here from sup_pay_panel.dart so the QR card can be
 // pumped in a test without that file's transitive dart:html import.
 import 'pay_qr_card.dart';
+import 'checkout_pay_sheet.dart' show kCheckoutPayPollInterval;
+import 'razorpay_qr_card.dart';
+import 'rzp_checkout_card.dart';
 import 'payment_proof_image.dart';
 import 'upi_pay_sheet.dart' show buildUpiUri;
 
@@ -56,7 +60,10 @@ class _CustPayPanelState extends State<CustPayPanel> {
     if (mounted) setState(() { _loading = true; _error = null; });
     try {
       final res = await Supabase.instance.client.rpc(
-        'customer_order_payment_panel',
+        // #291 — _v2 is the same payload plus the money_display keys and
+        // `upi.provider` / `upi.razorpay`, which say WHICH payment provider the
+        // sheet must draw. Strictly additive over v1.
+        'customer_order_payment_panel_v2',
         params: {'p_order_id': widget.orderId},
       );
       final panel = Map<String, dynamic>.from(res as Map);
@@ -68,6 +75,13 @@ class _CustPayPanelState extends State<CustPayPanel> {
       final payments = (panel['payments'] as List?) ?? [];
       // CHANGE #480 — totals now come verbatim from backend display.* (which
       // already carry the "Awaiting bill" pending text); no client-side literal.
+      // #291 — which payment provider the backend chose for THIS load. This is
+      // the live reachability signal: the moment anyone opens a Payment tab the
+      // render-log says whether the Razorpay QR path or the manual UPI path is
+      // the one being drawn.
+      RenderLog.write(
+          'c291_pay_provider',
+          ((panel['upi'] as Map?)?['provider'] ?? 'upi_manual').toString());
       RenderLog.write('c468_total', display['total']?.toString() ?? '');
       RenderLog.write('c468_due', display['due']?.toString() ?? '');
       RenderLog.write('c468_paid', display['paid']?.toString() ?? totals['paid_label']?.toString() ?? '');
@@ -363,6 +377,11 @@ class _CustPayPanelState extends State<CustPayPanel> {
         qrSheet: upi['qr_sheet'] is Map
             ? (upi['qr_sheet'] as Map).cast<String, dynamic>()
             : const <String, dynamic>{},
+        // #291 — the backend names the provider; the sheet never guesses.
+        provider: upi['provider']?.toString() ?? '',
+        razorpayCopy: upi['razorpay'] is Map
+            ? (upi['razorpay'] as Map).cast<String, dynamic>()
+            : const <String, dynamic>{},
       ),
     );
   }
@@ -622,6 +641,21 @@ class CustPaySheet extends StatefulWidget {
   /// [kind] and prints the strings inside verbatim. Defaults to empty so the
   /// three legacy tests that construct this widget still compile.
   final Map<String, dynamic> qrSheet;
+
+  /// #291 — `payment.upi.provider`: 'razorpay_qr' when every payment gets its
+  /// own auto-verified Razorpay QR, 'upi_manual' (or absent) for the shared-VPA
+  /// deeplink QR this sheet has always drawn. The sheet NEVER decides this.
+  final String provider;
+
+  /// `payment.upi.razorpay` — the loading / error / retry words for the
+  /// Razorpay branch. Empty map = render nothing rather than invent copy.
+  final Map<String, dynamic> razorpayCopy;
+
+  /// Injected in tests so the Razorpay branch can be pumped without Supabase.
+  /// Production default is the real `razorpay-qr-create` edge function.
+  final Future<Map<String, dynamic>> Function(String orderId, String kind)?
+      createRzpQr;
+
   const CustPaySheet({
     super.key,
     required this.qrData,
@@ -632,6 +666,9 @@ class CustPaySheet extends StatefulWidget {
     required this.amount,
     required this.kind,
     this.qrSheet = const <String, dynamic>{},
+    this.provider = '',
+    this.razorpayCopy = const <String, dynamic>{},
+    this.createRzpQr,
     this.fetchWaNumbers,
     this.sendQr,
     this.downloadBytesSink,
@@ -651,11 +688,172 @@ class _CustPaySheetState extends State<CustPaySheet> {
   OverlayEntry? _waPopupEntry;
   bool _downloadingQr = false;
 
+  // ── #291 Razorpay branch ──────────────────────────────────────────────────
+  // The QR belongs to THIS payment and confirms itself through the webhook, so
+  // there is no screenshot to upload and nothing for a human to verify. It is
+  // minted on open by `razorpay-qr-create`, which re-derives the amount from
+  // the order — the amount below is never sent to it.
+  RzpQrView? _rzp;
+
+  /// CHANGE #304 — the CHECKOUT branch. When `rzp_pay_mode()` says this session
+  /// is the payer on the phone in hand, the backend hands over a Razorpay
+  /// Checkout URL instead of a picture, and this is the view of it. A QR on the
+  /// paying phone is unscannable: that is why #291 minted five QRs and collected
+  /// nothing.
+  RzpCheckoutView? _rzpPay;
+  bool _rzpOpening = false;
+  bool _rzpHandedOff = false;
+  Timer? _rzpPoll;
+
+  bool _rzpLoading = false;
+
+  /// The backend's own words for whatever went wrong. Empty until it says so.
+  String _rzpError = '';
+
+  /// Set when the Razorpay path could not produce a QR. The sheet then draws
+  /// the manual UPI card instead — the fallback is never lost.
+  bool _rzpFellBack = false;
+
+  bool get _rzpMode => widget.provider == 'razorpay_qr' && !_rzpFellBack;
+
+  String _rzpCopy(String key) =>
+      (widget.razorpayCopy[key] ?? '').toString();
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.provider == 'razorpay_qr') _loadRzpQr();
+  }
+
+  Future<Map<String, dynamic>> _defaultCreateRzpQr(
+      String orderId, String kind) async {
+    // #304 — one call for both branches: the BACKEND picks sdk or qr and the
+    // reply says which, so this sheet asks once and prints what it is given.
+    final res = await Supabase.instance.client.functions.invoke(
+      'razorpay-checkout-create',
+      body: {'order_id': orderId, 'kind': kind},
+    );
+    final d = res.data;
+    return d is Map ? d.cast<String, dynamic>() : <String, dynamic>{};
+  }
+
+  Future<void> _loadRzpQr() async {
+    if (!mounted) return;
+    setState(() {
+      _rzpLoading = true;
+      _rzpError = '';
+    });
+    Map<String, dynamic> payload;
+    try {
+      final call = widget.createRzpQr ?? _defaultCreateRzpQr;
+      payload = await call(widget.orderId, widget.kind);
+    } catch (_) {
+      payload = const <String, dynamic>{};
+    }
+    if (!mounted) return;
+
+    // #304 — the backend's own branch marker. Absent = the old QR contract,
+    // so a payload from before this change still renders exactly as it did.
+    final mode = (payload['pay_mode'] ?? '').toString();
+    if (mode == 'sdk' || mode == 'link') {
+      final pay = RzpCheckoutView.fromPayload(payload);
+      RenderLog.write('c304_rzp_sheet_mode',
+          'mode=sdk;ok=${pay.ok};url=${pay.hasPayUrl};status=${pay.status}');
+      setState(() {
+        _rzpLoading = false;
+        if (pay.ok && pay.hasPayUrl) {
+          _rzpPay = pay;
+          _rzpError = '';
+          RenderLog.write('c304_rzp_checkout_shown', 1);
+        } else {
+          _rzpError =
+              pay.error.isNotEmpty ? pay.error : _rzpCopy('error_label');
+        }
+      });
+      if (_rzpPay != null && !_rzpPay!.paid) _startRzpPoll();
+      return;
+    }
+
+    final view = RzpQrView.fromPayload(payload);
+    RenderLog.write('c291_rzp_sheet',
+        'ok=${view.ok};qr=${view.hasQr};provider=${view.provider}');
+
+    setState(() {
+      _rzpLoading = false;
+      if (view.ok && view.hasQr) {
+        _rzp = view;
+        _rzpError = '';
+        RenderLog.write('c291_rzp_qr_shown', 1);
+      } else if (view.provider == 'upi_manual') {
+        // The toggle went off between the panel load and this tap. Draw the
+        // manual sheet rather than an error the customer cannot act on.
+        _rzpFellBack = true;
+        RenderLog.write('c291_rzp_fell_back', 1);
+      } else {
+        // `error` is the backend's message when it sent one; only if it said
+        // nothing at all does the panel's generic error_label stand in.
+        _rzpError = view.error.isNotEmpty ? view.error : _rzpCopy('error_label');
+        RenderLog.write('c291_rzp_error', 1);
+      }
+    });
+  }
+
   @override
   void dispose() {
+    _rzpPoll?.cancel();
     _waPopupEntry?.remove();
     _waPopupEntry = null;
     super.dispose();
+  }
+
+  /// THE WEBHOOK IS TRUTH. Coming back from the UPI app proves nothing, so the
+  /// sheet asks the backend whether the signed delivery has landed and flips
+  /// only on its answer — never on the client's own return.
+  void _startRzpPoll() {
+    _rzpPoll?.cancel();
+    _rzpPoll = Timer.periodic(kCheckoutPayPollInterval, (_) async {
+      Map<String, dynamic> res;
+      try {
+        final d = await Supabase.instance.client.rpc('rzp_checkout_state',
+            params: {'p_order_id': widget.orderId, 'p_kind': widget.kind});
+        res = d is Map ? d.cast<String, dynamic>() : <String, dynamic>{};
+      } catch (_) {
+        return;
+      }
+      if (!mounted) return;
+      if (res['paid'] == true) {
+        _rzpPoll?.cancel();
+        final v = res['view'];
+        if (v is Map) {
+          setState(() =>
+              _rzpPay = RzpCheckoutView.fromPayload(v.cast<String, dynamic>()));
+        }
+        RenderLog.write('c304_rzp_checkout_paid', 1);
+      }
+    });
+  }
+
+  /// Hand the customer to Razorpay Checkout, which fires the UPI intent.
+  /// externalApplication is what makes Android open PhonePe/GPay rather than
+  /// bury checkout in a webview; on web it is a new tab.
+  Future<void> _payWithCheckout() async {
+    final view = _rzpPay;
+    if (view == null || !view.hasPayUrl) return;
+    setState(() => _rzpOpening = true);
+    bool launched = false;
+    try {
+      launched = await launchUrl(Uri.parse(view.payUrl),
+          mode: LaunchMode.externalApplication, webOnlyWindowName: '_blank');
+    } catch (_) {
+      launched = false;
+    }
+    if (!mounted) return;
+    setState(() {
+      _rzpOpening = false;
+      _rzpHandedOff = launched;
+      if (!launched) _rzpError = _rzpCopy('sdk_open_failed_label');
+    });
+    if (launched) _startRzpPoll();
   }
 
   /// #642 — the sheet's copy, straight off `qr_sheet.<kind>`.
@@ -804,6 +1002,33 @@ class _CustPaySheetState extends State<CustPaySheet> {
     );
   }
 
+  // #291 — the Razorpay branch: spinner, the backend's error + its Retry, or
+  // the QR card. Every word comes from the payload.
+  Widget _razorpayBody() {
+    final pay = _rzpPay;
+    if (pay != null) {
+      return RzpCheckoutCard(
+        view: pay,
+        onPay: _payWithCheckout,
+        opening: _rzpOpening,
+        openingLabel: _rzpCopy('sdk_opening_label'),
+        waiting: _rzpHandedOff && !pay.paid,
+        waitingLabel: _rzpCopy('sdk_waiting_label'),
+        waitingHint: _rzpCopy('sdk_waiting_hint'),
+        openFailedLabel: _rzpHandedOff ? '' : _rzpError,
+      );
+    }
+    if (_rzp != null) {
+      return RazorpayQrCard(view: _rzp!, qrSize: kRzpQrSide);
+    }
+    return RazorpayQrStatus(
+      loading: _rzpLoading,
+      message: _rzpLoading ? _rzpCopy('loading_label') : _rzpError,
+      retryLabel: _rzpCopy('retry_label'),
+      onRetry: _rzpLoading ? null : _loadRzpQr,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final bottom = MediaQuery.of(context).viewInsets.bottom;
@@ -822,7 +1047,17 @@ class _CustPaySheetState extends State<CustPaySheet> {
             // #642 — the heading is qr_sheet.<kind>.title, VERBATIM. It used to
             // be '${payLabel} — mediBO': the app gluing the payee name onto a
             // backend string that already carried the amount.
-            Expanded(child: PayQrSheetTitle(title: _copy.title)),
+            // #291 — in Razorpay mode the heading is the QR's OWN backend
+            // title (it carries the exact amount that QR will collect); until
+            // it arrives, qr_sheet.<kind>.title stands, which is also a backend
+            // string. Nothing here is composed.
+            Expanded(
+                child: PayQrSheetTitle(
+                    title: _rzpMode && _rzpPay != null
+                        ? _rzpPay!.title
+                        : _rzpMode && _rzp != null
+                            ? _rzp!.title
+                            : _copy.title)),
             IconButton(
               icon: const Icon(Icons.close, size: 20),
               onPressed: () => Navigator.of(context).pop(),
@@ -842,12 +1077,14 @@ class _CustPaySheetState extends State<CustPaySheet> {
               // format: ₹10770.73 vs the payload's ₹10,770.73).
               RepaintBoundary(
                 key: _qrCardKey,
-                child: PayQrCard(
-                  copy: _copy,
-                  qrData: widget.qrData,
-                  vpa: widget.vpa,
-                  payee: widget.bankingName,
-                ),
+                child: _rzpMode
+                    ? _razorpayBody()
+                    : PayQrCard(
+                        copy: _copy,
+                        qrData: widget.qrData,
+                        vpa: widget.vpa,
+                        payee: widget.bankingName,
+                      ),
               ),
               const SizedBox(height: 4),
               // ── Download QR (this sheet's live amount) · WhatsApp (mini

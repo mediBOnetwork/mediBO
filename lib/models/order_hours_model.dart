@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../services/live_feed.dart';
+
 import '../utils/render_log.dart';
 
 /// Holds the live order-hours state (order_hours_state() RPC) and keeps it in
@@ -41,7 +43,7 @@ class OrderHoursModel extends ChangeNotifier with WidgetsBindingObserver {
   String? autoCloseLabel; // "6:00 PM" — 12-hour, ready to print
   String? nowLabel; // "12:30 AM"
 
-  RealtimeChannel? _channel;
+  LiveFeedHandle? _channel;
   Timer? _debounce;
 
   OrderHoursModel() {
@@ -110,24 +112,23 @@ class OrderHoursModel extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void _subscribe() {
-    _channel = Supabase.instance.client
-        .channel('order_hours_watch')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'order_hours',
-          callback: (_) {
+    // CHANGE #643: the open/closed row moves twice a day; the registry polls it.
+    LiveFeed.instance
+        .watch(
+          channelPrefix: 'order_hours_watch',
+          tables: const ['order_hours'],
+          onChange: (_) {
             RenderLog.write('c444_realtime_hit', 1);
             RenderLog.write('c455_realtime', 1);
             _debounce?.cancel();
             _debounce = Timer(const Duration(milliseconds: 300), refresh);
           },
         )
-        .subscribe((status, [error]) {
-          if (status == RealtimeSubscribeStatus.subscribed) {
-            RenderLog.write('c455_realtime', 1);
-          }
-        });
+        .then((h) {
+      _channel?.unsubscribe();
+      _channel = h;
+      RenderLog.write('c455_realtime', 1);
+    });
   }
 
   /// Admin-only. All params optional — pass null to leave unchanged.

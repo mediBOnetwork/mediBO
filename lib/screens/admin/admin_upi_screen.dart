@@ -2,6 +2,7 @@
 // CHANGE #494 — renamed to "Payment and Partner"; added Partner section
 // CHANGE #611 — added Platform Details + Platform Documents; PDF uploads
 import 'package:flutter/material.dart';
+import 'admin_partner_console_screen.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -11,6 +12,9 @@ import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/utils/bill_mime.dart';
 import 'package:pharma_b2b/widgets/fullscreen_image.dart';
 import 'package:pharma_b2b/services/ui_copy.dart';
+import 'package:pharma_b2b/design_tokens.dart';
+import 'package:pharma_b2b/widgets/payment_mode_card.dart';
+import 'package:pharma_b2b/widgets/webhook_log_card.dart';
 
 class AdminUpiScreen extends StatefulWidget {
   // Injected RPCs — tests stub these; production leaves them null and hits
@@ -55,6 +59,17 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
   final Set<String> _partnerBusy = {};
   final Set<String> _docBusy = {};
 
+  // ── Payment mode (CHANGE #291) ───────────────────────────────────────────
+  // Razorpay auto-verified QR vs the manual shared-UPI flow. Every word in the
+  // card — title, helper, the two mode names — is payment_mode_get()'s, so
+  // rewording it is an UPDATE, not a deploy.
+  Map<String, dynamic>? _payMode;
+  bool _payModeBusy = false;
+
+  /// CHANGE #300 — rzp_webhook_log_recent(): the deliveries Razorpay has made
+  /// to this project, and whether we acted on each. Rendered verbatim.
+  Map<String, dynamic>? _webhookLog;
+
   // ── Platform state (CHANGE #611) ─────────────────────────────────────────
   // The whole platform block — rows, note and documents — is whatever
   // about_screen() returns. This screen never composes those strings.
@@ -70,6 +85,8 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
     RenderLog.write('c494_partner_screen_opened', 1);
     RenderLog.write('c611_platform_screen_opened', 1);
     _fetchList();
+    _fetchPayMode();
+    _fetchWebhookLog();
     _fetchPartnerData();
     _fetchPlatformData();
   }
@@ -243,10 +260,14 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
         .then((r) => List<Map<String, dynamic>>.from(r as List));
   }
 
-  Future<Map<String, dynamic>> _rpcSetActivePartner(String area) {
+  Future<Map<String, dynamic>> _rpcSetActivePartner(String area,
+      [String? overrideReason]) {
     if (widget.setActivePartnerRpc != null) return widget.setActivePartnerRpc!(area);
     return Supabase.instance.client
-        .rpc('set_active_partner', params: {'p_area': area})
+        .rpc('set_active_partner', params: {
+          'p_area': area,
+          'p_override_reason': overrideReason,
+        })
         .then((r) => Map<String, dynamic>.from(r as Map));
   }
 
@@ -278,11 +299,20 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
     }
   }
 
-  Future<void> _setActivePartner(String area) async {
+  Future<void> _setActivePartner(String area, {String? overrideReason}) async {
     if (_partnerBusy.contains(area)) return;
     setState(() => _partnerBusy.add(area));
     try {
-      final data = await _rpcSetActivePartner(area);
+      final data = await _rpcSetActivePartner(area, overrideReason);
+      // CHANGE #400 — the onboarding gate refused. Offer the override instead
+      // of a dead end: the reason is required, and the BACKEND logs it.
+      if (data['ok'] != true && data['error'] == 'onboarding_incomplete') {
+        if (mounted) setState(() => _partnerBusy.remove(area));
+        final reason = await _overrideReasonSheet(data);
+        if (reason == null || reason.isEmpty) return;
+        await _setActivePartner(area, overrideReason: reason);
+        return;
+      }
       final message = data['message'] as String?;
       if (mounted && message != null) {
         showToast(context, message, isError: data['ok'] != true);
@@ -292,6 +322,55 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
       if (mounted) showToast(context, c('admin_upi_screen.generic_error'), isError: true);
     }
     if (mounted) setState(() => _partnerBusy.remove(area));
+  }
+
+  /// Asks for the override reason, printing the backend's own refusal message
+  /// and its own hint. Returns null when the admin backs out.
+  Future<String?> _overrideReasonSheet(Map<String, dynamic> data) async {
+    final ob = data['onboarding'] is Map
+        ? Map<String, dynamic>.from(data['onboarding'] as Map)
+        : const <String, dynamic>{};
+    final ctrl = TextEditingController();
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+          left: Ds.space.x16,
+          right: Ds.space.x16,
+          top: Ds.space.x24,
+          bottom: MediaQuery.of(ctx).viewInsets.bottom + Ds.space.x24,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('${data['message'] ?? ''}', style: Ds.t.body),
+            SizedBox(height: Ds.space.x8),
+            Text('${ob['ready_label'] ?? ''}', style: Ds.t.caption),
+            SizedBox(height: Ds.space.x16),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              maxLines: 2,
+              decoration:
+                  InputDecoration(hintText: '${ob['override_hint'] ?? ''}'),
+            ),
+            SizedBox(height: Ds.space.x24),
+            SizedBox(
+              height: Ds.touch.minTarget,
+              child: FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: Text('${ob['activate_label'] ?? ''}'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    return ok == true ? ctrl.text.trim() : null;
   }
 
   Future<void> _confirmDeletePartner(String area) async {
@@ -633,6 +712,181 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
     });
   }
 
+  // ── Payment mode (CHANGE #291) ───────────────────────────────────────────
+
+  Future<void> _fetchPayMode() async {
+    try {
+      final res = await Supabase.instance.client.rpc('payment_mode_get');
+      if (!mounted) return;
+      setState(() => _payMode =
+          res is Map ? res.cast<String, dynamic>() : null);
+      RenderLog.write('c291_pay_mode_card',
+          'enabled=${_payMode?['enabled']}');
+    } catch (_) {
+      if (mounted) setState(() => _payMode = null);
+    }
+  }
+
+  Future<void> _setPayMode(String modeKey) async {
+    if (_payModeBusy || modeKey.isEmpty) return;
+    setState(() => _payModeBusy = true);
+    try {
+      final res = await Supabase.instance.client
+          .rpc('payment_mode_set', params: {'p_mode': modeKey});
+      if (!mounted) return;
+      final next = res is Map ? res.cast<String, dynamic>() : null;
+      setState(() {
+        if (next != null) _payMode = next;
+        _payModeBusy = false;
+      });
+      RenderLog.write('c293_pay_mode_set', 'mode=$modeKey');
+      if (mounted && next != null) {
+        showToast(context, (next['saved_label'] ?? '').toString());
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _payModeBusy = false);
+      showToast(context, _mapError(e), isError: true);
+    }
+  }
+
+  /// CHANGE #293 — the gateway settlement details. Razorpay's merchant API
+  /// answers /v1/account with an empty body for a non-partner key, so the
+  /// account name, bank and cycle are the super-admin's own entry; the backend
+  /// still owns every label and the final display string.
+  Future<void> _editGatewayDetails() async {
+    final lands = (_payMode?['money_lands'] as Map?)?.cast<String, dynamic>();
+    if (lands == null) return;
+    String s(String k) => (lands[k] ?? '').toString();
+
+    final acc = TextEditingController(text: s('account_value'));
+    final bank = TextEditingController(text: s('bank_value'));
+    final last4 = TextEditingController(text: s('last4_value'));
+    final cycle = TextEditingController(text: s('cycle_value'));
+
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (sheetCtx) => Padding(
+        padding: EdgeInsets.only(
+          left: Ds.space.x16,
+          right: Ds.space.x16,
+          top: Ds.space.x16,
+          bottom: MediaQuery.of(sheetCtx).viewInsets.bottom + Ds.space.x16,
+        ),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text(s('edit_title'), style: Ds.t.subtitle),
+          SizedBox(height: Ds.space.x16),
+          TextField(
+            controller: acc,
+            decoration: InputDecoration(labelText: s('account_label')),
+          ),
+          SizedBox(height: Ds.space.x12),
+          TextField(
+            controller: bank,
+            decoration: InputDecoration(labelText: s('bank_label')),
+          ),
+          SizedBox(height: Ds.space.x12),
+          TextField(
+            controller: last4,
+            keyboardType: TextInputType.number,
+            inputFormatters: [
+              FilteringTextInputFormatter.digitsOnly,
+              LengthLimitingTextInputFormatter(4),
+            ],
+            decoration: const InputDecoration(labelText: '••••'),
+          ),
+          SizedBox(height: Ds.space.x12),
+          TextField(
+            controller: cycle,
+            decoration: InputDecoration(
+                labelText: s('cycle_label'), hintText: s('cycle_hint')),
+          ),
+          SizedBox(height: Ds.space.x24),
+          SizedBox(
+            width: double.infinity,
+            height: Ds.touch.minTarget,
+            child: FilledButton(
+              onPressed: () => Navigator.of(sheetCtx).pop(true),
+              child: Text(s('save_label')),
+            ),
+          ),
+          SizedBox(height: Ds.space.x8),
+          SizedBox(
+            width: double.infinity,
+            height: Ds.touch.minTarget,
+            child: TextButton(
+              onPressed: () => Navigator.of(sheetCtx).pop(false),
+              child: Text(s('cancel_label')),
+            ),
+          ),
+        ]),
+      ),
+    );
+    if (saved != true || !mounted) return;
+
+    try {
+      await Supabase.instance.client.rpc('payment_gateway_details_set', params: {
+        'p_account_name': acc.text,
+        'p_bank': bank.text,
+        'p_last4': last4.text,
+        'p_cycle': cycle.text,
+      });
+      await _fetchPayMode();
+      RenderLog.write('c293_gateway_details_saved', 1);
+    } catch (e) {
+      if (mounted) showToast(context, _mapError(e), isError: true);
+    }
+  }
+
+  // ── Razorpay webhook deliveries (CHANGE #300) ────────────────────────────
+
+  /// #293 wrote every Razorpay delivery to razorpay_webhook_log and #300 fixed
+  /// the handled flag, but nothing in the app ever read it. This is the read.
+  Future<void> _fetchWebhookLog() async {
+    try {
+      final res = await Supabase.instance.client
+          .rpc('rzp_webhook_log_recent', params: {'p_limit': 20});
+      if (!mounted) return;
+      setState(() =>
+          _webhookLog = res is Map ? res.cast<String, dynamic>() : null);
+      RenderLog.write('c300_webhook_log_loaded',
+          '${(_webhookLog?['rows'] as List?)?.length ?? 0}');
+    } catch (_) {
+      if (mounted) setState(() => _webhookLog = null);
+    }
+  }
+
+  /// Every word and every tone arrives in the payload; [WebhookLogCard] prints
+  /// them. An absent or failed payload is an absence — the section disappears
+  /// rather than showing a placeholder the backend never sent.
+  Widget _buildWebhookLogSection() {
+    final w = _webhookLog;
+    if (w == null || w['ok'] != true) return const SizedBox.shrink();
+    RenderLog.write('c300_webhook_log_card', '${(w['rows'] as List?)?.length ?? 0}');
+    return WebhookLogCard(payload: w);
+  }
+
+  /// The card. Renders nothing at all until the backend has answered — an
+  /// absent payload is an absence, not a default-off switch.
+  ///
+  /// CHANGE #293 — a two-option SELECTOR (payment_config.collection_mode), not
+  /// a boolean switch, plus the backend's "where the money lands" block and the
+  /// zone + date collection summary. Every word is payment_mode_get()'s.
+  Widget _buildPayModeSection() {
+    final m = _payMode;
+    if (m == null) return const SizedBox.shrink();
+    RenderLog.write('c293_pay_mode_card', 'mode=${m['selected']}');
+    return PaymentModeCard(
+      payload: m,
+      busy: _payModeBusy,
+      onPick: _setPayMode,
+      onEditGateway: _editGatewayDetails,
+    );
+  }
+
   // ── Desktop ──────────────────────────────────────────────────────────────
 
   Widget _buildDesktop(BuildContext ctx) {
@@ -654,6 +908,9 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
                 _config?['payment_helper'] as String? ?? '',
                 style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
               ),
+              const SizedBox(height: 24),
+              _buildPayModeSection(),
+              _buildWebhookLogSection(),
               const SizedBox(height: 24),
               _AddUpiCard(
                 paCtrl: _paCtrl,
@@ -718,6 +975,9 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
               style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
             ),
             const SizedBox(height: 16),
+            _buildPayModeSection(),
+            _buildWebhookLogSection(),
+            const SizedBox(height: 24),
             _AddUpiCard(
               paCtrl: _paCtrl,
               pnCtrl: _pnCtrl,
@@ -880,6 +1140,13 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
                   onUploadDoc: (doc) => _uploadDoc(area, doc),
                   onViewDoc: (doc) => _viewDoc(area, doc),
                   onDeleteDoc: (doc) => _confirmDeleteDoc(area, doc),
+                  onManageAccess: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => AdminPartnerConsoleScreen(
+                        partnerId: int.tryParse('${p['id'] ?? ''}') ?? 0,
+                      ),
+                    ),
+                  ),
                 ),
               );
             }).toList(),
@@ -1340,6 +1607,18 @@ class _AddUpiCard extends StatelessWidget {
 
 // ── Partner Card ─────────────────────────────────────────────────────────────
 
+/// CHANGE #400 — backend tone slug -> token. The slug is the backend's; only
+/// the token lookup lives here.
+Color _obTone(Object? tone, {bool bg = false}) {
+  switch ('${tone ?? ''}') {
+    case 'success': return bg ? Ds.c.successSoft : Ds.c.success;
+    case 'danger':  return bg ? Ds.c.dangerSoft  : Ds.c.danger;
+    case 'info':    return bg ? Ds.c.infoSoft    : Ds.c.info;
+    case 'warning': return bg ? Ds.c.warningSoft : Ds.c.warning;
+  }
+  return bg ? Ds.c.bg : Ds.c.textSecondary;
+}
+
 class _PartnerCard extends StatelessWidget {
   final Map<String, dynamic> partner;
   final bool busy;
@@ -1351,6 +1630,9 @@ class _PartnerCard extends StatelessWidget {
   final void Function(Map<String, dynamic> doc) onViewDoc;
   final void Function(Map<String, dynamic> doc) onDeleteDoc;
 
+  /// CHANGE #307 — opens this partner's logins + per-feature access matrix.
+  final VoidCallback onManageAccess;
+
   const _PartnerCard({
     required this.partner,
     required this.busy,
@@ -1361,6 +1643,7 @@ class _PartnerCard extends StatelessWidget {
     required this.onUploadDoc,
     required this.onViewDoc,
     required this.onDeleteDoc,
+    required this.onManageAccess,
   });
 
   @override
@@ -1372,6 +1655,10 @@ class _PartnerCard extends StatelessWidget {
     final blockedReason = partner['delete_blocked_reason'] as String?;
     final detailLines =
         (partner['detail_lines'] as List? ?? []).cast<Map<String, dynamic>>();
+    // CHANGE #400 — onboarding progress, straight off the same payload.
+    final onboarding = partner['onboarding'] is Map
+        ? Map<String, dynamic>.from(partner['onboarding'] as Map)
+        : const <String, dynamic>{};
     final docs = (partner['docs'] as List? ?? []).cast<Map<String, dynamic>>();
 
     return Container(
@@ -1425,6 +1712,21 @@ class _PartnerCard extends StatelessWidget {
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
                     ),
+                    // CHANGE #307 — partner logins + the per-feature access
+                    // matrix. Adding a login is done from HERE, exactly as the
+                    // spec asks; the person then signs in with the ordinary
+                    // WhatsApp OTP / Google login.
+                    IconButton(
+                      icon: Icon(Icons.manage_accounts_outlined,
+                          size: Ds.space.x16 + Ds.space.x4,
+                          color: Ds.c.textSecondary),
+                      tooltip: c('admin_upi_screen.tooltip_partner_access'),
+                      onPressed: onManageAccess,
+                      padding: EdgeInsets.zero,
+                      constraints: BoxConstraints(
+                          minWidth: Ds.touch.minTarget,
+                          minHeight: Ds.touch.minTarget),
+                    ),
                     if (canMakeActive)
                       TextButton(
                         onPressed: onMakeActive,
@@ -1463,6 +1765,43 @@ class _PartnerCard extends StatelessWidget {
           if (!canDelete && blockedReason != null) ...[
             const SizedBox(height: 4),
             Text(blockedReason, style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+          ],
+          // CHANGE #400 — onboarding progress. Every string and tone is the
+          // backend's; this strip decides nothing but where to put them.
+          if (onboarding['ok'] == true) ...[
+            SizedBox(height: Ds.space.x12),
+            Row(
+              children: [
+                Expanded(
+                  child: Text('${onboarding['progress_label'] ?? ''}',
+                      style: Ds.t.caption),
+                ),
+                Container(
+                  padding: EdgeInsets.symmetric(
+                      horizontal: Ds.space.x8, vertical: Ds.space.x4),
+                  decoration: BoxDecoration(
+                    color: _obTone(onboarding['ready_tone'], bg: true),
+                    borderRadius: Ds.r.rChip,
+                  ),
+                  child: Text('${onboarding['ready_label'] ?? ''}',
+                      style: Ds.t.caption
+                          .copyWith(color: _obTone(onboarding['ready_tone']))),
+                ),
+              ],
+            ),
+            SizedBox(height: Ds.space.x8),
+            ClipRRect(
+              borderRadius: Ds.r.rChip,
+              child: LinearProgressIndicator(
+                value: ((onboarding['total_count'] as num?) ?? 0) == 0
+                    ? 0
+                    : ((onboarding['done_count'] as num?) ?? 0) /
+                        ((onboarding['total_count'] as num?) ?? 1),
+                minHeight: Ds.space.x4,
+                backgroundColor: Ds.c.divider,
+                color: _obTone(onboarding['ready_tone']),
+              ),
+            ),
           ],
           const SizedBox(height: 10),
           ...detailLines.map((line) => Padding(

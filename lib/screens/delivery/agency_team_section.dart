@@ -24,6 +24,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../fulfill/fulfill_lookups.dart';
 import '../../utils/render_log.dart';
+import 'agency_dispatch_screen.dart'; // C704: the agency's own dispatch board
 import 'delivery_id_scan.dart'; // C631: PART A — scan Aadhaar / driving licence
 
 Color get _kGreen => FulfillLookups.instance.color('c_ff1b7a43', const Color(0xFF1B7A43));
@@ -33,11 +34,16 @@ Color get _kSub => FulfillLookups.instance.color('c_ff6b7280', const Color(0xFF6
 
 String _ui(String k) => FulfillLookups.instance.ui(k);
 
-Color? _hex(String? h) {
-  final s = (h ?? '').trim().replaceFirst('#', '');
-  if (s.length != 6 && s.length != 8) return null;
-  final v = int.tryParse(s.length == 6 ? 'FF$s' : s, radix: 16);
-  return v == null ? null : Color(v);
+Color _colorFromToken(String? token) {
+  if (token == null || token.isEmpty) return _kText;
+  final s = token.trim().toLowerCase().replaceFirst('#', '');
+  switch (s) {
+    case '1b7a43': return _kGreen;
+    case 'e5e7eb': return _kBorder;
+    case '111827': return _kText;
+    case '6b7280': return _kSub;
+    default: return _kText;
+  }
 }
 
 class AgencyTeamSection extends StatefulWidget {
@@ -57,6 +63,8 @@ class AgencyTeamSectionState extends State<AgencyTeamSection> {
   bool _loading = true;
   bool _allowed = true;
   String _title = '';
+  // C704 — the label for the dispatch board link, worded by agency_team().
+  String _boardLabel = '';
   String _note = '';
   List<Map<String, dynamic>> _riders = const [];
   List<Map<String, dynamic>> _myStops = const [];
@@ -138,6 +146,7 @@ class AgencyTeamSectionState extends State<AgencyTeamSection> {
       setState(() {
         _allowed = m['allowed'] != false;
         _title = m['title']?.toString() ?? '';
+        _boardLabel = m['board_label']?.toString() ?? '';
         _note = m['note']?.toString() ?? '';
         _riders = riders;
         _myStops = _list(m['my_stops']);
@@ -295,7 +304,13 @@ class AgencyTeamSectionState extends State<AgencyTeamSection> {
     if (picked == null || picked.isEmpty) return;
 
     try {
-      final res = await Supabase.instance.client.rpc('delivery_reassign', params: {
+      // C704 — an agency writes through agency_dispatch_assign(). The old call
+      // here was delivery_reassign(), which is gated on partner_scope_delivery
+      // = admin|super_admin: an agency signed in as ITSELF was refused by it,
+      // so this hand-over could never actually complete. The new RPC asks the
+      // one question that matters — is this MY stop and MY rider — and gates
+      // the rider's documents and training on the way through.
+      final res = await Supabase.instance.client.rpc('agency_dispatch_assign', params: {
         'p_delivery_id': stop['delivery_id']?.toString() ?? '',
         'p_partner_id': picked,
       });
@@ -337,6 +352,19 @@ class AgencyTeamSectionState extends State<AgencyTeamSection> {
                 Text(_note, style: TextStyle(fontSize: 11.5, color: _kSub)),
             ]),
           ),
+          // C704 — the way in to the full dispatch board. Its label is the
+          // backend's (agency_team().board_label), so it is absent rather than
+          // invented on a build that has not been told about the board.
+          if (_boardLabel.isNotEmpty)
+            TextButton(
+              onPressed: () async {
+                await openAgencyDispatchScreen(context);
+                if (!mounted) return;
+                await _load();
+                await widget.onChanged();
+              },
+              child: Text(_boardLabel),
+            ),
           TextButton(
             onPressed: () => setState(() => _addOpen = !_addOpen),
             child: Text(_addOpen ? _ui('dlv_cancel') : _ui('dlv_add_rider')),
@@ -434,14 +462,14 @@ class AgencyTeamSectionState extends State<AgencyTeamSection> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
               decoration: BoxDecoration(
-                color: _hex(colors['bg']?.toString()) ?? Colors.transparent,
+                color: _colorFromToken(colors['bg']?.toString()),
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Text(r['status_label']!.toString(),
                   style: TextStyle(
                       fontSize: 10.5,
                       fontWeight: FontWeight.w700,
-                      color: _hex(colors['fg']?.toString()) ?? _kText)),
+                      color: _colorFromToken(colors['fg']?.toString()))),
             ),
         ]),
         const SizedBox(height: 3),

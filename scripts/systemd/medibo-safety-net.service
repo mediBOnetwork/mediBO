@@ -1,0 +1,25 @@
+[Unit]
+Description=mediBO nightly safety net — auth matrix, property fuzzing, invariant oracles (CHANGE #636)
+Documentation=CHANGE #636. The cron task c636_safety_net_nightly only ENQUEUES; this unit drains it. Never move autotest_safety_net_run() back onto cron_dispatch(): it is minutes of work inside a 15 s dblink budget and it takes the whole tick with it (#1808).
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/mediBO
+Environment=HOME=/home/ubuntu
+Environment=PATH=/home/ubuntu/mediBO-runner:/home/ubuntu/flutter/bin:/home/ubuntu/.npm-global/bin:/home/ubuntu/.local/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-/home/ubuntu/mediBO-runner/runner.env
+# RESOLVE, don't hardcode (#368). Five runners share /home/ubuntu/mediBO and it
+# sits on whichever branch was checked out there last, so this file is simply
+# ABSENT from that working tree most of the time. The merge worker's own
+# worktree tracks main and always has it; the shared checkout and the sibling
+# worktrees are the fallbacks. First copy that exists wins.
+ExecStart=/bin/bash -c 'for d in /home/ubuntu/medibo-merge /home/ubuntu/mediBO /home/ubuntu/wt-* /home/ubuntu/medibo-*; do [ -x "$d/scripts/safety_net_lane.sh" ] && exec /bin/bash "$d/scripts/safety_net_lane.sh"; done; echo "safety_net_lane.sh not found in any checkout" >&2; exit 1'
+TimeoutStartSec=3600
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

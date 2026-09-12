@@ -2,15 +2,12 @@
 // Loads get_dispute_form; responds via submit_dispute_response.
 
 import 'package:flutter/material.dart';
+import '../design_tokens.dart';
 import '../screens/admin/dispute/dispute_models.dart';
 import '../services/ui_copy.dart';
 import '../utils/render_log.dart';
 import '../utils/toast.dart';
 import '../widgets/dispute_card.dart';
-
-const _kGreen = Color(0xFF1B7A43);
-const _kSub   = Color(0xFF6B7280);
-const _kText  = Color(0xFF111827);
 
 class DisputeTokenPage extends StatefulWidget {
   final String token;
@@ -90,14 +87,15 @@ class _DisputeTokenPageState extends State<DisputeTokenPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F6F8),
+      backgroundColor: Ds.c.bg,
       body: SafeArea(child: _body()),
     );
   }
 
   Widget _body() {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
+      return Center(
+          child: CircularProgressIndicator(color: Ds.c.brand, strokeWidth: 2));
     }
 
     // Invalid token or RPC error
@@ -105,30 +103,32 @@ class _DisputeTokenPageState extends State<DisputeTokenPage> {
       final isInvalid = _error == 'invalid';
       return Center(
         child: Padding(
-          padding: const EdgeInsets.all(32),
+          padding: EdgeInsets.all(Ds.space.x32),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Icon(Icons.link_off_rounded, size: 56, color: Color(0xFFD97706)),
-            const SizedBox(height: 16),
+            Icon(Icons.link_off_rounded, size: 56, color: Ds.c.warning),
+            SizedBox(height: Ds.space.x16),
+            // CHANGE #671: the invalid-link title and body were Dart string
+            // literals on a page reached from a WhatsApp link. ui_copy now.
             Text(
-              isInvalid ? 'Link invalid' : c('dispute_token_page.unable_to_load'),
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: _kText),
+              c(isInvalid
+                  ? 'dispute_token_page.invalid_title'
+                  : 'dispute_token_page.unable_to_load'),
+              style: Ds.t.subtitle.copyWith(fontWeight: FontWeight.w700),
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 8),
+            SizedBox(height: Ds.space.x8),
             Text(
-              isInvalid
-                  ? 'This dispute link has expired or is not valid.'
-                  : _error!,
-              style: const TextStyle(fontSize: 14, color: _kSub),
+              isInvalid ? c('dispute_token_page.invalid_body') : _error!,
+              style: Ds.t.bodySecondary,
               textAlign: TextAlign.center,
             ),
             if (!isInvalid) ...[
-              const SizedBox(height: 16),
+              SizedBox(height: Ds.space.x16),
               FilledButton.icon(
                 onPressed: _load,
                 style: FilledButton.styleFrom(
-                  backgroundColor: _kGreen,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  backgroundColor: Ds.c.brand,
+                  shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
                 ),
                 icon: const Icon(Icons.refresh_rounded, size: 16),
                 label: Text(c('dispute_token_page.retry')),
@@ -145,15 +145,18 @@ class _DisputeTokenPageState extends State<DisputeTokenPage> {
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       // Header bar
       Container(
-        color: const Color(0xFF1B7A43),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        color: Ds.c.brand,
+        padding: EdgeInsets.symmetric(
+            horizontal: Ds.space.x16, vertical: Ds.space.x12),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(c('dispute_token_page.title'),
-              style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
+              style: Ds.t.subtitle.copyWith(
+                  color: Ds.c.surface, fontWeight: FontWeight.w700)),
           if (_supplierName.isNotEmpty) ...[
-            const SizedBox(height: 2),
+            SizedBox(height: Ds.space.x4),
             Text(_supplierName,
-                style: const TextStyle(color: Color(0xFFBBF7D0), fontSize: 13,
+                style: Ds.t.caption.copyWith(
+                    color: Ds.c.surface.withValues(alpha: 0.80),
                     fontWeight: FontWeight.w500)),
           ],
         ]),
@@ -162,23 +165,25 @@ class _DisputeTokenPageState extends State<DisputeTokenPage> {
       Expanded(
         child: RefreshIndicator(
           onRefresh: _load,
-          color: _kGreen,
+          color: Ds.c.brand,
           child: _items.isEmpty
               ? Center(
                   child: Padding(
-                    padding: const EdgeInsets.all(32),
+                    padding: EdgeInsets.all(Ds.space.x32),
                     child: Text(c('dispute_token_page.no_active_disputes'),
-                        style: const TextStyle(fontSize: 16, color: _kSub)),
+                        style: Ds.t.subtitle
+                            .copyWith(color: Ds.c.textSecondary)),
                   ),
                 )
               : Center(
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 640),
                     child: ListView(
-                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+                      padding: EdgeInsets.fromLTRB(Ds.space.x16,
+                          Ds.space.x16, Ds.space.x16, Ds.space.x32),
                       children: [
                         ...active.map((item) => Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
+                          padding: EdgeInsets.only(bottom: Ds.space.x12),
                           child: DisputeCard(
                             item: item,
                             onRespond: _respond,
@@ -186,7 +191,7 @@ class _DisputeTokenPageState extends State<DisputeTokenPage> {
                           ),
                         )),
                         ...closed.map((item) => Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
+                          padding: EdgeInsets.only(bottom: Ds.space.x12),
                           child: DisputeCard(item: item), // read-only
                         )),
                       ],

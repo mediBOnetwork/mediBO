@@ -41,6 +41,21 @@ enum AccountSurface {
 
   /// The route/worker surface.
   worker,
+
+  /// CHANGE #657 — there is no partner surface any more.
+  ///
+  /// #326 gave a zone partner its own word because `my_session()` shipped
+  /// `surface:'partner'`. #653 retired that: super admin, admin and partner are
+  /// ONE interface, and `_session_partner_overlay()` now returns
+  /// `surface:'admin', is_admin:true` for every partner login. Not one backend
+  /// function emits the word 'partner' as a surface any more (verified against
+  /// pg_proc on 2026-09-02).
+  ///
+  /// The Dart word outlived the backend's, and that is the bug this closes: a
+  /// partner login whose payload said `surface:'admin'` was still routed to the
+  /// old Partner page because [AppSession.surface] short-circuited on
+  /// `is_partner` BEFORE reading the backend's word. Routing now reads the
+  /// backend's surface and nothing else.
 }
 
 /// The backend's decision about whether this account may place an order, and
@@ -169,6 +184,11 @@ class AppSession {
     this.isCustomer = false,
     this.isRegisteredCustomerFlag = false,
     this.isWorker = false,
+    this.isPartner = false,
+    this.partnerId = '',
+    this.partnerName = '',
+    this.partnerZoneId = '',
+    this.partnerZoneLabel = '',
     this.surfaceName = '',
     this.headerTitle = '',
     this.statusLabel = '',
@@ -232,6 +252,23 @@ class AppSession {
   /// reach the checkout.
   final bool isRegisteredCustomerFlag;
   final bool isWorker;
+
+  /// CHANGE #326 — the backend's own `is_partner`. THE test that separates a
+  /// zone-locked fulfilment partner from a real admin: `get_my_role()` returns
+  /// 'admin' for both so that the fulfilment RPCs authorise, and `my_partner_id()`
+  /// being non-null is what `my_session()` turns into this boolean. Anything
+  /// admin-only (mediBO margin, customer payment method, another zone, the admin
+  /// shell itself) is hidden while this is true.
+  final bool isPartner;
+
+  /// region_partners.id, as text. Empty when [isPartner] is false.
+  final String partnerId;
+  final String partnerName;
+
+  /// The ONE zone this login may ever see. There is no zone picker for a
+  /// partner: the backend clamps every zone-aware RPC to this id.
+  final String partnerZoneId;
+  final String partnerZoneLabel;
 
   final String ownerType;
   final String ownerId;
@@ -337,6 +374,11 @@ class AppSession {
       isCustomer: b('is_customer'),
       isRegisteredCustomerFlag: b('is_registered_customer'),
       isWorker: b('is_worker'),
+      isPartner: b('is_partner'),
+      partnerId: s('partner_id'),
+      partnerName: s('partner_name'),
+      partnerZoneId: s('partner_zone_id'),
+      partnerZoneLabel: s('partner_zone_label'),
       ownerType: s('owner_type'),
       ownerId: s('owner_id'),
       displayName: s('display_name'),
@@ -380,6 +422,14 @@ class AppSession {
   /// user renders nothing at all.
   AccountSurface surface({required bool matchesAuthUser}) {
     if (!matchesAuthUser) return AccountSurface.unresolved;
+    // CHANGE #657 — the backend's word, and ONLY the backend's word.
+    //
+    // #326 short-circuited on `is_partner` here so a drifted surface word could
+    // not drop a partner on the storefront. #653 then collapsed partner into
+    // the admin interface, so `my_session()` answers `surface:'admin',
+    // is_partner:true` — and this short-circuit turned that correct payload
+    // back into the old Partner page for every partner login. Reading the
+    // payload means reading the field the payload decides with.
     return surfaceFromName(surfaceName);
   }
 
@@ -396,6 +446,12 @@ class AppSession {
         return AccountSurface.pendingSupplier;
       case 'worker':
         return AccountSurface.worker;
+      // CHANGE #657 — the legacy word. No backend function emits it any more,
+      // but a cached client or an old payload must land on the SHARED admin
+      // shell, never on `unresolved` — whose fallthrough is the customer
+      // storefront, which is the #326 bug.
+      case 'partner':
+        return AccountSurface.admin;
       case 'customer':
       case 'public':
         return AccountSurface.customer;

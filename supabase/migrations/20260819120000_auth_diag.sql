@@ -1,0 +1,21 @@
+-- CHANGE #275 — durable sign-in diagnostics (applied live; kept here for the record).
+--
+-- WHY THIS TABLE EXISTS
+-- Google sign-in dies on-device on the Play build before any network call, so
+-- Supabase auth logs show ZERO attempts and there is nothing to read. render_log
+-- cannot help either: render_log_note WIPES the whole singleton row whenever a
+-- different build_hash writes, so every web deploy erased anything Android had
+-- recorded (that is why the c668_native breadcrumbs were never observable).
+--
+-- auth_diag is the durable channel: append-only, anon-writable through a
+-- SECURITY DEFINER RPC (the user is signed OUT by definition on the login
+-- screen), and it carries the exact platform error code, description, details,
+-- the app version/versionCode AND the running APK's signing SHA-1 — which is
+-- what actually separates the sideloaded build from the Play-signed one.
+--
+-- The full statements are in the applied migrations
+-- `auth_diag_signin_diagnostics` and `auth_diag_list_dev_guard`:
+--   * table  public.auth_diag        — one row per failed sign-in attempt
+--   * table  public.auth_diag_copy   — the wording per code (UPDATE, no deploy)
+--   * rpc    public.auth_diag_note() — anon write, returns {show,tone,message}
+--   * rpc    public.auth_diag_list() — _dev_guard'd read, fully rendered rows

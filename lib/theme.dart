@@ -203,9 +203,11 @@ CategoryStyle categoryStyle(String category) =>
 /// theme-driven surface recolours on the next boot with zero code change.
 ThemeData buildTheme() {
   final ds = Ds.c;
+  // CHANGE #1017 (4) — the brightness is a token switch (Ds.setBrightness),
+  // and Ds.c is already the palette for it. One theme builder, both modes.
   final scheme = ColorScheme.fromSeed(
     seedColor: ds.brand,
-    brightness: Brightness.light,
+    brightness: Ds.brightness,
   ).copyWith(
     primary: ds.brand,
     onPrimary: Colors.white,

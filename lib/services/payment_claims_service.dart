@@ -40,8 +40,11 @@ class PaymentClaimsService {
 
   // CHANGE #213 — per-order payment view (nested advance/rest/other buckets)
   static Future<Map<String, dynamic>> orderPaymentView(String orderId) async {
+    // #293 — the _v2 wrapper is the SAME payload plus the money display block
+    // and `collection` (rzp_panel_block()), so the admin panel reads the one
+    // platform-wide collection mode instead of assuming the manual flow.
     final res = await _client
-        .rpc('admin_order_payment_view', params: {'p_order_id': orderId});
+        .rpc('admin_order_payment_view_v2', params: {'p_order_id': orderId});
     RenderLog.write('c213_service_loaded', 1);
     if (res == null) return {};
     return Map<String, dynamic>.from(res as Map);

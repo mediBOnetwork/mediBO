@@ -36,6 +36,7 @@ class _CodeResolverPageState extends State<CodeResolverPage> {
   String? _error;
   // Resolved kind ('order' | 'inquiry' | 'dispute') and its token.
   String? _kind;
+  String? _secret;   // CHANGE #687 — carried, never parsed
   String? _token;
 
   @override
@@ -66,6 +67,12 @@ class _CodeResolverPageState extends State<CodeResolverPage> {
 
       final kind  = data['kind']  as String? ?? '';
       final token = data['token'] as String? ?? '';
+      // CHANGE #687 — resolve_code hands back ONLY the secret it just verified
+      // (#526 gap 28). Carry it to the viewer: get_inquiry_form and
+      // submit_inquiry_form both gate on it, and dropping it here is what made
+      // every secret-protected inquiry link render "This link is no longer
+      // valid".
+      final secret = data['secret'] as String?;
       final err   = data['error'] as String?;
 
       if (err != null || kind.isEmpty || token.isEmpty) {
@@ -80,7 +87,7 @@ class _CodeResolverPageState extends State<CodeResolverPage> {
 
       // Store kind + token; build() returns the viewer widget inline.
       // NO navigation. URL stays /<CODE>.
-      setState(() { _kind = kind; _token = token; });
+      setState(() { _kind = kind; _token = token; _secret = secret; });
     } catch (_) {
       if (!mounted) return;
       setState(() { _error = 'error'; });
@@ -97,7 +104,7 @@ class _CodeResolverPageState extends State<CodeResolverPage> {
       if (kind == 'order') {
         return PublicOrderPage(token: token);
       } else if (kind == 'inquiry') {
-        return InquiryFormScreen(token: token);
+        return InquiryFormScreen(token: token, secret: _secret);
       } else if (kind == 'dispute') {
         return DisputeFormScreen(token: token);
       }

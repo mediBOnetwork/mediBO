@@ -6,6 +6,7 @@ import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
 import 'dev_queue_common.dart';
 import 'restart_safety.dart';
+import 'dev_queue_deploy_wait.dart';
 import 'dev_queue_detail.dart';
 import 'dev_queue_service.dart';
 
@@ -168,17 +169,24 @@ class WorkerGridCard extends StatelessWidget {
   }
 
   Future<void> _openSettings(BuildContext context) async {
-    final changed = await showModalBottomSheet<bool>(
+    final changed = await showPoolSettingsSheet(context, _config, service);
+    if (changed == true) onChanged();
+  }
+}
+
+/// CMD #1940 — the Pool settings sheet is opened from two places (the worker
+/// grid's gear and the deploy-lock queue's intervals editor), so the opener is
+/// shared. Resolves true when a `pool_set` landed.
+Future<bool?> showPoolSettingsSheet(
+        BuildContext context, Map<String, dynamic> config, DevQueueService service) =>
+    showModalBottomSheet<bool>(
       context: context,
       backgroundColor: Ds.c.surface,
       isScrollControlled: true,
       shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Ds.r.rSheet.topLeft)),
-      builder: (_) => _PoolSettingsSheet(config: _config, service: service),
+      builder: (_) => _PoolSettingsSheet(config: config, service: service),
     );
-    if (changed == true) onChanged();
-  }
-}
 
 /// The Remote Control flapping banner (CHANGE #1662).
 ///
@@ -340,12 +348,18 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
   late bool _routingEnabled;
   late final TextEditingController _opusLanes;
   late final TextEditingController _sonnetLanes;
+  // CMD #1940 — the deploy-lock waiter queue knobs (worker_pool.deploy_wait).
+  late final TextEditingController _dwMinutes;
+  late final TextEditingController _dwSafety;
+  late bool _dwUrgent;
   bool _busy = false;
 
   Map<String, dynamic> get _routing =>
       (widget.config['routing'] as Map?)?.cast<String, dynamic>() ?? const {};
   Map<String, dynamic> get _lanes =>
       (_routing['lanes'] as Map?)?.cast<String, dynamic>() ?? const {};
+  Map<String, dynamic> get _deployWait =>
+      (widget.config['deploy_wait'] as Map?)?.cast<String, dynamic>() ?? const {};
 
   int get _min => asInt(widget.config['min']) == 0 ? 1 : asInt(widget.config['min']);
   int get _max => asInt(widget.config['max']) == 0 ? 8 : asInt(widget.config['max']);
@@ -365,6 +379,13 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
     _routingEnabled = _routing['enabled'] == true;
     _opusLanes = TextEditingController(text: '${asInt(_lanes['opus'])}');
     _sonnetLanes = TextEditingController(text: '${asInt(_lanes['sonnet'])}');
+    _dwMinutes = TextEditingController(
+        text: ((_deployWait['minutes_by_position'] as List?) ?? const [])
+            .map((e) => e.toString())
+            .join(', '));
+    _dwSafety = TextEditingController(
+        text: '${asInt(_deployWait['safety_poll_minutes'])}');
+    _dwUrgent = _deployWait['urgent_jumps'] == true;
   }
 
   @override
@@ -374,6 +395,8 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
     _session.dispose();
     _opusLanes.dispose();
     _sonnetLanes.dispose();
+    _dwMinutes.dispose();
+    _dwSafety.dispose();
     super.dispose();
   }
 
@@ -428,6 +451,16 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
             'sonnet':
                 int.tryParse(_sonnetLanes.text.trim()) ?? asInt(_lanes['sonnet']),
           },
+        },
+        // CMD #1940 — deploy_wait is sent WHOLE too: an unparsable field keeps
+        // the stored value rather than inventing one.
+        'deploy_wait': {
+          ..._deployWait,
+          if (parseMinutesByPosition(_dwMinutes.text) != null)
+            'minutes_by_position': parseMinutesByPosition(_dwMinutes.text),
+          if (int.tryParse(_dwSafety.text.trim()) != null)
+            'safety_poll_minutes': int.tryParse(_dwSafety.text.trim()),
+          'urgent_jumps': _dwUrgent,
         },
       }, pin);
       if (!mounted) return;
@@ -531,6 +564,30 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
           ]),
         ],
         SizedBox(height: Ds.space.x24),
+        // CMD #1940 — deploy-lock waiter queue: the safety-check intervals by
+        // queue position, their ceiling, and whether urgent commands jump.
+        _label(c('dev_queue.pool_deploy_wait_title'), ''),
+        SizedBox(height: Ds.space.x12),
+        _label(c('dev_queue.pool_deploy_wait_minutes'), ''),
+        SizedBox(height: Ds.space.x8),
+        _textField(_dwMinutes),
+        _hint(c('dev_queue.pool_deploy_wait_minutes_hint')),
+        SizedBox(height: Ds.space.x16),
+        _label(c('dev_queue.pool_deploy_wait_safety'), ''),
+        SizedBox(height: Ds.space.x8),
+        _numField(_dwSafety),
+        _hint(c('dev_queue.pool_deploy_wait_safety_hint')),
+        SizedBox(height: Ds.space.x16),
+        Row(children: [
+          Expanded(child: _label(c('dev_queue.pool_deploy_wait_urgent'), '')),
+          Switch(
+            value: _dwUrgent,
+            activeTrackColor: Ds.c.brand,
+            onChanged: _busy ? null : (v) => setState(() => _dwUrgent = v),
+          ),
+        ]),
+        _hint(c('dev_queue.pool_deploy_wait_urgent_hint')),
+        SizedBox(height: Ds.space.x24),
         SizedBox(
           width: double.infinity,
           child: FilledButton(
@@ -584,6 +641,29 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
   Widget _hint(String s) => Padding(
         padding: EdgeInsets.only(top: Ds.space.x4),
         child: Text(s, style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+      );
+
+  // CMD #1940 — a full-width text input (the minutes-by-position list).
+  Widget _textField(TextEditingController ctl) => TextField(
+        controller: ctl,
+        enabled: !_busy,
+        keyboardType: TextInputType.text,
+        style: Ds.t.body,
+        decoration: _inputDecoration(),
+      );
+
+  InputDecoration _inputDecoration() => InputDecoration(
+        isDense: true,
+        filled: true,
+        fillColor: Ds.c.bg,
+        enabledBorder: OutlineInputBorder(
+          borderRadius: Ds.r.rButton,
+          borderSide: BorderSide(color: Ds.c.divider),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: Ds.r.rButton,
+          borderSide: BorderSide(color: Ds.c.brand),
+        ),
       );
 
   // A small numeric input (idle minutes / usage thresholds). The backend

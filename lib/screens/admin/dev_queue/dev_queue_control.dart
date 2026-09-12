@@ -10,6 +10,7 @@ import 'dev_queue_branch.dart';
 import 'dev_queue_claude_login.dart';
 import 'dev_queue_common.dart';
 import 'dev_queue_context.dart';
+import 'dev_queue_deploy_wait.dart';
 import 'dev_queue_health.dart';
 import 'restart_safety.dart';
 import 'dev_queue_service.dart';
@@ -601,6 +602,12 @@ class _DevQueueControlState extends State<DevQueueControl> {
           if ((_lock['has'] ?? false) == true) ...[
             _divider(),
             _deployLockRow(),
+            // CMD #1940 — who is asleep behind that lock, in the backend's order.
+            DeployWaitBlock(
+              data: (_snap['deploy_wait'] as Map?)?.cast<String, dynamic>() ??
+                  const {},
+              onEditIntervals: () => _editDeployWaitIntervals(),
+            ),
           ],
           if ((_usage['has_usage'] ?? false) == true) ...[
             _divider(),
@@ -869,6 +876,16 @@ class _DevQueueControlState extends State<DevQueueControl> {
   /// take back. Every string here is `deploy_lock_banner()`'s: the banner used
   /// to be a sentence with "CMD #1859" baked into it, so a command waiting
   /// behind #1895 read someone else's number off its own card.
+  /// CMD #1940 — the interval editor IS the Pool settings sheet: one
+  /// `pool_set` with the whole `deploy_wait` block, then a reload.
+  Future<void> _editDeployWaitIntervals() async {
+    final config = ((_snap['pool'] as Map?)?['config'] as Map?)
+            ?.cast<String, dynamic>() ??
+        const {};
+    final changed = await showPoolSettingsSheet(context, config, widget.service);
+    if (changed == true && mounted) await _load();
+  }
+
   Widget _deployLockRow() {
     RenderLog.write('c1911_deploy_lock',
         '${_lock['busy'] == true ? 'held' : 'free'}:${_lock['command_id'] ?? '-'}');

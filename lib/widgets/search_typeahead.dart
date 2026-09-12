@@ -205,20 +205,21 @@ class SearchSuggestController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void onQueryChanged(String q, {bool zoneOnly = true}) {
+  void onQueryChanged(String q) {
     _timer?.cancel();
     if (q.trim().isEmpty) {
       close();
       return;
     }
-    _timer = Timer(debounce, () => _fetch(q, zoneOnly));
+    _timer = Timer(debounce, () => _fetch(q));
   }
 
-  Future<void> _fetch(String q, bool zoneOnly) async {
+  Future<void> _fetch(String q) async {
     final mine = ++_seq;
     try {
-      final res =
-          await _rpc('search_suggest', {'p_q': q, 'p_zone': zoneOnly});
+      // CMD #1909 — `p_zone` is gone with the switch it belonged to. Suggestions
+      // cover the whole catalogue, the same as the list they open.
+      final res = await _rpc('search_suggest', {'p_q': q});
       if (mine != _seq) return; // a later keystroke already won
       _payload = res is Map ? Map<String, dynamic>.from(res) : const {};
       _open = true;

@@ -1271,42 +1271,57 @@ class _TrailBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (trail.isEmpty) return const SizedBox.shrink();
+    final pad = Ds.space.x16;
     return Container(
       color: Ds.c.surface,
       child: Semantics(
         label: trail.label,
         child: SizedBox(
           height: Ds.touch.minTarget,
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            reverse: true, // the step you are ON stays in view as the trail grows
-            padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                for (var i = 0; i < trail.items.length; i++) ...[
-                  if (i > 0 && trail.separator.isNotEmpty)
-                    Padding(
-                      padding: EdgeInsets.symmetric(horizontal: Ds.space.x4),
-                      child: Text(trail.separator,
-                          style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
-                    ),
-                  InkWell(
-                    onTap: () => onTap(trail.items[i]),
-                    borderRadius: Ds.r.rChip,
-                    child: Container(
-                      constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
-                      padding: EdgeInsets.symmetric(horizontal: Ds.space.x4),
-                      alignment: Alignment.center,
-                      child: Text(
-                        trail.items[i].label,
-                        style: Ds.t.caption.copyWith(
-                            color: trail.items[i].current ? Ds.c.text : Ds.c.brand),
+          // A trail reads left to right, so it is LEFT-aligned whenever it
+          // fits — the min-width box is what stops `reverse` from pinning a
+          // short trail to the right edge. Only once the trail OVERFLOWS does
+          // `reverse` matter, and then it keeps the step you are on in view.
+          child: LayoutBuilder(
+            builder: (context, c) => SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              reverse: true,
+              padding: EdgeInsets.symmetric(horizontal: pad),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                    minWidth: (c.maxWidth - pad * 2).clamp(0.0, double.infinity)),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.start,
+                  children: [
+                    for (var i = 0; i < trail.items.length; i++) ...[
+                      if (i > 0 && trail.separator.isNotEmpty)
+                        Padding(
+                          padding: EdgeInsets.symmetric(horizontal: Ds.space.x4),
+                          child: Text(trail.separator,
+                              style: Ds.t.caption
+                                  .copyWith(color: Ds.c.textSecondary)),
+                        ),
+                      InkWell(
+                        onTap: () => onTap(trail.items[i]),
+                        borderRadius: Ds.r.rChip,
+                        child: Container(
+                          constraints:
+                              BoxConstraints(minHeight: Ds.touch.minTarget),
+                          padding: EdgeInsets.symmetric(horizontal: Ds.space.x4),
+                          alignment: Alignment.center,
+                          child: Text(
+                            trail.items[i].label,
+                            style: Ds.t.caption.copyWith(
+                                color: trail.items[i].current
+                                    ? Ds.c.text
+                                    : Ds.c.brand),
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-                ],
-              ],
+                    ],
+                  ],
+                ),
+              ),
             ),
           ),
         ),

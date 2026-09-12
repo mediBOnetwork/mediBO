@@ -37,6 +37,7 @@ import '../admin/admin_delivery_waves_screen.dart';
 import '../admin/admin_feedback_screen.dart';
 import '../admin/returns_refunds_screen.dart';
 import '../admin/surface_map_screen.dart';
+import '../admin/payment_alerts_screen.dart';
 import '../admin/dev_queue/triage_inbox_screen.dart';
 import '../admin/damage_report_screen.dart';
 import '../partner/zone_pnl_screen.dart';
@@ -83,6 +84,14 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       'delivery_waves' => const AdminDeliveryWavesScreen(),
       'returns_refunds' => const ReturnsRefundsScreen(),
       'surface_map' => const SurfaceMapScreen(),
+      // CMD #1929 — Payment alerts: the notifications the partner phone
+      // forwards, and what the backend matched each one to. The door is HERE
+      // rather than in the shell's own switch for the reason this shard
+      // exists: one more case there put home_shell.dart at 2,006 of a hard
+      // 2,000-line guard. Authorisation is not here either —
+      // payment_alerts_screen() answers on the caller's own role and renders
+      // its own refusal, and the tile comes from feature_registry.
+      'payment_alerts' => const PaymentAlertsScreen(),
       // CHANGE #639 — Triage. Its real entry point is Dev Queue → tools →
       // Proof & QA → Triage, but a findings inbox is what an alert wants to
       // link straight at, and a screen with no URL cannot be screenshotted for

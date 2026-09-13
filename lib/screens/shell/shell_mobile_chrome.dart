@@ -50,13 +50,19 @@ class _LocationHeader extends StatelessWidget {
           border: Border(bottom: BorderSide(color: Brand.border)),
         ),
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-        child: Row(
-          children: [
-            // LEFT: profile avatar
-            _MobileProfileAvatar(onAdminNav: onAdminNav, isSuperAdmin: isSuperAdmin, deletionCount: deletionCount, alertCount: alertCount),
-            // CENTER: logo — context-aware navigation
-            Expanded(
-              child: Center(
+        // CMD #1947 — a Stack, not a Row. The logo is centred against the
+        // HEADER itself, so it stays exactly centred whatever the avatar on the
+        // left and the date·zone chip on the right happen to measure. The chip
+        // is capped at half the row less the logo's own half and truncates
+        // inside that cap ("12 Sep · Rai…"), so the logo can never be pushed
+        // off centre at any width.
+        child: LayoutBuilder(builder: (context, box) {
+          final sideMax =
+              (box.maxWidth / 2 - _kLogoHalfReserve).clamp(Ds.touch.minTarget, box.maxWidth);
+          return Stack(
+            alignment: Alignment.center,
+            children: [
+              Center(
                 child: Tooltip(
                   message: logoTooltip,
                   child: MouseRegion(
@@ -98,28 +104,41 @@ class _LocationHeader extends StatelessWidget {
                   ),
                 ),
               ),
-            ),
-            // RIGHT: the cart, and on an admin's header nothing at all.
-            //
-            // CMD #1914 (Om) — the wishlist heart and the inbox bell used to
-            // stand here too, so the right edge was three icons wide against a
-            // single 40px avatar on the left and the "centred" logo sat
-            // wherever the leftover space put it. Both moved into the profile
-            // dropdown, which is a `customer_feature_placement` row rather than
-            // anything this file decides, and the two sides are the same width
-            // now — so Expanded + Center puts the logo in the actual centre.
-            // The unread count did not go with the bell: it rides the avatar
-            // (ProfileUnreadDot) and the dropdown's own row.
-            if (!isAdmin)
-              _MobileCartIcon(cartItems: cartItems, onCart: onCart)
-            else
-              SizedBox(width: Ds.touch.minTarget),
-          ],
-        ),
+              // CMD #1914 (Om) — the wishlist heart and the inbox bell used
+              // to stand on the right too, so that edge was three icons wide
+              // against a single 40px avatar. Both moved into the profile
+              // dropdown, which is a `customer_feature_placement` row rather
+              // than anything this file decides. The unread count did not go
+              // with the bell: it rides the avatar (ProfileUnreadDot).
+              Row(
+                children: [
+                  // LEFT: profile avatar
+                  _MobileProfileAvatar(
+                      onAdminNav: onAdminNav,
+                      isSuperAdmin: isSuperAdmin,
+                      deletionCount: deletionCount,
+                      alertCount: alertCount),
+                  const Spacer(),
+                  // RIGHT: staff get the date·zone chip that replaced the old
+                  // second row of filters; a customer keeps the cart.
+                  if (isAdmin)
+                    ScopeChip(maxWidth: sideMax)
+                  else
+                    _MobileCartIcon(cartItems: cartItems, onCart: onCart),
+                ],
+              ),
+            ],
+          );
+        }),
       ),
     );
   }
 }
+
+/// Half the centred logo lock-up plus its breathing room, in logical pixels.
+/// The avatar and the chip are both held outside it, which is what makes the
+/// logo's centring exact rather than approximate.
+const double _kLogoHalfReserve = 70;
 
 // ─────────────────────── Mobile profile avatar (left) ───────────────────────
 

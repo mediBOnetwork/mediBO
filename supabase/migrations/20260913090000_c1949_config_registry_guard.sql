@@ -56,3 +56,15 @@ on conflict (name) do update set body = excluded.body, enabled = true, note = ex
 insert into public.ui_copy (key, value) values
   ('dev_queue.pool_fields_empty', '"No editable settings were sent by the backend — dev_config_registry has no editable rows under worker_pool."'::jsonb)
 on conflict (key) do nothing;
+
+-- rg was red before this command (privileged_rpcs_are_not_anon): #1926 granted
+-- four public-storefront helpers to anon on purpose (every public card renders
+-- them) but did not record the tokenless callers in rpc_anon_allow, which is
+-- what the guard asks for. Recording them honours #1926's intent; idempotent.
+insert into public.rpc_anon_allow (fn_name, reason) values
+  ('storefront_availability',      'CMD #1926 — availability line every public card renders (anon storefront); recorded by #1949'),
+  ('storefront_availability_line', 'CMD #1926 — label/tone helper of storefront_availability (anon storefront); recorded by #1949'),
+  ('storefront_can_add',           'CMD #1926 — can-add verdict every public card renders (anon storefront); recorded by #1949'),
+  ('_zone_display_name',           'CMD #1926 — zone name inside the public availability line (anon storefront); recorded by #1949')
+on conflict (fn_name) do nothing;
+grant execute on function public.storefront_availability_line(integer, boolean) to anon, authenticated;

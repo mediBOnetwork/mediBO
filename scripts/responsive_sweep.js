@@ -32,8 +32,25 @@ const TARGET = (argVal('--target', process.env.MEDIBO_TARGET || 'https://medibo.
 const QUIET = process.argv.includes('--quiet');
 const say = (...a) => { if (!QUIET) console.log(...a); };
 
-const SUPABASE_URL = process.env.PROD_SUPABASE_URL || process.env.SUPABASE_URL;
-const SERVICE_KEY  = process.env.PROD_SERVICE_ROLE_KEY || process.env.SERVICE_ROLE_KEY;
+// deploy.sh runs this with a bare environment, so the runner's env file is the
+// fallback — CHANGE #1322 shipped with the sweep exiting before it opened a
+// single page because neither variable was set.
+function fromRunnerEnv(name) {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const file = path.join(process.env.MEDIBO_RUNNER_DIR || `${process.env.HOME}/mediBO-runner`, 'runner.env');
+    const line = fs.readFileSync(file, 'utf8').split('\n')
+      .find((l) => l.trim().startsWith(`${name}=`));
+    if (!line) return undefined;
+    return line.slice(line.indexOf('=') + 1).trim().replace(/^["']|["']$/g, '');
+  } catch (_) { return undefined; }
+}
+
+const SUPABASE_URL = process.env.PROD_SUPABASE_URL || process.env.SUPABASE_URL
+  || fromRunnerEnv('PROD_SUPABASE_URL') || fromRunnerEnv('SUPABASE_URL');
+const SERVICE_KEY  = process.env.PROD_SERVICE_ROLE_KEY || process.env.SERVICE_ROLE_KEY
+  || fromRunnerEnv('PROD_SERVICE_ROLE_KEY') || fromRunnerEnv('SERVICE_ROLE_KEY');
 
 async function rpc(fn, body) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {

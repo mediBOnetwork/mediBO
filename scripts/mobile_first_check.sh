@@ -12,10 +12,27 @@
 # either way — a red verdict is the point).
 set -uo pipefail
 
-RUNNER="${MEDIBO_RUNNER_DIR:-$HOME/mediBO-runner}/runner.sh"
-RULES="${MEDIBO_REPO:-$(cd "$(dirname "$0")/.." && pwd)}/RULES.md"
+RUNNER_DIR="${MEDIBO_RUNNER_DIR:-$HOME/mediBO-runner}"
+RUNNER="$RUNNER_DIR/runner.sh"
+
+# deploy.sh runs this from the deploy worktree with a bare environment, so
+# neither the credentials nor the RULES.md an agent session loads are where a
+# plain relative path would look. CHANGE #1322 shipped with both wrong and the
+# hook reported RED on a healthy tree.
+if [ -z "${PROD_SUPABASE_URL:-}${SUPABASE_URL:-}" ] && [ -r "$RUNNER_DIR/runner.env" ]; then
+  set -a; . "$RUNNER_DIR/runner.env"; set +a
+fi
 : "${PROD_SUPABASE_URL:=${SUPABASE_URL:-}}"
 : "${PROD_SERVICE_ROLE_KEY:=${SERVICE_ROLE_KEY:-}}"
+
+# RULES.md is regenerated into the SHARED checkout by memory_render.sh at every
+# session start — that copy is the one every agent boots from. A worktree cut
+# from an older base carries a stale copy and must not be read as a regression.
+RULES=""
+for _c in "${MEDIBO_RULES_FILE:-}" "$HOME/mediBO/RULES.md" \
+          "${MEDIBO_REPO:-$(cd "$(dirname "$0")/.." && pwd)}/RULES.md"; do
+  if [ -n "$_c" ] && [ -r "$_c" ]; then RULES="$_c"; break; fi
+done
 
 problems=()
 

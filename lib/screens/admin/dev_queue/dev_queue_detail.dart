@@ -369,29 +369,62 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
         color: const Color(0xFFD1FAE5),
         borderRadius: BorderRadius.circular(12),
       ),
-      child: Row(children: [
-        const Icon(Icons.cloud_done_outlined, size: 20, color: Color(0xFF065F46)),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(c('dev_queue.section_change'),
-                style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFF065F46))),
-            const SizedBox(height: 2),
-            Text('${c('dev_queue.change_prefix')}$n',
-                style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                    color: Color(0xFF065F46))),
-          ]),
-        ),
-        if (_row['web_deployed_at'] != null)
-          Text(istShort(_row['web_deployed_at'].toString()),
-              style: const TextStyle(fontSize: 11, color: Color(0xFF065F46))),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.cloud_done_outlined,
+              size: 20, color: Color(0xFF065F46)),
+          const SizedBox(width: 10),
+          Expanded(
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(c('dev_queue.section_change'),
+                  style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF065F46))),
+              const SizedBox(height: 2),
+              Text('${c('dev_queue.change_prefix')}$n',
+                  style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF065F46))),
+            ]),
+          ),
+          if (_row['web_deployed_at'] != null)
+            Text(istShort(_row['web_deployed_at'].toString()),
+                style: const TextStyle(fontSize: 11, color: Color(0xFF065F46))),
+        ]),
+        // CMD #1975 — WHO closed this row. The deploy going live completes the
+        // command itself now, so the banner that already carries the change
+        // number carries the verdict with it: the backend's chip sentence, and
+        // every finish condition it waived because the change was already live.
+        // Both strings arrive in the payload; nothing is worded in Dart.
+        _finishVerdict(),
       ]),
     );
+  }
+
+  /// The finish verdict under the change banner: `finish_chip` (worded by
+  /// `_dev_cmd_rows` from `ui_copy`) and `finish_blockers` — what the gate
+  /// wanted and did not get, kept visible instead of quietly dropped.
+  Widget _finishVerdict() {
+    final finish = RowFinish(_row);
+    final waived = finish.blockers;
+    if (!finish.show && waived.isEmpty) return const SizedBox.shrink();
+    final head = Ds.t.caption
+        .copyWith(fontWeight: FontWeight.w700, color: Ds.c.success);
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      SizedBox(height: Ds.space.x8),
+      if (finish.show) Text(finish.label, style: head),
+      if (waived.isNotEmpty) ...[
+        SizedBox(height: Ds.space.x8),
+        Text(c('dev_queue.finish_waived_head'), style: head),
+        for (final w in waived) ...[
+          SizedBox(height: Ds.space.x4),
+          Text(w, style: Ds.t.caption.copyWith(color: Ds.c.success)),
+        ],
+      ],
+    ]);
   }
 
   /// Per-command token usage — updates live while building (heartbeat feeds

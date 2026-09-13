@@ -65,6 +65,18 @@ class DeployLaneSection extends StatelessWidget {
     // sentence) is dev_wait_gate_recent()'s. has:false draws nothing at all.
     final gate = (data['gate'] as Map?)?.cast<String, dynamic>() ?? const {};
     final gateRows = (gate['rows'] as List?) ?? const [];
+    // CMD #1973 — DIRECT DEPLOYS, and where each one's time went. The key has
+    // been on this payload since #1859 but as a bare array with no strings to
+    // draw, so nothing rendered it and a 21-minute lock hold was invisible in
+    // the app — the only place it showed was direct_deploy.journal, on the box.
+    // deploy_direct_panel() now ships the heading, the sentence, each row's
+    // line and the two chips (prep off the lock, lock held) already judged.
+    // A backend still on the #1859 shape sends a bare ARRAY here. That is not
+    // a crash to inherit: an unrecognised shape draws nothing.
+    final direct = data['direct'] is Map
+        ? (data['direct'] as Map).cast<String, dynamic>()
+        : const <String, dynamic>{};
+    final directRows = (direct['rows'] as List?) ?? const [];
 
     return DqCard(
       child: Column(
@@ -174,6 +186,57 @@ class DeployLaneSection extends StatelessWidget {
               (smoke['verdict'] as String?) ?? '',
               (smoke['tone'] as String?) ?? 'neutral',
             ),
+          ],
+
+          // ── direct deploys: prep off the lock vs the lock itself ───────
+          if (direct['has'] == true) ...[
+            SizedBox(height: Ds.space.x24),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    (direct['heading'] as String?) ?? '',
+                    style: Ds.t.body.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: kTextHi,
+                    ),
+                  ),
+                ),
+                if (((direct['target_label'] as String?) ?? '').isNotEmpty) ...[
+                  SizedBox(width: Ds.space.x8),
+                  ToneChip(
+                    label: (direct['target_label'] as String?) ?? '',
+                    tone: toneByName('neutral'),
+                  ),
+                ],
+              ],
+            ),
+            SizedBox(height: Ds.space.x4),
+            Text(
+              (direct['subtitle'] as String?) ?? '',
+              style: Ds.t.caption.copyWith(color: kTextLo),
+            ),
+            if (directRows.isEmpty) ...[
+              SizedBox(height: Ds.space.x4),
+              Text(
+                (direct['empty'] as String?) ?? '',
+                style: Ds.t.caption.copyWith(color: kTextLo),
+              ),
+            ] else
+              for (final d in directRows.whereType<Map>()) ...[
+                SizedBox(height: Ds.space.x12),
+                _DirectRow(
+                  row: d.cast<String, dynamic>(),
+                  onOpen: onOpenCommand,
+                ),
+              ],
+            if (((direct['footnote'] as String?) ?? '').isNotEmpty) ...[
+              SizedBox(height: Ds.space.x8),
+              Text(
+                (direct['footnote'] as String?) ?? '',
+                style: Ds.t.caption.copyWith(color: kTextLo),
+              ),
+            ],
           ],
 
           // ── the wait gate (CMD #1866) ─────────────────────────────────
@@ -508,6 +571,85 @@ class _CompletedRow extends StatelessWidget {
           ),
           SizedBox(width: Ds.space.x8),
           if (value.isNotEmpty) ToneChip(label: value, tone: tone),
+        ],
+      ),
+    );
+    if (onOpen == null || id is! int) return body;
+    return InkWell(
+      onTap: () => onOpen!(id),
+      borderRadius: Ds.r.rCard,
+      child: body,
+    );
+  }
+}
+
+/// CMD #1973 — one direct deploy, with the two numbers that matter kept apart:
+/// how long its prep ran with the deploy lock FREE, and how long it actually
+/// held the lock. Before this command both were one 21-minute lump and only the
+/// second one blocks every other runner.
+///
+/// The widget judges nothing. The label, the phase line, both chip captions and
+/// the hold tone (success under 5 min, warning under 10, danger above) are
+/// deploy_direct_recent()'s. The chips WRAP rather than overflow, because a
+/// 360px phone is the viewport this is read on.
+class _DirectRow extends StatelessWidget {
+  final Map<String, dynamic> row;
+  final void Function(int commandId)? onOpen;
+  const _DirectRow({required this.row, this.onOpen});
+
+  @override
+  Widget build(BuildContext context) {
+    final id = row['command_id'];
+    final label = (row['label'] as String?) ?? '';
+    final line = (row['line'] as String?) ?? '';
+    final prep = (row['prep_label'] as String?) ?? '';
+    final hold = (row['hold_label'] as String?) ?? '';
+    final rebuilt = (row['rebuilt_label'] as String?) ?? '';
+    final body = ConstrainedBox(
+      constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  label,
+                  style: Ds.t.body.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: kTextHi,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              SizedBox(width: Ds.space.x8),
+              if (hold.isNotEmpty)
+                ToneChip(
+                  label: hold,
+                  tone: toneByName((row['hold_tone'] as String?) ?? 'neutral'),
+                ),
+            ],
+          ),
+          if (line.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(line, style: Ds.t.caption.copyWith(color: kTextLo)),
+          ],
+          if (prep.isNotEmpty || rebuilt.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x8),
+            Wrap(
+              spacing: Ds.space.x8,
+              runSpacing: Ds.space.x8,
+              children: [
+                if (prep.isNotEmpty)
+                  ToneChip(label: prep, tone: toneByName('success')),
+                if (rebuilt.isNotEmpty)
+                  ToneChip(label: rebuilt, tone: toneByName('warning')),
+              ],
+            ),
+          ],
         ],
       ),
     );

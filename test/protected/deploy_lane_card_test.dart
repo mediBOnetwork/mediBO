@@ -30,6 +30,15 @@
 //      countdown is ever computed in Dart.
 //   6. THE OLD BLOCK CANNOT COME BACK. A payload still carrying `batches`
 //      renders none of it.
+//   7. CMD #1973 — DIRECT DEPLOYS PRINT WHERE THE TIME WENT. Prep runs with the
+//      deploy lock FREE and only migrate/upload/verify hold it, so the card
+//      keeps the two apart: the hold chip, its tone, the prep chip and the
+//      'base moved' chip are all deploy_direct_recent()'s words. The fixture
+//      gives one row a hold of '3m 51s' toned success and another '19m 4s'
+//      toned danger; a card that re-derived either from started_at, or that
+//      coloured them by a Dart threshold, fails here. An older backend still
+//      sending the #1859 shape (a bare array on `direct`) draws nothing rather
+//      than throwing.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -87,9 +96,60 @@ Map<String, dynamic> _completed({bool has = true, List? rows}) => {
       ],
 };
 
+Map<String, dynamic> _direct({bool has = true, List? rows}) => {
+  'has': has,
+  'heading': 'Direct deploys',
+  'subtitle':
+      '2 deploy(s) in 7 days · lock held 4m 12s on average · '
+      '11m 30s of prep ran with the lane free.',
+  'target_label': 'target: lock under 5 min',
+  'empty': 'No direct deploy has run yet.',
+  'footnote':
+      'CMD #1973 — prep off the lock. Before it, one ship held the lane '
+      '21 min: 6 min of tests and 9 min of build were inside it.',
+  'rows':
+      rows ??
+      const [
+        {
+          'id': 160,
+          'command_id': 1973,
+          'label': 'CHANGE #1333 · #1973',
+          'status': 'deployed',
+          'tone': 'success',
+          'line':
+              'CHANGE #1333 is live (commit 9ab31c0e, 14m 2s) — complete with '
+              'p_deploy_no 1333. Lock held 3m 51s of that; 9m 12s of prep ran '
+              'with the lane free.',
+          'prep_label': 'prep 9m 12s · lock free',
+          'hold_label': 'lock 3m 51s',
+          'hold_tone': 'success',
+          'rebuilt_label': '',
+          'duration_label': '14m 2s',
+        },
+        {
+          // out of id order on purpose, and the slow one is toned by the
+          // backend, not by a Dart threshold
+          'id': 158,
+          'command_id': 1852,
+          'label': 'CHANGE #1332 · #1852',
+          'status': 'deployed',
+          'tone': 'success',
+          'line':
+              'CHANGE #1332 is live (commit 0fd410ff, 24m 8s) — complete with '
+              'p_deploy_no 1332.',
+          'prep_label': '',
+          'hold_label': 'lock 19m 4s',
+          'hold_tone': 'danger',
+          'rebuilt_label': 'the live base moved — retested under the lock',
+          'duration_label': '24m 8s',
+        },
+      ],
+};
+
 Map<String, dynamic> _payload({
   Map<String, dynamic>? completed,
   Map<String, dynamic>? lane,
+  Object? direct,
   bool withDeadBatches = false,
 }) => {
   'ok': true,
@@ -137,6 +197,7 @@ Map<String, dynamic> _payload({
   'stale': const [],
   'smoke': const {'has': false},
   'completed': completed ?? _completed(),
+  'direct': direct ?? _direct(),
   // A payload from an older backend still carrying the dead block.
   if (withDeadBatches)
     'batches': const {
@@ -226,7 +287,14 @@ void main() {
   ) async {
     final opened = <int>[];
     await _pump(t, _payload(), onOpen: opened.add);
-    await t.tap(find.text('#1949 · a label whose number is NOT the id'));
+    // CMD #1973 added the Direct deploys block above this one, so the row can
+    // start below the 600px test viewport. Scroll it into view first — the
+    // assertion (the id comes from the payload, never from the label) is
+    // unchanged.
+    final row = find.text('#1949 · a label whose number is NOT the id');
+    await t.ensureVisible(row);
+    await t.pumpAndSettle();
+    await t.tap(row);
     await t.pump();
     expect(opened, [1941]);
   });
@@ -284,6 +352,95 @@ void main() {
     await _pump(t, _payload(completed: _completed(rows: const [])));
     expect(find.text('Recently completed'), findsOneWidget);
     expect(find.text('No command has completed yet.'), findsOneWidget);
+  });
+
+  testWidgets('direct deploys print prep and hold as the backend worded them', (
+    t,
+  ) async {
+    await _pump(t, _payload());
+    expect(find.text('Direct deploys'), findsOneWidget);
+    expect(find.text('target: lock under 5 min'), findsOneWidget);
+    expect(
+      find.text(
+        '2 deploy(s) in 7 days · lock held 4m 12s on average · '
+        '11m 30s of prep ran with the lane free.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('CHANGE #1333 · #1973'), findsOneWidget);
+    expect(
+      find.text(
+        'CHANGE #1333 is live (commit 9ab31c0e, 14m 2s) — complete with '
+        'p_deploy_no 1333. Lock held 3m 51s of that; 9m 12s of prep ran '
+        'with the lane free.',
+      ),
+      findsOneWidget,
+    );
+    // the two numbers, kept apart, verbatim
+    expect(find.text('lock 3m 51s'), findsOneWidget);
+    expect(find.text('prep 9m 12s · lock free'), findsOneWidget);
+    expect(find.text('lock 19m 4s'), findsOneWidget);
+    expect(
+      find.text('the live base moved — retested under the lock'),
+      findsOneWidget,
+    );
+    expect(
+      find.text(
+        'CMD #1973 — prep off the lock. Before it, one ship held the lane '
+        '21 min: 6 min of tests and 9 min of build were inside it.',
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('an absent prep or rebuilt chip is omitted, never dashed', (
+    t,
+  ) async {
+    await _pump(t, _payload());
+    // the second row has no prep_label: nothing stands in for it
+    expect(find.text('—'), findsNothing);
+    expect(find.text('prep'), findsNothing);
+  });
+
+  testWidgets('a direct row taps through on the backend id', (t) async {
+    final opened = <int>[];
+    await _pump(t, _payload(), onOpen: opened.add);
+    await t.tap(find.text('CHANGE #1333 · #1973'));
+    await t.pump();
+    expect(opened, [1973]);
+  });
+
+  testWidgets('direct has:false draws no heading and no empty state', (
+    t,
+  ) async {
+    await _pump(t, _payload(direct: _direct(has: false)));
+    expect(find.text('Direct deploys'), findsNothing);
+    expect(find.text('No direct deploy has run yet.'), findsNothing);
+  });
+
+  testWidgets('an empty direct list shows the backend\'s empty state', (
+    t,
+  ) async {
+    await _pump(t, _payload(direct: _direct(rows: const [])));
+    expect(find.text('No direct deploy has run yet.'), findsOneWidget);
+    expect(find.text('lock 3m 51s'), findsNothing);
+  });
+
+  testWidgets('the #1859 array shape on direct draws nothing, never throws', (
+    t,
+  ) async {
+    await _pump(
+      t,
+      _payload(
+        direct: const [
+          {'id': 1, 'label': 'CHANGE #1', 'line': 'legacy row'},
+        ],
+      ),
+    );
+    expect(find.text('Direct deploys'), findsNothing);
+    expect(find.text('legacy row'), findsNothing);
+    // and the rest of the card still drew, i.e. nothing threw on the way past
+    expect(find.text('Recently completed'), findsOneWidget);
   });
 
   testWidgets('a payload still carrying batches renders none of it', (t) async {

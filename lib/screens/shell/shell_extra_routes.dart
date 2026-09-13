@@ -50,6 +50,7 @@ import '../partner/partner_tasks_screen.dart';
 import '../worker/worker_tasks_screen.dart';
 import '../admin/kyc_review_screen.dart';
 import '../admin/order_cutoff_screen.dart'; // CMD #1934 — the cut-off door
+import '../admin/admin_advance_slabs_screen.dart'; // CMD #1932 — advance ladder
 import '../partner/partner_documents_screen.dart';
 import '../admin/settlement_invoices_screen.dart'; // CHANGE #695 — tax invoices
 import '../partner/partner_issues_screen.dart'; // CHANGE #696 — partner issues
@@ -286,6 +287,15 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       // get_my_role() and answers anyone else with `not_admin`, which the
       // screen renders — the same story as damage_report above.
       'order_cutoff' => const OrderCutoffScreen(),
+      // CMD #1932 — the advance ladder: what advance % a pharmacy pays on its
+      // nth fully-paid order, per zone. Registered here rather than in the
+      // shell's switch for the reason at the top of this file — the shell is
+      // held under 2,000 lines and one more case is what tips it.
+      //
+      // Authorisation is NOT here: advance_slabs_list() gates on the access
+      // matrix (feature key advance_slabs) and the screen renders the
+      // backend's own refusal, the same story as order_cutoff above.
+      'advance_slabs' => const AdminAdvanceSlabsScreen(),
       'partner_scorecards' => const AdminPartnerScorecardsScreen(),
       'partner_scorecard' => const PartnerScorecardScreen(),
       _ => null,

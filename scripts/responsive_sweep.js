@@ -32,8 +32,25 @@ const TARGET = (argVal('--target', process.env.MEDIBO_TARGET || 'https://medibo.
 const QUIET = process.argv.includes('--quiet');
 const say = (...a) => { if (!QUIET) console.log(...a); };
 
-const SUPABASE_URL = process.env.PROD_SUPABASE_URL || process.env.SUPABASE_URL;
-const SERVICE_KEY  = process.env.PROD_SERVICE_ROLE_KEY || process.env.SERVICE_ROLE_KEY;
+// deploy.sh runs this with a bare environment, so the runner's env file is the
+// fallback — CHANGE #1322 shipped with the sweep exiting before it opened a
+// single page because neither variable was set.
+function fromRunnerEnv(name) {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const file = path.join(process.env.MEDIBO_RUNNER_DIR || `${process.env.HOME}/mediBO-runner`, 'runner.env');
+    const line = fs.readFileSync(file, 'utf8').split('\n')
+      .find((l) => l.trim().startsWith(`${name}=`));
+    if (!line) return undefined;
+    return line.slice(line.indexOf('=') + 1).trim().replace(/^["']|["']$/g, '');
+  } catch (_) { return undefined; }
+}
+
+const SUPABASE_URL = process.env.PROD_SUPABASE_URL || process.env.SUPABASE_URL
+  || fromRunnerEnv('PROD_SUPABASE_URL') || fromRunnerEnv('SUPABASE_URL');
+const SERVICE_KEY  = process.env.PROD_SERVICE_ROLE_KEY || process.env.SERVICE_ROLE_KEY
+  || fromRunnerEnv('PROD_SERVICE_ROLE_KEY') || fromRunnerEnv('SERVICE_ROLE_KEY');
 
 async function rpc(fn, body) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
@@ -66,14 +83,30 @@ const SCREENS = [
 ];
 
 async function readRenderLog(page) {
-  return page.evaluate(() => {
-    try {
-      const el = document.getElementById('medibo-render-log');
-      if (el && el.textContent) return JSON.parse(el.textContent);
-      if (window.__mediboRenderLog) return window.__mediboRenderLog;
-    } catch (_) {}
-    return null;
+  const text = await page.evaluate(() => {
+    const el = document.getElementById('medibo-render-log');
+    return el ? (el.textContent || el.innerText || '') : '';
   });
+  if (!text || !text.trim()) return null;
+  const out = {};
+  for (const line of text.split('\n')) {
+    const i = line.indexOf('=');
+    if (i > 0) out[line.slice(0, i)] = line.slice(i + 1);
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+// Wait for the app to say it painted rather than sleeping a fixed amount: a
+// 320px cold load on a slow edge takes longer than a 480px warm one, and a
+// blank page read too early is indistinguishable from a broken one.
+async function waitForPaint(page, budgetMs) {
+  const deadline = Date.now() + budgetMs;
+  while (Date.now() < deadline) {
+    const log = await readRenderLog(page);
+    if (log && String(log.boot_status || '') === 'painted') return log;
+    await page.waitForTimeout(1000);
+  }
+  return readRenderLog(page);
 }
 
 (async () => {
@@ -109,8 +142,10 @@ async function readRenderLog(page) {
           const sep = route.includes('?') ? '&' : '?';
           await page.goto(`${TARGET}${route}${sep}responsive_audit=1&min_touch=${minTouch}`,
             { waitUntil: 'domcontentloaded', timeout: 45000 });
-          // The audit re-measures for ~16s after boot; give the screen its RPC.
-          await page.waitForTimeout(9000);
+          // Wait for the app's own "painted", then let the audit re-measure
+          // while the screen's RPC lands before reading the counts.
+          await waitForPaint(page, 30000);
+          await page.waitForTimeout(6000);
           log = await readRenderLog(page);
         } catch (e) {
           failures.push(`${label} @${width}px did not load (${String(e.message).slice(0, 80)})`);

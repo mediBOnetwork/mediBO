@@ -45,14 +45,27 @@ GUARDS=(c641_complete_fast_under_2s c641_no_rg_in_http_rpcs)
 is_transport_error() {
   local body="$1"
   case "$(jq -r '.code // ""' <<<"$body")" in PGRST*) return 0;; esac
+  # CMD #1975 — the EDGE is transport too. On 2026-09-13 Supabase's origin went
+  # unreachable and Cloudflare answered every RPC with its own error document:
+  #     {"title":"Error 522: Connection timed out","status":522,
+  #      "error_code":522,"error_name":"connection_timeout", ...}
+  # It has no .message, .error or .details, so the classifier read "unknown",
+  # the guard reported RED, and two deploys (#1975, #1951) were failed for a
+  # database outage — the exact thing the header of this script says must never
+  # happen. A 5xx status or an error_name/title from the edge is UNREACHABLE.
+  local st; st="$(jq -r '(.status // .error_code // empty) | tostring' <<<"$body" 2>/dev/null)"
+  case "$st" in 5[0-9][0-9]) return 0;; esac
+  [ -n "$(jq -r '.error_name // empty' <<<"$body" 2>/dev/null)" ] && return 0
   local msg
-  msg="$(jq -r '((.message // "") + " " + (.error // "") + " " + (.details // "")) | ascii_downcase' <<<"$body")"
+  msg="$(jq -r '((.message // "") + " " + (.error // "") + " " + (.details // "")
+                 + " " + (.title // "") + " " + (.detail // "")) | ascii_downcase' <<<"$body")"
   case "$msg" in
     *"schema cache"*|*"could not query the database"*|*"lock timeout"*|\
     *"statement timeout"*|*"deadlock detected"*|*"too many clients"*|\
     *"remaining connection slots"*|*"server closed the connection"*|\
     *"terminating connection due to"*|*"connection refused"*|\
-    *"connection reset by peer"*|*"service unavailable"*|*"gateway"*) return 0;;
+    *"connection reset by peer"*|*"service unavailable"*|*"gateway"*|\
+    *"connection timed out"*|*"tcp connection"*|*"origin"*|*"unreachable"*) return 0;;
   esac
   return 1
 }
@@ -101,7 +114,8 @@ for g in "${GUARDS[@]}"; do
     if is_transport_error "$out"; then
       [ "$attempt" -lt 3 ] && { sleep 10; continue; }
       echo "  $g: UNREACHABLE — the transport answered, the guard did not:" \
-           "$(jq -r '.code // ""' <<<"$out") $(jq -r '.message // .error // ""' <<<"$out")"
+           "$(jq -r '[.code, .status, .error_name] | map(select(. != null) | tostring) | join(" ")' <<<"$out")" \
+           "$(jq -r '[.message, .error, .title, .detail] | map(select(. != null)) | join(" — ") | .[0:160]' <<<"$out")"
       exit 2
     fi
     break

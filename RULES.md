@@ -9,7 +9,7 @@
      Dev Queue → Memory screen, or via the MCP memory server. Do NOT hand-edit
      this block; it is rewritten on every session start. Target: generic -->
 
-# Agent memory (generic) — 46 rules
+# Agent memory (generic) — 48 rules
 # Canonical fallback: see RULES.md in the repo root (git-committed).
 
 ## GLOBAL · style  (priority 10, v2)
@@ -428,7 +428,20 @@ Only `lib/design_tokens.dart` and `lib/theme.dart` may hold style literals — t
 
 
 
-## PROJECT · design_qa  (priority 84, v2)
+## PROJECT · mobile_first  (priority 81, v1)
+
+
+MOBILE-FIRST IS THE DEFAULT (CMD #1950, gate c_mobile_first). 99% of mediBO users are on phones, so the phone viewport is where every command is designed, built, QA'd and PROVEN — desktop/web is secondary and must never degrade the phone layout.
+
+The rule text, the widths and the touch minimum live in `dev_runner_config.build_rules.mobile_first` and are printed verbatim into every command prompt. Change the wording or the widths with one UPDATE — never a deploy.
+
+- **Proof comes from a phone, first.** A UI command needs a 360px AND a 412px capture in `dev-cmd-proofs`, taken BEFORE any desktop shot. One door does the whole errand: `devcmd.sh phoneproof <id> <url>` (or `--admin <route>`). The finish gate condition is "mobile proof" and `dev_cmd_complete` refuses without it while `worker_pool.mobile_first.enforce` is true.
+- **Design QA runs on the phone viewport**, not on 1440px. Journeys default to the phone viewport too.
+- **Responsive on every phone.** No fixed widths, no horizontal overflow, text scales, chips wrap or scroll, every tap target >= 44px. The post-deploy sweep renders the top staff and customer screens at 320/360/412/480 plus one tablet width; `rg_check` goes red on any overflow the app reports (`responsive_no_overflow`) or if the rule itself goes missing from build_rules or from the prompt builder (`mobile_first_rule_present`).
+
+
+
+## PROJECT · design_qa  (priority 84, v3)
 
 
 Design QA gate — run before `dev_cmd_complete` on ANY command that touches UI. Self-review the changed screens; if a check fails, FIX and re-check before completing. Write "Design QA: passed (N checks)" into result_summary.
@@ -441,6 +454,8 @@ Design QA gate — run before `dev_cmd_complete` on ANY command that touches UI.
 6. States — empty state has one-line guidance; loading is a skeleton, not a bare spinner; errors show backend copy + Retry.
 7. Tokens — zero new style literals (gate green); everything via Ds/theme.
 
+
+8. Phone viewport — run every check above at 360px and 412px FIRST (CMD #1950, build_rules.mobile_first). A desktop pass is secondary and never excuses a phone failure.
 
 
 ## PROJECT · verification  (priority 85, v3)
@@ -528,13 +543,16 @@ COMPANY NAMING RULE (absolute). Gemini never generates or normalizes company nam
 
 
 
-## PROJECT · regression_guard  (priority 106, v1)
+## PROJECT · regression_guard  (priority 106, v2)
 
 Regression guard — the schema safety net.
 
 Run `rg_check()` (`devcmd.sh rgcheck` → must print `true`) after EVERY migration and before every `dev_cmd_complete`; the completion RPC itself raises if the guard is red. It compares the live schema/RPC surface against a stored baseline, so a dropped column or a silently changed function signature is caught in the same command that caused it.
 
 `rg_baseline_all()` (`devcmd.sh rebaseline`) is ONLY run AFTER you have verified the new state is correct — re-baselining a red guard just blesses the regression. Order is: migrate → verify the new state is what you intended → rebaseline → rgcheck green → deploy.
+
+THE BASELINE IS PRODUCTION'S — SO REBASELINE AGAIN AFTER THE LIVE REPLAY (CMD #1928). Your migration runs on the build BRANCH; production only gets it when the direct deploy replays the file. A rebaseline taken before deploy blesses production's OLD schema, so the moment the replay lands the scheduled guard goes red — for a change that was reviewed, tested and verified live. That red is then filed as its own "RG red after #N" command whose entire content is pressing rebaseline: #1925, #1927 and #1928 were all filed that way in one morning, off correct migrations. When a command ships a migration, the LAST thing it does — after `devcmd.sh deploy_wait <id>` exits 0, before `dev_cmd_complete` — is `devcmd.sh rebaseline` then `devcmd.sh rgcheck`. The new state is verified by then (protected suite green on the merged tree, file in `migration_replay_ledger`, `verify_live.sh` passed), so blessing it records the intended state rather than hiding a regression. The pre-deploy rebaseline stays — it keeps the branch honest — but it is never the last one.
+
 
 
 ## RULES HELD OUT OF THE WINDOW (CMD #1885)
@@ -548,6 +566,7 @@ carried by the other forty-nine.
     ~/mediBO/RULES.full.md       # all of them, in full, git-committed
 
 - **PROJECT · db_lane  (priority 76, v1)** — 15. DB WORK LANE (permanent — CHANGE #301)
+- **PROJECT · runner_self_wait  (priority 76, v2)** — YOUR OWN DEPLOY IS ONE BLOCKING WAIT (CMD #1962).
 - **PROJECT · build_lane  (priority 77, v1)** — 16. BUILD LANE — NOTHING WAITS ON A FILE (CHANGE #327)
 - **PROJECT · design_system  (priority 82, v2)** — DESIGN SYSTEM (apply to all UI work)
 - **PROJECT · protected_tests  (priority 90, v13)** — PROTECTED TEST SUITE (CHANGE #635 — never remove)
@@ -557,4 +576,3 @@ carried by the other forty-nine.
 - **PROJECT · parallel_workers  (priority 108, v2)** — 13. PARALLEL WORKERS (permanent — CHANGE #74)
 - **PROJECT · gcp  (priority 110, v2)** — 10. GCP COMMANDS (kind='gcp')
 - **PROJECT · playstore  (priority 112, v1)** — Play Store / Android.
-

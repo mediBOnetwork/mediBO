@@ -4,6 +4,7 @@ import '../design_tokens.dart';
 import '../screens/admin/nav_registry_view.dart' show navIcon;
 import '../screens/customer/profile_account_menu.dart' show customerMenuScreen;
 import '../services/customer_surfaces.dart';
+import 'notification_bell.dart' show NotifUnread;
 import '../utils/render_log.dart';
 
 /// CHANGE #745 — the three customer surfaces the profile menu emptied into.
@@ -272,6 +273,200 @@ class _CustomerRewardsSectionState
                 ],
               ),
             ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// CMD #1914 — the profile dropdown.
+///
+/// Om's steer: the mobile header wore an avatar on the left and THREE icons on
+/// the right (wishlist heart, inbox bell, cart), so the logo between them was
+/// never centred — it sat wherever the leftover space put it. The heart and the
+/// bell moved in here, and moving them was a placement row, not a Dart edit:
+/// this widget draws `placements.profile_dropdown` in the backend's order and
+/// names no feature. The heading, the caption, every label and every badge —
+/// the wishlist count and the unread count alike — arrive in the payload.
+class CustomerProfileDropdown extends StatefulWidget {
+  const CustomerProfileDropdown({super.key, this.title});
+
+  /// The signed-in identity's own display name, which is `my_session()`'s
+  /// string and is passed in rather than re-fetched here.
+  final String? title;
+
+  @override
+  State<CustomerProfileDropdown> createState() =>
+      _CustomerProfileDropdownState();
+}
+
+class _CustomerProfileDropdownState
+    extends _SurfaceState<CustomerProfileDropdown> {
+  @override
+  void initState() {
+    super.initState();
+    // The unread count is the dropdown's own badge now, so it is refreshed on
+    // open rather than by a bell that is no longer on the header.
+    NotifUnread.refresh();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<Map<String, dynamic>>(
+      valueListenable: CustomerSurfaces.value,
+      builder: (context, payload, _) {
+        final items = CustomerSurfaces.itemsFor(payload, 'profile_dropdown');
+        final heading = (widget.title ?? '').trim().isNotEmpty
+            ? widget.title!.trim()
+            : (payload['dropdown_title'] ?? '').toString();
+        final caption = (payload['dropdown_caption'] ?? '').toString();
+        RenderLog.write('c1914_profile_dropdown', items.length);
+        return Padding(
+          padding: EdgeInsets.fromLTRB(
+              Ds.space.x24, Ds.space.x16, Ds.space.x24, Ds.space.x24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: Ds.space.x32,
+                  height: Ds.space.x4,
+                  decoration: BoxDecoration(
+                    color: Ds.c.divider,
+                    borderRadius: Ds.r.rChip,
+                  ),
+                ),
+              ),
+              SizedBox(height: Ds.space.x16),
+              if (heading.isNotEmpty)
+                Text(heading,
+                    style: Ds.t.subtitle.copyWith(fontWeight: FontWeight.w700)),
+              if (caption.isNotEmpty) ...[
+                SizedBox(height: Ds.space.x4),
+                Text(caption,
+                    style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+              ],
+              SizedBox(height: Ds.space.x16),
+              for (final e in items) _DropdownRow(entry: e),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _DropdownRow extends StatelessWidget {
+  final Map<String, dynamic> entry;
+  const _DropdownRow({required this.entry});
+
+  @override
+  Widget build(BuildContext context) {
+    final screen = customerMenuScreen((entry['route_key'] ?? '').toString());
+    if (screen == null) return const SizedBox.shrink();
+    final label = (entry['label'] ?? '').toString();
+    if (label.isEmpty) return const SizedBox.shrink();
+    final caption = (entry['caption'] ?? '').toString();
+    // The trailing number is the ENTRY's own badge — the wishlist count for
+    // one row, the unread count for another. This widget never asks which.
+    final badge = (entry['badge'] ?? '').toString();
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x8),
+      child: InkWell(
+        borderRadius: Ds.r.rCard,
+        onTap: () {
+          Navigator.of(context).pop();
+          Navigator.of(context)
+              .push(MaterialPageRoute<void>(builder: (_) => screen));
+        },
+        child: Container(
+          constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+          padding: EdgeInsets.symmetric(
+              horizontal: Ds.space.x16, vertical: Ds.space.x12),
+          decoration: BoxDecoration(
+            color: Ds.c.surface,
+            borderRadius: Ds.r.rCard,
+            border: Border.all(color: Ds.c.divider),
+          ),
+          child: Row(
+            children: [
+              Icon(navIcon((entry['icon_key'] ?? '').toString()),
+                  size: 22, color: Ds.c.brand),
+              SizedBox(width: Ds.space.x12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(label,
+                        style:
+                            Ds.t.body.copyWith(fontWeight: FontWeight.w600)),
+                    if (caption.isNotEmpty) ...[
+                      SizedBox(height: Ds.space.x4),
+                      Text(caption,
+                          style: Ds.t.caption
+                              .copyWith(color: Ds.c.textSecondary)),
+                    ],
+                  ],
+                ),
+              ),
+              if (badge.isNotEmpty)
+                Container(
+                  padding: EdgeInsets.symmetric(
+                      horizontal: Ds.space.x8, vertical: 0),
+                  constraints: BoxConstraints(minWidth: Ds.space.x24),
+                  decoration: BoxDecoration(
+                    color: Ds.c.brand,
+                    borderRadius: Ds.r.rChip,
+                  ),
+                  child: Text(
+                    badge,
+                    textAlign: TextAlign.center,
+                    style: Ds.t.caption.copyWith(
+                        color: Ds.c.surface, fontWeight: FontWeight.w700),
+                  ),
+                ),
+              SizedBox(width: Ds.space.x8),
+              Icon(Icons.chevron_right, size: 20, color: Ds.c.textSecondary),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The unread dot the avatar wears now that the bell has left the header.
+///
+/// It is the same value the dropdown's Notifications row prints — one fetch,
+/// one number, two places that draw it. The label is the backend's, "99+" cap
+/// included; this only decides whether to paint it.
+class ProfileUnreadDot extends StatelessWidget {
+  const ProfileUnreadDot({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<Map<String, dynamic>>(
+      valueListenable: NotifUnread.value,
+      builder: (context, s, _) {
+        final show = (s['show'] as bool?) ?? false;
+        final label = (s['label'] as String?) ?? '';
+        if (!show || label.isEmpty) return const SizedBox.shrink();
+        RenderLog.write('c1914_avatar_unread', 1);
+        return Container(
+          padding: EdgeInsets.symmetric(horizontal: Ds.space.x4),
+          constraints: BoxConstraints(minWidth: Ds.space.x16),
+          decoration: BoxDecoration(
+            color: Ds.c.danger,
+            borderRadius: Ds.r.rChip,
+            border: Border.all(color: Ds.c.surface, width: 2),
+          ),
+          child: Text(
+            label,
+            textAlign: TextAlign.center,
+            style: Ds.t.caption.copyWith(
+                color: Ds.c.surface, fontWeight: FontWeight.w700),
           ),
         );
       },

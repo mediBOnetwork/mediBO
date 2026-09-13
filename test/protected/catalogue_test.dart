@@ -47,7 +47,7 @@ import 'package:pharma_b2b/models/cart_model.dart';
 import 'package:pharma_b2b/models/catalogue.dart';
 import 'package:pharma_b2b/screens/catalogue_screen.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
-import 'package:pharma_b2b/widgets/catalogue_product_card.dart';
+import 'package:pharma_b2b/widgets/product_row_card.dart';
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
@@ -302,61 +302,42 @@ void main() {
     });
   });
 
-  group('the zone switch is a flag, not an inference', () {
-    testWidgets('has:false draws no control at all', (tester) async {
-      await _pump(tester, queued: {
-        'catalogue_home': [_home(zoneHas: false)],
-        'catalogue_tree': [_treeRoot()],
-      });
-      expect(find.byType(Switch), findsNothing,
-          reason: 'an anonymous viewer gets no switch — it would change nothing');
-      expect(find.text('Available in my zone'), findsNothing);
-    });
-
-    testWidgets('has:true draws it with the payload\'s own label and note',
-        (tester) async {
+  group('CMD #1909 — the zone switch is GONE, not hidden', () {
+    // #747 shipped a switch that FILTERED the catalogue: a customer in Raipur
+    // was shown a short list with no way of knowing the rest existed. Om's
+    // call was to stop hiding, so there is no control left to draw and no
+    // question left to ask the backend. These three pin that it stays gone.
+    testWidgets('no switch is drawn, whatever the payload says', (tester) async {
+      // zone.has is deliberately TRUE here: a cached payload, or a backend
+      // that has not been migrated yet, must not resurrect the control.
       await _pump(tester, queued: {
         'catalogue_home': [_home()],
         'catalogue_tree': [_treeRoot()],
       });
-      expect(find.byType(Switch), findsOneWidget);
-      expect(find.text('Available in my zone'), findsOneWidget);
+      expect(find.byType(Switch), findsNothing);
+      expect(find.text('Available in my zone'), findsNothing);
       expect(find.text('Showing what suppliers in your zone can send.'),
-          findsOneWidget);
+          findsNothing);
     });
 
-    testWidgets('turning it off re-asks the backend with p_zone false',
-        (tester) async {
+    testWidgets('no list call carries p_zone any more', (tester) async {
       final rpc = await _pump(tester, queued: {
         'catalogue_home': [_home()],
         'catalogue_tree': [_treeRoot()],
       });
-      await tester.tap(find.byType(Switch));
-      await tester.pumpAndSettle();
-      expect(rpc.lastArgs('catalogue_tree')['p_zone'], isFalse,
-          reason: 'the switch is a QUESTION to the backend, not a client filter');
+      for (final fn in const ['catalogue_home', 'catalogue_tree']) {
+        expect(rpc.lastArgs(fn).containsKey('p_zone'), isFalse,
+            reason: '$fn must ask for the WHOLE catalogue, with no zone '
+                'question attached — the ordering is the backend\'s job now');
+      }
     });
 
-    testWidgets('an OFF switch is still drawn — has and on are two questions',
-        (tester) async {
-      // The bug this pins: resolving `has` from the same expression as `on`
-      // made the control vanish the moment anyone used it. `has` is "does this
-      // viewer get a switch", `on` is "is it flipped", and the backend answers
-      // both separately.
+    testWidgets('the sentence no longer offers a zone chip', (tester) async {
       await _pump(tester, queued: {
-        'catalogue_home': [
-          {..._home(), 'zone': _zone(has: true, on: false)}
-        ],
+        'catalogue_home': [_home()],
         'catalogue_tree': [_treeRoot()],
-      }, route: const CatalogueRoute(zoneOn: false));
-      expect(find.byType(Switch), findsOneWidget);
-      expect(tester.widget<Switch>(find.byType(Switch)).value, isFalse);
-      expect(
-          find.text('Showing the whole catalogue, including items no supplier '
-              'near you stocks.'),
-          findsOneWidget,
-          reason: 'the note under the switch changes because the BACKEND '
-              'changed it, not because this widget picked a second sentence');
+      });
+      expect(find.text('In my zone'), findsNothing);
     });
   });
 
@@ -398,7 +379,7 @@ void main() {
       expect(find.text('Paracetamol (500mg)'), findsOneWidget);
       expect(find.text('Every brand for this salt'), findsOneWidget);
       expect(find.text('15 products'), findsOneWidget);
-      expect(find.byType(CatalogueProductCard), findsOneWidget);
+      expect(find.byType(ProductRowCard), findsOneWidget);
     });
 
     testWidgets('an empty list prints the backend empty state, never a Dart one',
@@ -409,7 +390,7 @@ void main() {
       }, route: const CatalogueRoute(
           tab: 'cold_chain', listKind: 'tab', listKey: 'cold_chain'));
       expect(find.text('Nothing here in this view.'), findsOneWidget);
-      expect(find.byType(CatalogueProductCard), findsNothing);
+      expect(find.byType(ProductRowCard), findsNothing);
     });
 
     testWidgets('the end label is the backend\'s, and only when it says so',
@@ -475,7 +456,6 @@ void main() {
           flags: {'cold_chain', 'has_image'},
         ),
         sort: 'newest',
-        zoneOn: false,
         query: 'para',
       );
       final url = route.url;
@@ -490,9 +470,18 @@ void main() {
       expect(back.filters.rx, 'Rx');
       expect(back.filters.flags, {'cold_chain', 'has_image'});
       expect(back.sort, 'newest');
-      expect(back.zoneOn, isFalse);
       expect(back.query, 'para');
       expect(back.url, url, reason: 'the round trip must be stable');
+    });
+
+    test('CMD #1909 — a link from when the switch existed still opens', () {
+      // `zone=0` was a real, shareable URL for two changes. It must not 404
+      // and it must not be honoured: it opens the same whole list every other
+      // link opens, and re-serialises without the dead parameter.
+      final back = CatalogueRoute.parse('?lk=tree&p=CARDIAC&zone=0');
+      expect(back.listKind, 'tree');
+      expect(back.path, ['CARDIAC']);
+      expect(back.url.contains('zone='), isFalse);
     });
 
     test('the default state is the bare path, and /catalogue is recognised', () {

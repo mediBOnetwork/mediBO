@@ -42,6 +42,29 @@ class CartLine {
   bool get unavailable => display['unavailable'] == true;
   bool get qtyLocked => display['qty_locked'] == true;
 
+  /// CMD #1912 — `cart_render().items[].row`: the whole compact cart row,
+  /// already worded. The name, the pack caption, the quantity that leads the
+  /// row ("4 Strip"), the Rx chip, the one price line and the expanded detail
+  /// rows all arrive from here. The screen renders them; it derives none of
+  /// them — the unit word alone used to be a chain of `contains()` calls in
+  /// Dart, which is why "1 Strip of 15 Tablets" and "Strip" could disagree.
+  Map<String, dynamic> get row =>
+      (display['row'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  /// One string out of [row] ('' when the payload did not send it).
+  String rows(String key) => (row[key] ?? '').toString();
+
+  /// One nested object out of [row] (empty map when absent).
+  Map<String, dynamic> rowMap(String key) =>
+      (row[key] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  /// The expanded body's label/value pairs, in payload order.
+  List<Map<String, dynamic>> get rowDetails =>
+      ((row['detail_rows'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => e.cast<String, dynamic>())
+          .toList(growable: false);
+
   /// CHANGE #615 — a cart line is worth qty × MRP and nothing else. There is no
   /// sale price, no GST and no discount left to fold in, so `mrp` is the only
   /// number this can be built from. The BILLED figure is still the server's

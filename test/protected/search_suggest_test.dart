@@ -4,19 +4,21 @@
 //
 //   * the typeahead computes NOTHING. Groups render in payload order with the
 //     backend's own titles; every label, sub-label and "N variants" counter is
-//     a string from search_suggest(); a tap hands back the payload's `query`
-//     (for a Hindi word that is the SALT, never the word the shopper typed);
+//     a string from search_suggest();
+//   * CMD #1905 CHANGED what a tap hands back, and it is the one assertion in
+//     this file that moved. A tap used to hand back the payload's `query`
+//     STRING, which the caller pasted into a product-name search — the bug
+//     that made tapping a company with 2,461 products say "Nothing here in
+//     this view". It now hands back the typed item, and what a caller does
+//     with it is held down by search_typed_suggestions_test.dart;
 //   * "not enough letters" is `ready:false` plus the backend's sentence, never
 //     a length test written here, and an empty result prints the backend's
 //     empty line;
 //   * the Hinglish line is `expanded.label` under `expanded_prefix` — absent
 //     when the backend sent no mapping;
-//   * the brand-family card GROUPS NOTHING. `storefront_search_page()` hands
-//     the grid a `blocks` list already folded by brand_family_key(); the card
-//     prints the block's title, "by <company>" line and "N variants" counter
-//     verbatim, draws one chip per variant in payload order, and a chip opens
-//     THAT variant's own product id. A block kind this build has never heard
-//     of renders nothing instead of throwing;
+//   * (CMD #1903 removed the brand-family card and its `blocks` payload
+//     entirely — search is a flat list of rows now, and what holds that down
+//     is test/protected/search_flat_list_test.dart);
 //   * the synonym console prints the payload: rows in payload order with the
 //     backend's own "term → target" subtitle and source label, the two
 //     dropdowns offer exactly the options the payload carried, and a refusal
@@ -28,7 +30,6 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pharma_b2b/screens/admin/search_synonyms_screen.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
-import 'package:pharma_b2b/widgets/search_family_card.dart';
 import 'package:pharma_b2b/widgets/search_typeahead.dart';
 
 Map<String, dynamic> _suggest({bool hinglish = false}) => {
@@ -150,22 +151,6 @@ Map<String, dynamic> _synonyms({bool ok = true}) => ok
         'message': 'Only mediBO staff can edit search synonyms.',
       };
 
-Map<String, dynamic> _familyBlock() => {
-      'kind': 'family',
-      'family_key': 'monticope|mankind',
-      'title': 'Monticope',
-      'company_label': 'MANKIND PHARMA LTD',
-      'sub_label': 'by MANKIND PHARMA LTD',
-      'variant_count': 3,
-      'count_label': '3 variants',
-      // deliberately NOT alphabetical: the order is the backend's
-      'variants': const [
-        {'id': 501, 'product_name': 'Monticope Tablet', 'variant_label': 'Tablet'},
-        {'id': 502, 'product_name': 'Monticope-A Tablet', 'variant_label': '-A Tablet'},
-        {'id': 503, 'product_name': 'Monticope Syrup', 'variant_label': 'Syrup'},
-      ],
-    };
-
 void main() {
   setUpAll(() => RenderLog.flushEnabled = false);
   tearDown(() {
@@ -199,21 +184,29 @@ void main() {
       expect(find.text('842'), findsNothing);
     });
 
-    testWidgets('a tap hands back the payload query, not the label',
-        (t) async {
-      String? picked;
+    testWidgets('a tap hands back the TYPED item, not a string', (t) async {
+      // CMD #1905 — this assertion replaced "a tap hands back the payload
+      // query". The old contract is the bug: a string cannot say whether it
+      // names a product, a company or a salt, so every tap became a
+      // product-name search and a company suggestion matched nothing.
+      SearchSuggestion? picked;
       final p = _suggest(hinglish: true);
-      // The salt group's query is what a Hindi word must search for.
       await t.pumpWidget(MaterialApp(
         home: Scaffold(
-          body: SearchSuggestions(payload: p, onPick: (q) => picked = q),
+          body: SearchSuggestions(payload: p, onPick: (s) => picked = s),
         ),
       ));
       await t.pumpAndSettle();
 
       await t.tap(find.text('Montelukast'));
       await t.pumpAndSettle();
-      expect(picked, 'Montelukast');
+      expect(picked, isNotNull);
+      expect(picked!.kind, 'salt');
+      // A payload with no `nav` block predates #1905. It only ever knew how
+      // to search for text, so that is still all it claims to do — the app
+      // never invents a route the backend did not name.
+      expect(picked!.navKind, 'search');
+      expect(picked!.navId, 'Montelukast');
     });
 
     testWidgets('the Hinglish line is the backend sentence, under its prefix',
@@ -269,92 +262,6 @@ void main() {
           find.text(
               'No matches yet — press search to look through the full catalogue'),
           findsOneWidget);
-    });
-  });
-
-  group('the family card groups nothing', () {
-    testWidgets('title, company line and counter are backend strings',
-        (t) async {
-      await t.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: SizedBox(
-            height: 320,
-            child: SearchFamilyCard(
-                block: _familyBlock(), onOpenProduct: (_) {}),
-          ),
-        ),
-      ));
-      await t.pumpAndSettle();
-
-      expect(find.text('Monticope'), findsOneWidget);
-      expect(find.text('by MANKIND PHARMA LTD'), findsOneWidget);
-      expect(find.text('3 variants'), findsOneWidget);
-      // the raw count is never printed on its own
-      expect(find.text('3'), findsNothing);
-    });
-
-    testWidgets('one chip per variant, in payload order, opening its own id',
-        (t) async {
-      String? opened;
-      await t.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: SizedBox(
-            height: 320,
-            child: SearchFamilyCard(
-                block: _familyBlock(), onOpenProduct: (id) => opened = id),
-          ),
-        ),
-      ));
-      await t.pumpAndSettle();
-
-      expect(find.text('Tablet'), findsOneWidget);
-      expect(find.text('-A Tablet'), findsOneWidget);
-      expect(find.text('Syrup'), findsOneWidget);
-      // payload order, not alphabetical
-      expect(t.getTopLeft(find.text('Tablet')).dx,
-          lessThan(t.getTopLeft(find.text('-A Tablet')).dx));
-
-      // the SECOND chip opens the second variant's own product, not the card's
-      await t.tap(find.text('-A Tablet'));
-      await t.pumpAndSettle();
-      expect(opened, '502');
-    });
-
-    testWidgets('a block kind this build never heard of renders nothing',
-        (t) async {
-      await t.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: SearchResultBlock(
-            block: const {'kind': 'something_new_from_the_backend'},
-            onOpenProduct: (_) {},
-          ),
-        ),
-      ));
-      await t.pumpAndSettle();
-      expect(tester_findsNoText(t), isTrue);
-    });
-
-    testWidgets('a product block draws the product card the grid always used',
-        (t) async {
-      var built = 0;
-      await t.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: SearchResultBlock(
-            block: const {
-              'kind': 'product',
-              'item': {'id': 77, 'product_name': 'Solo product'},
-            },
-            onOpenProduct: (_) {},
-            productFor: (m) {
-              built++;
-              return Text('${m['product_name']}');
-            },
-          ),
-        ),
-      ));
-      await t.pumpAndSettle();
-      expect(built, 1);
-      expect(find.text('Solo product'), findsOneWidget);
     });
   });
 

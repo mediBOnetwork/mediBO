@@ -295,6 +295,50 @@ void main() {
     expect(find.text('running'), findsNothing);
   });
 
+  // ── CMD #1864 ──────────────────────────────────────────────────────────
+  testWidgets('actual_chip is drawn whenever the payload sent one',
+      (tester) async {
+    // The VM row's whole job is to answer "what state is the box actually in",
+    // and it used to go silent the moment that agreed with the switch — which
+    // made the chip a restatement of the toggle rather than a reading of EC2.
+    // The backend decides: a word means draw it, mismatch or not.
+    await _pump(tester, _payload(toggles: const [
+      {
+        'key': 'vm',
+        'label': 'VM',
+        'desired': true,
+        'actual': true,
+        'actual_label': 'Running',
+        'not_actual_label': 'Running',
+        'actual_chip': 'Running',
+        'actual_tone': 'success',
+        'sub': '',
+      }
+    ]));
+    expect(find.text('Running'), findsOneWidget);
+  });
+
+  testWidgets('an empty actual_chip means no chip, even on a mismatch',
+      (tester) async {
+    // The inverse, and the reason this is the backend's call: a row that
+    // disagrees with its switch but has nothing true to say must stay quiet
+    // rather than have Dart pick one of the two labels for it.
+    await _pump(tester, _payload(toggles: const [
+      {
+        'key': 'vm',
+        'label': 'VM',
+        'desired': true,
+        'actual': false,
+        'actual_label': 'Running',
+        'not_actual_label': 'Stopped',
+        'actual_chip': '',
+        'actual_tone': 'warning',
+        'sub': '',
+      }
+    ]));
+    expect(find.text('Stopped'), findsNothing);
+  });
+
   testWidgets('has:false draws nothing — but never eats the footer',
       (tester) async {
     await _pump(tester, _payload(has: false));

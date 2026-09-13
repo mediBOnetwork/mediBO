@@ -23,10 +23,12 @@ import 'url_sync.dart' show captureInitialPath;
 import 'services/crash_reporting.dart'; // CHANGE #473
 import 'services/version_watcher.dart';
 import 'utils/render_log.dart';
+import 'utils/responsive_audit.dart';
 import 'view_as_state.dart';
 import 'models/cart_model.dart';
 import 'models/order_hours_model.dart';
 import 'models/inquiry_lock_model.dart';
+import 'screens/auth/complete_registration_screen.dart';
 import 'screens/auth/login_screen.dart';
 
 import 'screens/customer/customer_staff_screen.dart'; // CMD #438: /customer/staff
@@ -34,6 +36,7 @@ import 'screens/wishlist_screen.dart'; // CHANGE #745: /wishlist
 import 'screens/customer/my_account_screen.dart'; // CHANGE #840: /my-account
 import 'screens/customer/address_book_screen.dart'; // CHANGE #745: /customer/addresses
 import 'screens/rewards_screen.dart'; // CHANGE #745: /rewards
+import 'screens/profile_screen.dart'; // CMD #1923: /profile
 import 'screens/admin/admin_partner_console_screen.dart';
 import 'screens/admin/admin_partner_scorecards_screen.dart';
 import 'screens/partner/partner_scorecard_card.dart';
@@ -95,6 +98,7 @@ import 'screens/public/near_screen.dart'; // CMD #426 — /near, /near/p/<token>
 import 'services/feature_gaps_service.dart'; // CHANGE #312
 import 'services/ui_copy.dart';
 import 'services/session_recorder.dart';
+import 'services/recording_tap.dart'; // CMD #1851
 import 'supabase_config.dart';
 import 'theme.dart';
 import 'design_tokens.dart';
@@ -164,12 +168,29 @@ final Map<String, WidgetBuilder> kAppRoutes = <String, WidgetBuilder>{
   // neither route guards anything of its own.
   '/wishlist':     (_) => const WishlistScreen(),
   '/rewards':      (_) => const RewardsScreen(),
+  // CMD #1923 — '/profile' becomes a real address. Two registry rows have
+  // claimed it for a long time (identity.view_profile, and cust.profile_home
+  // from CMD #1914), and neither URL opened the profile: MaterialApp found no
+  // entry here, onUnknownRoute took it and the storefront came up instead. A
+  // registry deep_link is a URL and not a promise (#745), and the RG contract
+  // gate c634 asks every active feature for a test entry point that a headless
+  // session can actually open. It guards nothing of its own — ProfileScreen
+  // asks the backend who the viewer is, exactly as it does from the dropdown.
+  '/profile':      (_) => const ProfileScreen(),
   // CMD #1834 — the second profile editor is gone for good. This address used
   // to open it; it opens My Account -> Profile & KYC, and asks for no section
   // because the editor is not embedded in that tab either.
   '/customer/profile':   (_) => const MyAccountScreen(initialTab: 'profile'),
   '/customer/addresses': (_) => const AddressBookScreen(),
   '/register':     (_) => const LoginScreen(),
+  // CMD #1904 — the address my_session().signup_route names. A WhatsApp signup
+  // now creates an auth user with no pharmacy row behind it, which is the same
+  // state a Google signup comes back in, so both are sent to one URL and one
+  // form. It guards nothing: the screen asks my_session() who the viewer is and
+  // renders the backend's own sentence for a signed-out or already-registered
+  // one. A real route (not a push from inside the login panel) is what lets the
+  // form survive the page reload the OAuth round trip performs.
+  '/complete-registration': (_) => const CompleteRegistrationScreen(),
   // CHANGE #631 (PART A) — the delivery-partner registration form.
   // delivery_partner_register() stamps auth.uid() itself, so the
   // screen asks for a sign-in rather than inventing an anonymous
@@ -269,10 +290,24 @@ void main() {
     WidgetsFlutterBinding.ensureInitialized();
 
     // Flutter framework errors: log and swallow — never let them crash the boot.
+    // CMD #1950 — MOBILE-FIRST. The post-deploy responsive sweep opens each top
+    // screen with ?responsive_audit=1&min_touch=<from build_rules> and reads the
+    // audit back out of the render log. Inert for every real visitor.
+    try {
+      ResponsiveAudit.configureFromQuery(Uri.base.queryParameters);
+    } catch (_) {}
+
     FlutterError.onError = (details) {
       try {
         final msg = details.exceptionAsString();
         RenderLog.write('flutter_error', msg.length > 120 ? msg.substring(0, 120) : msg);
+        // CMD #1950 — a layout that overflows on a phone is the one failure a
+        // canvas app cannot be photographed into admitting. Flutter names it
+        // ("A RenderFlex overflowed by 23 pixels on the right"), so it is
+        // counted here and the post-deploy responsive sweep reads the count.
+        if (msg.contains('overflowed')) {
+          RenderLog.noteOverflow(msg);
+        }
       } catch (_) {}
       // CHANGE #473 — the same error, off the device: to Sentry when a DSN
       // exists, to the backend crash queue when it does not. Swallowed as
@@ -286,6 +321,14 @@ void main() {
     usePathUrlStrategy();
 
     // Supabase init is crash-isolated: failure renders app in signed-out state.
+    // CMD #1851 — the client BELOW the tap is kept: the recording flush posts
+    // through it, so a flush can never observe itself.
+    final medibotHttp = ResilientClient(
+      http.Client(),
+      probeUri: Uri.parse('${SupabaseConfig.url}/rest/v1/'),
+      probeHeaders: const {'apikey': SupabaseConfig.anonKey},
+    );
+    RecordingCapture.instance.useFlushClient(medibotHttp);
     try {
       await Supabase.initialize(
         url: SupabaseConfig.url,
@@ -299,11 +342,13 @@ void main() {
         // or a timeout, and the Reconnecting strip is raised. The breadcrumb
         // therefore records what the SCREEN got (200 + x-medibo-cached), which
         // is the truth an outage report needs.
-        httpClient: CrashReporting.breadcrumbHttpClient(ResilientClient(
-          http.Client(),
-          probeUri: Uri.parse('${SupabaseConfig.url}/rest/v1/'),
-          probeHeaders: const {'apikey': SupabaseConfig.anonKey},
-        )),
+        // CMD #1851 — outermost sits the recording tap. It is a single
+        // boolean test until a live TEST SESSION says a walkthrough is
+        // recording; only then does it keep the function name, the arguments
+        // and the answer of each call so the walk can be replayed later. With
+        // no session it adds nothing at all — see RecordingTap.
+        httpClient: RecordingTap.wrap(
+            CrashReporting.breadcrumbHttpClient(medibotHttp)),
         authOptions: const FlutterAuthClientOptions(
           authFlowType: AuthFlowType.pkce,
           autoRefreshToken: true,
@@ -320,6 +365,9 @@ void main() {
     // can escape the session. Crash-isolated: a failure means NOT in test
     // mode, never the reverse.
     try { await TestSessionState.instance.loadToken(); } catch (_) {}
+    // CMD #1851 — the tap follows the banner every screen already polls:
+    // `recording_state()` rides on it, and nothing else turns recording on.
+    try { RecordingCapture.instance.bind(); } catch (_) {}
 
     // One-shot URL cleanup: strip ?code= / #access_token= immediately after SDK processes them.
     // Prevents browser session-restore from re-presenting the OAuth callback URL on reopen,
@@ -705,7 +753,8 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
             theme: buildTheme(),
             scrollBehavior: const SmoothScrollBehavior(),
             // Belt-and-suspenders: clear any stray text decoration on Flutter web.
-            builder: (context, child) => DefaultTextStyle.merge(
+            builder: (context, child) => _NoteViewport(
+              child: DefaultTextStyle.merge(
               style: const TextStyle(decoration: TextDecoration.none, decorationColor: Color(0x00000000)),
               // CHANGE #286 — the slim update bar lives here, above every
               // route, so it can sit over the bottom nav and the floating cart
@@ -727,6 +776,7 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                   ]),
                 ),
               ),
+            ),
             ),
             home: _AppRoot(auth: _auth),
             // Public inquiry form — no auth required, handles /inquiry/<token>
@@ -1542,6 +1592,31 @@ class _SuperOnly extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (!UserState.of(context).isSuperAdmin) return HomeShell();
+    return child;
+  }
+}
+
+/// CMD #1950 — MOBILE-FIRST: the app tells the render log which viewport it is
+/// painting at. 99% of mediBO users are on phones, so the post-deploy
+/// responsive sweep loads every top screen at 320/360/412/480 px and reads
+/// `viewport_w` + `overflow_errors` back out of the render log. A canvas app
+/// cannot be measured from outside; this is how it measures itself.
+///
+/// It renders nothing of its own and reflows nothing — it reads the MediaQuery
+/// its parent already built and writes two numbers.
+class _NoteViewport extends StatelessWidget {
+  const _NoteViewport({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    // Never let diagnostics be the thing that breaks a boot (boot resilience).
+    try {
+      RenderLog.noteViewport(size.width.round(), size.height.round());
+      ResponsiveAudit.schedule();
+    } catch (_) {}
     return child;
   }
 }

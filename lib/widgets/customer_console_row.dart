@@ -13,6 +13,7 @@
 import 'package:flutter/material.dart';
 
 import '../design_tokens.dart';
+import '../screens/admin/customer_pipeline_screen.dart';
 
 class CustomerConsoleRow extends StatelessWidget {
   final Map<String, dynamic> row;
@@ -20,7 +21,13 @@ class CustomerConsoleRow extends StatelessWidget {
   /// Tapping the row opens the customer page.
   final VoidCallback? onOpen;
 
-  const CustomerConsoleRow({super.key, required this.row, this.onOpen});
+  /// CMD #1886 — customers_stage_meta()'s chip for this row: {label, tone}.
+  /// The registration funnel's word for where this customer actually is. Null
+  /// (or a payload this build has not been sent) draws nothing at all.
+  final dynamic stageChip;
+
+  const CustomerConsoleRow(
+      {super.key, required this.row, this.onOpen, this.stageChip});
 
   String _s(String key) => (row[key] as String?) ?? '';
 
@@ -64,7 +71,15 @@ class CustomerConsoleRow extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(_s('name'), style: Ds.t.bodyStrong, softWrap: true),
+            Row(children: [
+              Expanded(
+                  child: Text(_s('name'),
+                      style: Ds.t.bodyStrong, softWrap: true)),
+              if (stageChip != null) ...[
+                SizedBox(width: Ds.space.x8),
+                CustomerStageChip(chip: stageChip),
+              ],
+            ]),
             if (subtitle.isNotEmpty || status.isNotEmpty) ...[
               SizedBox(height: Ds.space.x4),
               Row(children: [

@@ -275,6 +275,23 @@ class WaitView {
   final String kind;
   final Tone tone;
 
+  /// CHANGE #1856 — WHAT THE WAITING COST, as one backend sentence.
+  ///
+  /// A wait has two prices and the queue used to show one word for both. A
+  /// HOLD keeps the session alive and costs nothing; a COLD RESUME tears it
+  /// down and the next session re-reads the entire context — that is how #1848
+  /// reached 9.7M tokens across four resumes. The counts and the sentence are
+  /// the backend's: nothing here pluralises, adds up or decides a tone.
+  /// An empty [costLine] means this command never waited, and draws nothing.
+  final String costLine;
+  final Tone costTone;
+  final int holds;
+  final int coldResumes;
+
+  /// True only while the session is being HELD — the backend's own state word,
+  /// never inferred from the chip text or from `waiting` plus a guess.
+  final bool holding;
+
   const WaitView({
     required this.waiting,
     required this.chip,
@@ -282,6 +299,11 @@ class WaitView {
     required this.reason,
     required this.kind,
     required this.tone,
+    this.costLine = '',
+    this.costTone = _neutral,
+    this.holds = 0,
+    this.coldResumes = 0,
+    this.holding = false,
   });
 
   factory WaitView.fromRow(Map<String, dynamic> row) {
@@ -295,6 +317,13 @@ class WaitView {
       reason: (row['wait_reason'] ?? '').toString(),
       kind: (row['wait_kind'] ?? '').toString(),
       tone: toneByName((row['wait_tone'] ?? 'warning').toString()),
+      // The cost outlives the wait: a finished command still has to show what
+      // its cold resumes cost, so this is read whatever `is_waiting` says.
+      costLine: (row['resume_cost_line'] ?? '').toString(),
+      costTone: toneByName((row['resume_cost_tone'] ?? 'neutral').toString()),
+      holds: asInt(row['hold_count']),
+      coldResumes: asInt(row['cold_resume_count']),
+      holding: (row['wait_state'] ?? '').toString() == 'holding',
     );
   }
 }

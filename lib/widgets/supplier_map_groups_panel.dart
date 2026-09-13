@@ -76,6 +76,14 @@ class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel>
 
   final ValueNotifier<bool> _mapTouchLock = ValueNotifier<bool>(false);
 
+  /// CHANGE #1890 — the collapsed card puts the map in a Row (thumbnail on the
+  /// right of the filter grid) and the open card puts it in a Column (filters
+  /// above, map below). Those are different positions in the tree, and a
+  /// different position means a new State — which is exactly the paid Google
+  /// Maps reload #754 removed. A GlobalKey reparents the SAME element between
+  /// the two, so the map is still created once for the life of the tab.
+  final GlobalKey _mapKey = GlobalKey();
+
   @override
   void initState() {
     super.initState();
@@ -159,6 +167,11 @@ class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel>
     final v = SupplierMapPanelView.fromJson(_data);
 
     RenderLog.write('c754_map_pinned', _open ? 'full' : 'mini');
+    // CHANGE #1890 — what the card actually drew, so a regression to the old
+    // full-height-by-default card shows up in the render-log.
+    RenderLog.write('c1890_map_card', _open ? 'expanded' : 'collapsed');
+    RenderLog.write('c1890_map_filter_cols',
+        '${SupplierMapPanelView.collapsedFilterColumns}');
 
     return Container(
       margin: EdgeInsets.only(bottom: Ds.space.x12),
@@ -169,24 +182,16 @@ class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel>
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         _header(v.headerLabel),
-        // ── The map. ONE instance, always in the tree, two heights. ────────
+        // ── The map. ONE instance, always in the tree, two layouts. ────────
         // It is deliberately NOT inside the AnimatedSize below: animating a
         // child in and out is what disposed the map on every collapse.
-        if (v.loaded)
-          Padding(
-            padding: EdgeInsets.fromLTRB(
-                Ds.space.x12, 0, Ds.space.x12, Ds.space.x12),
-            child: _SupplierPointsMap(
-              center: _data?['map_center'] as Map?,
-              points: v.mapPoints,
-              touchLock: _mapTouchLock,
-              height: v.mapHeight(open: _open),
-              emptyLabel: v.emptyLabel,
-            ),
-          ),
-        // ── The legend/filter row, OUTSIDE the map area (Om: the chips were
-        //    rendering on top of the map itself). ──────────────────────────
-        if (v.showsLegend) _legend(v.legendLabel, v.badges),
+        //
+        // CHANGE #1890 — collapsed is the DEFAULT, and collapsed is a fixed
+        // block: the status filters in a two-column grid on the left, a square
+        // map thumbnail on the right. Tap the thumbnail and the card opens —
+        // filters above, map below, capped at the payload's share of the
+        // viewport so the supplier list underneath is never pushed off screen.
+        if (v.loaded) (_open ? _openBody(v) : _collapsedBody(v)),
         // Only the supplier groups fold away with the arrow.
         AnimatedSize(
           duration: Ds.motion.standard,
@@ -201,13 +206,187 @@ class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel>
     );
   }
 
+  // ── CHANGE #1890 — collapsed: filters left, map thumbnail right ───────────
+  //
+  // The card is a fixed block (the thumbnail's own height plus the header), so
+  // a day with five filters and a day with two are the same size and the list
+  // below never moves. The grid scrolls inside that block rather than growing
+  // it, which is what keeps every pill a full 44 px tap target.
+  Widget _collapsedBody(SupplierMapPanelView v) {
+    return Padding(
+      padding:
+          EdgeInsets.fromLTRB(Ds.space.x12, 0, Ds.space.x12, Ds.space.x12),
+      child: SizedBox(
+        // Tall enough for EVERY filter the backend sent, never shorter than
+        // the thumbnail. The first cut sized this block to the thumbnail alone
+        // and "Optimize route" — the fifth filter, and the only one that is an
+        // action — was clipped below the fold of a 120 px scroller. A filter
+        // you have to discover by scrolling a postage stamp is a filter that
+        // is not there.
+        height: _collapsedBodyHeight(v),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // Capped, and left-aligned: stretched across a 1100 px desktop these
+          // saturated pills read as decorative colour blocks rather than
+          // filters (Om's design rules: no decorative multi-colour fills).
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: Ds.space.x48 * 8),
+                child: _filterGrid(v.badges),
+              ),
+            ),
+          ),
+          SizedBox(width: Ds.space.x12),
+          _mapThumb(v),
+        ]),
+      ),
+    );
+  }
+
+  /// Open: the filters get the full width above, the map the full width below,
+  /// and the map is capped at the payload's share of the viewport. It is the
+  /// SAME map widget as the thumbnail — the GlobalKey moves it here rather
+  /// than building a second one.
+  Widget _openBody(SupplierMapPanelView v) {
+    final viewport = MediaQuery.of(context).size.height;
+    return Padding(
+      padding:
+          EdgeInsets.fromLTRB(Ds.space.x12, 0, Ds.space.x12, Ds.space.x12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        if (v.showsLegend) ...[
+          if (v.legendLabel.isNotEmpty) ...[
+            Text(v.legendLabel, style: Ds.t.caption),
+            SizedBox(height: Ds.space.x8),
+          ],
+          Wrap(
+            spacing: Ds.space.x8,
+            runSpacing: Ds.space.x8,
+            children: [for (final b in v.badges) _badgePill(b, fill: false)],
+          ),
+          SizedBox(height: Ds.space.x8),
+        ],
+        Align(
+          alignment: Alignment.centerRight,
+          child: Text(c('supplier_map_groups.collapse_hint'),
+              style: Ds.t.caption),
+        ),
+        SizedBox(height: Ds.space.x8),
+        _SupplierPointsMap(
+          key: _mapKey,
+          center: _data?['map_center'] as Map?,
+          points: v.mapPoints,
+          touchLock: _mapTouchLock,
+          height: v.expandedHeight(viewport),
+          emptyLabel: v.emptyLabel,
+        ),
+      ]),
+    );
+  }
+
+  /// One grid row per pair of filters, each a full tap target, plus the gap
+  /// between them — or the thumbnail's height, whichever is larger.
+  double _collapsedBodyHeight(SupplierMapPanelView v) {
+    final rowH = Ds.touch.minTarget + Ds.space.x8;
+    final rows =
+        (v.badges.length + SupplierMapPanelView.collapsedFilterColumns - 1) ~/
+            SupplierMapPanelView.collapsedFilterColumns;
+    final grid = rows == 0 ? 0.0 : rows * rowH - Ds.space.x8;
+    return grid > v.collapsedBodyHeight ? grid : v.collapsedBodyHeight;
+  }
+
+  /// The status filters as a strict two-column grid. Two columns, not "as many
+  /// as fit": a column count that changes with the width is a layout that
+  /// jumps every time the phone rotates.
+  Widget _filterGrid(List<Map<String, dynamic>> badges) {
+    if (badges.isEmpty) return const SizedBox.shrink();
+    const cols = SupplierMapPanelView.collapsedFilterColumns;
+    final rows = <Widget>[];
+    for (var i = 0; i < badges.length; i += cols) {
+      final cells = <Widget>[];
+      for (var col = 0; col < cols; col++) {
+        if (col > 0) cells.add(SizedBox(width: Ds.space.x8));
+        final idx = i + col;
+        cells.add(Expanded(
+          child: idx < badges.length
+              ? _badgePill(badges[idx])
+              : const SizedBox.shrink(),
+        ));
+      }
+      rows.add(Padding(
+        padding: EdgeInsets.only(bottom: Ds.space.x8),
+        child: Row(children: cells),
+      ));
+    }
+    return SingleChildScrollView(
+      padding: EdgeInsets.zero,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: rows),
+    );
+  }
+
+  /// The collapsed thumbnail: a square of the payload's mini height, with a
+  /// transparent tap layer over it so a tap OPENS the card instead of panning
+  /// a map the size of a postage stamp.
+  Widget _mapThumb(SupplierMapPanelView v) {
+    final side = v.thumbSize;
+    return Tooltip(
+      message: c('supplier_map_groups.expand_hint'),
+      child: SizedBox(
+        width: side,
+        height: side,
+        child: Stack(children: [
+          // IgnorePointer, and it is the whole reason the tap works.
+          //
+          // Measured on the live build: a GestureDetector laid OVER the
+          // thumbnail never fired, while the card header's InkWell right above
+          // it did. The map draws its own pan/tap recognisers, and in the
+          // gesture arena they were taking the pointer. A postage-stamp map
+          // has nothing to pan anyway, so collapsed it takes no pointers at
+          // all and the tap layer below is the only claimant.
+          Positioned.fill(
+            child: IgnorePointer(
+              child: _SupplierPointsMap(
+                key: _mapKey,
+                center: _data?['map_center'] as Map?,
+                points: v.mapPoints,
+                touchLock: _mapTouchLock,
+                height: side,
+                emptyLabel: v.emptyLabel,
+              ),
+            ),
+          ),
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => setState(() => _open = true),
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: Container(
+                  width: double.infinity,
+                  padding: EdgeInsets.symmetric(
+                      horizontal: Ds.space.x4, vertical: Ds.space.x4),
+                  color: Ds.c.surface.withValues(alpha: 0.86),
+                  child: Text(c('supplier_map_groups.expand_hint'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: Ds.t.caption),
+                ),
+              ),
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+
   Widget _header(String headerLabel) {
     return InkWell(
       borderRadius: Ds.r.rCard,
       onTap: () => setState(() => _open = !_open),
       child: Padding(
         padding: EdgeInsets.symmetric(
-            horizontal: Ds.space.x12, vertical: Ds.space.x12),
+            horizontal: Ds.space.x12, vertical: Ds.space.x8),
         child: Row(children: [
           Icon(Icons.map_outlined, size: Ds.t.bodySize, color: Ds.c.brand),
           SizedBox(width: Ds.space.x8),
@@ -231,23 +410,6 @@ class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel>
     );
   }
 
-  Widget _legend(String legendLabel, List<Map<String, dynamic>> badges) {
-    return Padding(
-      padding: EdgeInsets.fromLTRB(Ds.space.x12, 0, Ds.space.x12, Ds.space.x8),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        if (legendLabel.isNotEmpty) ...[
-          Text(legendLabel, style: Ds.t.caption),
-          SizedBox(height: Ds.space.x8),
-        ],
-        Wrap(
-          spacing: Ds.space.x8,
-          runSpacing: Ds.space.x8,
-          children: [for (final b in badges) _badgePill(b)],
-        ),
-      ]),
-    );
-  }
-
   Widget _groupList(SupplierMapPanelView v) {
     final activeChip = _data?['active_chip']?.toString();
     final activeChipComplex = _data?['active_chip_complex']?.toString();
@@ -268,7 +430,13 @@ class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel>
     );
   }
 
-  Widget _badgePill(Map<String, dynamic> badge) {
+  /// [fill] is the collapsed grid's cell, which is a fixed half-column and
+  /// wants the pill to fill it. The open card lays the same pills out in a
+  /// Wrap, where they must be as wide as their WORD — the first live build
+  /// drew five 1220 px bars of saturated yellow and green across the card,
+  /// because a Center inside loose constraints expands to the widest it is
+  /// allowed and dragged the pill with it.
+  Widget _badgePill(Map<String, dynamic> badge, {bool fill = true}) {
     final selected = badge['selected'] == true;
     final bg = _hexColor(badge['fill']?.toString(), Ds.c.bg);
     final fg = _hexColor(badge['fg']?.toString(), Ds.c.text);
@@ -285,7 +453,10 @@ class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel>
           border: Border.all(color: selected ? fg : Colors.transparent, width: 2),
         ),
         child: Center(
+          widthFactor: fill ? null : 1.0,
           child: Text(badge['text']?.toString() ?? '',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: Ds.t.caption.copyWith(fontWeight: FontWeight.w700, color: fg)),
         ),
       ),
@@ -442,6 +613,7 @@ class _SupplierPointsMap extends StatefulWidget {
   final String emptyLabel;
 
   const _SupplierPointsMap({
+    super.key,
     required this.center,
     required this.points,
     required this.touchLock,

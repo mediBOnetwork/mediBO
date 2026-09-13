@@ -4,18 +4,23 @@ import 'package:flutter/services.dart';
 import '../design_tokens.dart';
 import '../models/catalogue.dart';
 
-/// CHANGE #799 — the A–Z rail down the right edge of the company list.
+/// The A–Z index of a catalogue list.
+///
+/// CHANGE #799 built it as a rail down the right edge of the company list.
+/// CMD #1908 turns it on its side: a HORIZONTAL strip that sits under the
+/// breadcrumb on the company, salt and class lists — one component, three
+/// screens, always in the same place, and never floating over the rows.
 ///
 /// The track is EVERY letter the backend sent, always, with `enabled` saying
-/// which ones have companies behind them. A rail that grows and shrinks as the
-/// list filters is a rail nobody can learn the shape of — and drag-to-jump
-/// needs a track whose geometry does not move under the thumb.
+/// which ones have rows behind them. A track that grows and shrinks as the
+/// list filters is a track nobody can learn the shape of.
 ///
 /// It decides nothing: the letters, their order, their labels and the "All"
-/// word all arrive in `catalogue_companies().rail`. What lives here is the
-/// GESTURE — which letter the finger is currently over — because that is a
-/// pointer position and not a business fact.
-class CatalogueAlphabetRail extends StatefulWidget {
+/// word all arrive in the payload's `rail`. Every child is built (a Row inside
+/// one scroll view, not a lazy list) so the whole alphabet exists whether or
+/// not it is on screen — the strip is an index, and an index you cannot reach
+/// by scrolling to it is not one.
+class CatalogueAlphabetRail extends StatelessWidget {
   final CatRail rail;
 
   /// The letter currently applied, or null for "All".
@@ -31,104 +36,92 @@ class CatalogueAlphabetRail extends StatefulWidget {
     required this.onPick,
   });
 
-  static const double width = 24;
-  static const double _rowH = 15;
-  static const double _bubble = 44;
-
   @override
-  State<CatalogueAlphabetRail> createState() => _CatalogueAlphabetRailState();
+  Widget build(BuildContext context) {
+    if (rail.letters.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      color: Ds.c.surface,
+      padding: EdgeInsets.only(bottom: Ds.space.x8),
+      child: Semantics(
+        label: rail.label,
+        child: SizedBox(
+          height: Ds.touch.minTarget,
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+            child: Row(
+              children: [
+                if (rail.allLabel.isNotEmpty)
+                  _Letter(
+                    label: rail.allLabel,
+                    enabled: true,
+                    selected: active == null,
+                    wide: true,
+                    onTap: () => onPick(null),
+                  ),
+                for (final l in rail.letters)
+                  _Letter(
+                    label: l.label,
+                    enabled: l.enabled,
+                    selected: l.key == active,
+                    wide: false,
+                    onTap: l.enabled ? () => onPick(l.key) : null,
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
-class _CatalogueAlphabetRailState extends State<CatalogueAlphabetRail> {
-  /// The letter under the finger during a drag. Null when nothing is dragging.
-  String? _dragging;
+/// One cell of the strip. A full touch target wide and tall even for a single
+/// character, because a 13 px letter is not a button.
+class _Letter extends StatelessWidget {
+  final String label;
+  final bool enabled;
+  final bool selected;
+  final bool wide;
+  final VoidCallback? onTap;
 
-  void _handle(Offset local, double height) {
-    final letters = widget.rail.letters;
-    if (letters.isEmpty || height <= 0) return;
-    final i = (local.dy / height * letters.length).floor().clamp(0, letters.length - 1);
-    final l = letters[i];
-    if (!l.enabled || l.key == _dragging) return;
-    HapticFeedback.selectionClick();
-    setState(() => _dragging = l.key);
-    widget.onPick(l.key);
-  }
+  const _Letter({
+    required this.label,
+    required this.enabled,
+    required this.selected,
+    required this.wide,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final letters = widget.rail.letters;
-    if (letters.isEmpty) return const SizedBox.shrink();
-    final shown = _dragging ?? widget.active;
-
-    return LayoutBuilder(builder: (context, c) {
-      final h = c.maxHeight;
-      return Stack(
-        clipBehavior: Clip.none,
-        children: [
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onVerticalDragStart: (d) => _handle(d.localPosition, h),
-            onVerticalDragUpdate: (d) => _handle(d.localPosition, h),
-            onVerticalDragEnd: (_) => setState(() => _dragging = null),
-            onVerticalDragCancel: () => setState(() => _dragging = null),
-            onTapDown: (d) => _handle(d.localPosition, h),
-            onTapUp: (_) => setState(() => _dragging = null),
-            child: SizedBox(
-              width: CatalogueAlphabetRail.width,
-              height: h,
-              child: Semantics(
-                label: widget.rail.label,
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    for (final l in letters)
-                      SizedBox(
-                        height: CatalogueAlphabetRail._rowH,
-                        child: Center(
-                          child: Text(
-                            l.label,
-                            style: Ds.t.caption.copyWith(
-                              color: !l.enabled
-                                  ? Ds.c.divider
-                                  : (l.key == shown ? Ds.c.brand : Ds.c.textSecondary),
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          // The bubble that follows the thumb. It only exists while a drag is
-          // live, so nothing hovers over the list at rest.
-          if (_dragging != null)
-            Positioned(
-              right: CatalogueAlphabetRail.width,
-              top: _bubbleTop(h, letters),
-              child: Container(
-                width: CatalogueAlphabetRail._bubble,
-                height: CatalogueAlphabetRail._bubble,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: Ds.c.brand,
-                  borderRadius: Ds.r.rChip,
-                  boxShadow: Ds.elevation.e2,
-                ),
-                child: Text(_dragging!,
-                    style: Ds.t.title.copyWith(color: Ds.c.surface)),
-              ),
-            ),
-        ],
-      );
-    });
-  }
-
-  double _bubbleTop(double h, List<CatRailLetter> letters) {
-    final i = letters.indexWhere((l) => l.key == _dragging);
-    if (i < 0) return 0;
-    final centre = (i + 0.5) / letters.length * h;
-    return (centre - CatalogueAlphabetRail._bubble / 2)
-        .clamp(0.0, (h - CatalogueAlphabetRail._bubble).clamp(0.0, h));
+    final color = !enabled
+        ? Ds.c.divider
+        : (selected ? Ds.c.brand : Ds.c.textSecondary);
+    return InkWell(
+      onTap: onTap == null
+          ? null
+          : () {
+              HapticFeedback.selectionClick();
+              onTap!();
+            },
+      borderRadius: Ds.r.rChip,
+      child: Container(
+        constraints: BoxConstraints(
+          minWidth: Ds.touch.minTarget,
+          minHeight: Ds.touch.minTarget,
+        ),
+        padding: wide
+            ? EdgeInsets.symmetric(horizontal: Ds.space.x12)
+            : EdgeInsets.zero,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected ? Ds.c.brandSoft : null,
+          borderRadius: Ds.r.rChip,
+        ),
+        child: Text(label, style: Ds.t.body.copyWith(color: color)),
+      ),
+    );
   }
 }

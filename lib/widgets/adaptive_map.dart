@@ -161,6 +161,12 @@ class AdaptiveMap extends StatefulWidget {
   /// Render-log key so a deploy can be proven from curl alone.
   final String logKey;
 
+  /// CHANGE #1888 — the map is being used to PICK a point: the caller draws a
+  /// fixed pin over the centre and this fires with the centre the operator
+  /// has dragged under it. Null on every other surface, which keeps the three
+  /// existing map screens byte-identical.
+  final void Function(double lat, double lng)? onCenterChanged;
+
   const AdaptiveMap({
     super.key,
     this.pins = const [],
@@ -176,6 +182,7 @@ class AdaptiveMap extends StatefulWidget {
     this.emptyState,
     this.emptyOverlay = false,
     this.logKey = 'c634_map',
+    this.onCenterChanged,
   });
 
   @override
@@ -404,6 +411,10 @@ class _TileMapState extends State<_TileMap> {
             _fittedFor = 'unfitted';
             _maybeFit();
           },
+          onPositionChanged: host.onCenterChanged == null
+              ? null
+              : (camera, _) =>
+                  host.onCenterChanged!(camera.center.latitude, camera.center.longitude),
         ),
         children: [
           if (cfg.hasTiles)
@@ -610,6 +621,12 @@ class _GoogleJsMapState extends State<_GoogleJsMap> {
             target: initial,
             zoom: host.zoom ?? cfg.defaultZoom,
           ),
+          // CHANGE #1888 — the picker works on either provider, so switching
+          // uses_google_js never quietly breaks the registration form.
+          onCameraMove: host.onCenterChanged == null
+              ? null
+              : (pos) => host.onCenterChanged!(
+                  pos.target.latitude, pos.target.longitude),
           markers: {
             for (final p in host.pins)
               gm.Marker(

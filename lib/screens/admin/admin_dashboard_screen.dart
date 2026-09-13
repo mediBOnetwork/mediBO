@@ -16,7 +16,13 @@ import '../../design_tokens.dart';
 import '../../models/c529_admin_gaps.dart';
 import '../../widgets/crashes_card.dart'; // CHANGE #473
 import '../../widgets/dashboard_v2_card.dart'; // CHANGE #812
+import '../../widgets/dashboard_home_sections.dart'; // CMD #1891
+import '../../widgets/dashboard_nav_search.dart'; // CMD #1892
+import '../../widgets/dashboard_quick_actions.dart'; // CMD #1893
+import 'admin_customer_screen.dart'; // CMD #1891 — sub-tab doors
+import 'admin_supplier_screen.dart'; // CMD #1891 — sub-tab doors
 import '../../services/ui_copy.dart';
+import '../../utils/toast.dart'; // CMD #1941 — the automation reply's own words
 import '../../services/staff_nav.dart'; // CHANGE #1016 — the layout flag
 import 'admin_ops_board_screen.dart';
 import 'command_palette.dart';   // CHANGE #325
@@ -75,6 +81,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   // does, so it sits FIRST on the admin home and carries its own wording.
   Map<String, dynamic> _ops = const {};
 
+  /// CMD #1893 — ONE dashboard_home() read feeds the personal rows AND the six
+  /// sections, and a pin toggle re-reads it for both at once.
+  late final DashboardHomeFeed _homeFeed = DashboardHomeFeed(loadDashboardHome);
+
   // CHANGE #812 — the whole dashboard head in ONE payload: today's strip with
   // deltas and 7-day sparklines, the needs-you queue, the stage funnel, the
   // promised ring, alerts, quick actions and (super admin) the zone cards.
@@ -99,6 +109,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   @override
   void dispose() {
     _refresh?.cancel();
+    _homeFeed.dispose();
     super.dispose();
   }
 
@@ -190,6 +201,28 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     }
   }
 
+  /// CMD #1891 — dashboard_home(): the six sections that replaced the "Also
+  /// here" strip. Injected into the widget so the protected test can pump it
+  /// without Supabase.
+  static Future<Map<String, dynamic>> loadDashboardHome() async {
+    final raw = await Supabase.instance.client.rpc('dashboard_home');
+    return Map<String, dynamic>.from((raw is List ? raw.first : raw) as Map);
+  }
+
+  /// CMD #1941 — the AUTOMATION block's two doors. Both reply with the whole
+  /// block plus the sentence to show; the screen composes neither.
+  static Future<Map<String, dynamic>> _automationSet(String key, bool next) async {
+    final raw = await Supabase.instance.client.rpc('dashboard_automation_set',
+        params: {'p_key': key, 'p_on': next});
+    return Map<String, dynamic>.from((raw is List ? raw.first : raw) as Map);
+  }
+
+  static Future<Map<String, dynamic>> _automationAction(String key) async {
+    final raw = await Supabase.instance.client
+        .rpc('dashboard_automation_action', params: {'p_key': key});
+    return Map<String, dynamic>.from((raw is List ? raw.first : raw) as Map);
+  }
+
   /// CHANGE #325 — one call for the entire dashboard nav.
   Future<void> _loadNav() async {
     try {
@@ -238,6 +271,26 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         }
       }
       return;
+    }
+    // CMD #1891 — a Dashboard tile whose destination is a SUB-TAB of another
+    // page (Customers → Pending approval, Suppliers → Items to review). The
+    // pairing is the registry's: `tab_host` is the page, `tab_screen` the
+    // sub-tab, so moving a door to another host is an UPDATE. Dart only knows
+    // how to reach a host and how to ask it to open a named sub-tab.
+    {
+      final host = (tile['tab_host'] ?? '').toString();
+      final tab = (tile['tab_key'] ?? '').toString();
+      if (host.isNotEmpty) {
+        QuickLinkNavigator.of(context)?.navigate(host);
+        if (tab.isNotEmpty) {
+          if (host == 'customers') {
+            AdminCustomerScreen.openTab(tab);
+          } else if (host == 'suppliers') {
+            AdminSupplierScreen.openTab(tab);
+          }
+        }
+        return;
+      }
     }
     // CHANGE #395 — a registry row may name a REAL named route instead of a
     // shell route key. `_handleAdminNav`'s switch has no default branch, so a
@@ -334,6 +387,18 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       return;
     }
     QuickLinkNavigator.of(context)?.navigate(route);
+  }
+
+  /// CMD #1893 — long-press on any dashboard tile. The sheet's one line and
+  /// the toast under it are both the backend's strings; all this does is ask
+  /// nav_pin_toggle() and re-read dashboard_home() so Quick actions and the
+  /// held tile's own label agree again.
+  void _holdTile(Map<String, dynamic> tile) {
+    showDashboardPinSheet(context, tile, (featureKey) async {
+      final reply = await _togglePin(featureKey);
+      _homeFeed.invalidate();
+      return reply;
+    });
   }
 
   Future<Map<String, dynamic>> _togglePin(String featureKey) async {
@@ -471,6 +536,17 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     );
   }
 
+  /// CMD #1892 — the search field and the section grids live in a column that
+  /// stops growing at [kDashboardMaxWidth] and stays centred, so a 6-across
+  /// grid on a wide monitor is a grid and not a scatter. The KPI cards above
+  /// keep the full width they had: the spec leaves them exactly as they are.
+  static Widget _centred(Widget child) => Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: kDashboardMaxWidth),
+          child: child,
+        ),
+      );
+
   Widget _buildBody(BuildContext context, {required bool legacy}) {
     RenderLog.write('c1016_dashboard_layout', legacy ? 'v1' : 'v2');
     return LayoutBuilder(builder: (ctx, box) {
@@ -485,8 +561,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       // only copy of them in the console — and it collapses to a single line
       // as the page scrolls. Under it, the universal search bar.
       final slivers = <Widget>[
+        // CMD #1892 — the spec asks for one page that scrolls with nothing
+        // fixed, so the header scrolls away with everything else. It keeps the
+        // date and zone pickers: they are still the ONLY copy of them in the
+        // console, they simply no longer float over the content.
         SliverPersistentHeader(
-          pinned: true,
+          pinned: false,
           delegate: _StickyDashHeader(
             title: (header['title'] ?? '').toString(),
             subLabel: (header['sub_label'] ?? '').toString(),
@@ -503,19 +583,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 RenderLog.write('titles_removed_dashboard', 'true');
                 return const SizedBox.shrink();
               }),
-              // The entity door, full width, directly under the header: order
-              // code, phone, pharmacy, supplier or product. Its wording is
-              // universal_search()'s own hint, never a Dart literal.
-              _SearchBar(
-                key: const Key('c813_search_bar'),
-                label: (header['search_hint'] ?? '').toString().isNotEmpty
-                    ? (header['search_hint'] ?? '').toString()
-                    : c('usearch.placeholder'),
-                onTap: _openUniversalSearch,
-                paletteLabel: _label('search_button'),
-                onPalette: _openPalette,
-              ),
-              SizedBox(height: Ds.space.x24),
               if (_loading && _dash.isEmpty)
                 // Loading is a shape, not a spinner.
                 const DashboardV2Skeleton()
@@ -527,7 +594,49 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   onShare: _shareMetric,
                 ),
                 if (_dash.isNotEmpty) SizedBox(height: Ds.space.x24),
+                // CMD #1892 — the ONE search control, directly under today's
+                // KPI cards: an inline nav_search() field. #813's entity sheet
+                // and #325's palette are its trailing icons, so neither door
+                // was closed by moving the bar.
+                _centred(DashboardNavSearchField(
+                  key: const Key('c813_search_bar'),
+                  search: _search,
+                  onPick: _openTile,
+                  hint: (header['search_hint'] ?? '').toString().isNotEmpty
+                      ? (header['search_hint'] ?? '').toString()
+                      : c('dashboard_home.search_hint'),
+                  entityLabel: c('usearch.placeholder'),
+                  onEntitySearch: _openUniversalSearch,
+                  paletteLabel: _label('search_button'),
+                  onPalette: _openPalette,
+                )),
+                SizedBox(height: Ds.space.x24),
+                // CMD #1893 — Quick actions (this login's nav_pin pins, 4
+                // across) and Recently used (its last six nav_usage opens),
+                // directly under the search field and above everything else.
+                _centred(DashboardPersonalRows(
+                  key: const Key('c1893_personal'),
+                  load: _homeFeed.read,
+                  onOpen: _openTile,
+                  onHold: _holdTile,
+                  revision: _homeFeed.revision,
+                )),
                 if (_ops.isNotEmpty) _OpsBoardCard(payload: _ops),
+                // CMD #1891 — every door that used to hide in the "Also
+                // here" strip above Customers, Suppliers and Fulfill, in the
+                // six sections dashboard_home() names.
+                // CMD #1892 — needs-you-now as rows, the rest as tile grids.
+                _centred(DashboardHomeSections(
+                  load: _homeFeed.read,
+                  onOpen: _openTile,
+                  onHold: _holdTile,
+                  revision: _homeFeed.revision,
+                  // CMD #1941 — AutoFlow / Bundle, at the top of the grid.
+                  automationSet: _automationSet,
+                  automationAction: _automationAction,
+                  onToast: (msg, isError) =>
+                      showToast(context, msg, isError: isError),
+                )),
                 const OrderHoursCard(),
                 const NotificationsCard(),
                 const CrashesCard(),
@@ -661,70 +770,12 @@ class _StickyDashHeader extends SliverPersistentHeaderDelegate {
       old.hpad != hpad;
 }
 
-// ── CHANGE #813: the one search bar ──────────────────────────────────────────
+// ── CHANGE #813 / CMD #1892: the one search control ─────────────────────────
 //
-// #812 put the entity search behind a quiet text button so it would not read as
-// a second identical box. The spec asks for ONE bar under the header, so this
-// is that bar — the entity door — with the screen jumper kept as its trailing
-// icon rather than a second full-width control.
-class _SearchBar extends StatelessWidget {
-  final String label;
-  final VoidCallback onTap;
-  final String paletteLabel;
-  final VoidCallback onPalette;
-
-  const _SearchBar({
-    super.key,
-    required this.label,
-    required this.onTap,
-    required this.paletteLabel,
-    required this.onPalette,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    RenderLog.write('c325_palette_button', 1);
-    return Row(children: [
-      Expanded(
-        child: InkWell(
-          key: const Key('c812_search_button'),
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(Ds.r.button),
-          child: Container(
-            height: Ds.space.x48,
-            padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-            decoration: BoxDecoration(
-              color: Ds.c.bg,
-              borderRadius: BorderRadius.circular(Ds.r.button),
-              border: Border.all(color: Ds.c.divider),
-            ),
-            child: Row(children: [
-              Icon(Icons.search,
-                  size: Ds.space.x24, color: Ds.c.textSecondary),
-              SizedBox(width: Ds.space.x12),
-              Expanded(
-                  child: Text(label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Ds.t.bodySecondary)),
-            ]),
-          ),
-        ),
-      ),
-      SizedBox(width: Ds.space.x8),
-      Tooltip(
-        message: paletteLabel,
-        child: IconButton(
-          key: const Key('c813_palette_button'),
-          onPressed: onPalette,
-          iconSize: Ds.space.x24,
-          constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-          icon: Icon(Icons.bolt_outlined, color: Ds.c.textSecondary),
-        ),
-      ),
-    ]);
-  }
-}
+// #813's tap-to-open bar has become an INLINE nav_search() field
+// (widgets/dashboard_nav_search.dart), moved to sit directly under today's
+// KPI cards where #1892's layout puts it. It is still ONE control: the entity
+// search sheet and the command palette ride on it as trailing icons.
 
 // ── #58 — the stuck-work card ────────────────────────────────────────────────
 //
@@ -895,5 +946,5 @@ class QuickLinkNavigator extends InheritedWidget {
 
 
 // CHANGE #813 — _PaletteButton is gone: the screen jumper now lives as the
-// trailing icon on the ONE search bar (_SearchBar above), so the dashboard has
-// a single search control instead of two stacked boxes.
+// trailing icon on the ONE search control (DashboardNavSearchField), so the
+// dashboard has a single search box instead of two stacked ones.

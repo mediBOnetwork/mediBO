@@ -221,6 +221,11 @@ class _DesktopSearchRowState extends State<_DesktopSearchRow> {
   // nothing else.
   final SearchSuggestController _suggest = SearchSuggestController();
 
+  // CMD #1905 — the scope a tapped suggestion opened. While it is up the
+  // field shows the backend's chip instead of a phrase the shopper never
+  // typed. Both strings come from the payload.
+  SearchChip _chip = SearchChip.none;
+
   @override
   void initState() {
     super.initState();
@@ -242,14 +247,82 @@ class _DesktopSearchRowState extends State<_DesktopSearchRow> {
     super.dispose();
   }
 
-  /// A tapped suggestion carries the BACKEND's own query for it — for a Hindi
-  /// word that is the salt, not the word — so the field is filled with that
-  /// and the search runs on it.
-  void _pickSuggestion(String query) {
+  /// CMD #1905 — a tapped suggestion opens WHAT IT IS.
+  ///
+  /// The old version pasted the suggestion's text into this field and pressed
+  /// search, which for a company meant a product-name search for
+  /// "SUN PHARMACEUTICAL INDUSTRIES LTD" — no product is named that, so the
+  /// shopper who tapped a company with 2,461 products was told there was
+  /// nothing and offered to request one. The backend now names the
+  /// destination; this method only knows which screen renders which kind.
+  void _pickSuggestion(SearchSuggestion s) {
     _suggest.close();
-    if (query.isEmpty) return;
-    widget.controller.text = query;
-    _submitNow();
+    FocusManager.instance.primaryFocus?.unfocus();
+    switch (s.navKind) {
+      case 'product':
+        if (s.navId.isEmpty) return;
+        _showChip(s);
+        Navigator.of(context).pushNamed('/product/${s.navId}');
+      case 'company':
+        if (s.navId.isEmpty) return;
+        _showChip(s);
+        Navigator.of(context)
+            .pushNamed('/company/${Uri.encodeComponent(s.navId)}');
+      case 'salt':
+        if (s.navId.isEmpty) return;
+        _showChip(s);
+        _openCatalogue(
+            CatalogueRoute(tab: 'salts', listKind: 'salt', listKey: s.navId),
+            s.label);
+      case 'category':
+        if (s.navId.isEmpty) return;
+        _showChip(s);
+        _openCatalogue(
+            CatalogueRoute(path: [s.navId], listKind: 'tree'), s.label);
+      case 'tab':
+        _clearChip();
+        _openCatalogue(
+            CatalogueRoute(tab: s.navTab, query: s.navQuery), s.label);
+      default:
+        // 'search' — the only nav that is still a text query, because the
+        // backend said so.
+        if (s.navId.isEmpty) return;
+        _clearChip();
+        widget.controller.text = s.navId;
+        _submitNow();
+    }
+  }
+
+  /// The Catalogue is a page of the shell's IndexedStack, so a named path
+  /// would land on the shell's BOOT parse instead of this scope. It is pushed
+  /// with its route pre-seeded, the same way company_screen.dart opens a salt.
+  void _openCatalogue(CatalogueRoute route, String title) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => Scaffold(
+        backgroundColor: Ds.c.bg,
+        appBar: AppBar(
+          backgroundColor: Ds.c.surface,
+          surfaceTintColor: Ds.c.surface,
+          foregroundColor: Ds.c.text,
+          elevation: 0,
+          title: Text(title,
+              maxLines: 1, overflow: TextOverflow.ellipsis, style: Ds.t.subtitle),
+        ),
+        body: CatalogueScreen(active: true, initialRoute: route),
+      ),
+    ));
+  }
+
+  void _showChip(SearchSuggestion s) {
+    if (s.chipLabel.isEmpty) return;
+    setState(() {
+      _chip = SearchChip(label: s.chipLabel, clearLabel: _suggest.clearLabel);
+      widget.controller.text = '';
+    });
+  }
+
+  void _clearChip() {
+    if (_chip.has) setState(() => _chip = SearchChip.none);
   }
 
   void _onControllerChange() {
@@ -277,6 +350,7 @@ class _DesktopSearchRowState extends State<_DesktopSearchRow> {
   void _clearSearch() {
     _debounce?.cancel();
     _suggest.close();
+    _clearChip();
     widget.controller.clear();
     widget.onSearch('');
     FocusManager.instance.primaryFocus?.unfocus();
@@ -311,7 +385,12 @@ class _DesktopSearchRowState extends State<_DesktopSearchRow> {
               child: Icon(Icons.search, color: Color(0xFF9CA3AF), size: 20),
             ),
             Expanded(
-              child: TextField(
+              // CMD #1905 — with a chip up, the box IS the chip: the field had
+              // been left holding a company name under a company page, which
+              // claimed a search the shopper never ran.
+              child: _chip.has
+                  ? SearchBoxChip(chip: _chip, onClear: _clearSearch)
+                  : TextField(
                 controller: widget.controller,
                 focusNode: widget.focusNode,
                 onChanged: _onChanged,
@@ -342,7 +421,7 @@ class _DesktopSearchRowState extends State<_DesktopSearchRow> {
                   child: CircularProgressIndicator(strokeWidth: 2, color: Brand.green),
                 ),
               )
-            else if (_hasText)
+            else if (_hasText && !_chip.has)
               IconButton(
                 onPressed: _clearSearch,
                 icon: const Icon(Icons.close, size: 18, color: Color(0xFF6B7280)),
@@ -438,8 +517,21 @@ class _DesktopProfileButton extends StatelessWidget {
     // and one place it comes from.
     final displayName = auth.headerTitle;
     final initial = displayName.isNotEmpty ? displayName[0].toUpperCase() : '?';
-    final shortName =
-        displayName.length > 16 ? '${displayName.substring(0, 14)}…' : displayName;
+    // CMD #1947 — the pill used to print "Hello masteromprakashsahu@gmail…",
+    // an email cut mid-word, and it ate the width the date·zone chip now needs.
+    // my_session() carries header_short (the backend's own short name: an
+    // override row, else the profile name's first word, else the email's local
+    // part, truncated THERE) and header_email. The pill prints the short name;
+    // the full address moved into the dropdown's first row. Nothing about
+    // either string is decided here — the fallback is the old client-side trim
+    // only for a session that predates the field.
+    final shortName = auth.headerShort.isNotEmpty
+        ? auth.headerShort
+        : (displayName.length > 16
+            ? '${displayName.substring(0, 14)}…'
+            : displayName);
+    final fullEmail =
+        auth.headerEmail.isNotEmpty ? auth.headerEmail : displayName;
     final hasAdminNav = onAdminNav != null;
 
     return ConstrainedBox(
@@ -454,6 +546,13 @@ class _DesktopProfileButton extends StatelessWidget {
           RenderLog.write('c206_dropdown_bills', 1);
         }
         return [
+        // CMD #1947 — the address the pill no longer shows, in full, first.
+        if (fullEmail.isNotEmpty)
+          PopupMenuItem<String>(
+            enabled: false,
+            child: Text(fullEmail, style: Ds.t.caption),
+          ),
+        if (fullEmail.isNotEmpty) const PopupMenuDivider(),
         for (final row in NavProfileMenu.items.value)
           if ((row['feature_key'] ?? '') != 'identity.logout')
             PopupMenuItem(
@@ -550,7 +649,7 @@ class _DesktopProfileButton extends StatelessWidget {
             const SizedBox(width: 9),
             Flexible(
               child: Text(
-                cf('home_shell.hello_a', {'a': shortName}),
+                shortName,
                 style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,

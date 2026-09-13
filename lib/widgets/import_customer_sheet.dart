@@ -1,19 +1,22 @@
-// CHANGE #547 — Import Customer registration form (Customers tab).
+// Import Customer / Convert lead — now just a shell around THE registration
+// form (CHANGE #1887).
 //
-// One form, three entry paths:
-//   • Import Manually        -> opened empty
-//   • Import by File         -> opened pre-filled from customer-import 'extract'
-//   • (both)                 -> Location fetch button in the Address section
+// One form, three entry paths, and they are the same widget as self-signup:
+//   • Import Manually  -> opened empty
+//   • Import by File   -> opened pre-filled from customer-import 'extract'
+//   • Convert lead     -> opened pre-filled from lead_customer_prefill()
 //
-// EVERY field stays fully editable in all paths, including anything the OCR or
-// the geocoder filled in.
+// The field list, labels, order, required flags and dropdown options all come
+// from customer_form_schema(); this file composes no display string.
 //
 // BACKEND OWNS EVERYTHING:
-//   • saving          -> customer-import mode 'import' (provisions the auth
-//                        login, writes the profile, auto-approves and sends the
-//                        approval WhatsApp). We never call admin_import_customer
-//                        directly, and never call an approve/notify RPC after.
-//   • address lookup  -> customer-import mode 'geocode'
+//   • saving          -> admin_import_customer(), which provisions the auth
+//                        login itself (WhatsApp number as the identity, no
+//                        password, OTP later). CHANGE #1887 retired the
+//                        customer-import 'import' round-trip; the edge
+//                        function stays for CSV bulk import, OCR extract and
+//                        geocoding only.
+//   • address lookup  -> customer-import mode 'geocode' / 'forward'
 //   • all messages    -> shown verbatim; this file composes no error copy.
 //   • normalisation   -> phone / pincode / GSTIN are NOT formatted or validated
 //                        here. The backend normalises and validates them.
@@ -24,7 +27,9 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'customer_registration_form.dart';
 import 'geo_position.dart';
+import '../design_tokens.dart';
 import '../services/ui_copy.dart';
 import '../utils/render_log.dart';
 
@@ -35,19 +40,35 @@ class ImportCustomerSheet extends StatefulWidget {
   /// customer-import 'extract' payload, or null for the manual path.
   final Map<String, dynamic>? extracted;
 
-  /// CHANGE #550 — lead_customer_prefill().customer, for importing a customer
-  /// straight from a route visit. Everything stays editable.
+  /// lead_customer_prefill().customer, for importing a customer straight from
+  /// a route visit. Everything stays editable.
   final Map<String, dynamic>? prefill;
 
-  /// CHANGE #550 — lead_customer_prefill().missing[]: fields the lead could
-  /// not supply. Highlighted so the rep knows what to fill in.
+  /// lead_customer_prefill().missing[]: fields the lead could not supply.
   final List<String> missing;
+
+  /// CMD #1874 — the lead this form was opened from. When it is set the save
+  /// goes through lead_import_customer(), which writes the customer AND the
+  /// lead's matched_customer_id in ONE transaction, so a converted shop can
+  /// never be left as an unlinked lead.
+  final int? leadId;
+
+  /// Which schema the backend should send. A caller may name it; otherwise a
+  /// sheet opened with a LEAD prefill is the Convert-lead surface and asks for
+  /// that schema, so the S Leads call sites need no change to get their own
+  /// title and field list.
+  final String? formContext;
+
+  String get schemaContext =>
+      formContext ?? (prefill != null ? 'lead_convert' : 'admin');
 
   const ImportCustomerSheet({
     super.key,
     this.extracted,
     this.prefill,
     this.missing = const [],
+    this.formContext,
+    this.leadId,
   });
 
   /// Returns true when a customer was imported (caller should refresh).
@@ -56,12 +77,18 @@ class ImportCustomerSheet extends StatefulWidget {
     Map<String, dynamic>? extracted,
     Map<String, dynamic>? prefill,
     List<String> missing = const [],
+    String? formContext,
+    int? leadId,
   }) =>
       showDialog<bool>(
         context: context,
         barrierDismissible: false,
         builder: (_) => ImportCustomerSheet(
-            extracted: extracted, prefill: prefill, missing: missing),
+            extracted: extracted,
+            prefill: prefill,
+            missing: missing,
+            formContext: formContext,
+            leadId: leadId),
       );
 
   @override
@@ -69,48 +96,8 @@ class ImportCustomerSheet extends StatefulWidget {
 }
 
 class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
-  // Backend field name -> controller. Keyed by the exact name the edge
-  // function expects, so submission is a straight map build with no renaming.
-  final Map<String, TextEditingController> _c = {
-    for (final k in const [
-      'pharmacy_name',
-      'customer_name',
-      'phone',
-      'whatsapp_no',
-      'other_contact_no',
-      'email',
-      'address',
-      'address_local',
-      'city',
-      'district',
-      'state',
-      'pincode',
-      'latitude',
-      'longitude',
-      'store_location_link',
-      'store_type',
-      'range_zone',
-      'payment_term',
-      'gstin',
-      'dl_20b',
-      'dl_21b',
-      'customer_code',
-    ])
-      k: TextEditingController(),
-  };
-
-  /// Fields the backend flagged as low-confidence or dropped during extract.
-  final Set<String> _review = {};
-
-  // ── CHANGE #549: the form's SHAPE is backend-owned ──────────────────────
-  // customer_form_options() decides which fields are hidden, which are
-  // required, which are single-select, and what each dropdown's choices are.
-  // Nothing here is hardcoded.
-  Set<String> _hidden = {};
-  Set<String> _required = {};
-  Set<String> _singleSelect = {};
-  Map<String, List<String>> _choices = {};
-  bool _optionsLoaded = false;
+  late final CustomerFormController _form =
+      CustomerFormController(formContext: widget.schemaContext);
 
   bool _saving = false;
   bool _locating = false;
@@ -124,15 +111,9 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
   @override
   void initState() {
     super.initState();
-    _loadOptions();
-    // CHANGE #550: prefill first, then any extract merges on top of it.
-    final pre = widget.prefill;
-    if (pre != null) {
-      for (final k in _c.keys) {
-        _set(k, pre[k]);
-      }
-    }
-    _review.addAll(widget.missing);
+    // Prefill first, then any extract merges on top of it.
+    _form.applyMap(widget.prefill);
+    _form.flagged.addAll(widget.missing);
     final e = widget.extracted;
     if (e != null) _applyExtract(e);
     RenderLog.write('c547_form_open',
@@ -141,76 +122,36 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
 
   @override
   void dispose() {
-    for (final ctl in _c.values) {
-      ctl.dispose();
-    }
+    _form.dispose();
     super.dispose();
-  }
-
-  Future<void> _loadOptions() async {
-    try {
-      final res = await Supabase.instance.client.rpc('customer_form_options');
-      if (res is! Map || !mounted) return;
-      final m = Map<String, dynamic>.from(res);
-      Set<String> setOf(dynamic v) => v is List
-          ? v.map((e) => e.toString()).toSet()
-          : <String>{};
-      List<String> listOf(dynamic v) => v is List
-          ? v.map((e) => e.toString()).toList()
-          : <String>[];
-      setState(() {
-        _hidden = setOf(m['hidden_fields']);
-        _required = setOf(m['required_fields']);
-        _singleSelect = setOf(m['single_select']);
-        _choices = {
-          for (final k in _singleSelect) k: listOf(m[k]),
-        };
-        _optionsLoaded = true;
-      });
-      RenderLog.write('c549_form_options',
-          'hidden=${_hidden.length};required=${_required.length};'
-          'single=${_singleSelect.length}');
-    } catch (_) {
-      // No hardcoded fallback: without options the dropdowns stay empty.
-    }
-  }
-
-  void _set(String key, dynamic v) {
-    final ctl = _c[key];
-    if (ctl == null || v == null) return;
-    final s = v.toString();
-    if (s.isEmpty || s == 'null') return;
-    ctl.text = s;
   }
 
   /// Pre-fills from an 'extract' response and marks anything the backend was
   /// unsure about, so the admin knows to check it.
   void _applyExtract(Map<String, dynamic> e) {
-    for (final k in _c.keys) {
-      _set(k, e[k]);
-    }
+    _form.applyMap(e);
 
     final conf = e['per_field_confidence'];
     if (conf is Map) {
       conf.forEach((k, v) {
         final n = v is num ? v.toDouble() : double.tryParse('$v');
-        if (n != null && n < kLowConfidence) _review.add(k.toString());
+        if (n != null && n < kLowConfidence) _form.flagged.add(k.toString());
       });
     }
     final dropped = e['dropped'];
     if (dropped is List) {
       for (final d in dropped) {
-        _review.add(d.toString());
+        _form.flagged.add(d.toString());
       }
     } else if (dropped is Map) {
-      _review.addAll(dropped.keys.map((k) => k.toString()));
+      _form.flagged.addAll(dropped.keys.map((k) => k.toString()));
     }
 
     final notes = e['notes'];
     if (notes != null && notes.toString().isNotEmpty) _notice = notes.toString();
 
     RenderLog.write('c547_extract_applied',
-        'review=${_review.length};conf=${conf is Map ? conf.length : 0}');
+        'review=${_form.flagged.length};conf=${conf is Map ? conf.length : 0}');
   }
 
   // ── Location ──────────────────────────────────────────────────────────────
@@ -244,31 +185,19 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
         return;
       }
 
-      // 'partial' -> coordinates + map link only; address stays blank.
       final status = m['status']?.toString();
-      // CHANGE #549: range_zone is filled from the location response too, and
-      // stays editable like every other auto-filled field.
-      for (final k in const [
-        'address',
-        'city',
-        'district',
-        'state',
-        'pincode',
-        'latitude',
-        'longitude',
-        'store_location_link',
-        'range_zone',
-      ]) {
-        _set(k, m[k]);
-      }
+      _form.applyMap(m);
       // Coordinates always come from the device when the backend omits them.
-      if ((_c['latitude']!.text).isEmpty) _c['latitude']!.text = '$lat';
-      if ((_c['longitude']!.text).isEmpty) _c['longitude']!.text = '$lng';
+      if (_form.controllerFor('latitude').text.isEmpty) {
+        _form.setValue('latitude', '$lat');
+      }
+      if (_form.controllerFor('longitude').text.isEmpty) {
+        _form.setValue('longitude', '$lng');
+      }
 
       RenderLog.write('c547_geocode', 'status=${status ?? ''}');
       setState(() {
         _locating = false;
-        // Backend copy, verbatim.
         final note = m['note'] ?? m['message'] ?? m['notes'];
         if (note != null && note.toString().isNotEmpty) {
           _notice = note.toString();
@@ -278,16 +207,13 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
       if (!mounted) return;
       setState(() {
         _locating = false;
-        _error = e is FunctionException
-            ? _fnError(e)
-            : (_c['store_location_link']!.text.isEmpty ? '$e' : null);
+        _error = e is FunctionException ? _fnError(e) : '$e';
       });
     }
   }
 
-  /// CHANGE #550 — photograph the licence / GST board from inside the form and
-  /// MERGE the extracted fields on top of what is already here. Same
-  /// customer-import 'extract' mode the Customers tab uses.
+  /// Photograph the licence / GST board from inside the form and MERGE the
+  /// extracted fields on top of what is already here.
   Future<void> _scanDocuments() async {
     final picked = await FilePicker.pickFiles(
       type: FileType.image,
@@ -337,8 +263,8 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
     }
   }
 
-  /// CHANGE #549 — "Fill coordinates": derive coordinates from the address
-  /// fields already typed in, via customer-import mode 'forward'.
+  /// "Fill coordinates": derive coordinates from the address fields already
+  /// typed in, via customer-import mode 'forward'.
   Future<void> _fillCoordinates() async {
     setState(() {
       _forwarding = true;
@@ -350,11 +276,11 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
         'customer-import',
         body: {
           'mode': 'forward',
-          'address': _c['address']!.text.trim(),
-          'city': _c['city']!.text.trim(),
-          'district': _c['district']!.text.trim(),
-          'state': _c['state']!.text.trim(),
-          'pincode': _c['pincode']!.text.trim(),
+          'address': _form.controllerFor('address').text.trim(),
+          'city': _form.controllerFor('city').text.trim(),
+          'district': _form.controllerFor('district').text.trim(),
+          'state': _form.controllerFor('state').text.trim(),
+          'pincode': _form.controllerFor('pincode').text.trim(),
         },
       );
       final data = res.data;
@@ -375,14 +301,13 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
         'store_location_link',
         'range_zone',
       ]) {
-        _set(k, m[k]);
+        _form.setValue(k, m[k]);
       }
 
       final status = m['status']?.toString();
       RenderLog.write('c549_forward', 'status=${status ?? ''}');
       setState(() {
         _forwarding = false;
-        // 'not_found' (and any other) note is backend copy, verbatim.
         final note = m['note'] ?? m['message'] ?? m['notes'];
         if (note != null && note.toString().isNotEmpty) {
           _notice = note.toString();
@@ -408,29 +333,36 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
   // ── Save ──────────────────────────────────────────────────────────────────
 
   Future<void> _submit() async {
+    final missing = _form.missingRequired();
+    if (missing.isNotEmpty) {
+      setState(() {
+        // Backend copy; the field names come from the schema too.
+        _error = '${_form.text('missing_required_message')} '
+            '${missing.map(_form.labelOf).join(', ')}';
+        for (final k in missing) {
+          _form.flagged.add(k);
+        }
+      });
+      return;
+    }
+
     setState(() {
       _saving = true;
       _error = null;
       _notice = null;
     });
     try {
-      // Straight pass-through: no client-side formatting or validation. Empty
-      // fields are omitted so the backend applies its own defaults.
-      // CHANGE #549: hidden fields are NEVER sent — customer_code is generated
-      // by the backend (same logic as supplier codes) and address_local is gone.
-      final customer = <String, dynamic>{};
-      _c.forEach((k, v) {
-        if (_hidden.contains(k)) return;
-        final s = v.text.trim();
-        if (s.isNotEmpty) customer[k] = s;
-      });
-
-      final res = await Supabase.instance.client.functions.invoke(
-        'customer-import',
-        body: {'mode': 'import', 'customer': customer},
-      );
-      final data = res.data;
-      final m = data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
+      // CHANGE #1887 — straight to the RPC. admin_import_customer() makes the
+      // auth login itself when there is no user_id, so adding a shop is one
+      // call, not an edge-function round-trip first.
+      // CMD #1874 — opened from a lead, the save is the lead-aware wrapper:
+      // same import, plus the link back onto scraped_leads, one transaction.
+      final res = widget.leadId == null
+          ? await Supabase.instance.client
+              .rpc('admin_import_customer', params: {'p': _form.payload()})
+          : await Supabase.instance.client.rpc('lead_import_customer',
+              params: {'p': _form.payload(), 'p_lead_id': widget.leadId});
+      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
 
       if (m['error'] != null) {
         setState(() {
@@ -442,17 +374,27 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
 
       final code = m['customer_code']?.toString() ?? '';
       final msg = m['message']?.toString() ?? '';
-      RenderLog.write('c547_import_ok', 'code=$code');
+      final stage = m['stage_label']?.toString() ?? '';
+      // CMD #1874 — the link's own sentence, verbatim, when there was a lead.
+      final link = m['link_message']?.toString() ?? '';
+      RenderLog.write('c1887_import_ok',
+          'code=$code;login=${m['login_created']};stage=${m['registration_stage']}');
       if (!mounted) return;
       Navigator.of(context).pop(true);
-      final banner = [msg, if (code.isNotEmpty) code].where((s) => s.isNotEmpty);
+      final banner =
+          [msg, link, code, stage].where((s) => s.isNotEmpty).join('  ·  ');
       if (banner.isNotEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(banner.join('  ·  ')),
-          backgroundColor: const Color(0xFF1B7A43),
-          duration: const Duration(seconds: 6),
+          content: Text(banner),
+          backgroundColor: Ds.c.brand,
         ));
       }
+    } on PostgrestException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = e.message; // the backend's own sentence, verbatim
+      });
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -464,152 +406,31 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
 
   // ── UI ────────────────────────────────────────────────────────────────────
 
-  /// CHANGE #549: renders nothing for a backend-hidden field, marks required
-  /// from required_fields, and renders a single-select dropdown when the
-  /// backend lists the field in single_select.
-  Widget _field(String key, String label, {int maxLines = 1}) {
-    if (_hidden.contains(key)) return const SizedBox.shrink();
-    if (_singleSelect.contains(key)) return _dropdown(key, label);
+  Widget _actionButton({
+    required bool busy,
+    required VoidCallback? onPressed,
+    required IconData icon,
+    required String label,
+  }) =>
+      OutlinedButton.icon(
+        onPressed: onPressed,
+        icon: busy
+            ? SizedBox(
+                width: Ds.space.x16,
+                height: Ds.space.x16,
+                child: CircularProgressIndicator(color: Ds.c.brand))
+            : Icon(icon),
+        label: Text(label),
+      );
 
-    final required = _required.contains(key);
-    final flagged = _review.contains(key);
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Text(required ? cf('import_customer.required_label', {'label': label}) : label,
-              style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  color: Color(0xFF374151))),
-          if (flagged) ...[
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFEF3C7),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(c('import_customer.flag_check_this'),
-                  style: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w500,
-                      color: Color(0xFF92400E))),
-            ),
-          ],
-        ]),
-        const SizedBox(height: 6),
-        TextField(
-          controller: _c[key],
-          maxLines: maxLines,
-          decoration: InputDecoration(
-            isDense: true,
-            filled: true,
-            fillColor: const Color(0xFFF5F6F8),
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(
-                  color: flagged
-                      ? const Color(0xFFFCD34D)
-                      : const Color(0xFFE5E7EB)),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
-            ),
-            border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8)),
-          ),
-        ),
-      ]),
-    );
-  }
-
-  /// Single-select built from customer_form_options()'s own list. The current
-  /// value is kept in the same controller as every other field, so submission
-  /// and auto-fill (e.g. range_zone from the location response) work unchanged.
-  Widget _dropdown(String key, String label) {
-    final required = _required.contains(key);
-    final flagged = _review.contains(key);
-    final opts = _choices[key] ?? const <String>[];
-    final cur = _c[key]!.text.trim();
-    // An auto-filled value the backend didn't list still shows, so nothing is
-    // silently dropped — the admin can re-pick from the list.
-    final items = <String>[
-      if (cur.isNotEmpty && !opts.contains(cur)) cur,
-      ...opts,
-    ];
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Text(required ? cf('import_customer.required_label', {'label': label}) : label,
-              style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  color: Color(0xFF374151))),
-          if (flagged) ...[
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFEF3C7),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(c('import_customer.flag_check_this'),
-                  style: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w500,
-                      color: Color(0xFF92400E))),
-            ),
-          ],
-        ]),
-        const SizedBox(height: 6),
-        DropdownButtonFormField<String>(
-          initialValue: cur.isEmpty ? null : cur,
-          isExpanded: true,
-          decoration: InputDecoration(
-            isDense: true,
-            filled: true,
-            fillColor: const Color(0xFFF5F6F8),
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(
-                  color: flagged
-                      ? const Color(0xFFFCD34D)
-                      : const Color(0xFFE5E7EB)),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
-            ),
-            border:
-                OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-          ),
-          items: [
-            for (final o in items)
-              DropdownMenuItem<String>(value: o, child: Text(o)),
-          ],
-          // Still fully editable — re-picking simply overwrites the value.
-          onChanged: (v) => setState(() => _c[key]!.text = v ?? ''),
-        ),
-      ]),
-    );
-  }
-
-  Widget _section(String title) => Padding(
-        padding: const EdgeInsets.only(top: 8, bottom: 12),
-        child: Text(title,
-            style: const TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF9CA3AF),
-                letterSpacing: 1.0)),
+  Widget _banner(String text, Color background) => Container(
+        width: double.infinity,
+        padding: EdgeInsets.all(Ds.space.x12),
+        margin: EdgeInsets.only(bottom: Ds.space.x16),
+        decoration:
+            BoxDecoration(color: background, borderRadius: Ds.r.rButton),
+        // Backend copy, verbatim.
+        child: Text(text, style: Ds.t.body),
       );
 
   @override
@@ -619,252 +440,116 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
 
     return Dialog(
       insetPadding: EdgeInsets.symmetric(
-          horizontal: isNarrow ? 12 : 40, vertical: 24),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          horizontal: isNarrow ? Ds.space.x12 : Ds.space.x48,
+          vertical: Ds.space.x24),
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rCard),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 720, maxHeight: 720),
+        constraints: BoxConstraints(maxWidth: Ds.space.x48 * 15, maxHeight: Ds.space.x48 * 15),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          // Header
+          // Header — the title is the schema's, so Convert lead says so itself.
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 18, 12, 12),
+            padding: EdgeInsets.fromLTRB(
+                Ds.space.x24, Ds.space.x16, Ds.space.x12, Ds.space.x12),
             child: Row(children: [
               Expanded(
-                child: Text(c('import_customer.title'),
-                    style: const TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFF111827))),
+                child: Text(
+                    _form.ready ? _form.text('title') : c('import_customer.title'),
+                    style: Ds.t.title),
               ),
               IconButton(
                 onPressed: _saving ? null : () => Navigator.of(context).pop(false),
-                icon: const Icon(Icons.close, size: 20, color: Color(0xFF6B7280)),
+                icon: const Icon(Icons.close),
               ),
             ]),
           ),
-          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          Divider(height: Ds.space.x4, thickness: Ds.space.hairline, color: Ds.c.divider),
 
           Expanded(
-            child: !_optionsLoaded
-                // CHANGE #549: the form's shape (hidden / required / dropdown
-                // choices) is backend-owned, so nothing renders until
-                // customer_form_options() has landed.
-                ? const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(32),
-                      child: CircularProgressIndicator(
-                          color: Color(0xFF1B7A43), strokeWidth: 2.5),
-                    ),
-                  )
-                : SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                if (_notice != null) ...[
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(12),
-                    margin: const EdgeInsets.only(bottom: 16),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFEFF6FF),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    // Backend copy, verbatim.
-                    child: Text(_notice!,
-                        style: const TextStyle(
-                            fontSize: 13, color: Color(0xFF1E40AF))),
-                  ),
-                ],
-                if (_review.isNotEmpty)
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(12),
-                    margin: const EdgeInsets.only(bottom: 16),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFEF3C7),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                        cf('import_customer.review_banner', {'n': '${_review.length}'}),
-                        style: const TextStyle(
-                            fontSize: 13, color: Color(0xFF92400E))),
-                  ),
-
-                // CHANGE #550 — the same two paths the Customers tab offers:
-                // fill it in by hand, or photograph the licence / GST board and
-                // let customer-import 'extract' merge those fields in.
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 16),
-                  child: OutlinedButton.icon(
-                    onPressed: _scanning ? null : _scanDocuments,
-                    icon: _scanning
-                        ? const SizedBox(
-                            width: 14,
-                            height: 14,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2, color: Color(0xFF1B7A43)))
-                        : const Icon(Icons.document_scanner_outlined, size: 16),
-                    label: Text(c('import_customer.btn_scan')),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFF1B7A43),
-                      side: const BorderSide(color: Color(0xFF1B7A43)),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 10),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8)),
-                    ),
-                  ),
-                ),
-
-                _section(c('import_customer.section_business')),
-                _field('pharmacy_name', c('import_customer.field_pharmacy_name')),
-                _field('customer_name', c('import_customer.field_customer_name')),
-                _field('store_type', c('import_customer.field_store_type')),
-
-                _section(c('import_customer.section_contact')),
-                _field('phone', c('import_customer.field_phone')),
-                _field('whatsapp_no', c('import_customer.field_whatsapp_no')),
-                _field('other_contact_no', c('import_customer.field_other_contact_no')),
-                _field('email', c('import_customer.field_email')),
-
-                _section(c('import_customer.section_address')),
-                // CHANGE #549 — two backend-driven location actions.
-                //  • Fetch current location : device GPS -> mode 'geocode'
-                //  • Fill coordinates       : typed address -> mode 'forward'
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Wrap(spacing: 8, runSpacing: 8, children: [
-                    OutlinedButton.icon(
-                      onPressed:
-                          (_locating || _forwarding) ? null : _fetchLocation,
-                      icon: _locating
-                          ? const SizedBox(
-                              width: 14,
-                              height: 14,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: Color(0xFF1B7A43)))
-                          : const Icon(Icons.my_location, size: 16),
-                      label: Text(c('import_customer.btn_fetch_location')),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: const Color(0xFF1B7A43),
-                        side: const BorderSide(color: Color(0xFF1B7A43)),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 8),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8)),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed:
-                          (_locating || _forwarding) ? null : _fillCoordinates,
-                      icon: _forwarding
-                          ? const SizedBox(
-                              width: 14,
-                              height: 14,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: Color(0xFF1B7A43)))
-                          : const Icon(Icons.place_outlined, size: 16),
-                      label: Text(c('import_customer.btn_fill_coordinates')),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: const Color(0xFF1B7A43),
-                        side: const BorderSide(color: Color(0xFF1B7A43)),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 8),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8)),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                    ),
-                  ]),
-                ),
-                _field('address', c('import_customer.field_address'), maxLines: 2),
-                if (isNarrow) ...[
-                  _field('city', c('import_customer.field_city')),
-                  _field('district', c('import_customer.field_district')),
-                ] else
-                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Expanded(child: _field('city', c('import_customer.field_city'))),
-                    const SizedBox(width: 12),
-                    Expanded(child: _field('district', c('import_customer.field_district'))),
-                  ]),
-                if (isNarrow) ...[
-                  _field('state', c('import_customer.field_state')),
-                  _field('pincode', c('import_customer.field_pincode')),
-                ] else
-                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Expanded(child: _field('state', c('import_customer.field_state'))),
-                    const SizedBox(width: 12),
-                    Expanded(child: _field('pincode', c('import_customer.field_pincode'))),
-                  ]),
-                if (isNarrow) ...[
-                  _field('latitude', c('import_customer.field_latitude')),
-                  _field('longitude', c('import_customer.field_longitude')),
-                ] else
-                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Expanded(child: _field('latitude', c('import_customer.field_latitude'))),
-                    const SizedBox(width: 12),
-                    Expanded(child: _field('longitude', c('import_customer.field_longitude'))),
-                  ]),
-                _field('store_location_link', c('import_customer.field_store_location_link')),
-                _field('range_zone', c('import_customer.field_range_zone')),
-                _field('payment_term', c('import_customer.field_payment_term')),
-
-                _section(c('import_customer.section_statutory')),
-                _field('gstin', c('import_customer.field_gstin')),
-                if (isNarrow) ...[
-                  _field('dl_20b', c('import_customer.field_dl_20b')),
-                  _field('dl_21b', c('import_customer.field_dl_21b')),
-                ] else
-                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Expanded(child: _field('dl_20b', c('import_customer.field_dl_20b'))),
-                    const SizedBox(width: 12),
-                    Expanded(child: _field('dl_21b', c('import_customer.field_dl_21b'))),
-                  ]),
-              ]),
+            child: SingleChildScrollView(
+              padding: EdgeInsets.fromLTRB(
+                  Ds.space.x24, Ds.space.x16, Ds.space.x24, Ds.space.x16),
+              child: CustomerRegistrationForm(
+                controller: _form,
+                header: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (_notice != null) _banner(_notice!, Ds.c.infoSoft),
+                      if (_form.flagged.isNotEmpty)
+                        _banner(
+                            cf('import_customer.review_banner',
+                                {'n': '${_form.flagged.length}'}),
+                            Ds.c.warningSoft),
+                      if (_form.ready)
+                        Padding(
+                          padding: EdgeInsets.only(bottom: Ds.space.x12),
+                          child:
+                              Text(_form.text('subtitle'), style: Ds.t.caption),
+                        ),
+                      Wrap(
+                          spacing: Ds.space.x8,
+                          runSpacing: Ds.space.x8,
+                          children: [
+                            _actionButton(
+                              busy: _scanning,
+                              onPressed: _scanning ? null : _scanDocuments,
+                              icon: Icons.document_scanner_outlined,
+                              label: c('import_customer.btn_scan'),
+                            ),
+                            _actionButton(
+                              busy: _locating,
+                              onPressed: (_locating || _forwarding)
+                                  ? null
+                                  : _fetchLocation,
+                              icon: Icons.my_location,
+                              label: c('import_customer.btn_fetch_location'),
+                            ),
+                            _actionButton(
+                              busy: _forwarding,
+                              onPressed: (_locating || _forwarding)
+                                  ? null
+                                  : _fillCoordinates,
+                              icon: Icons.place_outlined,
+                              label: c('import_customer.btn_fill_coordinates'),
+                            ),
+                          ]),
+                    ]),
+              ),
             ),
           ),
 
           if (_error != null)
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-              color: const Color(0xFFFEE2E2),
+              padding: EdgeInsets.symmetric(
+                  horizontal: Ds.space.x24, vertical: Ds.space.x12),
+              color: Ds.c.dangerSoft,
               // Backend message, verbatim.
-              child: Text(_error!,
-                  style: const TextStyle(
-                      fontSize: 13, color: Color(0xFF991B1B))),
+              child: Text(_error!, style: Ds.t.body),
             ),
 
-          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          Divider(height: Ds.space.x4, thickness: Ds.space.hairline, color: Ds.c.divider),
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
+            padding: EdgeInsets.fromLTRB(
+                Ds.space.x24, Ds.space.x12, Ds.space.x24, Ds.space.x16),
             child: Row(children: [
               const Spacer(),
               TextButton(
                 onPressed: _saving ? null : () => Navigator.of(context).pop(false),
-                child: Text(c('import_customer.btn_cancel'),
-                    style: const TextStyle(color: Color(0xFF6B7280))),
+                child: Text(_form.ready
+                    ? _form.text('cancel_label')
+                    : c('import_customer.btn_cancel')),
               ),
-              const SizedBox(width: 8),
+              SizedBox(width: Ds.space.x8),
               ElevatedButton(
-                onPressed: _saving ? null : _submit,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF1B7A43),
-                  foregroundColor: Colors.white,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10)),
-                  elevation: 0,
-                ),
+                onPressed: (_saving || !_form.ready) ? null : _submit,
                 child: _saving
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white))
-                    : Text(c('import_customer.btn_save'),
-                        style: const TextStyle(
-                            fontSize: 14, fontWeight: FontWeight.w600)),
+                    ? SizedBox(
+                        width: Ds.space.x16,
+                        height: Ds.space.x16,
+                        child: CircularProgressIndicator(color: Ds.c.surface))
+                    : Text(_form.ready
+                        ? _form.text('save_label')
+                        : c('import_customer.btn_save')),
               ),
             ]),
           ),

@@ -51,6 +51,9 @@ Map<String, dynamic> _card({int id = 176026, String name = 'Telma 40 Tablet'}) =
           'ptr_display': '₹152.90',
           'ptr_bg': '#1B7A43',
           'ptr_fg': '#FFFFFF',
+          // CMD #1895 — the one field the sale line prints.
+          'price_display': '₹152.90',
+          'price_locked': false,
           'has_note': false,
           'note': '',
         },

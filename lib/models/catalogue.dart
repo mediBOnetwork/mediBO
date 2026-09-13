@@ -12,9 +12,12 @@
 
 import 'product.dart';
 
-/// The "Available in my zone" control, exactly as `catalogue_zone_switch()`
-/// describes it. [has] false → draw nothing at all; an anonymous visitor is
-/// never shown a control that would not change what they see.
+/// CMD #1909 — the remains of the "Available in my zone" control. The backend
+/// now answers `has:false` for everyone, because catalogue lists no longer
+/// filter by zone at all: they show the whole scope and GROUP it. The class
+/// stays because the payload key stays, and because `has` is still the only
+/// thing allowed to decide whether a control exists — reading it as "off"
+/// would be the app inferring, which is what #638 forbade.
 class CatZone {
   final bool has;
   final bool on;
@@ -271,8 +274,19 @@ class CatBrowse {
   final List<CatRow> letters;
   final String allLabel;
 
-  /// CHANGE #799 — the fixed A–Z track on the right of the company list.
+  /// CHANGE #799 — the fixed A–Z track. CMD #1908 draws it as a horizontal
+  /// strip under the breadcrumb, and companies, salts and classes all send one.
   final CatRail rail;
+
+  /// CMD #1908 — the breadcrumb, worded and routed by the backend.
+  final CatTrail trail;
+
+  /// CMD #1908 — the pack/Rx sentence. An index screen sends none, so the row
+  /// simply is not there; the front page and a search still send theirs.
+  final CatSentence sentence;
+
+  /// The letter currently applied, or '' for the whole list.
+  final String letter;
 
   /// 'level' → the next tap opens another level; 'products' → it opens the grid.
   final String childOpens;
@@ -297,6 +311,9 @@ class CatBrowse {
     required this.letters,
     required this.allLabel,
     required this.rail,
+    required this.trail,
+    required this.sentence,
+    required this.letter,
     required this.childOpens,
     required this.productsLabel,
     required this.hasProducts,
@@ -335,6 +352,9 @@ class CatBrowse {
           .toList(growable: false),
       allLabel: (m['all_label'] ?? '').toString(),
       rail: CatRail.fromMap(m['rail']),
+      trail: CatTrail.fromMap(m['trail']),
+      sentence: CatSentence.fromMap(m['sentence']),
+      letter: (m['letter'] ?? '').toString(),
       childOpens: (m['child_opens'] ?? '').toString(),
       productsLabel: (m['products_label'] ?? '').toString(),
       hasProducts: m['has_products'] == true,
@@ -342,6 +362,58 @@ class CatBrowse {
       nextOffset: (m['next_offset'] as num?)?.toInt() ?? 0,
     );
   }
+}
+
+/// CMD #1909 — one of the two availability groups a catalogue list is ordered
+/// into. [label] already carries its count ("Available in your zone (5)") and
+/// is printed exactly as it arrived; [count] is here for nothing but tests and
+/// is never re-rendered into a label by the app.
+class CatGroup {
+  final String key;
+  final String label;
+  final int? count;
+
+  const CatGroup({required this.key, required this.label, required this.count});
+
+  static CatGroup fromMap(Object? raw) {
+    final m = raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
+    return CatGroup(
+      key: (m['key'] ?? '').toString(),
+      label: (m['label'] ?? '').toString(),
+      count: m['count'] is num ? (m['count'] as num).toInt() : null,
+    );
+  }
+}
+
+/// One row of a catalogue PRODUCT list: the card, plus the divider the BACKEND
+/// asked to be drawn above it. (Not [CatRow] — that is a browse row, a company
+/// or a salt on the way to a list like this one.)
+///
+/// The divider travels on the row that OPENS a group rather than as a separate
+/// list the app has to interleave. That is what makes paging safe: page two of
+/// the same group arrives with every [dividerLabel] empty, so a header is
+/// never repeated and never lost, and the app never compares one page's last
+/// item with the next page's first to work out where a group changed.
+class CatListRow {
+  final String dividerLabel;
+
+  /// 'in' | 'out', or '' when the list is not grouped at all (anonymous
+  /// viewers, and any viewer whose zone has no counts built yet).
+  final String group;
+
+  final Product product;
+
+  const CatListRow({
+    required this.dividerLabel,
+    required this.group,
+    required this.product,
+  });
+
+  static CatListRow fromMap(Map<String, dynamic> m) => CatListRow(
+        dividerLabel: (m['divider_label'] ?? '').toString(),
+        group: (m['group'] ?? '').toString(),
+        product: Product.fromHomeCard(m),
+      );
 }
 
 /// `catalogue_list()` — one page of products for any scope.
@@ -367,7 +439,18 @@ class CatList {
   final CatSentence sentence;
   final CatEmptyState empty;
 
-  final List<Product> items;
+  /// CMD #1908 — the breadcrumb for this scope.
+  final CatTrail trail;
+
+  /// CMD #1909 — true when the backend split this list into the two zone
+  /// groups. False is not "no zone": it is "this list is one flat run", which
+  /// is what an anonymous visitor gets.
+  final bool grouped;
+
+  /// The two groups, in the order they appear. Empty when [grouped] is false.
+  final List<CatGroup> groups;
+
+  final List<CatListRow> rows;
   final bool hasMore;
   final String? nextCursor;
 
@@ -386,7 +469,10 @@ class CatList {
     required this.filters,
     required this.sentence,
     required this.empty,
-    required this.items,
+    required this.trail,
+    required this.grouped,
+    required this.groups,
+    required this.rows,
     required this.hasMore,
     required this.nextCursor,
   });
@@ -409,9 +495,14 @@ class CatList {
       sentence: CatSentence.fromMap(m['sentence']),
       empty: CatEmptyState.fromMap(m['empty'],
           fallbackLabel: (m['empty_label'] ?? '').toString()),
-      items: ((m['items'] as List?) ?? const [])
+      trail: CatTrail.fromMap(m['trail']),
+      grouped: m['grouped'] == true,
+      groups: ((m['groups'] as List?) ?? const [])
+          .map(CatGroup.fromMap)
+          .toList(growable: false),
+      rows: ((m['items'] as List?) ?? const [])
           .whereType<Map>()
-          .map((i) => Product.fromHomeCard(Map<String, dynamic>.from(i)))
+          .map((i) => CatListRow.fromMap(Map<String, dynamic>.from(i)))
           .toList(growable: false),
       hasMore: m['has_more'] == true,
       nextCursor: (m['next_cursor'] as String?),
@@ -609,14 +700,27 @@ class CatEmptyAction {
   final bool has;
   final String kind;
   final String label;
-  const CatEmptyAction({required this.has, required this.kind, required this.label});
 
-  static CatEmptyAction fromMap(Object? raw) {
+  /// CMD #1905 — 'primary' | 'secondary', the backend's own word for how
+  /// loudly this way out should be offered. It is never inferred from the
+  /// kind: when filters are on, Clear is the primary and Request the quiet
+  /// one, and only the payload knows that.
+  final String tone;
+
+  const CatEmptyAction({
+    required this.has,
+    required this.kind,
+    required this.label,
+    this.tone = 'primary',
+  });
+
+  static CatEmptyAction fromMap(Object? raw, {String tone = 'primary'}) {
     final m = raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
     return CatEmptyAction(
       has: m['has'] == true,
       kind: (m['kind'] ?? '').toString(),
       label: (m['label'] ?? '').toString(),
+      tone: (m['tone'] ?? tone).toString(),
     );
   }
 }
@@ -628,11 +732,21 @@ class CatEmptyState {
   final CatEmptyAction action;
   final CatEmptyAction clear;
 
+  /// CMD #1905 — the ways out IN THE ORDER THEY ARE DRAWN. "Clear filters"
+  /// comes first when filters are on, because the shopper's own filter is the
+  /// likelier reason the scope is blank; the screen does not re-decide that.
+  /// A payload from before this change carries no `buttons`, so the list is
+  /// rebuilt as `action` then `clear` — exactly the order that payload was
+  /// drawn in. A compat shim reproduces the old behaviour; it never invents
+  /// the new one on a payload that did not ask for it.
+  final List<CatEmptyAction> buttons;
+
   const CatEmptyState({
     required this.label,
     required this.hint,
     required this.action,
     required this.clear,
+    this.buttons = const [],
   });
 
   static const CatEmptyState none = CatEmptyState(
@@ -644,11 +758,24 @@ class CatEmptyState {
   static CatEmptyState fromMap(Object? raw, {String fallbackLabel = ''}) {
     final m = raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
     final label = (m['label'] ?? '').toString();
+    final action = CatEmptyAction.fromMap(m['action']);
+    final clear = CatEmptyAction.fromMap(m['clear'], tone: 'secondary');
+    final sent = (m['buttons'] as List<dynamic>?)
+        ?.whereType<Map>()
+        .map((e) => CatEmptyAction.fromMap(
+            {...Map<String, dynamic>.from(e), 'has': true}))
+        .where((b) => b.label.isNotEmpty)
+        .toList(growable: false);
     return CatEmptyState(
       label: label.isEmpty ? fallbackLabel : label,
       hint: (m['hint'] ?? '').toString(),
-      action: CatEmptyAction.fromMap(m['action']),
-      clear: CatEmptyAction.fromMap(m['clear']),
+      action: action,
+      clear: clear,
+      buttons: sent ??
+          [
+            if (action.has) action,
+            if (clear.has) clear,
+          ],
     );
   }
 }
@@ -734,5 +861,70 @@ class CatVariantMap {
           .toList(growable: false);
     });
     return CatVariantMap(title: (m['title'] ?? '').toString(), byId: out);
+  }
+}
+
+/// CMD #1908 — one step of the breadcrumb.
+///
+/// The label is a word the backend chose, and [route] is the FOUR values the
+/// catalogue's route is made of, sent as data. Tapping a crumb is "copy this
+/// object into the route" — the app never works out where "Company" goes, and
+/// it never joins "Catalogue" to anything.
+class CatCrumb {
+  final String label;
+  final bool current;
+  final String tab;
+  final List<String> path;
+  final String? listKind;
+  final String? listKey;
+
+  const CatCrumb({
+    required this.label,
+    required this.current,
+    required this.tab,
+    required this.path,
+    required this.listKind,
+    required this.listKey,
+  });
+
+  static CatCrumb fromMap(Object? raw) {
+    final m = raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
+    final r = m['route'] is Map
+        ? Map<String, dynamic>.from(m['route'] as Map)
+        : const <String, dynamic>{};
+    return CatCrumb(
+      label: (m['label'] ?? '').toString(),
+      current: m['current'] == true,
+      tab: (r['tab'] ?? 'browse').toString(),
+      path: ((r['path'] as List?) ?? const [])
+          .map((e) => e.toString())
+          .toList(growable: false),
+      listKind: r['list_kind']?.toString(),
+      listKey: r['list_key']?.toString(),
+    );
+  }
+}
+
+/// The trail every catalogue payload carries. Empty means "the backend sent
+/// none" — never "this screen decided there is nothing to show".
+class CatTrail {
+  final String label;
+  final String separator;
+  final List<CatCrumb> items;
+  const CatTrail({required this.label, required this.separator, required this.items});
+
+  static const CatTrail empty = CatTrail(label: '', separator: '', items: []);
+  bool get isEmpty => items.isEmpty;
+
+  static CatTrail fromMap(Object? raw) {
+    final m = raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
+    return CatTrail(
+      label: (m['label'] ?? '').toString(),
+      separator: (m['separator'] ?? '').toString(),
+      items: ((m['items'] as List?) ?? const [])
+          .whereType<Map>()
+          .map(CatCrumb.fromMap)
+          .toList(growable: false),
+    );
   }
 }

@@ -37,15 +37,18 @@ import '../admin/admin_delivery_waves_screen.dart';
 import '../admin/admin_feedback_screen.dart';
 import '../admin/returns_refunds_screen.dart';
 import '../admin/surface_map_screen.dart';
+import '../admin/payment_alerts_screen.dart';
 import '../admin/dev_queue/triage_inbox_screen.dart';
 import '../admin/damage_report_screen.dart';
 import '../partner/zone_pnl_screen.dart';
 import '../admin/wa_assistant_screen.dart';
+import '../admin/admin_conditions_screen.dart';
 import '../admin/search_synonyms_screen.dart';
 import '../admin/support_threads_screen.dart';
 import '../partner/partner_tasks_screen.dart';
 import '../worker/worker_tasks_screen.dart';
 import '../admin/kyc_review_screen.dart';
+import '../admin/order_cutoff_screen.dart'; // CMD #1934 — the cut-off door
 import '../partner/partner_documents_screen.dart';
 import '../admin/settlement_invoices_screen.dart'; // CHANGE #695 — tax invoices
 import '../partner/partner_issues_screen.dart'; // CHANGE #696 — partner issues
@@ -62,8 +65,37 @@ export '../customer/order_feedback_sheet.dart' show maybeAskOrderFeedback;
 // CHANGE #790 — the typeahead panel and its controller, re-exported so the
 // shell's PART files (shell_header_chrome.dart) can see them without adding a
 // line to home_shell.dart, which sits at 1,998 of a hard 2,000-line guard.
+// CMD #1905 — SearchSuggestion / SearchChip / SearchBoxChip joined the list
+// when a suggestion stopped being a string. A type used by a PART file must be
+// re-exported here or the part cannot name it, and `dart analyze` on one file
+// will not say so — it compiles only when the whole library does.
 export '../../widgets/search_typeahead.dart'
-    show SearchSuggestions, SearchSuggestController;
+    show
+        SearchSuggestions,
+        SearchSuggestController,
+        SearchSuggestion,
+        SearchChip,
+        SearchBoxChip;
+
+/// CMD #1912 — /cart is a real URL.
+///
+/// The cart is a PANEL inside the shell, not a pushed route, so until now the
+/// only way into it was a tap on the pill: nothing in a push notification, a
+/// mail, a shared link or a proof run could land a buyer on their own basket.
+/// The door lives here rather than inline because the shell is held under
+/// 2,000 lines by its own guard — twelve lines in `home_shell.dart` took it to
+/// 2,009 and turned that guard red, which is the exact failure this file was
+/// created to stop (see the header above).
+///
+/// Returns true when the path was ours, so the caller can stop looking. The
+/// panel opens after the first frame for the same reason every other door in
+/// this file does: the navigator does not exist yet while the shell builds.
+bool shellOpenCartOnPath(String path, VoidCallback open) {
+  if (path != '/cart') return false;
+  RenderLog.write('c1912_cart_deeplink', path);
+  WidgetsBinding.instance.addPostFrameCallback((_) => open());
+  return true;
+}
 
 /// The screen a route_key opens, or null when this table does not own it —
 /// null means "keep looking", never "broken", so the shell's own switch and
@@ -73,6 +105,14 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       'delivery_waves' => const AdminDeliveryWavesScreen(),
       'returns_refunds' => const ReturnsRefundsScreen(),
       'surface_map' => const SurfaceMapScreen(),
+      // CMD #1929 — Payment alerts: the notifications the partner phone
+      // forwards, and what the backend matched each one to. The door is HERE
+      // rather than in the shell's own switch for the reason this shard
+      // exists: one more case there put home_shell.dart at 2,006 of a hard
+      // 2,000-line guard. Authorisation is not here either —
+      // payment_alerts_screen() answers on the caller's own role and renders
+      // its own refusal, and the tile comes from feature_registry.
+      'payment_alerts' => const PaymentAlertsScreen(),
       // CHANGE #639 — Triage. Its real entry point is Dev Queue → tools →
       // Proof & QA → Triage, but a findings inbox is what an alert wants to
       // link straight at, and a screen with no URL cannot be screenshotted for
@@ -164,6 +204,11 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       // itself on get_my_role() and the screen renders its refusal, the same
       // story as damage_report above.
       'search_synonyms' => const SearchSynonymsScreen(),
+      // CMD #1910 — Admin → Uses & conditions, the vocabulary behind the
+      // fourth browse door. admin_conditions_list() gates on get_my_role()
+      // and the screen renders that refusal itself, so the fence is the
+      // RPC's and this line is only the door.
+      'admin_conditions' => const AdminConditionsScreen(),
       // CHANGE #695 — the GST tax invoice raised on every settled period, its
       // credit notes and the monthly GSTR-1 register.
       //
@@ -224,6 +269,17 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       // partner_scorecard() resolves the partner from the CALLER — its
       // partnerId argument is an operator filter and never a way in — so the
       // door being open to a role decides nothing about what that role reads.
+      // CMD #1934 — Order cut-off. CMD #1847 built the whole rule (the clock,
+      // the two gates, the auto-cancel, the restoration window, the per-order
+      // actions and the settings writer) and gave it no door of its own: every
+      // knob was reachable only by scrolling the order-alerts screen, and the
+      // audit of who changed what and the never-auto-cancel list had no
+      // surface at all. This is that door.
+      //
+      // Authorisation is NOT here. order_cutoff_screen() gates on
+      // get_my_role() and answers anyone else with `not_admin`, which the
+      // screen renders — the same story as damage_report above.
+      'order_cutoff' => const OrderCutoffScreen(),
       'partner_scorecards' => const AdminPartnerScorecardsScreen(),
       'partner_scorecard' => const PartnerScorecardScreen(),
       _ => null,

@@ -253,16 +253,32 @@ void main() {
   setUpAll(() => RenderLog.flushEnabled = false);
 
   group('CMD #791 — gallery', () {
+    // CMD #1896 — the counter and the zoom hint left the PAGE. The strip of
+    // thumbnails and the "shot 1 of 5 · Pinch to enlarge" caption under the
+    // hero are gone; the hero is one bordered card with dots. The contract
+    // this group defends is unchanged and is asserted where the counter now
+    // lives — inside the full-screen zoom, which is the one place a reader
+    // actually needs to know which of five shots they are looking at.
     testWidgets('prints the BACKEND counter for the visible shot, never its own',
         (tester) async {
       await _pump(tester, _payload());
 
-      // The first shot's counter, verbatim. "1 / 5" is what a client-side
-      // counter would print and is deliberately absent from the payload.
-      expect(find.text('shot 1 of 5'), findsOneWidget);
+      // Not on the page. Neither the payload's counter nor an invented one.
+      expect(find.text('shot 1 of 5'), findsNothing);
       expect(find.text('1 / 5'), findsNothing);
-      // The hint is the backend's word too — not "Tap to zoom" typed here.
-      expect(find.text('Pinch to enlarge'), findsOneWidget);
+      expect(find.text('Pinch to enlarge'), findsNothing);
+      expect(find.byKey(const ValueKey('pdp-gallery-dots')), findsOneWidget,
+          reason: 'five shots still get a page control — dots, not thumbnails');
+
+      // Open the zoom on the hero: there the counter is the BACKEND's string.
+      await tester.tap(find.byKey(const ValueKey('pdp-gallery-shot-0')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('shot 1 of 5'), findsOneWidget);
+      expect(find.text('1 / 5'), findsNothing,
+          reason: '"1 / 5" is what a client-side counter would print');
+      // The dismiss control's word is the backend's too.
+      expect(find.text('Done'), findsOneWidget);
     });
 
     testWidgets('a payload with no gallery block draws no counter at all',
@@ -270,6 +286,7 @@ void main() {
       await _pump(tester, _payload(gallery: false));
       expect(find.text('shot 1 of 5'), findsNothing);
       expect(find.text('Pinch to enlarge'), findsNothing);
+      expect(find.byKey(const ValueKey('pdp-gallery-dots')), findsNothing);
     });
   });
 
@@ -353,7 +370,9 @@ void main() {
       expect(find.text('Add usual qty (9)'), findsNothing);
 
       // …while the content an anonymous visitor IS entitled to still renders.
-      expect(find.text('shot 1 of 5'), findsOneWidget);
+      // CMD #1896 — the gallery proves itself with its page control now; the
+      // counter moved into the zoom.
+      expect(find.byKey(const ValueKey('pdp-gallery-dots')), findsOneWidget);
       expect(find.text('Product details'), findsOneWidget);
       expect(find.text('Uses'), findsOneWidget);
       expect(find.text('Side effects'), findsOneWidget);

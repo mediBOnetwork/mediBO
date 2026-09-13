@@ -246,9 +246,102 @@ class _TestModeScreenState extends State<TestModeScreen> {
       // CMD #1848 — the session token is the backend's to give and take:
       // `token` puts THIS install into test mode, `clear_token` takes it out.
       await TestSessionState.instance.absorb(res);
+      // CMD #1851 — ending a session OFFERS the walkthrough as a journey. The
+      // offer, its wording, its default name and its area are all in the reply;
+      // this screen only asks the question the backend wrote.
+      final offer = res['recording_offer'];
+      if (offer is Map && offer['has'] == true) {
+        _pendingOffer = Map<String, dynamic>.from(offer);
+      }
       return res;
     });
+    final offer = _pendingOffer;
+    _pendingOffer = null;
+    if (offer != null && mounted) await _offerJourney(offer);
   }
+
+  Map<String, dynamic>? _pendingOffer;
+
+  /// The save-as-journey sheet. Every word is [offer]'s; the two fields start
+  /// on the backend's own defaults and the save is one call.
+  Future<void> _offerJourney(Map<String, dynamic> offer) async {
+    final id = offer['recording_id'];
+    if (id is! int) return;
+    final name = TextEditingController(
+        text: (offer['default_name'] ?? '').toString());
+    final area = TextEditingController(
+        text: (offer['default_area'] ?? '').toString());
+    final save = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.fromLTRB(Ds.space.x24, Ds.space.x24, Ds.space.x24,
+            Ds.space.x24 + MediaQuery.of(ctx).viewInsets.bottom),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text((offer['title'] ?? '').toString(), style: Ds.t.subtitle),
+            SizedBox(height: Ds.space.x8),
+            Text((offer['count_label'] ?? '').toString(),
+                style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+            SizedBox(height: Ds.space.x12),
+            Text((offer['body'] ?? '').toString(),
+                style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+            SizedBox(height: Ds.space.x24),
+            TextField(
+              controller: name,
+              decoration: InputDecoration(
+                  labelText: (offer['name_label'] ?? '').toString()),
+            ),
+            SizedBox(height: Ds.space.x12),
+            TextField(
+              controller: area,
+              decoration: InputDecoration(
+                  labelText: (offer['area_label'] ?? '').toString()),
+            ),
+            SizedBox(height: Ds.space.x24),
+            SizedBox(
+              width: double.infinity,
+              height: Ds.touch.minTarget,
+              child: FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: Ds.c.brand,
+                  shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+                ),
+                onPressed: () => Navigator.pop(ctx, true),
+                child: Text((offer['save'] ?? '').toString(),
+                    style: Ds.t.body.copyWith(color: Ds.c.surface)),
+              ),
+            ),
+            SizedBox(height: Ds.space.x8),
+            SizedBox(
+              width: double.infinity,
+              height: Ds.touch.minTarget,
+              child: TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text((offer['discard'] ?? '').toString()),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (save != true || !mounted) return;
+    await _run(() async => _asMapPublic(await Supabase.instance.client.rpc(
+          'recording_promote',
+          params: {
+            'p_recording': id,
+            'p_title': name.text,
+            'p_area': area.text,
+          },
+        )));
+  }
+
+  static Map<String, dynamic> _asMapPublic(dynamic v) =>
+      v is Map ? Map<String, dynamic>.from(v) : <String, dynamic>{};
 
   String _s2(String key) => (_s[key] ?? '').toString();
 

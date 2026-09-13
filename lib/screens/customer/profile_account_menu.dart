@@ -8,7 +8,9 @@ import '../../user_state.dart';
 import '../../widgets/delete_account_section.dart';
 import '../admin/loyalty_admin_screen.dart';
 import '../admin/nav_registry_view.dart' show navIcon, navIconResolves;
+import '../notifications_inbox_screen.dart';
 import '../orders_screen.dart';
+import '../profile_screen.dart';
 import '../rewards_screen.dart';
 import '../wishlist_screen.dart';
 import 'address_book_screen.dart';
@@ -39,6 +41,12 @@ Widget? customerMenuScreen(String routeKey) => switch (routeKey) {
       'cust_staff_logins' => const CustomerStaffScreen(),
       'cust_loyalty_admin' => const LoyaltyAdminScreen(),
       'cust_wishlist' => const WishlistScreen(),
+      // CMD #1914 — the two doors the profile dropdown opens. The avatar's own
+      // tap used to BE the way to My Profile, so 'cust_profile_home' keeps that
+      // door open from inside the sheet; 'cust_notifications' is the inbox the
+      // header bell opened before Om moved it here.
+      'cust_profile_home' => const ProfileScreen(),
+      'cust_notifications' => const NotificationsInboxScreen(),
       'cust_rewards' => const RewardsScreen(),
       _ => null,
     };

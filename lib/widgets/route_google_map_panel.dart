@@ -19,6 +19,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:http/http.dart' as http;
 
+import '../screens/admin/route_stop_checkin_sheet.dart' show routeStopToneColor;
 import '../utils/render_log.dart';
 import 'adaptive_map.dart';
 
@@ -118,11 +119,29 @@ class RouteGoogleMapPanel extends StatefulWidget {
   final Map<String, dynamic> mapData; // route_map() response
   final bool isDesktop;
   final void Function(Map<String, dynamic> stop) onTapStop;
+
+  /// CMD #1878 — route_worker_dots().dots, drawn ON the route map so the
+  /// worker's pin moves along the line he is walking. Empty on every surface
+  /// that has no live feed; each entry's colour, initials and hover text are
+  /// the backend's, exactly as on the live card.
+  final List<Map<String, dynamic>> workers;
+
+  /// CMD #1917 — the map's height, in pixels, decided by the CALLER (which
+  /// gets it from route_view().map_mini_h / map_large_vh). Null keeps the
+  /// pre-#1917 behaviour: the panel picks its own desktop/phone height.
+  ///
+  /// Changing this NEVER rebuilds the map — AdaptiveMap only resizes the
+  /// SizedBox around the live map instance, so a mini <-> large tap costs no
+  /// tiles, no markers and no OSRM call.
+  final double? height;
+
   const RouteGoogleMapPanel({
     super.key,
     required this.mapData,
     required this.isDesktop,
     required this.onTapStop,
+    this.workers = const [],
+    this.height,
   });
 
   @override
@@ -130,13 +149,18 @@ class RouteGoogleMapPanel extends StatefulWidget {
 }
 
 class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
-  final Map<String, Uint8List> _iconCache = {};
+  // CMD #1917 — STATIC, so the drawn marker art survives this widget being
+  // rebuilt and is shared by Today and All plans. Before this they were
+  // instance fields: every trip between the two screens redrew every pin.
+  static final Map<String, Uint8List> _iconCache = {};
 
   // CHANGE #484: road-following polyline fetched from OSRM, cached per
   // route_id so switching Map/List tabs doesn't refetch. Null (or a
   // mismatched route id) means "still on the straight-line fallback".
-  final Map<String, List<MapPoint>> _roadPolylineCache = {};
-  String? _roadFetchInFlightForRouteId;
+  // CMD #1917: static for the same reason — one OSRM call per route, ever,
+  // whichever screen asked for it first.
+  static final Map<String, List<MapPoint>> _roadPolylineCache = {};
+  static String? _roadFetchInFlightForRouteId;
 
   @override
   void initState() {
@@ -386,6 +410,28 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
       ));
     }
 
+    // CMD #1878 — the live dots ride on top of the stops. zIndex above every
+    // stop so a worker standing on a shop is still visible.
+    for (final w in widget.workers) {
+      final wlat = (w['lat'] as num?)?.toDouble();
+      final wlng = (w['lng'] as num?)?.toDouble();
+      if (wlat == null || wlng == null) continue;
+      pins.add(MapPin(
+        id: 'worker_${w['worker_id']}',
+        lat: wlat,
+        lng: wlng,
+        tipAtPoint: false,
+        iconWidth: 26,
+        iconHeight: 26,
+        fallbackColor: routeStopToneColor(w['tone']?.toString()),
+        title: '${w['label'] ?? ''} · ${w['age_label'] ?? ''}',
+        zIndex: 5000,
+      ));
+    }
+    if (widget.workers.isNotEmpty) {
+      RenderLog.write('c1878_route_map_workers', widget.workers.length);
+    }
+
     final straightPoints = _pathPoints(data);
     // CHANGE #485: prefer the server-side Google-optimized road polyline when
     // present (authoritative — matches the stop order route_apply_google()
@@ -451,7 +497,7 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
           : null,
       fitBounds: bounds,
       cameraSignature: '${data['route_id']}|${polylinePoints.length}',
-      height: widget.isDesktop ? 420 : 320,
+      height: widget.height ?? (widget.isDesktop ? 420 : 320),
       touchLock: routeMapTouchLock,
       logKey: 'c634_route_map',
     );

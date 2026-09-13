@@ -108,6 +108,11 @@ const supplierKeys    = argv.includes('--supplier-keys');
 // and reads the render-log THERE; --shot saves that page's pixels, which is the
 // screenshot the completion gate asks for.
 const adminPath       = argVal('--admin-path');
+// CMD #1892 — the admin phase always drove a 1280px desktop, so a screenshot of
+// a responsive admin screen could only ever prove the wide layout. --admin-width
+// drives the same authed session at a phone width (390) or anything else; it
+// defaults to 1280, so every existing caller behaves exactly as before.
+const adminWidth      = parseInt(argVal('--admin-width') || '1280', 10);
 const shotPath        = argVal('--shot');
 
 // CMD #466 — a card BELOW the fold is still unphotographed evidence.
@@ -173,16 +178,13 @@ const supplierWheel   = parseInt(argVal('--supplier-wheel') || '0', 10);
 // below the shell's 900 px breakpoint — so the one thing that most needed
 // proving could not be photographed by the one tool that can photograph an
 // authenticated Flutter page. `--customer-width 390` drives the phone.
-// CMD #1849 — the ADMIN phase had no viewport flag at all.
+// CMD #1849 — the admin phase takes a HEIGHT too.
 //
-// devcmd.sh's `phoneproof <id> --admin <route>` has been passing --admin-width
-// since #1950 and this file simply did not read it, so every "phone" proof of
-// an authed admin route was silently captured at 1280x800. A desktop pixel
-// filed as a 360px capture is worse than no capture: the mobile-first gate goes
-// green on evidence of the wrong viewport. Same default as the others, so an
-// explicit desktop shot is unchanged.
-const adminWidth  = parseInt(argVal('--admin-width') || '1280', 10);
-const adminHeight = parseInt(argVal('--admin-height') || '800', 10);
+// --admin-width arrived with the responsive admin proof; the height stayed
+// wired to one number, so a phone capture was 360 px wide and 900 px tall, a
+// viewport no phone has. The customer and supplier phases have had the pair
+// since #536. Same default as theirs.
+const adminHeight = parseInt(argVal('--admin-height') || '900', 10);
 
 // CMD #1849 — a surface that only exists after a TAP.
 //
@@ -672,7 +674,9 @@ async function phaseAdmin(browser, session, expectedHash) {
 
   for (let attempt = 1; attempt <= MAX_RETRIES && !passed; attempt++) {
     console.log(`  Attempt ${attempt}/${MAX_RETRIES}`);
-    const ctx = await browser.newContext({ viewport: { width: adminWidth, height: adminHeight } });
+    const ctx = await browser.newContext({
+      viewport: { width: adminWidth, height: adminHeight },
+    });
     await ctx.addInitScript(({ key, val }) => {
       localStorage.setItem(key, val);
     }, { key: STORAGE_KEY, val: JSON.stringify(session) });
@@ -691,11 +695,18 @@ async function phaseAdmin(browser, session, expectedHash) {
           { waitUntil: 'domcontentloaded', timeout: 30000 });
         await waitForFlutter(page, 10, adminPath);
       }
+      // CMD #1892 — the wheel runs BEFORE the log is read, not just before the
+      // capture. A Flutter SliverList only builds what is in (or near) the
+      // viewport, so a section below the fold has not run its build method yet
+      // and its RenderLog key does not exist. Reading first meant --shot-wheel
+      // photographed the section while the SAME run reported its key MISSING —
+      // which is how the dashboard's tile grids looked broken at 390 px and
+      // fine at 1280 px, on one identical build. Scroll, then read, then shoot.
+      await wheelBeforeShot(page);
       const logText = await readRenderLog(page);
       lastLog = logText;
       if (shotPath) {
         try {
-          await wheelBeforeShot(page);
           await tapBeforeShot(page);
           await page.screenshot({ path: shotPath, fullPage: false });
           console.log(`  Screenshot : ${shotPath}`);

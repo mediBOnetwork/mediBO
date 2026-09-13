@@ -6,54 +6,48 @@ import '../design_tokens.dart';
 import '../models/product.dart';
 import '../theme.dart';
 import 'animations.dart';
+import 'ds_tone.dart';
 import 'notify_control.dart';
 import 'product_image.dart';
 
-/// CHANGE #274 — the storefront product card, rebuilt to the reference
-/// storefront's anatomy, keeping mediBO's B2B trade pricing.
+/// CMD #1926 — the storefront product card, corrected.
 ///
-/// Om put the two apps side by side: theirs read as a finished shop, ours as a
-/// form. The layout is theirs; the money is ours. Top to bottom:
+/// #1293/#1895 shipped the pack-type + ADD row FLOATING under the plate: the
+/// bordered box ended at the photo, and the two controls sat on the page
+/// beneath it looking like they belonged to the card below. The frame is one
+/// block again, and the row is inside it.
 ///
-///  1. **A square white image plate.** Pure white behind the pack shot — a
-///     tinted plate makes every photo look like it was cut out badly.
-///  2. **The pack TYPE sits bottom-LEFT ON the image** ("Strip", "Vial"), in
-///     the plate's own footer strip. CHANGE #287 put it there: that strip is
-///     only as wide as the card minus the add pill, so the long quantity
-///     sentence that used to live here was ellipsised on every card
-///     ("10 tablet er…"). One word always fits. The string is
-///     [Product.packTypeLabel] — MEDICINE.pack_type, decided in the RPC.
-///  3. **The add control is a compact pill, bottom-RIGHT, half over the plate's
-///     edge.** One element crossing one boundary is what separates a card that
-///     was laid out from a card that was designed. It becomes a −/qty/+ pill
-///     the moment something is in the cart.
-///  4. **Below the plate**: the pack QUANTITY chip ("10.0 tablets in 1 strip"
-///     — [Product.packQtyLabel], the stored value verbatim, and no chip at all
-///     when the catalogue has none), the name at exactly two bold lines, the
-///     manufacturer small and grey, then the price.
+/// Top to bottom:
 ///
-/// What is deliberately GONE from #673's card:
-///
-///  * The full-width grey pill. `_FormChip` set `alignment` on a `Container`
-///    under an `Align`, and a Container with a non-null alignment FILLS the
-///    loose constraints it is handed — so the chip stretched the whole card
-///    width and printed the long pack sentence. It hugs its label now.
-///  * The empty 18px offer row under the price. It reserved height on every
-///    card so that a minority could show a chip, and that reserved emptiness
-///    was most of the "large dead gap" Om saw. A scheme badge now rides on the
-///    plate, where it costs no height at all.
-///
-/// The price block is [CardPrice] and is the whole reason this is a B2B card:
-/// MRP struck on its own line as the printed ceiling, PTR under it in a filled
-/// box as the rate the pharmacy actually pays. No "% OFF", no "best offer
-/// applied", no "on orders of ₹999+" — those are consumer-discount devices and
-/// mediBO does not sell that way; discounts land on the bill.
+///  1. **The FRAME** — one bordered, shadowed block containing two things:
+///     the artwork, with the pack sentence badge bottom-left and the Rx badge
+///     top-right; and, beneath it and still inside the border, a single row —
+///     pack TYPE ("Strip") hard left, ADD hard right.
+///  2. **The pack badge** is a LIGHT-green chip with dark-green text. #1895b
+///     made it solid dark green with white text, which read as a second
+///     primary action sitting on the photo; there is only one primary action
+///     on this card and it is ADD.
+///  3. **ADD is OUTLINED green** — white fill, green border, green word. The
+///     card is a grid of twenty of these; twenty filled green buttons is a
+///     wall, and the outline is what lets the artwork stay the loud thing.
+///  4. **The name**, two bold lines, then **the company**, one grey line —
+///     both below the frame.
+///  5. **MRP, struck, always** — the printed ceiling is shown to everyone,
+///     including a visitor who is not signed in.
+///  6. **The sale line**: [CardPrice.priceDisplay]. ONE backend string — the
+///     trade amount when the viewer is approved and a trade price exists, the
+///     literal word "PTR" otherwise.
+///  7. **The zone availability line** — [Availability.availabilityLabel] in
+///     [Availability.availabilityTone]. "Available" for a viewer with no zone,
+///     "Available · Raipur Zone" / "Not available · Raipur Zone" for a buyer
+///     who has one. The app prints it; the ZONE, the count and the wording are
+///     all `storefront_availability()`'s in Postgres.
 ///
 /// Two rules the card keeps:
 ///
-///  * It invents nothing. Every string — pack type, pack quantity, MRP, PTR, the
-///    locked-price note, the ADD word — arrives rendered. There is no number
-///    formatted here and no verdict reached here.
+///  * It invents nothing and it decides nothing. There is no approval check
+///    here, no price arithmetic and no formatting — `price_locked` is the
+///    backend's verdict and `price_display` is the backend's string.
 ///  * Every size is fixed. [extent] is the exact main-axis height the grid and
 ///    the rail reserve, summed from the same constants the widget lays out
 ///    with, so the card cannot grow without its container growing with it.
@@ -78,20 +72,32 @@ class CompactProductCard extends StatelessWidget {
   // viewport.
   static const double tileH = 152;
 
-  /// How far the add pill hangs below the plate. This overhang is the card's
-  /// signature move — set it to 0 and the card goes back to looking like a
-  /// form.
-  static const double _overhang = 14;
+  /// The add control's height, and with it the height of the row it shares
+  /// with the pack type. 34 leaves the whole row a 44pt tap target once the
+  /// gaps above and below it are counted.
   static const double pillH = 34;
 
-  /// The plate's footer strip, holding the pack badge clear of the artwork.
-  static const double _footerH = 30;
+  /// The pack-type + ADD row. CMD #1926 — it is INSIDE the frame now, so its
+  /// height is part of [_frameH] rather than a sibling of the plate.
+  static const double _actionH = pillH;
 
-  static const double _chipH = 18; // pack quantity chip (#287)
+  /// CHANGE #1895b — Om's sketch: the pack sentence is a GREEN BADGE lying ON
+  /// the photo at its bottom edge, not a grey strip under it. The artwork now
+  /// fills the whole plate and the badge floats over it, so this is the
+  /// badge's own height (what the purchase badge has to clear), not a band
+  /// carved out of the image.
+  static const double _footerH = 20;
+
   static const double _nameH = 36; // exactly two 18px lines
-  static const double _mfrH = 15; // manufacturer, one line
-  static const double _mrpH = 15; // "MRP ₹117.19", struck
-  static const double _ptrH = 22; // the filled trade-price box
+  static const double _mfrH = 15; // company, one line
+  static const double _mrpH = 15; // "MRP ₹174.38", struck
+  static const double _ptrH = 22; // the sale line: the amount, or "PTR"
+
+  /// CMD #1926 — the zone availability line under the sale price
+  /// ("Available · Raipur Zone"). Reserved whether or not the payload sent
+  /// one, so a card whose backend predates this cannot be a different height
+  /// from the card beside it.
+  static const double _availH = 16;
 
   // Named gaps — the 4/8/12/16 rhythm, as constants so the design-literal gate
   // sees no bare numbers inside an EdgeInsets/SizedBox on a styling line.
@@ -103,14 +109,23 @@ class CompactProductCard extends StatelessWidget {
   /// measuring the tappable image area).
   static const double cardHeight = tileH;
 
+  /// The frame's hairline, as a named constant: `Border.all` eats it out of
+  /// the box's CONTENT height, so leaving it out of [_frameH] overflowed the
+  /// inner Column by exactly 2 px (one hairline top, one bottom) on the first
+  /// build of this change.
+  static const double _frameBorderW = 1;
+
+  /// CMD #1926 — the bordered block: artwork, then the pack-type + ADD row,
+  /// with the frame's own bottom padding under it. Everything inside ONE
+  /// border, which is the whole point of this change.
+  static const double _frameH =
+      tileH + _gapM + _actionH + _gapL + _frameBorderW * 2; // 202
+
   /// The grid's mainAxisExtent and the rail's height. Summed from the parts
   /// above so a change to the card can never silently overflow its container
   /// the way a hardcoded number did.
   static const double extent =
-      tileH +
-      _overhang + // the pill hangs into this
-      _gapL +
-      _chipH +
+      _frameH +
       _gapM +
       _nameH +
       _gapS +
@@ -118,7 +133,9 @@ class CompactProductCard extends StatelessWidget {
       _gapM +
       _mrpH +
       _gapS +
-      _ptrH; // 298
+      _ptrH +
+      _gapS +
+      _availH; // 328
 
   /// Hero tag shared with the product page's first carousel image.
   static String heroTag(String id) => 'pd-img-$id';
@@ -140,54 +157,17 @@ class CompactProductCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            SizedBox(
-              height: tileH + _overhang,
-              child: Stack(
-                children: [
-                  // Dimming the sold-out plate is a visual treatment of the
-                  // backend's own verdict, not a second opinion about it.
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    top: 0,
-                    child: Opacity(
-                      opacity: soldOut ? 0.45 : 1.0,
-                      child: _Plate(
-                        product: product,
-                        pricing: pricing,
-                        soldOut: soldOut,
-                        soldOutLabel: soldOut ? av.ctaLabel : '',
-                      ),
-                    ),
-                  ),
-                  // The overlap. Sits above the dim layer because it is the one
-                  // thing a sold-out card is still for.
-                  Positioned(
-                    right: _gapL,
-                    bottom: 0,
-                    child: soldOut
-                        ? SizedBox(
-                            height: pillH,
-                            child: Center(
-                              child: NotifyControl(productId: product.id),
-                            ),
-                          )
-                        : CompactCartControl(product: product),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: _gapL),
-            // CHANGE #287 — the pack QUANTITY chip. The two pack strings swapped
-            // places: the long sentence gets the full card width here, the one
-            // word gets the narrow gap beside the ADD pill. Empty label = no
-            // chip at all (most `Piece` rows carry no pack_qty); the row's
-            // height stays reserved so the grid's fixed extent still holds.
-            SizedBox(
-              height: _chipH,
-              child: product.packQtyLabel.isEmpty
-                  ? const SizedBox.shrink()
-                  : _TypeChip(text: product.packQtyLabel),
+            // CMD #1926 — ONE bordered block. The plate and the action row
+            // used to be siblings, with the border stopping at the photo; the
+            // row then read as loose furniture between two cards. Only the
+            // ARTWORK dims when a pack is sold out — the row inside the frame
+            // stays legible, because Notify is the one thing a sold-out card
+            // is still for.
+            _Frame(
+              product: product,
+              pricing: pricing,
+              soldOut: soldOut,
+              soldOutLabel: soldOut ? av.ctaLabel : '',
             ),
             const SizedBox(height: _gapM),
             SizedBox(
@@ -213,7 +193,21 @@ class CompactProductCard extends StatelessWidget {
               ),
             ),
             const SizedBox(height: _gapM),
-            _CardPriceBlock(price: pricing?.cardPrice),
+            CardPriceLines(
+              price: pricing?.cardPrice,
+              mrpHeight: _mrpH,
+              priceHeight: _ptrH,
+              gap: _gapS,
+            ),
+            const SizedBox(height: _gapS),
+            // CMD #1926 — the zone line. One backend string in one backend
+            // tone; there is no branch here on sign-in, on approval or on a
+            // count, because `storefront_availability()` already answered all
+            // three when it chose the words.
+            SizedBox(
+              height: _availH,
+              child: AvailabilityLine(availability: av),
+            ),
           ],
         ),
       ),
@@ -221,20 +215,138 @@ class CompactProductCard extends StatelessWidget {
   }
 }
 
-/// The image plate: white, hairline-bordered, one soft shadow, with the pack
-/// badge in a footer strip along its bottom edge.
+/// CMD #1926 — the availability line, shared by the compact card and the
+/// catalogue/search row so the two can never word the same verdict differently.
 ///
-/// The pack badge lives INSIDE the plate deliberately — twice over. It is
-/// where Om asked for it, and putting it below would make the text block's
-/// height depend on whether a product has a pack label, which a fixed-extent
-/// grid cannot survive.
-class _Plate extends StatelessWidget {
+/// It prints [Availability.availabilityLabel] verbatim and colours it through
+/// [dsToneFg], the app's ONE tone→colour lookup. An empty label (a payload
+/// built before #1926, or a cart line whose product could not be resolved) is
+/// an absence the backend declared: nothing is rendered and nothing is guessed.
+class AvailabilityLine extends StatelessWidget {
+  final Availability? availability;
+  final TextAlign align;
+
+  const AvailabilityLine({
+    super.key,
+    required this.availability,
+    this.align = TextAlign.left,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final a = availability;
+    if (a == null || a.availabilityLabel.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Text(
+      a.availabilityLabel,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      textAlign: align,
+      style: AppType.t2.copyWith(
+        color: dsToneFg(a.availabilityTone),
+        fontWeight: FontWeight.w600,
+      ),
+    );
+  }
+}
+
+/// CMD #1926 — THE FRAME. White, hairline-bordered, one soft shadow, and it
+/// holds BOTH the artwork and the pack-type + ADD row.
+///
+/// #1895 drew the border around the photo alone and left the row outside it.
+/// On a two-column grid that reads as a card followed by two loose controls,
+/// and at a glance the controls attach themselves to the card BELOW. One
+/// border around both is the correction.
+///
+/// The pack badge lives on the artwork deliberately — twice over. It is where
+/// Om asked for it, and putting it below would make the text block's height
+/// depend on whether a product has a pack label, which a fixed-extent grid
+/// cannot survive.
+class _Frame extends StatelessWidget {
   final Product product;
   final Pricing? pricing;
   final bool soldOut;
   final String soldOutLabel;
 
-  const _Plate({
+  const _Frame({
+    required this.product,
+    required this.pricing,
+    required this.soldOut,
+    required this.soldOutLabel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: CompactProductCard._frameH,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(Rad.card),
+        border: Border.all(
+          color: Brand.border,
+          width: CompactProductCard._frameBorderW,
+        ),
+        boxShadow: Ds.elevation.e1,
+      ),
+      child: Column(
+        children: [
+          SizedBox(
+            height: CompactProductCard.tileH,
+            child: _Artwork(
+              product: product,
+              pricing: pricing,
+              soldOut: soldOut,
+              soldOutLabel: soldOutLabel,
+            ),
+          ),
+          const SizedBox(height: CompactProductCard._gapM),
+          // The action row, INSIDE the border. The pack TYPE is one word
+          // ("Strip", "Vial") and sits hard left; the add control sits hard
+          // right. The row's height is reserved whether or not either is
+          // present, so a product with no pack type cannot shorten the card.
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              CompactProductCard._gapL,
+              0,
+              CompactProductCard._gapL,
+              CompactProductCard._gapL,
+            ),
+            child: SizedBox(
+              height: CompactProductCard._actionH,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: product.packTypeLabel.isEmpty
+                        ? const SizedBox.shrink()
+                        : _TypeChip(text: product.packTypeLabel),
+                  ),
+                  const SizedBox(width: CompactProductCard._gapM),
+                  soldOut
+                      ? NotifyControl(productId: product.id)
+                      : CompactCartControl(product: product),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The artwork half of the frame: the photo, the margin ribbon, the scheme /
+/// Rx stack and the pack badge. Split out of [_Frame] so the sold-out DIM
+/// applies to the picture alone — the row below it holds Notify, which is the
+/// one control a sold-out card exists for and must stay at full contrast.
+class _Artwork extends StatelessWidget {
+  final Product product;
+  final Pricing? pricing;
+  final bool soldOut;
+  final String soldOutLabel;
+
+  const _Artwork({
     required this.product,
     required this.pricing,
     required this.soldOut,
@@ -257,23 +369,13 @@ class _Plate extends StatelessWidget {
         badge.label.isNotEmpty;
     final offerText = (!hasBadge && product.hasOffer) ? product.offerChip : '';
 
-    return Container(
-      height: CompactProductCard.tileH,
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(Rad.card),
-        border: Border.all(color: Brand.border),
-        boxShadow: Ds.elevation.e1,
-      ),
+    return Opacity(
+      opacity: soldOut ? 0.45 : 1.0,
       child: Stack(
         children: [
-          // The artwork sits above the footer strip, never under the badge.
-          Positioned(
-            left: 0,
-            right: 0,
-            top: 0,
-            bottom: CompactProductCard._footerH,
+          // #1895b — the artwork fills the plate. The pack badge lies on top of
+          // it (below), which is what "inside the image" means on the sketch.
+          Positioned.fill(
             child: Padding(
               padding: const EdgeInsets.all(CompactProductCard._gapL),
               child: Center(
@@ -282,13 +384,9 @@ class _Plate extends StatelessWidget {
                   child: ProductImage(
                     url: product.imageUrl,
                     width:
-                        CompactProductCard.tileH -
-                        CompactProductCard._footerH -
-                        CompactProductCard._gapL * 2,
+                        CompactProductCard.tileH - CompactProductCard._gapL * 2,
                     height:
-                        CompactProductCard.tileH -
-                        CompactProductCard._footerH -
-                        CompactProductCard._gapL * 2,
+                        CompactProductCard.tileH - CompactProductCard._gapL * 2,
                     radius: BorderRadius.circular(Rad.tile),
                   ),
                 ),
@@ -321,7 +419,8 @@ class _Plate extends StatelessWidget {
           if (product.purchase.has)
             Positioned(
               left: CompactProductCard._gapM,
-              bottom: CompactProductCard._footerH + CompactProductCard._gapS,
+              bottom:
+                  CompactProductCard._footerH + CompactProductCard._gapL * 2,
               child: _PurchaseBadge(
                 product: product,
                 enabled: !soldOut && product.purchase.canAdd,
@@ -351,39 +450,37 @@ class _Plate extends StatelessWidget {
                   if (product.hasRxBadge) ...[
                     if (hasBadge || offerText.isNotEmpty)
                       SizedBox(height: Ds.space.x4),
-                    _C461RxChip(
-                      label: product.rxLabel,
-                      tone: product.rxTone,
-                    ),
+                    _C461RxChip(label: product.rxLabel, tone: product.rxTone),
                   ],
                 ],
               ),
             ),
-          // The footer strip: pack badge left, kept clear of the pill's corner.
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            height: CompactProductCard._footerH,
-            child: Container(
-              color: Brand.section,
-              padding: const EdgeInsets.only(
-                left: CompactProductCard._gapM * 2,
-                right: CompactProductCard._gapL * 9,
+          // CMD #1926 — the pack SENTENCE ("10 capsules in 1 strip") is a
+          // LIGHT-green chip with dark-green text, bottom-left on the photo
+          // and inside the frame. #1895b made it solid dark green with white
+          // text; that is the weight of a primary action, and the only primary
+          // action on this card is ADD. It hugs its text (a Row, so the
+          // Container is not stretched to the plate width) and ellipsises
+          // inside the plate rather than painting past it.
+          //
+          // Sold out, the same slot carries the backend's own out-of-stock
+          // word instead — one badge, never two stacked on the artwork.
+          if (product.packQtyLabel.isNotEmpty ||
+              (soldOut && soldOutLabel.isNotEmpty))
+            Positioned(
+              left: CompactProductCard._gapL,
+              right: CompactProductCard._gapL,
+              bottom: CompactProductCard._gapL,
+              child: Row(
+                children: [
+                  Flexible(
+                    child: (soldOut && soldOutLabel.isNotEmpty)
+                        ? _MiniChip(text: soldOutLabel, strong: true)
+                        : _PackBadge(text: product.packQtyLabel),
+                  ),
+                ],
               ),
-              alignment: Alignment.centerLeft,
-              child: (soldOut && soldOutLabel.isNotEmpty)
-                  ? _MiniChip(text: soldOutLabel, strong: true)
-                  // CHANGE #287 — one word ("Strip", "Vial"), because this
-                  // strip is only as wide as the card minus the add pill.
-                  : Text(
-                      product.packTypeLabel,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppType.t1.copyWith(color: Brand.inkSub),
-                    ),
             ),
-          ),
         ],
       ),
     );
@@ -531,6 +628,12 @@ class _AddPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // CMD #1926 — OUTLINED green again. #1895b filled it solid, which on a
+    // 2-column grid paints twenty solid green blocks down the page and makes
+    // the photographs the quietest thing on a product screen. The outline
+    // still reads as the one action on the card; it just stops shouting.
+    // The STEPPER stays solid — filling it is how "this is in your cart"
+    // differs from "you may add this".
     return Material(
       color: Colors.white,
       borderRadius: BorderRadius.circular(Rad.tile),
@@ -540,7 +643,7 @@ class _AddPill extends StatelessWidget {
         child: Ink(
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(Rad.tile),
-            border: Border.all(color: Brand.accent, width: 1.5),
+            border: Border.all(color: Brand.accent, width: _borderW),
           ),
           child: Center(
             // The button text is the backend's, printed verbatim. An empty
@@ -560,6 +663,10 @@ class _AddPill extends StatelessWidget {
       ),
     );
   }
+
+  /// The outline's weight. Named so the design-literal gate sees no bare
+  /// number on a styling line.
+  static const double _borderW = 1.5;
 }
 
 class _Stepper extends StatelessWidget {
@@ -608,6 +715,41 @@ class _StepIcon extends StatelessWidget {
       width: 24,
       height: CompactProductCard.pillH,
       child: Icon(icon, size: 16, color: Colors.white),
+    ),
+  );
+}
+
+/// CMD #1926 — the pack sentence, as a LIGHT-green chip with dark-green text,
+/// lying on the photo's bottom edge ("10 capsules in 1 strip").
+///
+/// The sentence itself is the backend's `pack_qty_label`, printed verbatim —
+/// nothing here counts units or picks a plural. #1895b painted it solid dark
+/// green on white, which gave a label the weight of a button and put two
+/// primary-looking greens on one card; the tint keeps it readable over a
+/// photograph without competing with ADD. It hugs its text so a short
+/// sentence does not paint a bar the width of the plate.
+class _PackBadge extends StatelessWidget {
+  final String text;
+  const _PackBadge({required this.text});
+
+  static const double _padH = 8;
+  static const double _padV = 3;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: _padH, vertical: _padV),
+    decoration: BoxDecoration(
+      color: Brand.accentSoft,
+      borderRadius: BorderRadius.circular(Rad.chip),
+    ),
+    child: Text(
+      text,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: AppType.t2.copyWith(
+        color: Brand.accentDark,
+        fontWeight: FontWeight.w700,
+      ),
     ),
   );
 }
@@ -694,8 +836,7 @@ class _MiniChip extends StatelessWidget {
   );
 }
 
-/// CHANGE #274 — the B2B price block: MRP struck on its own line, PTR under it
-/// in a filled box.
+/// CHANGE #1895 — the B2B price block: the struck MRP, then the sale line.
 ///
 /// Every branch here is a backend boolean, never a test on a string being
 /// empty:
@@ -703,35 +844,52 @@ class _MiniChip extends StatelessWidget {
 ///  * [CardPrice.hasMrp] — the catalogue has a printed price at all. 9.7% of
 ///    MEDICINE rows carry no mrp, and "₹0.00" reads as FREE rather than
 ///    unknown.
-///  * [CardPrice.strikeMrp] — strike it only when a trade price sits beneath.
-///  * [CardPrice.hasPtr] — the viewer is entitled to a trade price AND one
-///    exists. An un-entitled viewer's payload has no ptr key at all, so this
-///    widget is not hiding anything: there is nothing here to hide.
-///  * [CardPrice.hasNote] — what to tell a visitor who is not entitled yet.
-///    Its wording is the backend's, so "register and get approved" can be
-///    reworded with an UPDATE.
-class _CardPriceBlock extends StatelessWidget {
+///  * [CardPrice.strikeMrp] — the MRP is the printed ceiling and is struck
+///    whether or not the viewer may see a trade rate. What sits under it is
+///    an amount for one viewer and the word "PTR" for another.
+///  * [CardPrice.priceLocked] — the backend's entitlement verdict, and the
+///    ONLY thing that decides whether the sale line is tappable. An
+///    unentitled viewer's payload carries no trade number at all, so this
+///    widget is not hiding one: there is nothing here to hide.
+///
+/// What LEFT the card in #1895: the "Register and get approved to see trade
+/// prices" sentence. It was a third line of copy on every card a visitor saw;
+/// it is the prompt behind the word now.
+///
+/// It is PUBLIC because the catalogue card renders the same two lines from the
+/// same block: "identical everywhere" is one widget, not two that agree today.
+/// The two heights are the caller's, because the two grids reserve different
+/// extents; everything else is shared.
+class CardPriceLines extends StatelessWidget {
   final CardPrice? price;
-  const _CardPriceBlock({required this.price});
+  final double mrpHeight;
+  final double priceHeight;
+  final double gap;
+
+  const CardPriceLines({
+    super.key,
+    required this.price,
+    required this.mrpHeight,
+    required this.priceHeight,
+    required this.gap,
+  });
 
   @override
   Widget build(BuildContext context) {
     final p = price;
     if (p == null) {
-      return const SizedBox(
-        height:
-            CompactProductCard._mrpH +
-            CompactProductCard._gapS +
-            CompactProductCard._ptrH,
-      );
+      return SizedBox(height: mrpHeight + gap + priceHeight);
     }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
+        // Line 4 — the MRP. Struck whenever the backend says so, which since
+        // #1895 is whenever there is one: the printed ceiling is a fact about
+        // the pack, not about who is looking at it.
         SizedBox(
-          height: CompactProductCard._mrpH,
+          height: mrpHeight,
           child: !p.hasMrp
               ? const SizedBox.shrink()
               : Row(
@@ -762,92 +920,160 @@ class _CardPriceBlock extends StatelessWidget {
                   ],
                 ),
         ),
-        const SizedBox(height: CompactProductCard._gapS),
+        SizedBox(height: gap),
+        // Line 5 — the sale line. ONE string either way, so there is no branch
+        // here on approval, on a role, or on whether a number arrived: the
+        // backend already answered all three when it chose what to put in
+        // price_display. The only thing the lock changes is the tap.
         SizedBox(
-          height: CompactProductCard._ptrH,
-          child: p.hasPtr
-              ? _PtrBox(price: p)
-              : (p.hasNote
-                    ? Text(
-                        p.note,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppType.t2.copyWith(
-                          color: Brand.inkMuted,
-                          height: 11 / 10,
-                        ),
-                      )
-                    : const SizedBox.shrink()),
+          height: priceHeight,
+          child: _SaleLine(price: p, height: priceHeight),
         ),
       ],
     );
   }
 }
 
-/// The trade price, in a solid filled box. This is the number the pharmacy
-/// pays; the box is what makes it, and not the struck MRP above it, read as
-/// the price of the product.
-class _PtrBox extends StatelessWidget {
+/// The sale line: the backend's caption, then [CardPrice.priceDisplay] riding
+/// in a badge the backend colours.
+///
+/// CHANGE #1895b — Om's sketch turned the bare bold amount into a labelled
+/// row: "Sale price:" in caption grey, then the value on a green plate. Both
+/// the caption ([CardPrice.saleLabel]) and the two colours
+/// ([CardPrice.saleBg] / [CardPrice.saleFg]) arrive in the payload, so the
+/// word and the green are an UPDATE to `storefront_ui_label`, not a deploy.
+/// A payload built before #1895b carries neither, and the fallbacks below
+/// keep it rendering the card's own accent rather than nothing.
+///
+/// Locked, the value is the word the backend chose ("PTR") and the badge
+/// opens that block's own prompt. Unlocked, it is the trade amount and it is
+/// inert — tapping the card is what opens the product. Nothing here knows
+/// which of the two it is holding; [CardPrice.priceLocked] is the backend's
+/// verdict.
+///
+/// [height] is the extent the caller reserved (22 on the compact card, 20 on
+/// the catalogue one). The badge is EXACTLY that tall rather than padded to
+/// whatever its font needs, which is what keeps one widget safe inside two
+/// grids whose rows are different heights.
+class _SaleLine extends StatelessWidget {
   final CardPrice price;
-  const _PtrBox({required this.price});
+  final double height;
+  const _SaleLine({required this.price, required this.height});
 
-  static const double _padH = 7;
+  /// The badge's side padding. Vertical padding would fight [height].
+  static const double _padH = 8;
 
-  // Same reason as _TypeChip: a Row so the box sits hard left in the card's
-  // full-width price column, rather than being centred by the SizedBox that
-  // reserves its height.
   @override
-  Widget build(BuildContext context) => Row(
-    children: [
-      Flexible(
-        child: Container(
-          height: CompactProductCard._ptrH,
-          padding: const EdgeInsets.symmetric(horizontal: _padH),
-          decoration: BoxDecoration(
-            color: price.ptrBg == null ? Brand.accent : Color(price.ptrBg!),
-            borderRadius: BorderRadius.circular(Rad.chip),
+  Widget build(BuildContext context) {
+    if (price.priceDisplay.isEmpty) return const SizedBox.shrink();
+
+    // A Container with a null alignment shrink-wraps its child, which is the
+    // whole reason the badge hugs "₹99.56" instead of painting a green bar
+    // the width of the card — the same trap [_TypeChip] documents.
+    final badge = Container(
+      height: height,
+      padding: const EdgeInsets.symmetric(horizontal: _padH),
+      decoration: BoxDecoration(
+        color: price.saleBg == null ? Brand.accent : Color(price.saleBg!),
+        borderRadius: BorderRadius.circular(Rad.chip),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(
+            child: Text(
+              price.priceDisplay,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppType.l5.copyWith(
+                fontWeight: FontWeight.w800,
+                color: price.saleFg == null
+                    ? Colors.white
+                    : Color(price.saleFg!),
+              ),
+            ),
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              // Both halves are Flexible: the label and the number are BOTH
-              // backend strings, and a card 148pt wide in a rail on a 360pt
-              // phone must survive "NET RATE" replacing "PTR" without a
-              // deploy. A copy edit is a data change; it may never overflow.
-              if (price.ptrLabel.isNotEmpty) ...[
-                Flexible(
-                  child: Text(
-                    price.ptrLabel,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppType.t2.copyWith(
-                      color: price.ptrFg == null
-                          ? Colors.white
-                          : Color(price.ptrFg!),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: CompactProductCard._gapS),
-              ],
-              Flexible(
-                child: Text(
-                  price.ptrDisplay,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppType.l5.copyWith(
-                    fontWeight: FontWeight.w800,
-                    color: price.ptrFg == null
-                        ? Colors.white
-                        : Color(price.ptrFg!),
-                  ),
+          if (price.priceLocked) ...[
+            const SizedBox(width: CompactProductCard._gapS),
+            Icon(
+              Icons.lock_outline_rounded,
+              size: Ds.space.x12,
+              color: price.saleFg == null ? Colors.white : Color(price.saleFg!),
+            ),
+          ],
+        ],
+      ),
+    );
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        if (price.saleLabel.isNotEmpty) ...[
+          Text(
+            price.saleLabel,
+            maxLines: 1,
+            style: AppType.t1.copyWith(color: Brand.inkSub),
+          ),
+          const SizedBox(width: CompactProductCard._gapM),
+        ],
+        Flexible(
+          child: price.priceLocked
+              ? InkWell(
+                  onTap: () => showPriceLockedSheet(context, price),
+                  borderRadius: BorderRadius.circular(Rad.chip),
+                  child: badge,
+                )
+              : badge,
+        ),
+      ],
+    );
+  }
+}
+
+/// The register/approval prompt the locked word opens.
+///
+/// A sheet, not a dialog (the design contract), and every word in it — the
+/// heading, the sentence, the button, and the ROUTE the button takes — is the
+/// payload's. Nothing is worded or routed here, so the prompt can be reworded
+/// or re-pointed with an UPDATE to storefront_ui_label.
+Future<void> showPriceLockedSheet(BuildContext context, CardPrice price) {
+  return showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: Ds.c.surface,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(Rad.card)),
+    ),
+    builder: (sheet) => SafeArea(
+      child: Padding(
+        padding: EdgeInsets.all(Ds.space.x16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (price.lockedTitle.isNotEmpty) ...[
+              Text(price.lockedTitle, style: Ds.t.subtitle),
+              SizedBox(height: Ds.space.x8),
+            ],
+            if (price.lockedNote.isNotEmpty)
+              Text(price.lockedNote, style: Ds.t.body),
+            if (price.lockedCta.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x16),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () {
+                    Navigator.of(sheet).pop();
+                    if (price.lockedRoute.isEmpty) return;
+                    Navigator.of(context).pushNamed(price.lockedRoute);
+                  },
+                  child: Text(price.lockedCta),
                 ),
               ),
             ],
-          ),
+          ],
         ),
       ),
-    ],
+    ),
   );
 }
 
@@ -863,14 +1089,14 @@ class CompactCardSkeleton extends StatelessWidget {
     crossAxisAlignment: CrossAxisAlignment.start,
     mainAxisSize: MainAxisSize.min,
     children: [
+      // CMD #1926 — ONE box for the whole frame: the artwork AND the
+      // pack-type + ADD row now live inside a single border, so the skeleton
+      // must be one block too or the card visibly splits in two on load.
       SkeletonBox(
         width: double.infinity,
-        height: CompactProductCard.tileH,
+        height: CompactProductCard._frameH,
         radius: Rad.card,
       ),
-      // Stands in for the pill overhang, so nothing shifts on load.
-      SizedBox(height: CompactProductCard._overhang + CompactProductCard._gapL),
-      SkeletonBox(width: 44, height: CompactProductCard._chipH),
       SizedBox(height: CompactProductCard._gapM),
       SkeletonBox(width: double.infinity, height: CompactProductCard._nameH),
       SizedBox(height: CompactProductCard._gapS),
@@ -879,6 +1105,8 @@ class CompactCardSkeleton extends StatelessWidget {
       SkeletonBox(width: 72, height: CompactProductCard._mrpH),
       SizedBox(height: CompactProductCard._gapS),
       SkeletonBox(width: 88, height: CompactProductCard._ptrH),
+      SizedBox(height: CompactProductCard._gapS),
+      SkeletonBox(width: 104, height: CompactProductCard._availH),
     ],
   );
 }
@@ -895,7 +1123,9 @@ class _C461RxChip extends StatelessWidget {
     if (label.isEmpty) return const SizedBox.shrink();
     return Container(
       padding: EdgeInsets.symmetric(
-          horizontal: Ds.space.x8, vertical: Ds.space.x4 / 2),
+        horizontal: Ds.space.x8,
+        vertical: Ds.space.x4 / 2,
+      ),
       decoration: BoxDecoration(
         color: Ds.hex(tone?['bg'], Ds.c.infoSoft),
         borderRadius: Ds.r.rChip,
@@ -907,7 +1137,6 @@ class _C461RxChip extends StatelessWidget {
     );
   }
 }
-
 
 /// CMD #791 — the catalogue card's repeat-purchase badge.
 ///
@@ -937,7 +1166,9 @@ class _PurchaseBadge extends StatelessWidget {
           : null,
       child: Container(
         padding: EdgeInsets.symmetric(
-            horizontal: Ds.space.x8, vertical: Ds.space.x4),
+          horizontal: Ds.space.x8,
+          vertical: Ds.space.x4,
+        ),
         decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rChip),
         child: Text(
           o.shortLabel,

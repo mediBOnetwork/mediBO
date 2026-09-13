@@ -75,14 +75,10 @@ typedef FetchPageResult = ({
   // c553_count_label while storefront_page itself was perfectly healthy), and
   // Retry re-read the poisoned entry, so the grid could never recover without
   // a full reload. Callers read it; nothing else in the app branches on it.
+  // CMD #1903 — and nothing else. CHANGE #790's `blocks` (the brand-family
+  // fold) is gone from the envelope and from here: a search page is `items`,
+  // one entry per product, in the backend's own rank order.
   bool degraded,
-  // CHANGE #790 — the search grid's RENDER ORDER, already folded by the
-  // backend: one entry per card, either {kind:'family', ...variants} or
-  // {kind:'product', item}. Empty on browse (which has no families) and on
-  // the outage path. The grid never groups anything itself — brand_family_key
-  // is the rule and it lives in SQL, so a variant list can never disagree
-  // between two screens.
-  List<Map<String, dynamic>> blocks,
 });
 
 /// CHANGE #553 — one product plus the backend's availability verdict, as
@@ -387,11 +383,6 @@ class MedicineRepository {
           .toList(growable: false),
       // A real envelope. Cacheable.
       degraded: false,
-      // CHANGE #790 — present on the SEARCH envelope only.
-      blocks: ((env['blocks'] as List?) ?? const [])
-          .whereType<Map>()
-          .map((b) => Map<String, dynamic>.from(b))
-          .toList(growable: false),
     );
   }
 
@@ -851,7 +842,6 @@ class MedicineRepository {
           sortOptions: const <Map<String, dynamic>>[],
           // Outage fallback — see [FetchPageResult.degraded].
           degraded: true,
-          blocks: const <Map<String, dynamic>>[],
         );
       }
       // CMD #434 — a degraded page is NEVER cached. Caching it under the key
@@ -936,7 +926,6 @@ class MedicineRepository {
           sortOptions: const <Map<String, dynamic>>[],
           // Outage fallback — see [FetchPageResult.degraded].
           degraded: true,
-          blocks: const <Map<String, dynamic>>[],
         );
         // CMD #434 — NOT cached. See [FetchPageResult.degraded].
         return result;
@@ -979,7 +968,6 @@ class MedicineRepository {
       // The non-buyable priority lane never had an envelope to begin with, so
       // it is not a fallback and stays cacheable.
       degraded: false,
-      blocks: const <Map<String, dynamic>>[],
     );
     _cacheSet(_resultCache, cacheKey, result);
     return result;

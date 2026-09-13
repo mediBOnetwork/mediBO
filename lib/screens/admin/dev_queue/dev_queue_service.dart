@@ -57,6 +57,7 @@ class DevQueueService {
     'recording_step_add',
     'recording_stop',
     'recording_promote',
+    'recording_replay',
     // CHANGE #636 — the safety net judges PRODUCTION's own RPC surface: its
     // pg_proc, its grants, its guards, its money and its stock. Pointing it at
     // the control plane would grade the wrong database and pass.
@@ -332,6 +333,13 @@ class DevQueueService {
         'p_title': title,
         'p_area': area,
       }));
+
+  /// CMD #1851 — replay a recorded walkthrough: every RPC it recorded is called
+  /// again with the arguments it was given, the answers are compared against
+  /// the ones it got, and every write is rolled back. The verdict, the step
+  /// that diverged and the words for it are all the backend's.
+  Future<Map<String, dynamic>> recordingReplay(int recording) async =>
+      _asMap(await _rpc('recording_replay', params: {'p_recording': recording}));
 
   /// The journey library: every enabled journey, optionally scoped to an area.
   /// Rendered verbatim in the Journey Library screen.
@@ -714,6 +722,13 @@ class DevQueueService {
   Future<Map<String, dynamic>> autoscaleState() async =>
       _asMap(await _rpc('runner_autoscale_state'));
 
+  /// CMD #1911 — the Deploy lock banner. One render-ready payload: who holds
+  /// the lock RIGHT NOW (its real command id, never a number baked into a
+  /// string), how long of the hold cap it has used, and the forced releases
+  /// the reaper has had to make. Every string is the backend's.
+  Future<Map<String, dynamic>> deployLockBanner() async =>
+      _asMap(await _rpc('deploy_lock_banner'));
+
   /// CHANGE #1401 — the Runner card's re-login tap, the SAME RPC the Cron
   /// health panel calls, so the two surfaces can never start different logins.
   /// The backend starts `claude auth login` on the VM and answers with the
@@ -722,11 +737,25 @@ class DevQueueService {
   Future<Map<String, dynamic>> claudeAuthRelogin() async =>
       _asMap(await _rpc('claude_auth_relogin_request'));
 
-  /// Flip one toggle (vm|claude|workflow → on|off). Returns the backend verdict
-  /// (for 'vm' it carries call_edge:true + action so the caller invokes the fn).
+  /// Flip one toggle (vm|claude|workflow → on|off). Returns the backend verdict.
+  ///
+  /// CMD #1864 — a 'vm' flip no longer hands the caller a cloud errand. The
+  /// control plane makes the EC2 call itself (`call_edge:false`) and answers
+  /// with the vm block, the poll cadence and its own toast; the caller chases
+  /// [vmPoll] until the payload says `settled`.
   Future<Map<String, dynamic>> ctlSet(String key, String value) async => _asMap(
     await _rpc('dev_ctl_set', params: {'p_key': key, 'p_value': value}),
   );
+
+  /// CMD #1864 — one poll of the live EC2 state, run BY the control plane.
+  ///
+  /// vm-control writes `vm_status` with a service client for whichever project
+  /// it lives in, and the copy holding a working AWS key is production's — so a
+  /// browser calling it directly could never feed the chip, which reads the
+  /// control plane. `dev_vm_poll` collects that reply on the control plane,
+  /// writes it there, and returns the render-ready block plus the cadence to
+  /// ask again on. Nothing about the answer is interpreted here.
+  Future<Map<String, dynamic>> vmPoll() async => _asMap(await _rpc('dev_vm_poll'));
 
   /// Start/stop/status the builder VM via the vm-control edge function (carries
   /// the user's JWT; the function re-checks super_admin). Which cloud it drives
@@ -864,6 +893,42 @@ class DevQueueService {
       _asMap(await _rpc('dev_cloud_waste_get'));
   Future<Map<String, dynamic>> rcHealth() async =>
       _asMap(await _rpc('dev_rc_health'));
+
+  // ── The three controls CMD #1863's audit found with no button or card ────
+  // Same rule as #1843: ONE existing RPC each, rendered verbatim, no new
+  // backend. The rest of that audit's list was already reachable — 27 called
+  // by name here, and five more (health / disk / blocked / build_branch /
+  // context) ride inside `dev_ctl_get()`, so nothing below is fetched twice.
+  //
+  // Three of the audited names are deliberately NOT here: `deploy_status()` is
+  // a rawer, label-less subset of `deploy_lane_status()`, which is already on
+  // the Deploy lane card; `qa_report` refuses anything but service_role, so no
+  // button using the app's console ticket could ever call it; and
+  // `dev_cmd_retry` does not exist on either project — retry lives inside
+  // `dev_cmd_fail`. All three need backend work this wiring-only change bans.
+
+  /// CMD #1863 — "stop after this command". `strip_v3_drain_set(p_id)` writes
+  /// `drain_after` and returns `strip_v3_card()`; a null id clears it. The
+  /// Runners card has PRINTED the resulting `drain_label` since #1367 — there
+  /// was simply never a way to set it.
+  Future<Map<String, dynamic>> drainAfter(int? id) async =>
+      _asMap(await _rpc('strip_v3_drain_set', params: {'p_id': id}));
+
+  /// CMD #1863 — the build-branch ledger: every branch that has existed, how
+  /// long it lived, how many builds used it and why it was created. The
+  /// Runners panel's BuildBranchCard shows the LIVE branch and its recent
+  /// attempts; this is the history behind that one line.
+  Future<Map<String, dynamic>> buildBranchLog({int days = 7}) async =>
+      _asMap(await _rpc('build_branch_log', params: {'p_days': days}));
+
+  /// CMD #1863 — the standing lessons for a command's area. Every runner reads
+  /// these before it builds (`devcmd.sh lessons_get`); nothing ever put them in
+  /// front of Om. An absent area asks for all of them, which is what the
+  /// backend does with a null `p_area`.
+  Future<List<Map<String, dynamic>>> lessons({String? area, int? cmd}) async =>
+      _asList(await _rpc('dev_lessons_get',
+          params: {'p_area': (area != null && area.isEmpty) ? null : area,
+                   'p_cmd': cmd}));
 
   /// CMD #1843 — the delete half of the template list, which had a backend and
   /// no button. Save and list were already wired.

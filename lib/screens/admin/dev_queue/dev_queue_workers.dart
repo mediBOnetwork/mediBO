@@ -8,6 +8,8 @@ import 'dev_queue_common.dart';
 import 'restart_safety.dart';
 import 'dev_queue_detail.dart';
 import 'dev_queue_service.dart';
+import 'pool_settings_fields.dart';
+import '../../../utils/render_log.dart';
 
 /// The parallel-build worker grid, slotted inside the Runner-control card.
 ///
@@ -42,8 +44,19 @@ class WorkerGridCard extends StatelessWidget {
   PoolLiveness get _live => PoolLiveness(_state);
   List<Map<String, dynamic>> get _workers => _live.workers;
 
+  // CMD #1949 — `/admin/dev-queue?panel=runner&sheet=pool` opens the Pool
+  // settings sheet on land, once per page load, so the registry-driven sheet can
+  // be photographed headlessly (a Flutter canvas cannot be tapped).
+  static bool _sheetAutoOpened = false;
+
   @override
   Widget build(BuildContext context) {
+    if (!_sheetAutoOpened && Uri.base.queryParameters['sheet'] == 'pool') {
+      _sheetAutoOpened = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (context.mounted) _openSettings(context);
+      });
+    }
     final workers = _workers;
     final active = asInt(_state['active_workers']);
     final cap = asInt(_config['cap']);
@@ -168,16 +181,42 @@ class WorkerGridCard extends StatelessWidget {
   }
 
   Future<void> _openSettings(BuildContext context) async {
-    final changed = await showModalBottomSheet<bool>(
-      context: context,
-      backgroundColor: Ds.c.surface,
-      isScrollControlled: true,
-      shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Ds.r.rSheet.topLeft)),
-      builder: (_) => _PoolSettingsSheet(config: _config, service: service),
-    );
+    final changed = await showPoolSettingsSheet(context, _config, service);
     if (changed == true) onChanged();
   }
+}
+
+/// CMD #1940 — the Pool settings sheet is opened from two places (the worker
+/// grid's gear and the deploy-lock queue's intervals editor), so the opener is
+/// shared. CMD #1949 — the sheet is dev_config_registry rendered verbatim: the
+/// opener fetches the editable fields (and a fresh config) from pool_get first;
+/// [config] is only the fallback if that read fails. Resolves true when a
+/// `pool_set` landed.
+Future<bool?> showPoolSettingsSheet(BuildContext context,
+    Map<String, dynamic> config, DevQueueService service) async {
+  var cfg = config;
+  List<PoolSettingField> fields = const [];
+  try {
+    final res = await service.poolGet();
+    cfg = (res['config'] as Map?)?.cast<String, dynamic>() ?? config;
+    fields = PoolSettingsFields.parse(res['fields']);
+  } catch (e) {
+    if (context.mounted) {
+      showToast(context, e is PostgrestException ? e.message : e.toString(),
+          isError: true);
+    }
+    return null;
+  }
+  if (!context.mounted) return null;
+  return showModalBottomSheet<bool>(
+    context: context,
+    backgroundColor: Ds.c.surface,
+    isScrollControlled: true,
+    shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Ds.r.rSheet.topLeft)),
+    builder: (_) =>
+        _PoolSettingsSheet(config: cfg, fields: fields, service: service),
+  );
 }
 
 /// The Remote Control flapping banner (CHANGE #1662).
@@ -323,57 +362,43 @@ class _WorkerChip extends StatelessWidget {
 /// collects the patch and forwards the PIN.
 class _PoolSettingsSheet extends StatefulWidget {
   final Map<String, dynamic> config;
+  final List<PoolSettingField> fields;
   final DevQueueService service;
-  const _PoolSettingsSheet({required this.config, required this.service});
+  const _PoolSettingsSheet({
+    required this.config,
+    required this.fields,
+    required this.service,
+  });
 
   @override
   State<_PoolSettingsSheet> createState() => _PoolSettingsSheetState();
 }
 
+/// CMD #1949 — one control per registry row, drawn in payload order. Labels,
+/// help, control kind, range and choices all come from dev_config_registry via
+/// pool_get().fields; the sheet only collects the edits and forwards the PIN.
 class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
-  late int _cap;
-  late bool _auto;
-  late String _billing;
-  late final TextEditingController _idle;
-  late final TextEditingController _weekly;
-  late final TextEditingController _session;
-  late bool _routingEnabled;
-  late final TextEditingController _opusLanes;
-  late final TextEditingController _sonnetLanes;
+  final Map<String, dynamic> _values = {};
+  final Map<String, TextEditingController> _ctl = {};
   bool _busy = false;
-
-  Map<String, dynamic> get _routing =>
-      (widget.config['routing'] as Map?)?.cast<String, dynamic>() ?? const {};
-  Map<String, dynamic> get _lanes =>
-      (_routing['lanes'] as Map?)?.cast<String, dynamic>() ?? const {};
-
-  int get _min => asInt(widget.config['min']) == 0 ? 1 : asInt(widget.config['min']);
-  int get _max => asInt(widget.config['max']) == 0 ? 8 : asInt(widget.config['max']);
 
   @override
   void initState() {
     super.initState();
-    _cap = asInt(widget.config['cap']).clamp(_min, _max);
-    _auto = widget.config['auto'] == true;
-    _billing = (widget.config['billing_mode'] ?? 'max_subscription').toString();
-    _idle = TextEditingController(
-        text: '${asInt(widget.config['idle_shutdown_min'])}');
-    _weekly = TextEditingController(
-        text: '${asInt(widget.config['quota_shrink_pct'])}');
-    _session = TextEditingController(
-        text: '${asInt(widget.config['quota_shrink_session_pct'])}');
-    _routingEnabled = _routing['enabled'] == true;
-    _opusLanes = TextEditingController(text: '${asInt(_lanes['opus'])}');
-    _sonnetLanes = TextEditingController(text: '${asInt(_lanes['sonnet'])}');
+    for (final f in widget.fields) {
+      _values[f.key] = f.value;
+      if (f.control == 'number' || f.control == 'text') {
+        _ctl[f.key] = TextEditingController(text: f.value?.toString() ?? '');
+      }
+    }
+    RenderLog.write('c1949_pool_fields', widget.fields.length);
   }
 
   @override
   void dispose() {
-    _idle.dispose();
-    _weekly.dispose();
-    _session.dispose();
-    _opusLanes.dispose();
-    _sonnetLanes.dispose();
+    for (final c in _ctl.values) {
+      c.dispose();
+    }
     super.dispose();
   }
 
@@ -408,28 +433,18 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
     if (pin == null || pin.isEmpty) return;
     setState(() => _busy = true);
     try {
-      final res = await widget.service.poolSet({
-        'cap': _cap,
-        'auto': _auto,
-        'billing_mode': _billing,
-        'idle_shutdown_min': int.tryParse(_idle.text.trim()) ??
-            asInt(widget.config['idle_shutdown_min']),
-        'quota_shrink_pct': int.tryParse(_weekly.text.trim()) ??
-            asInt(widget.config['quota_shrink_pct']),
-        'quota_shrink_session_pct': int.tryParse(_session.text.trim()) ??
-            asInt(widget.config['quota_shrink_session_pct']),
-        // pool_set shallow-merges the top level, so routing is sent whole.
-        'routing': {
-          ..._routing,
-          'enabled': _routingEnabled,
-          'lanes': {
-            ..._lanes,
-            'opus': int.tryParse(_opusLanes.text.trim()) ?? asInt(_lanes['opus']),
-            'sonnet':
-                int.tryParse(_sonnetLanes.text.trim()) ?? asInt(_lanes['sonnet']),
-          },
-        },
-      }, pin);
+      for (final f in widget.fields) {
+        if (f.control == 'number') {
+          _values[f.key] =
+              PoolSettingsFields.numberValue(_ctl[f.key]!.text, f.value);
+        } else if (f.control == 'text') {
+          // Sent as typed — the backend parses/validates it (pool_set).
+          _values[f.key] = _ctl[f.key]!.text.trim();
+        }
+      }
+      final patch =
+          PoolSettingsFields.buildPatch(widget.config, widget.fields, _values);
+      final res = await widget.service.poolSet(patch, pin);
       if (!mounted) return;
       if (res['ok'] == false) {
         showToast(context, c('dev_queue.gcp_pin_failed'), isError: true);
@@ -457,80 +472,12 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
         Text(c('dev_queue.workers_settings'),
             style: Ds.t.subtitle.copyWith(fontWeight: FontWeight.w700, color: Ds.c.text)),
         SizedBox(height: Ds.space.x24),
-        // Cap slider.
-        _label(c('dev_queue.pool_cap'), '$_cap'),
-        Slider(
-          value: _cap.toDouble(),
-          min: _min.toDouble(),
-          max: _max.toDouble(),
-          divisions: (_max - _min).clamp(1, 20),
-          activeColor: Ds.c.brand,
-          label: '$_cap',
-          onChanged: _busy ? null : (v) => setState(() => _cap = v.round()),
-        ),
-        _hint(c('dev_queue.pool_cap_hint')),
-        SizedBox(height: Ds.space.x16),
-        // Auto-scale toggle.
-        Row(children: [
-          Expanded(child: _label(c('dev_queue.pool_auto'), '')),
-          Switch(
-            value: _auto,
-            activeTrackColor: Ds.c.brand,
-            onChanged: _busy ? null : (v) => setState(() => _auto = v),
-          ),
-        ]),
-        _hint(c('dev_queue.pool_auto_hint')),
-        SizedBox(height: Ds.space.x16),
-        // Billing-mode selector.
-        _label(c('dev_queue.pool_billing'), ''),
-        SizedBox(height: Ds.space.x8),
-        Wrap(spacing: Ds.space.x8, children: [
-          _billingChoice('max_subscription', c('dev_queue.pool_billing_max')),
-          _billingChoice('api', c('dev_queue.pool_billing_api')),
-        ]),
-        _hint(c('dev_queue.pool_billing_hint')),
-        SizedBox(height: Ds.space.x16),
-        // Parallel-pause threshold — weekly usage %.
-        _label(c('dev_queue.pool_weekly'), ''),
-        SizedBox(height: Ds.space.x8),
-        _numField(_weekly),
-        _hint(c('dev_queue.pool_weekly_hint')),
-        SizedBox(height: Ds.space.x16),
-        // Parallel-pause threshold — 5h session usage %.
-        _label(c('dev_queue.pool_session'), ''),
-        SizedBox(height: Ds.space.x8),
-        _numField(_session),
-        _hint(c('dev_queue.pool_session_hint')),
-        SizedBox(height: Ds.space.x16),
-        // Idle shutdown minutes.
-        _label(c('dev_queue.pool_idle'), ''),
-        SizedBox(height: Ds.space.x8),
-        _numField(_idle),
-        _hint(c('dev_queue.pool_idle_hint')),
-        SizedBox(height: Ds.space.x16),
-        // Lane routing: send small specs to the Sonnet lane, large to Opus.
-        Row(children: [
-          Expanded(child: _label(c('dev_queue.pool_routing'), '')),
-          Switch(
-            value: _routingEnabled,
-            activeTrackColor: Ds.c.brand,
-            onChanged: _busy ? null : (v) => setState(() => _routingEnabled = v),
-          ),
-        ]),
-        _hint(c('dev_queue.pool_routing_hint')),
-        if (_routingEnabled) ...[
-          SizedBox(height: Ds.space.x12),
-          Row(children: [
-            Expanded(child: _label(c('dev_queue.pool_lane_opus'), '')),
-            _numField(_opusLanes),
-          ]),
-          SizedBox(height: Ds.space.x12),
-          Row(children: [
-            Expanded(child: _label(c('dev_queue.pool_lane_sonnet'), '')),
-            _numField(_sonnetLanes),
-          ]),
+        if (widget.fields.isEmpty) _hint(c('dev_queue.pool_fields_empty')),
+        for (final f in widget.fields) ...[
+          _field(f),
+          SizedBox(height: Ds.space.x16),
         ],
-        SizedBox(height: Ds.space.x24),
+        SizedBox(height: Ds.space.x8),
         SizedBox(
           width: double.infinity,
           child: FilledButton(
@@ -553,12 +500,74 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
     );
   }
 
-  Widget _billingChoice(String value, String label) {
-    final sel = _billing == value;
+  Widget _field(PoolSettingField f) {
+    switch (f.control) {
+      case 'slider':
+        final lo = (f.min ?? 0).toDouble();
+        final hi = (f.max ?? lo + 1).toDouble();
+        final v = asInt(_values[f.key]).toDouble().clamp(lo, hi);
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _label(f.label, '${v.round()}'),
+          Slider(
+            value: v,
+            min: lo,
+            max: hi,
+            divisions: (hi - lo).round().clamp(1, 20),
+            activeColor: Ds.c.brand,
+            label: '${v.round()}',
+            onChanged: _busy
+                ? null
+                : (x) => setState(() => _values[f.key] = x.round()),
+          ),
+          if (f.help.isNotEmpty) _hint(f.help),
+        ]);
+      case 'switch':
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(child: _label(f.label, '')),
+            Switch(
+              value: _values[f.key] == true,
+              activeTrackColor: Ds.c.brand,
+              onChanged:
+                  _busy ? null : (x) => setState(() => _values[f.key] = x),
+            ),
+          ]),
+          if (f.help.isNotEmpty) _hint(f.help),
+        ]);
+      case 'choice':
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _label(f.label, ''),
+          SizedBox(height: Ds.space.x8),
+          Wrap(spacing: Ds.space.x8, children: [
+            for (final ch in f.choices)
+              _choice(f.key, (ch['value'] ?? '').toString(),
+                  (ch['label'] ?? ch['value'] ?? '').toString()),
+          ]),
+          if (f.help.isNotEmpty) _hint(f.help),
+        ]);
+      case 'text':
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _label(f.label, ''),
+          SizedBox(height: Ds.space.x8),
+          _textField(_ctl[f.key]!),
+          if (f.help.isNotEmpty) _hint(f.help),
+        ]);
+      default: // number
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _label(f.label, ''),
+          SizedBox(height: Ds.space.x8),
+          _numField(_ctl[f.key]!),
+          if (f.help.isNotEmpty) _hint(f.help),
+        ]);
+    }
+  }
+
+  Widget _choice(String key, String value, String label) {
+    final sel = (_values[key] ?? '').toString() == value;
     return ChoiceChip(
       label: Text(label),
       selected: sel,
-      onSelected: _busy ? null : (_) => setState(() => _billing = value),
+      onSelected: _busy ? null : (_) => setState(() => _values[key] = value),
       selectedColor: Ds.c.successSoft,
       backgroundColor: Ds.c.surface,
       labelStyle: Ds.t.caption.copyWith(
@@ -572,13 +581,13 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
   }
 
   Widget _label(String k, String v) => Row(children: [
-        Text(k,
-            style: Ds.t.body.copyWith(fontWeight: FontWeight.w600, color: Ds.c.text)),
-        if (v.isNotEmpty) ...[
-          const Spacer(),
+        Expanded(
+          child: Text(k,
+              style: Ds.t.body.copyWith(fontWeight: FontWeight.w600, color: Ds.c.text)),
+        ),
+        if (v.isNotEmpty)
           Text(v,
               style: Ds.t.body.copyWith(fontWeight: FontWeight.w700, color: Ds.c.brand)),
-        ],
       ]);
 
   Widget _hint(String s) => Padding(
@@ -586,8 +595,29 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
         child: Text(s, style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
       );
 
-  // A small numeric input (idle minutes / usage thresholds). The backend
-  // range-validates on save and renders any error verbatim.
+  // A full-width text input (e.g. a comma-separated list) — parsed and
+  // validated by the backend on save.
+  Widget _textField(TextEditingController ctl) => TextField(
+        controller: ctl,
+        enabled: !_busy,
+        style: Ds.t.body,
+        decoration: InputDecoration(
+          isDense: true,
+          filled: true,
+          fillColor: Ds.c.bg,
+          enabledBorder: OutlineInputBorder(
+            borderRadius: Ds.r.rButton,
+            borderSide: BorderSide(color: Ds.c.divider),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: Ds.r.rButton,
+            borderSide: BorderSide(color: Ds.c.brand),
+          ),
+        ),
+      );
+
+  // A small numeric input. The backend range-validates on save and renders any
+  // error verbatim.
   Widget _numField(TextEditingController ctl) => SizedBox(
         width: Ds.space.x48 * 2,
         child: TextField(
@@ -611,12 +641,6 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
         ),
       );
 }
-
-/// CHANGE #1366 — the disk line on the Runner health card, on its own so it can
-/// be tested without a Supabase client behind it.
-///
-/// A PRINTER: `runner_disk_state()` sends the label, the value sentence, the
-/// sub-line and a tone name. Nothing here divides, rounds or compares against a
 /// threshold. `has:false` draws nothing — "not measured yet" must never render
 /// as a reassuring 0%.
 class RunnerDiskLine extends StatelessWidget {

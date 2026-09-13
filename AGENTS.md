@@ -6,7 +6,7 @@
      Dev Queue → Memory screen, or via the MCP memory server. Do NOT hand-edit
      this block; it is rewritten on every session start. Target: generic -->
 
-# Agent memory (generic) — 46 rules
+# Agent memory (generic) — 48 rules
 # Canonical fallback: see RULES.md in the repo root (git-committed).
 
 ## GLOBAL · style  (priority 10, v2)
@@ -436,70 +436,75 @@ A model turn taken while the row is waiting is a BUG, and it is now visible: dev
 devcmd.sh wait_state <id> is the one cheap read that says what a row is waiting on. The journey qa-1817-wait-sleeps holds the whole state machine down.
 
 
-## PROJECT · deploy_lane  (priority 75, v5)
+## PROJECT · deploy_lane  (priority 75, v6)
 
-## 3. DEPLOY LANE — IT IS A MERGE QUEUE (CHANGE #324)
+## 3. DEPLOY IS DIRECT — ONE COMMAND, ONE BRANCH, ONE LOCK HOLD (CMD #1859)
 
-You do NOT take the deploy lock. You push a branch and leave; ONE merge worker
-(`medibo-merge.service`, `~/mediBO-runner/merge_worker.sh`) batches everything
-waiting, runs the FULL protected suite ONCE on the merged tree and deploys ONCE.
-Ten commands become one test run and one deploy.
+The merge lane (CHANGE #324) is OFF: `worker_pool.merge_lane.enabled=false`
+(the default; `pool_set` flips it) and `medibo-merge.service` is stopped and
+disabled. Over 3 days it ran 135 batches for 176 entries (1.3 per batch), 51
+failed, ~12 minutes each, and every eviction or park/resume it caused re-read a
+whole context. Batching cost more than it saved. Each command now deploys ITS
+OWN branch under `deploy_lock`, and nothing is ever evicted.
 
-Why it changed: the lane was a mutex held across test + build + deploy + verify
-with a 25-minute TTL, and each command claimed it two or three times (#309 took
-changes 820/821/823; #312 took 822/824; #307 took 819/825; #319 took 827/828).
-Five runners generated fifteen queue slots, so a 20-minute build took over an
-hour — of queueing, not building.
+1. **Rebase speculatively while you work, never inside a lock.** The moment you
+   start coding: `~/mediBO-runner/spec_rebase.sh <your-branch> &`. Stop it with
+   `spec_rebase.sh --stop` before you deploy.
+2. **Test what you touched, on your own checkout.**
+   `bash scripts/affected_tests.sh`. The FULL protected suite runs once more
+   on the merged tree inside the direct deploy — a red suite there fails the
+   deploy and names the failures.
+3. **Schema changed?** `devcmd.sh rebaseline`, then `devcmd.sh rgcheck` must
+   print `true` BEFORE you deploy.
+4. **Name your branch.** Every runner shares ONE checkout and the deploy
+   worktree (`~/medibo-direct`) is cut from the same `.git`, so a local branch
+   is already visible: `git branch -f <your-branch> HEAD`. Nothing to push
+   (GitHub's key is not authorised here; `origin` is history only).
+5. **Deploy it — one call, then sleep on it:**
+   `devcmd.sh deploy_direct <cmd-id> <agent> "<title>" <your-branch>`
+   It starts `direct_deploy.sh` DETACHED and drops you into the wait door
+   (kind `deploy`). The script does, in order: `deploy_lock_try` (busy → holds
+   in place, polling every 60 s, never exits) → worktree on the LIVE base +
+   your branch merged (the rebase) → `flutter test test/protected/` → live
+   migration replay → `deploy_claim_number` → `deploy.sh N` (clean, build,
+   smoke gate, stamp version.json, upload) → `verify_live.sh` → `deployed`/`main`
+   advanced, `preview_mark(promoted)`, `rg_check` → `deploy_lock_release`.
+   Every phase lands on `deploy_direct` (the card draws it) and in
+   `~/mediBO-runner/direct_deploy.journal`.
+6. **Exit 75 = still deploying.** Run the IDENTICAL `devcmd.sh deploy_wait
+   <cmd-id>` again — nothing else, no summary, no re-read. Exit 0 prints
+   `CHANGE #N is live (commit …) — complete with p_deploy_no N`. Use THAT
+   number in `dev_cmd_complete`; it came from `deploy_claim_number` and is
+   already on the row (`web_deploy_no`). A FAILED line names the phase and the
+   reason (red test, merge conflict with the live base, smoke, verify): fix it
+   on your branch, `git branch -f`, run `deploy_direct` again. It never batches
+   with anyone, so nothing is ever evicted.
+7. **Watch the lane any time:** `devcmd.sh queue_status` (Dev Queue → Cron
+   health → Deploy lane) — `mode_label` reads `DIRECT (deploy_lock)`, and
+   `direct[]` lists the recent direct deploys with their phase lines.
 
-Your whole interaction with the lane:
-1. `~/mediBO-runner/spec_rebase.sh <branch> &` the moment you start coding —
-   speculative rebase onto origin/main WHILE you work, never inside a lock.
-   `spec_rebase.sh --stop` before you push.
-2. `bash scripts/affected_tests.sh` — only the tests your change can break (its
-   own `*_test.dart` plus the protected tests that reference the files you
-   changed). The full 573 run once, on the batch. It falls back to the whole
-   protected suite when it cannot tell what a change touches.
-3. Schema changed? `devcmd.sh rebaseline` then `devcmd.sh rgcheck` = `true`,
-   BEFORE you push. The merge worker will not fix a red guard for you.
-4. `git branch -f <branch> HEAD` — every runner shares ONE checkout and the merge worker's worktree is cut from the same .git, so a local branch is already visible to it. Nothing to push: GitHub's key is not authorised on this box and `origin` is history only.
-5. `devcmd.sh queue_push <cmd-id> <agent> "<title>" <branch> <commit>` →
-   `entry_id`. Then go straight back to building.
-6. `devcmd.sh queue_wait <entry_id> 1800` only when you need the change number
-   for `dev_cmd_complete`. `evicted` means your branch broke the batch: fix it,
-   push, `queue_push` again.
-7. `devcmd.sh queue_status` shows the lane any time — the same payload the app
-   draws at Dev Queue → Cron health → Deploy lane.
+`queue_push` / `wait <id> merge` still work: with the lane off they start (or
+sleep on) the direct deploy instead, so an old habit lands in the right place.
+Flip `worker_pool.merge_lane.enabled=true` and start `medibo-merge.service` to
+batch again — the worker code is untouched, only gated.
 
-ONE CLAIM PER COMMAND (enforced by a partial unique index on `deploy_queue`).
-A design-QA fix, a route marker and a promote go on the SAME branch and re-use
-the SAME queue slot — `queue_push` updates the entry the command already holds
-instead of taking a second one.
 
-The lane is held only for merge + deploy: 5-minute TTL, target hold under 60s,
-never across a test or a build. The merge worker works in its OWN git worktree
-(`~/medibo-merge`, `MEDIBO_REPO`), never in the `~/mediBO` checkout five runners
-are editing. A red suite is BISECTED — the offending branch is evicted and the
-rest of the batch still ships. Nothing deploys unverified: full protected suite
-+ `verify_live.sh` before `deployed_at` is ever stamped.
+What the lane proved and the direct path KEEPS: the base is the furthest
+fast-forward of `deployed` / `main` / `merge-lane` that still CONTAINS what is
+live (never a ref behind production — the CHANGE #983 rewind); this branch's
+migration files are replayed on live once, idempotent and ledgered
+(`scripts/migration_replay.sh`); the critical-path smoke gate runs on a preview
+before the upload (CHANGE #1823, verdict recorded on `deploy_direct`);
+`verify_live.sh` with self-load retries is the verdict; `deployed` and `main`
+advance only after it; every hold records `wait_s` vs `hold_s`. The lock is
+renewed every 60 s (`deploy_lock_touch`) and `deploy_lane_sweep()` still frees
+an orphaned lock past its TTL.
 
-Instrumentation: `deploy_lock_release` and `merge_batch_finish` stamp
-`deployed_at` (the old code only stamped it when `p_status='deployed'` while
-every caller passed `'success'`, so all 177 rows read NULL and hold time was
-unmeasurable). Every claim records `wait_s` (queued → batched) vs `hold_s` (lock
-held), so you can see whether time goes to queueing or building.
-`deploy_lane_sweep()` rides the cron dispatcher, auto-expires any claim silent
-past its TTL, frees an orphaned lock, requeues a dead batch and raises an
-`rg_alerts` row.
+`devcmd.sh lane_mode` prints on|off. `devcmd.sh queue_status` → `mode_label`
+reads `DIRECT (deploy_lock)`; when it reads `MERGE QUEUE` the switch is on and
+the old queue_push → merge worker → batch flow applies (`merge_worker.sh` is
+untouched, only gated on the same switch).
 
-Persistent build cache: `~/mediBO-runner/cache.env` pins `PUB_CACHE`,
-`GRADLE_USER_HOME`, `FLUTTER_ROOT` and the Dart cache outside the repo, so the
-mandatory `flutter clean` cannot cold-start them. `scripts/warm_cache.sh` warms
-them after a VM restart.
-
-Legacy fallback ONLY when `queue_status` reports `mode_label: "MUTEX (legacy)"`
-(merge_queue.enabled = false): deploy_lock_try → rebase → protected suite →
-deploy_claim_number → stamp version.json → `bash ~/deploy.sh <N>` →
-`verify_live.sh` → deploy_lock_release, with a short TTL.
 
 
 ## PROJECT · db_lane  (priority 76, v1)
@@ -545,6 +550,32 @@ The watchdog `db_watchdog_tick()` rides that dispatcher every minute and raises
 `rg_alerts` when connections pass 45 of 60, a transaction stays open past 2 min,
 or more than 10 statement timeouts land inside 5 min. Om reads it at
 Dev Queue → Cron health → **Database lane**.
+
+
+## PROJECT · runner_self_wait  (priority 76, v2)
+
+
+YOUR OWN DEPLOY IS ONE BLOCKING WAIT (CMD #1962).
+
+After `devcmd.sh deploy_direct <id> <agent> "<title>" <branch>` run
+
+    devcmd.sh wait <id> own
+
+ONCE, and do nothing else until it returns. It blocks in the shell on
+LISTEN deploy_direct — a safety re-check on a timer, and the heartbeat is sent
+by the loop itself — then prints ONE line: the change number when it is live,
+or the phase that failed. Exit 75 means still deploying: run the IDENTICAL
+command again, nothing in between. `devcmd.sh deploy_wait <id>` is the same
+wait under its older name.
+
+NEVER poll deploy_direct. NEVER run a status check "just to see". NEVER start a
+watcher, poller or "quick check" background task: #1950 started 18 of them
+while its own build ran, and every one was a model turn on a wait that cost
+nothing. The guard is the control-plane behaviour test deploy_self_wait_no_poll
+— red the moment a building command logs more than
+worker_pool.deploy_wait.self_poll_max hand-made deploy-status reads inside one
+deploy window.
+
 
 
 ## PROJECT · build_lane  (priority 77, v1)
@@ -660,6 +691,19 @@ Only `lib/design_tokens.dart` and `lib/theme.dart` may hold style literals — t
 
 
 
+## PROJECT · mobile_first  (priority 81, v1)
+
+
+MOBILE-FIRST IS THE DEFAULT (CMD #1950, gate c_mobile_first). 99% of mediBO users are on phones, so the phone viewport is where every command is designed, built, QA'd and PROVEN — desktop/web is secondary and must never degrade the phone layout.
+
+The rule text, the widths and the touch minimum live in `dev_runner_config.build_rules.mobile_first` and are printed verbatim into every command prompt. Change the wording or the widths with one UPDATE — never a deploy.
+
+- **Proof comes from a phone, first.** A UI command needs a 360px AND a 412px capture in `dev-cmd-proofs`, taken BEFORE any desktop shot. One door does the whole errand: `devcmd.sh phoneproof <id> <url>` (or `--admin <route>`). The finish gate condition is "mobile proof" and `dev_cmd_complete` refuses without it while `worker_pool.mobile_first.enforce` is true.
+- **Design QA runs on the phone viewport**, not on 1440px. Journeys default to the phone viewport too.
+- **Responsive on every phone.** No fixed widths, no horizontal overflow, text scales, chips wrap or scroll, every tap target >= 44px. The post-deploy sweep renders the top staff and customer screens at 320/360/412/480 plus one tablet width; `rg_check` goes red on any overflow the app reports (`responsive_no_overflow`) or if the rule itself goes missing from build_rules or from the prompt builder (`mobile_first_rule_present`).
+
+
+
 ## PROJECT · design_system  (priority 82, v2)
 
 ## DESIGN SYSTEM (apply to all UI work)
@@ -741,7 +785,7 @@ ALWAYS — no "AI slop": no oversized emoji, no confetti illustrations, no gener
 
 
 
-## PROJECT · design_qa  (priority 84, v2)
+## PROJECT · design_qa  (priority 84, v3)
 
 ### DESIGN QA GATE (runner — after ANY command that touches UI)
 Before `dev_cmd_complete` on a UI command, self-review the changed screens
@@ -769,6 +813,8 @@ Design QA gate — run before `dev_cmd_complete` on ANY command that touches UI.
 6. States — empty state has one-line guidance; loading is a skeleton, not a bare spinner; errors show backend copy + Retry.
 7. Tokens — zero new style literals (gate green); everything via Ds/theme.
 
+
+8. Phone viewport — run every check above at 360px and 412px FIRST (CMD #1950, build_rules.mobile_first). A desktop pass is secondary and never excuses a phone failure.
 
 
 ## PROJECT · verification  (priority 85, v3)
@@ -1300,13 +1346,16 @@ External integrations — the facts that stop key-hunting.
 - **CORS is required on any browser-invoked edge function.** An edge function called from the Flutter web app must answer the OPTIONS preflight and send the CORS headers, or it fails in the browser while working perfectly from curl. Copy the header block from an existing browser-invoked function.
 
 
-## PROJECT · regression_guard  (priority 106, v1)
+## PROJECT · regression_guard  (priority 106, v2)
 
 Regression guard — the schema safety net.
 
 Run `rg_check()` (`devcmd.sh rgcheck` → must print `true`) after EVERY migration and before every `dev_cmd_complete`; the completion RPC itself raises if the guard is red. It compares the live schema/RPC surface against a stored baseline, so a dropped column or a silently changed function signature is caught in the same command that caused it.
 
 `rg_baseline_all()` (`devcmd.sh rebaseline`) is ONLY run AFTER you have verified the new state is correct — re-baselining a red guard just blesses the regression. Order is: migrate → verify the new state is what you intended → rebaseline → rgcheck green → deploy.
+
+THE BASELINE IS PRODUCTION'S — SO REBASELINE AGAIN AFTER THE LIVE REPLAY (CMD #1928). Your migration runs on the build BRANCH; production only gets it when the direct deploy replays the file. A rebaseline taken before deploy blesses production's OLD schema, so the moment the replay lands the scheduled guard goes red — for a change that was reviewed, tested and verified live. That red is then filed as its own "RG red after #N" command whose entire content is pressing rebaseline: #1925, #1927 and #1928 were all filed that way in one morning, off correct migrations. When a command ships a migration, the LAST thing it does — after `devcmd.sh deploy_wait <id>` exits 0, before `dev_cmd_complete` — is `devcmd.sh rebaseline` then `devcmd.sh rgcheck`. The new state is verified by then (protected suite green on the merged tree, file in `migration_replay_ledger`, `verify_live.sh` passed), so blessing it records the intended state rather than hiding a regression. The pre-deploy rebaseline stays — it keeps the branch honest — but it is never the last one.
+
 
 
 ## PROJECT · parallel_workers  (priority 108, v2)

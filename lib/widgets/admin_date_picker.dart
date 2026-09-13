@@ -85,7 +85,7 @@ class _AdminDatePickerState extends State<AdminDatePicker> {
         PopupMenuItem<String>(
           enabled: false,
           padding: EdgeInsets.zero,
-          child: _CalendarBody(onPick: (d) => Navigator.of(context).pop(d)),
+          child: AdminCalendarBody(onPick: (d) => Navigator.of(context).pop(d)),
         ),
       ],
     );
@@ -164,9 +164,25 @@ class _MonthGroup {
   });
 }
 
-class _CalendarBody extends StatelessWidget {
+/// CMD #1947 — public so the header chip's sheet renders the SAME calendar
+/// this picker does. `width` / `height` let the sheet hand it the space it
+/// actually has on a 360 px phone; both default to the popup's own size.
+class AdminCalendarBody extends StatelessWidget {
   final ValueChanged<String> onPick;
-  const _CalendarBody({required this.onPick});
+  final double? width;
+  final double? height;
+
+  /// CMD #1947 — the sheet feeds the calendar straight from its own
+  /// admin_scope_chip() payload (`date.calendar`), which is how a zone-locked
+  /// partner gets a calendar at all. Null keeps this picker's original source,
+  /// the AdminDateScope singleton.
+  final List<Map<String, dynamic>>? calendar;
+  const AdminCalendarBody(
+      {super.key,
+      required this.onPick,
+      this.width,
+      this.height,
+      this.calendar});
 
   static const _weekdayHeads = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 
@@ -208,12 +224,12 @@ class _CalendarBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final groups = _group(AdminDateScope.instance.calendar);
+    final groups = _group(calendar ?? AdminDateScope.instance.calendar);
     RenderLog.write('c546_calendar_months', '${groups.length}');
 
     return SizedBox(
-      width: 316,
-      height: 372,
+      width: width ?? 316,
+      height: height ?? 372,
       child: Column(children: [
         // Weekday column heads — static UI chrome, not derived from any date.
         Padding(

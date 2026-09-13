@@ -9,6 +9,49 @@ import '../design_tokens.dart';
 import '../utils/render_log.dart';
 import '../screens/notifications_inbox_screen.dart';
 
+/// CMD #1914 — the unread count is a VALUE, not a widget.
+///
+/// Om moved the bell off the mobile header and into the profile dropdown, and
+/// the count went with it: the fetch lived inside the bell's own State, so a
+/// header without a bell had no unread number to put on the avatar and a
+/// foreground push had nothing to refresh. The count is a notifier now. The
+/// bell still draws it, the avatar's dot draws it, and the dropdown row draws
+/// it — none of them owns it, and every string in it is still the backend's
+/// (`notif_inbox_unread`), including the "99+" cap.
+class NotifUnread {
+  NotifUnread._();
+
+  /// The last answer. Empty until the first one lands; every reader treats a
+  /// missing key as "nothing to show", never as an error.
+  static final ValueNotifier<Map<String, dynamic>> value =
+      ValueNotifier<Map<String, dynamic>>(const {});
+
+  /// Test seam — same shape the screens use.
+  @visibleForTesting
+  static Future<dynamic> Function()? transport;
+
+  static Future<void> refresh() async {
+    try {
+      final t = transport;
+      final res = t != null
+          ? await t()
+          : await Supabase.instance.client.rpc('notif_inbox_unread');
+      if (res is! Map) return;
+      final m = Map<String, dynamic>.from(res);
+      // Proof key: the value is the backend's own count, so the render-log
+      // shows what is being shown.
+      RenderLog.write('c298_bell', (m['count'] as num?)?.toInt() ?? 0);
+      value.value = m;
+    } catch (_) {
+      // A count that cannot be counted is still not an error on the chrome.
+    }
+  }
+
+  static bool get show => (value.value['show'] as bool?) ?? false;
+  static String get label => (value.value['label'] as String?) ?? '';
+  static String get tooltip => (value.value['tooltip'] as String?) ?? '';
+}
+
 class NotificationBell extends StatefulWidget {
   const NotificationBell({super.key, this.onOpened});
 
@@ -20,8 +63,6 @@ class NotificationBell extends StatefulWidget {
 }
 
 class NotificationBellState extends State<NotificationBell> {
-  Map<String, dynamic>? _state;
-
   @override
   void initState() {
     super.initState();
@@ -29,28 +70,23 @@ class NotificationBellState extends State<NotificationBell> {
   }
 
   /// Public so the shell can refresh the badge when a foreground push lands.
-  Future<void> refresh() async {
-    try {
-      final res = await Supabase.instance.client.rpc('notif_inbox_unread');
-      if (!mounted || res is! Map) return;
-      final m = Map<String, dynamic>.from(res);
-      // Proof key: a bell that answered is a bell that rendered. The value is
-      // the backend's own count, so the render-log shows what it is showing.
-      RenderLog.write('c298_bell', (m['count'] as num?)?.toInt() ?? 0);
-      setState(() => _state = m);
-    } catch (_) {
-      // A bell that cannot count is still a bell — it must never throw into
-      // the app bar.
-    }
-  }
+  Future<void> refresh() => NotifUnread.refresh();
 
   @override
   Widget build(BuildContext context) {
-    final s = _state;
-    final show = (s?['show'] as bool?) ?? false;
-    final label = (s?['label'] as String?) ?? '';
-    final tooltip = (s?['tooltip'] as String?) ?? '';
+    return ValueListenableBuilder<Map<String, dynamic>>(
+      valueListenable: NotifUnread.value,
+      builder: (context, s, _) => _bell(
+        context,
+        (s['show'] as bool?) ?? false,
+        (s['label'] as String?) ?? '',
+        (s['tooltip'] as String?) ?? '',
+      ),
+    );
+  }
 
+  Widget _bell(
+      BuildContext context, bool show, String label, String tooltip) {
     return SizedBox(
       width: Ds.touch.minTarget,
       height: Ds.touch.minTarget,

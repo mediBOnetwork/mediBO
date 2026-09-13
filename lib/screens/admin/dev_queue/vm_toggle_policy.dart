@@ -22,6 +22,27 @@
 //   DescribeInstances read taken microseconds earlier. Dart no longer holds an
 //   opinion about VM state — it cannot hold a stale one.
 //
+// CMD #1864 — the third instance of the same bug, and the one that moved the
+// cloud call out of the app for good.
+//
+//   The Runners strip (strip_v3_card) flips a toggle with `dev_ctl_set` and
+//   never read `call_edge` at all, so START moved the switch and asked AWS
+//   nothing. STOP looked like it worked only because it needs no cloud call:
+//   the supervisor on the box sees desired_state.vm='off' and powers itself
+//   down. Two renderers, one errand, and only one of them ran it.
+//
+//   Worse, the errand wrote its answer into the wrong database. vm-control
+//   writes vm_status with a service client for its OWN project, and the copy
+//   that holds a working AWS key is PRODUCTION's — while the chip reads the
+//   CONTROL PLANE. So even the card that did make the call never saw the state
+//   come back, and the chip sat on the last word the box itself had written
+//   before it powered off: "running", for ever.
+//
+//   `dev_ctl_set('vm', …)` now makes the call server-side and answers
+//   `call_edge:false`; [pollState] chases `dev_vm_poll` on the cadence the
+//   payload names until the BACKEND says settled. [chip] is the last piece:
+//   Dart no longer owns a status→label map either.
+//
 // The rule these types enforce: the app decides NOTHING about the VM. Whether to
 // call the cloud, which action to send, when to look again, and every word shown
 // afterwards all come out of a backend payload. Dart only routes them.
@@ -135,4 +156,54 @@ class VmTogglePolicy {
   /// how the cache became authoritative in the first place.
   static bool needsLiveCheck(Map<String, dynamic> vm) =>
       vm['needs_live_check'] == true;
+
+  /// Whether to keep polling `dev_vm_poll`, read from a `dev_ctl_set` or
+  /// `dev_vm_poll` payload.
+  ///
+  /// The stop conditions are all the backend's words: `asked_ok:false` (the
+  /// call never left the database, so asking again just repeats the failure)
+  /// and `settled` (EC2 is at rest). `settled` is read from the envelope first
+  /// and from the vm block second, because both carry it and a caller should
+  /// not have to know which one it was handed.
+  static VmPollPlan pollState(Map<String, dynamic> reply) {
+    if (reply['ok'] == false || reply['asked_ok'] == false) {
+      return VmPollPlan.stop;
+    }
+    final vm = (reply['vm'] as Map?)?.cast<String, dynamic>() ?? const {};
+    if ((reply['settled'] ?? vm['settled']) != false) return VmPollPlan.stop;
+    final p = (reply['poll'] as Map?)?.cast<String, dynamic>() ??
+        (vm['poll'] as Map?)?.cast<String, dynamic>() ??
+        const {};
+    final ms = (p['interval_ms'] as num?)?.toInt() ?? 0;
+    final max = (p['max_polls'] as num?)?.toInt() ?? 0;
+    if (ms <= 0 || max <= 0) return VmPollPlan.stop;
+    return VmPollPlan(
+      again: true,
+      delay: Duration(milliseconds: ms),
+      maxPolls: max,
+    );
+  }
+
+  /// The chip beside "VM": the live EC2 word and its tone, both composed in the
+  /// backend from `vm_status` and `ui_copy`.
+  ///
+  /// This used to be a `const map` from status to a ui_copy key and a tone —
+  /// which is a display decision, and the toggle position was the only thing
+  /// keeping it company. An empty label means the payload sent none, and the
+  /// caller draws nothing rather than inventing a word for the gap.
+  static VmChip chip(Map<String, dynamic> vm) => VmChip(
+        label: (vm['chip_label'] ?? '').toString(),
+        tone: (vm['chip_tone'] ?? '').toString(),
+      );
+}
+
+/// The VM chip's two backend strings. Nothing here is derived.
+class VmChip {
+  final String label;
+  final String tone;
+
+  const VmChip({required this.label, required this.tone});
+
+  /// False when the payload carried no word — draw nothing.
+  bool get has => label.isNotEmpty;
 }

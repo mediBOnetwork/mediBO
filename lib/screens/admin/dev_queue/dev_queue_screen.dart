@@ -381,9 +381,17 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
                   // three toggles v3 already draws with `actual` beside
                   // `desired`. Same surfaces, one card.
                   StripV3Card(
-                    footer: DevQueueControl(
+                    // CMD #1862 — the strip reads the control plane through
+                    // the same router every other Dev Queue card uses. It was
+                    // calling production, where its RPCs do not exist, which is
+                    // why the three toggles disappeared.
+                    service: _svc,
+                    footer: (stripHasToggles) => DevQueueControl(
                       service: _svc,
                       embedded: true,
+                      // Exactly one of the two cards draws the switches, and
+                      // it is decided by what the strip ACTUALLY drew.
+                      showToggles: !stripHasToggles,
                       // CHANGE #1197 — ?panel=runner lands with the runner
                       // panel already open, so its contents can be
                       // photographed and can write their render-log keys at
@@ -828,6 +836,15 @@ class _Row extends StatelessWidget {
             label: (row['anomaly_chip']).toString(),
             tone: toneByName((row['anomaly_tone'] ?? 'danger').toString()),
             icon: Icons.local_fire_department_outlined),
+      // CMD #1950 — MOBILE-FIRST. 99% of mediBO users are on phones, so the
+      // card says whether this command was actually proven on one: the chip
+      // appears once a 360px AND a 412px capture are in dev-cmd-proofs.
+      // _dev_phone_proof_chip composes the label and the tone; Dart prints it.
+      if ((row['phone_proof_chip'] ?? '').toString().isNotEmpty)
+        ToneChip(
+            label: (row['phone_proof_chip']).toString(),
+            tone: toneByName((row['phone_proof_tone'] ?? 'neutral').toString()),
+            icon: Icons.smartphone_outlined),
       if ((row['preview_chip'] ?? '').toString().isNotEmpty)
         ToneChip(
             label: (row['preview_chip']).toString(),

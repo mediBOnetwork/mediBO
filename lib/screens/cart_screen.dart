@@ -1456,6 +1456,17 @@ class _ItemListState extends State<_ItemList> {
     // scroll-to target can be tagged as it is built.
     final firstUnavailable = filtered.indexWhere((l) => l.unavailable);
 
+    // CMD #1912 — the render-log proof for this rebuild. A screenshot shows
+    // one cart; this says how many compact rows the list actually painted,
+    // how many carried a backend row payload at all, and how many of those
+    // are still waiting on a supplier quote. Every number is read off the
+    // payload — the screen counts what it was handed, it decides nothing.
+    RenderLog.write(
+        'c1912_cart_rows',
+        'rows=${filtered.length}'
+        ';payload=${filtered.where((l) => l.row.isNotEmpty).length}'
+        ';pending=${filtered.where((l) => l.rowMap('price_badge')['priced'] == false).length}');
+
     return ListView.builder(
       physics: platformScrollPhysics(),
       controller: _scrollController,
@@ -1527,9 +1538,20 @@ class _ItemListState extends State<_ItemList> {
   }
 }
 
-// ─── Cart item card ───────────────────────────────────────────────────────────
-
-class _CartItemCard extends StatelessWidget {
+// ─── Cart item card — CMD #1912 ───────────────────────────────────────────────
+//
+// ONE COMPACT ROW PER ITEM, AND THE QUANTITY LEADS IT.
+//
+// The card used to be ~200px tall and said the same sentence on every line:
+// a 150px stepper sat over "MRP ₹944.80 · trade rate on confirmation", the
+// footer repeated it, and five items could not share a phone screen. The row
+// is now ~90px — image, name, pack, quantity, remove — and everything else
+// (company, the MRP line, the pack detail) is one tap away, expanded in place.
+//
+// Nothing on this row is worded here. `cart_render().items[].row` carries the
+// name, the pack caption, "4 Strip", the Rx chip, the price line and the
+// detail rows already formatted; this widget only lays them out.
+class _CartItemCard extends StatefulWidget {
   final CartLine line;
   final CartModel cart;
   // CHANGE #324: ViewAs checkbox — null = normal mode (show X remove button).
@@ -1549,348 +1571,283 @@ class _CartItemCard extends StatelessWidget {
   });
 
   @override
+  State<_CartItemCard> createState() => _CartItemCardState();
+}
+
+class _CartItemCardState extends State<_CartItemCard> {
+  bool _open = false;
+
+  @override
   Widget build(BuildContext context) {
+    final line = widget.line;
+    final cart = widget.cart;
     final p = line.product;
     // CHANGE #553 — the line's availability is whatever cart_availability()
     // said about this product_id. Nothing here re-derives it.
-    final av = availability;
+    final av = widget.availability;
+    final rx = line.rowMap('rx_chip');
+    final badge = line.rowMap('price_badge');
+    final details = line.rowDetails;
+    final mrpLine = line.rows('mrp_line');
 
-    // Parse scheme "X+Y" for free-qty calculation
-    final schemeParts = p.scheme.split('+');
-    final int buyX = schemeParts.length == 2 ? (int.tryParse(schemeParts[0]) ?? 0) : 0;
-    final int getY = schemeParts.length == 2 ? (int.tryParse(schemeParts[1]) ?? 0) : 0;
-    final int freeQty = (buyX > 0 && getY > 0) ? (line.quantity ~/ buyX) * getY : 0;
-    final String unit = _CartStepper._unit(p.packSize);
+    // The name and the pack caption are the payload's, with the product
+    // record standing in only while the first cart_render() is in flight.
+    final name = line.rows('name').isNotEmpty ? line.rows('name') : p.name;
+    final pack = line.rows('pack_label');
+    final qtyLabel = line.rows('qty_label');
+
+    final hasBody =
+        details.isNotEmpty || mrpLine.isNotEmpty || badge['has'] == true;
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: EdgeInsets.only(bottom: Ds.space.x8),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x06000000),
-            blurRadius: 4,
-            offset: Offset(0, 1),
-          ),
-        ],
+        color: Ds.c.surface,
+        borderRadius: BorderRadius.circular(Ds.r.card),
+        border: Border.all(color: Ds.c.divider),
+        boxShadow: Ds.elevation.e1,
       ),
-      child: Padding(
-        padding: const EdgeInsets.all(10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // ── TOP ROW: image | name + pack size + manufacturer | remove ──
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _ProductImage(product: p, size: 64),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Expanded(
-                            child: Text(
-                              p.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
-                                fontSize: 13,
-                                color: Color(0xFF111827),
-                                height: 1.3,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // ── THE ROW ─────────────────────────────────────────────────────
+          // A tap anywhere that is not the stepper or the ✕ opens the body.
+          InkWell(
+            borderRadius: BorderRadius.circular(Ds.r.card),
+            onTap: hasBody ? () => setState(() => _open = !_open) : null,
+            child: Padding(
+              padding: EdgeInsets.symmetric(
+                  horizontal: Ds.space.x12, vertical: Ds.space.x8),
+              child: Row(
+                children: [
+                  _ProductImage(product: p, size: 56),
+                  SizedBox(width: Ds.space.x12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          name,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Ds.t.bodyStrong,
+                        ),
+                        SizedBox(height: Ds.space.x4),
+                        Row(
+                          children: [
+                            if (rx['has'] == true) ...[
+                              _C1912Chip(
+                                label: (rx['label'] ?? '').toString(),
+                                tone: (rx['tone'] as Map?)?.cast<String, dynamic>(),
                               ),
-                            ),
-                          ),
-                          if (p.scheme.isNotEmpty) ...[
-                            const SizedBox(width: 6),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFFEF08A),
-                                borderRadius: BorderRadius.circular(6),
-                              ),
+                              SizedBox(width: Ds.space.x4),
+                            ],
+                            Flexible(
                               child: Text(
-                                p.scheme,
-                                style: const TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  color: Color(0xFF92400E),
-                                ),
+                                pack,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Ds.t.caption,
                               ),
                             ),
                           ],
-                          const SizedBox(width: 6),
-                          // CHANGE #324: ViewAs → checkbox; normal → X remove.
-                          if (viewAsChecked != null)
-                            SizedBox(
-                              width: 24,
-                              height: 24,
-                              child: Checkbox(
-                                value: viewAsChecked,
-                                onChanged: (_) => onViewAsToggle?.call(),
-                                activeColor: const Color(0xFF1B7A43),
-                                materialTapTargetSize:
-                                    MaterialTapTargetSize.shrinkWrap,
-                                visualDensity: VisualDensity.compact,
-                              ),
-                            )
-                          // CHANGE #639 — a line cart_render() flagged gets a
-                          // prominent RED remove control instead of the quiet
-                          // grey one. Same remove flow, same RPC; only the
-                          // emphasis changes, because this is the one action
-                          // that clears the block.
-                          else if (line.unavailable)
-                            GestureDetector(
-                              key: const ValueKey('c639_remove_unavailable'),
-                              onTap: () => cart.remove(p),
-                              child: Container(
-                                width: 30,
-                                height: 30,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: const Color(0xFFFEE2E2),
-                                  border: Border.all(
-                                      color: const Color(0xFFDC2626),
-                                      width: 1.2),
-                                ),
-                                child: const Center(
-                                  child: Icon(Icons.close,
-                                      size: 17, color: Color(0xFFDC2626)),
-                                ),
-                              ),
-                            )
-                          else
-                            GestureDetector(
-                              onTap: () => cart.remove(p),
-                              child: Container(
-                                width: 22,
-                                height: 22,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                      color: const Color(0xFFD1D5DB)),
-                                  color: const Color(0xFFF9FAFB),
-                                ),
-                                child: const Center(
-                                  child: Icon(Icons.close,
-                                      size: 11, color: Color(0xFF6B7280)),
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        p.packSize.isNotEmpty ? p.packSize : '—',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF374151),
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        p.manufacturer,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF9CA3AF),
-                        ),
-                      ),
-                      // CHANGE #553 — the backend's verdict for this line,
-                      // printed in the backend's own label and colours. Shown
-                      // only when it says the line cannot be ordered.
-                      if (av != null && !av.canAdd) ...[
-                        const SizedBox(height: 4),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: av.bg == null ? null : Color(av.bg!),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            av.note ?? av.ctaLabel,
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              color: av.fg == null ? null : Color(av.fg!),
-                            ),
-                          ),
                         ),
                       ],
-                      if (line.isSample) ...[
-                        const SizedBox(height: 3),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 5, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFFF7ED),
-                            borderRadius: BorderRadius.circular(4),
-                            border:
-                                Border.all(color: const Color(0xFFFED7AA)),
-                          ),
-                          child: Text(c('cart.badge_sample'),
-                              style: const TextStyle(
-                                  fontSize: 9, color: Color(0xFFEA580C))),
-                        ),
-                      ],
-                      // CHANGE #325 label rules:
-                      // "Added by Admin"   → both customer's own cart AND ViewAs.
-                      // "Added by customer"→ ViewAs only (never shown to the customer).
-                      if (line.addedByAdmin) ...[
-                        const SizedBox(height: 3),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 5, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFD1FAE5),
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(color: const Color(0xFF6EE7B7)),
-                          ),
-                          child: Text(
-                            c('cart.badge_added_by_admin'),
-                            style: const TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFF065F46),
-                            ),
-                          ),
-                        ),
-                      ] else if (viewAsChecked != null) ...[
-                        const SizedBox(height: 3),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 5, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFEF3C7),
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(color: const Color(0xFFFDE68A)),
-                          ),
-                          child: Text(
-                            c('cart.badge_added_by_customer'),
-                            style: const TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFF92400E),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ],
-            ),
-
-            const SizedBox(height: 10),
-
-            // ── BOTTOM ROW: line price (left) | qty selector (right) ──
-            //
-            // CHANGE #615 — one price, one source. The struck-through MRP, the
-            // black sale price beneath it and the "N% GST (₹x input credit)"
-            // badge are all gone: there is no sale price, no discount and no
-            // GST in the cart any more, so a second number here could only
-            // ever be a number the backend never sent.
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                // Left: the line total and how it was reached — both printed
-                // verbatim from cart_render(). Nothing multiplied in Dart.
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // CHANGE #572 — ONE PRICE TRUTH PER LINE. `price_line` is
-                    // the amount and `price_note` the caption under it, and
-                    // the BACKEND decides which of them exists. A line with no
-                    // trade rate yet sends an EMPTY price_line and folds its
-                    // MRP into the caption ("MRP ₹260.38 · trade rate on
-                    // confirmation"), so a rupee figure can never sit above the
-                    // words that say the rate is not known. CMD #452's absent
-                    // MRP (feature_gaps #182) is the same mechanism: the
-                    // caption says so instead of a ₹0.00 nobody printed.
-                    if (line.ds('price_line').isNotEmpty)
-                      Text(
-                        line.ds('price_line'),
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
-                          color: Color(0xFF111827),
-                          height: 1.1,
-                        ),
-                      ),
-                    if (line.ds('price_line').isNotEmpty)
-                      const SizedBox(height: 3),
-                    Text(
-                      line.ds('price_note'),
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: Color(0xFF6B7280),
-                        height: 1.1,
-                      ),
                     ),
-                  ],
-                ),
-                const Spacer(),
-                // Right: free-qty label (when earned) + qty stepper
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (freeQty > 0) ...[
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFDCFCE7),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          cf(
-                              freeQty == 1
-                                  ? 'cart.free_qty_one'
-                                  : 'cart.free_qty_many',
-                              {'qty': '$freeQty', 'unit': unit}),
-                          style: const TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFF15803D),
-                          ),
-                        ),
+                  ),
+                  SizedBox(width: Ds.space.x8),
+                  // CHANGE #324: ViewAs → checkbox; normal → the stepper.
+                  if (widget.viewAsChecked != null)
+                    SizedBox(
+                      width: Ds.touch.minTarget,
+                      height: Ds.touch.minTarget,
+                      child: Checkbox(
+                        value: widget.viewAsChecked,
+                        onChanged: (_) => widget.onViewAsToggle?.call(),
+                        activeColor: Ds.c.brand,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        visualDensity: VisualDensity.compact,
                       ),
-                      const SizedBox(height: 4),
-                    ],
-                    // CHANGE #615 — the stepper shows cart.quantityOf(), which
-                    // is the user's own unsent tap when there is one and the
-                    // server's number otherwise. This used to pass
-                    // line.quantity — the SERVER quantity — so #610's
-                    // optimistic echo and 300ms debounce were built but never
-                    // seen HERE: every tap on the cart screen sat unchanged
-                    // until the RPC came back, which is the lag being
-                    // reported. The product card already read quantityOf(),
-                    // which is why the catalog stepper felt instant and this
-                    // one did not.
+                    )
+                  else
+                    // CHANGE #615 — the stepper shows cart.quantityOf(), the
+                    // user's own unsent tap when there is one and the server's
+                    // number otherwise, so a tap lands in this frame.
                     // CHANGE #639 — qty_locked comes from cart_render(); the
-                    // stepper is disabled and tinted red on the strength of
-                    // the backend's flag, never on a local stock check.
+                    // stepper is dead and tinted danger on the strength of the
+                    // backend's flag, never on a local stock check.
                     _CartStepper(
                       product: p,
                       quantity: cart.quantityOf(p.id),
                       cart: cart,
                       locked: line.qtyLocked,
+                      qtyLabel: qtyLabel,
+                    ),
+                  SizedBox(width: Ds.space.x4),
+                  _C1912Remove(
+                    onTap: () => cart.remove(p),
+                    // CHANGE #639 — a line cart_render() flagged gets the
+                    // prominent remove control: same RPC, more emphasis,
+                    // because this is the one action that clears the block.
+                    danger: line.unavailable,
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // ── THE BODY, ON TAP ────────────────────────────────────────────
+          // Company and the pack detail live here, and so does the ONE price
+          // line: the MRP × quantity on the left, the sale-price badge on the
+          // right. They sit on opposite ends of one row, so nothing overlaps.
+          if (_open && hasBody) ...[
+            Divider(height: Ds.space.hairline, color: Ds.c.divider),
+            Padding(
+              padding: EdgeInsets.fromLTRB(
+                  Ds.space.x12, Ds.space.x12, Ds.space.x12, Ds.space.x12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (mrpLine.isNotEmpty || badge['has'] == true)
+                    Row(
+                      children: [
+                        Expanded(child: Text(mrpLine, style: Ds.t.caption)),
+                        if (badge['has'] == true) ...[
+                          SizedBox(width: Ds.space.x8),
+                          _C1912Chip(
+                            label: (badge['label'] ?? '').toString(),
+                            tone:
+                                (badge['tone'] as Map?)?.cast<String, dynamic>(),
+                          ),
+                        ],
+                      ],
+                    ),
+                  for (final d in details) ...[
+                    SizedBox(height: Ds.space.x8),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(
+                          width: 84,
+                          child: Text((d['label'] ?? '').toString(),
+                              style: Ds.t.caption),
+                        ),
+                        SizedBox(width: Ds.space.x8),
+                        Expanded(
+                          child: Text((d['value'] ?? '').toString(),
+                              style: Ds.t.body),
+                        ),
+                      ],
                     ),
                   ],
-                ),
-              ],
+                  // CHANGE #553 — the backend's verdict for this line, in the
+                  // backend's own label and colours, shown only when it says
+                  // the line cannot be ordered.
+                  if (av != null && !av.canAdd) ...[
+                    SizedBox(height: Ds.space.x8),
+                    _C1912Chip(
+                      label: av.note ?? av.ctaLabel,
+                      tone: {'bg': av.bg, 'fg': av.fg},
+                    ),
+                  ],
+                  if (line.isSample) ...[
+                    SizedBox(height: Ds.space.x8),
+                    _C1912Chip(label: c('cart.badge_sample')),
+                  ],
+                  // CHANGE #325 label rules:
+                  // "Added by Admin"   → both the customer's own cart AND ViewAs.
+                  // "Added by customer"→ ViewAs only (never shown to the customer).
+                  if (line.addedByAdmin) ...[
+                    SizedBox(height: Ds.space.x8),
+                    _C1912Chip(
+                      label: c('cart.badge_added_by_admin'),
+                      tone: const {'bg': '#D1FAE5', 'fg': '#065F46'},
+                    ),
+                  ] else if (widget.viewAsChecked != null) ...[
+                    SizedBox(height: Ds.space.x8),
+                    _C1912Chip(
+                      label: c('cart.badge_added_by_customer'),
+                      tone: const {'bg': '#FEF3C7', 'fg': '#92400E'},
+                    ),
+                  ],
+                  if (p.scheme.isNotEmpty) ...[
+                    SizedBox(height: Ds.space.x8),
+                    _C1912Chip(
+                      label: p.scheme,
+                      tone: const {'bg': '#FEF3C7', 'fg': '#92400E'},
+                    ),
+                  ],
+                ],
+              ),
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+/// CMD #1912 — one badge shape for the whole cart row.
+///
+/// The label and both colours are the payload's; `tone` absent means the
+/// neutral info tint, never a colour this widget picked for a meaning it
+/// guessed at.
+class _C1912Chip extends StatelessWidget {
+  final String label;
+  final Map<String, dynamic>? tone;
+  const _C1912Chip({required this.label, this.tone});
+
+  /// cart_render() sends tones as '#RRGGBB'; cart_availability() has always
+  /// sent them as packed ints. Both are the backend's colour — read either
+  /// rather than making one of the two callers convert on the way in.
+  static Color _colour(Object? raw, Color fallback) {
+    if (raw is int) return Color(raw);
+    if (raw is num) return Color(raw.toInt());
+    return Ds.hex(raw, fallback);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (label.isEmpty) return const SizedBox.shrink();
+    final t = tone ?? const {};
+    return Container(
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x8, vertical: Ds.space.x4 / 2),
+      decoration: BoxDecoration(
+        color: _colour(t['bg'], Ds.c.infoSoft),
+        borderRadius: BorderRadius.circular(Ds.r.chip),
+      ),
+      child: Text(
+        label,
+        style: Ds.t.caption.copyWith(color: _colour(t['fg'], Ds.c.info)),
+      ),
+    );
+  }
+}
+
+/// CMD #1912 — the ✕ at the far right of a cart row. A 24px mark inside a
+/// full-size tap target, so a compact row never costs the customer accuracy.
+class _C1912Remove extends StatelessWidget {
+  final VoidCallback onTap;
+  final bool danger;
+  const _C1912Remove({required this.onTap, this.danger = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: Ds.touch.minTarget * 0.8,
+      height: Ds.touch.minTarget,
+      child: GestureDetector(
+        key: danger ? const ValueKey('c639_remove_unavailable') : null,
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Center(
+          child: Icon(
+            Icons.close,
+            size: Ds.space.x16,
+            color: danger ? Ds.c.danger : Ds.c.textSecondary,
+          ),
         ),
       ),
     );
@@ -1947,37 +1904,36 @@ class _ProductImage extends StatelessWidget {
   }
 }
 
-// ─── Cart quantity stepper ────────────────────────────────────────────────────
-
+// ─── Cart quantity stepper — CMD #1912 ───────────────────────────────────────
+//
+// Compact: 132×44 instead of 150×56, so it fits a 90px row next to the name,
+// the pack and the ✕. The quantity is still the largest thing on the row —
+// it is the only bold number a collapsed row carries.
+//
+// The word beside the number ("Strip") is `row.qty_label`, formatted by
+// cart_row_block(). It used to be _CartStepper._unit(): nine `contains()`
+// tests over the pack string, in Dart, deciding a display word. The only
+// motion left is the roll when that label changes.
 class _CartStepper extends StatefulWidget {
   final Product product;
   final int quantity;
   final CartModel cart;
 
   /// CHANGE #639 — `qty_locked` from cart_render(). When true both tap zones
-  /// are dead and the control is tinted red. This is the backend's answer,
+  /// are dead and the control is tinted danger. This is the backend's answer,
   /// carried through; the stepper never decides it.
   final bool locked;
+
+  /// CMD #1912 — "4 Strip", straight from `items[].row.qty_label`.
+  final String qtyLabel;
 
   const _CartStepper({
     required this.product,
     required this.quantity,
     required this.cart,
     this.locked = false,
+    this.qtyLabel = '',
   });
-
-  static String _unit(String packSize) {
-    final s = packSize.toLowerCase();
-    if (s.contains('strip')) return c('cart.unit_strip');
-    if (s.contains('bottle')) return c('cart.unit_bottle');
-    if (s.contains('vial')) return c('cart.unit_vial');
-    if (s.contains('tube')) return c('cart.unit_tube');
-    if (s.contains('sachet')) return c('cart.unit_sachet');
-    if (s.contains('box')) return c('cart.unit_box');
-    if (s.contains('ampoule') || s.contains('ampule')) return c('cart.unit_ampoule');
-    if (s.contains('pack')) return c('cart.unit_pack');
-    return c('cart.unit_default');
-  }
 
   @override
   State<_CartStepper> createState() => _CartStepperState();
@@ -1996,136 +1952,102 @@ class _CartStepperState extends State<_CartStepper> {
 
   @override
   Widget build(BuildContext context) {
-    final unit = _CartStepper._unit(widget.product.packSize);
     final qty = widget.quantity;
     final increasing = _increasing;
-
-    // CHANGE #639 — the red state for a locked line.
     final locked = widget.locked;
-    const lockedBg = Color(0xFFFEE2E2);
-    const lockedEdge = Color(0xFFDC2626);
-    const lockedInk = Color(0xFF991B1B);
-    final ink = locked ? lockedInk : const Color(0xFF1a1a1a);
+    final zone = Ds.touch.minTarget;
+    final ink = locked ? Ds.c.danger : Ds.c.text;
 
     return SizedBox(
-      width: 150,
-      height: 56,
+      width: zone * 3,
+      height: zone,
       child: Stack(
         children: [
           // Visual layer
           Positioned.fill(
             child: Container(
               decoration: BoxDecoration(
-                color: locked ? lockedBg : Colors.white,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                    color: locked ? lockedEdge : const Color(0xFFE5E7EB)),
+                color: locked ? Ds.c.dangerSoft : Ds.c.surface,
+                borderRadius: BorderRadius.circular(Ds.r.button),
+                border: Border.all(color: locked ? Ds.c.danger : Ds.c.divider),
               ),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Minus visual
                   SizedBox(
-                    width: 44,
+                    width: zone,
                     child: Center(
-                      child: Text(
-                        '−',
-                        style: TextStyle(
-                          color: ink,
-                          fontSize: 22,
-                          fontWeight: FontWeight.w600,
-                          height: 1,
-                        ),
-                      ),
+                      child: Icon(Icons.remove, size: Ds.space.x16, color: ink),
                     ),
                   ),
-                  // Center: qty + unit with slide animation
+                  // Centre: the quantity, rolling, and the backend's unit word.
                   Expanded(
                     child: Center(
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          ClipRect(
-                            child: AnimatedSwitcher(
-                              duration: const Duration(milliseconds: 200),
-                              transitionBuilder: (child, anim) {
-                                final isNew =
-                                    (child.key as ValueKey<int>).value == qty;
-                                final begin = isNew
-                                    ? (increasing
-                                        ? const Offset(0, -1)
-                                        : const Offset(0, 1))
-                                    : (increasing
-                                        ? const Offset(0, 1)
-                                        : const Offset(0, -1));
-                                return SlideTransition(
-                                  position: Tween<Offset>(
-                                          begin: begin, end: Offset.zero)
+                      child: ClipRect(
+                        child: AnimatedSwitcher(
+                          duration:
+                              Duration(milliseconds: Ds.motion.standardMs),
+                          transitionBuilder: (child, anim) {
+                            final isNew =
+                                (child.key as ValueKey<String>).value ==
+                                    '$qty|${widget.qtyLabel}';
+                            final begin = isNew
+                                ? (increasing
+                                    ? const Offset(0, -1)
+                                    : const Offset(0, 1))
+                                : (increasing
+                                    ? const Offset(0, 1)
+                                    : const Offset(0, -1));
+                            return SlideTransition(
+                              position:
+                                  Tween<Offset>(begin: begin, end: Offset.zero)
                                       .animate(anim),
-                                  child: child,
-                                );
-                              },
-                              child: Text(
-                                '$qty',
-                                key: ValueKey<int>(qty),
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                  color: ink,
-                                  fontSize: 15,
-                                  height: 1,
-                                ),
-                              ),
-                            ),
+                              child: child,
+                            );
+                          },
+                          child: Text(
+                            widget.qtyLabel.isNotEmpty
+                                ? widget.qtyLabel
+                                : '$qty',
+                            key: ValueKey<String>('$qty|${widget.qtyLabel}'),
+                            maxLines: 1,
+                            overflow: TextOverflow.clip,
+                            softWrap: false,
+                            style: Ds.t.bodyStrong.copyWith(color: ink),
                           ),
-                          const SizedBox(width: 4),
-                          Text(
-                            unit,
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: ink,
-                              fontWeight: FontWeight.w600,
-                              height: 1,
-                            ),
-                          ),
-                        ],
+                        ),
                       ),
                     ),
                   ),
-                  // Plus visual — green right side, RED when the line is locked
+                  // The plus is TINTED, not filled: Place order is the one
+                  // solid green on this page (spec #1912/7), and two of them
+                  // competing is what made the old row read as a banner.
                   Container(
-                    width: 44,
+                    width: zone,
                     decoration: BoxDecoration(
-                      color: locked ? lockedEdge : Brand.green,
-                      borderRadius: const BorderRadius.only(
-                        topRight: Radius.circular(7),
-                        bottomRight: Radius.circular(7),
+                      color: locked ? Ds.c.dangerSoft : Ds.c.brandSoft,
+                      borderRadius: BorderRadius.only(
+                        topRight: Radius.circular(Ds.r.button),
+                        bottomRight: Radius.circular(Ds.r.button),
                       ),
                     ),
-                    child: const Center(
-                      child: Text(
-                        '+',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 22,
-                          fontWeight: FontWeight.w600,
-                          height: 1,
-                        ),
-                      ),
+                    child: Center(
+                      child: Icon(Icons.add,
+                          size: Ds.space.x16,
+                          color: locked ? Ds.c.danger : Ds.c.brand),
                     ),
                   ),
                 ],
               ),
             ),
           ),
-          // Invisible 3-zone tap overlay
+          // Invisible tap zones — both dead while the backend says locked.
           Positioned.fill(
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Zone 1: minus (44px) — dead while the backend says locked
                 SizedBox(
-                  width: 44,
+                  width: zone,
                   child: MouseRegion(
                     cursor: locked
                         ? SystemMouseCursors.basic
@@ -2138,11 +2060,9 @@ class _CartStepperState extends State<_CartStepper> {
                     ),
                   ),
                 ),
-                // Zone 2: center display (no action)
                 const Expanded(child: SizedBox()),
-                // Zone 3: plus (44px) — dead while the backend says locked
                 SizedBox(
-                  width: 44,
+                  width: zone,
                   child: MouseRegion(
                     cursor: locked
                         ? SystemMouseCursors.basic
@@ -2483,10 +2403,9 @@ class _CheckoutBar extends StatelessWidget {
                                 padding:
                                     const EdgeInsets.symmetric(vertical: 15),
                                 decoration: BoxDecoration(
-                                  color: blocked
-                                      ? const Color(0xFF9CA3AF)
-                                      : const Color(0xFF1B5E20),
-                                  borderRadius: BorderRadius.circular(12),
+                                  color: blocked ? Ds.c.textSecondary : Ds.c.brand,
+                                  borderRadius:
+                                      BorderRadius.circular(Ds.r.button),
                                 ),
                                 child: Row(
                                   mainAxisAlignment:
@@ -2618,10 +2537,8 @@ class _OrderSummaryPanel extends StatelessWidget {
                   child: Container(
                     padding: const EdgeInsets.symmetric(vertical: 15),
                     decoration: BoxDecoration(
-                      color: blocked
-                          ? const Color(0xFF9CA3AF)
-                          : const Color(0xFF1B5E20),
-                      borderRadius: BorderRadius.circular(12),
+                      color: blocked ? Ds.c.textSecondary : Ds.c.brand,
+                      borderRadius: BorderRadius.circular(Ds.r.button),
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -2920,7 +2837,14 @@ class _C461TotalRow extends StatelessWidget {
   final String label;
   final String amount;
   final bool strong;
-  const _C461TotalRow({required this.label, required this.amount, this.strong = false});
+  /// CMD #1912 — animate the amount when it can change under the customer's
+  /// own tap (the cart's own totals). Every other caller prints it still.
+  final bool animate;
+  const _C461TotalRow(
+      {required this.label,
+      required this.amount,
+      this.strong = false,
+      this.animate = false});
 
   @override
   Widget build(BuildContext context) {
@@ -2933,7 +2857,27 @@ class _C461TotalRow extends StatelessWidget {
         children: [
           Expanded(child: Text(label, style: style, maxLines: 1, overflow: TextOverflow.ellipsis)),
           SizedBox(width: Ds.space.x8),
-          Text(amount, style: strong ? Ds.t.subtitle : Ds.t.body, textAlign: TextAlign.right),
+          // CMD #1912 — the total re-counts when the stepper moves. It is the
+          // only motion on this screen besides the rolling quantity, and it is
+          // the same roll: a changed string slides the old one out.
+          if (animate)
+            ClipRect(
+              child: AnimatedSwitcher(
+                duration: Duration(milliseconds: Ds.motion.standardMs),
+                transitionBuilder: (child, anim) => SlideTransition(
+                  position: Tween<Offset>(
+                          begin: const Offset(0, 0.6), end: Offset.zero)
+                      .animate(anim),
+                  child: FadeTransition(opacity: anim, child: child),
+                ),
+                child: Text(amount,
+                    key: ValueKey<String>(amount),
+                    style: strong ? Ds.t.subtitle : Ds.t.body,
+                    textAlign: TextAlign.right),
+              ),
+            )
+          else
+            Text(amount, style: strong ? Ds.t.subtitle : Ds.t.body, textAlign: TextAlign.right),
         ],
       ),
     );
@@ -3087,6 +3031,13 @@ class C572TotalsBlock extends StatelessWidget {
     final line = selectedTotal != null ? selectedLine : (s['line'] ?? '').toString();
     final amount =
         selectedTotal ?? (s['has_amount'] == true ? (s['amount_display'] ?? '').toString() : '');
+    // CMD #1912 — the line only earns its place next to an amount. The BACKEND
+    // answers that (`show_line`): on a basket with nothing payable yet the
+    // rows below already say the item count, and the line said it again.
+    // ABSENCE IS NOT A NO: a payload that never heard of `show_line` (an older
+    // cached cart_render, a caller that builds the block itself) keeps the
+    // #572 behaviour and prints the line. Only an explicit false suppresses it.
+    final showLine = selectedTotal != null || s['show_line'] != false;
     final rows = selectedTotal != null
         ? const <Map<String, dynamic>>[]
         : ((s['rows'] as List?) ?? const [])
@@ -3095,35 +3046,64 @@ class C572TotalsBlock extends StatelessWidget {
             .toList(growable: false);
     final deliveryNote =
         selectedTotal != null ? '' : (s['delivery_note'] ?? '').toString();
+    // CMD #1912 — "Rate confirmed after supplier quote." Once, here, above the
+    // total — instead of once per row plus once in the footer.
+    final rateNote =
+        selectedTotal != null ? '' : (s['rate_note'] ?? '').toString();
 
-    if (line.isEmpty && amount.isEmpty && rows.isEmpty) {
+    if ((!showLine || line.isEmpty) &&
+        amount.isEmpty &&
+        rows.isEmpty &&
+        rateNote.isEmpty) {
       return const SizedBox.shrink();
     }
+
+    // ONE divider: it sits above the strong row when the payload sent one,
+    // and closes the ladder when it did not.
+    final strongAt = rows.indexWhere((r) => r['strong'] == true);
 
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Expanded(
-              child: Text(line,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: Ds.t.bodySecondary),
-            ),
-            if (amount.isNotEmpty) ...[
-              SizedBox(width: Ds.space.x8),
-              Text(amount, style: Ds.t.display),
+        if (showLine && (line.isNotEmpty || amount.isNotEmpty))
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: Text(line,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Ds.t.bodySecondary),
+              ),
+              if (amount.isNotEmpty) ...[
+                SizedBox(width: Ds.space.x8),
+                Text(amount, style: Ds.t.display),
+              ],
             ],
-          ],
-        ),
-        for (final r in rows)
+          ),
+        for (var i = 0; i < rows.length; i++) ...[
+          if (i == strongAt)
+            Padding(
+              padding: EdgeInsets.symmetric(vertical: Ds.space.x4),
+              child: Divider(height: Ds.space.hairline, color: Ds.c.divider),
+            ),
           _C461TotalRow(
-            label: (r['label'] ?? '').toString(),
-            amount: (r['amount'] ?? '').toString(),
-            strong: r['strong'] == true,
+            label: (rows[i]['label'] ?? '').toString(),
+            amount: (rows[i]['amount'] ?? '').toString(),
+            strong: rows[i]['strong'] == true,
+            animate: true,
+          ),
+        ],
+        if (strongAt < 0 && rows.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(top: Ds.space.x4),
+            child: Divider(height: Ds.space.hairline, color: Ds.c.divider),
+          ),
+        if (rateNote.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(top: Ds.space.x4),
+            child: Text(rateNote, style: Ds.t.caption),
           ),
         if (deliveryNote.isNotEmpty)
           Padding(

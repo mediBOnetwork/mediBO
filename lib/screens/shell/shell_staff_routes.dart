@@ -163,19 +163,25 @@ void shellOpenStaffTile(BuildContext context, Map<String, dynamic> tile,
   navigate(route, seed.isEmpty ? null : seed);
 }
 
-/// A Customers / Suppliers / Fulfill page with the home's extra doors drawn
-/// above its own tab row. Under the v1 flag the page is returned untouched.
+/// CMD #1891 — the "Also here" strip is GONE from Customers, Suppliers and
+/// Fulfill. Every door it carried is a Dashboard tile now
+/// (`dashboard_home()`, six named sections), so drawing it here as well would
+/// be the second surface this change removes — and a chip strip you have to
+/// scroll sideways was the reason those doors went unfound.
+/// CMD #1893 — and now it is gone for EVERY layout, not only v2. #1891 left
+/// the strip mounted under the legacy flag; the spec's line is that these three
+/// screens keep only their own tab bar, so the flag no longer buys it back.
+/// Every door the strip carried is a Dashboard tile — nav_dashboard_orphan_check()
+/// is the migration-time gate that keeps it that way, and
+/// scripts/check_nav_orphans.sh runs it before every deploy.
+///
+/// The page is returned untouched. The signature stays so the shell needs no
+/// edit, and [StaffHomeStrip] stays in staff_home_screen.dart with its own
+/// protected test: it is still what the Money / More home draws.
 Widget shellWithStaffStrip(String tab, Widget page,
     void Function(String route, [String? seed]) navigate) {
-  if (StaffNav.value.value.isLegacy) return page;
-  return Column(children: [
-    Builder(builder: (ctx) => StaffHomeStrip(
-          tabKey: tab,
-          load: shellStaffHomeLoad,
-          onOpen: (t) => shellOpenStaffTile(ctx, t, navigate),
-        )),
-    Expanded(child: page),
-  ]);
+  RenderLog.write('c1891_strip_retired', tab);
+  return page;
 }
 
 /// The Money / More page.
@@ -282,13 +288,16 @@ class _StaffRailItem extends StatelessWidget {
   }
 }
 
-/// CHANGE #1017 — the staff chrome the shell mounts ONCE under either header:
-/// the preview banner (only while a super admin previews a role) and the
-/// scope bar (zone + date, chosen here and nowhere else). Both verbatim from
-/// staff_nav(). Kept here so home_shell stays the shell (#340 size guard).
+/// CHANGE #1017 → CMD #1947 — the staff chrome the shell mounts ONCE under
+/// either header. The scope bar that used to sit here is gone: zone and date
+/// are ONE chip in the header row now (widgets/scope_chip.dart), so a staff
+/// screen starts at the top of the viewport instead of one row down. What
+/// remains is the preview banner (only while a super admin previews a role)
+/// and the offline banner — both verbatim from staff_nav(). Kept here so
+/// home_shell stays the shell (#340 size guard).
 Widget shellStaffChrome(bool isAdmin) => isAdmin
     ? const Column(mainAxisSize: MainAxisSize.min,
-        children: [StaffPreviewBanner(), StaffScopeBar()])
+        children: [StaffPreviewBanner(), StaffOfflineBanner()])
     : const SizedBox.shrink();
 
 /// CHANGE #1017 (6) — on a tablet the staff tabs stand in a rail on the left

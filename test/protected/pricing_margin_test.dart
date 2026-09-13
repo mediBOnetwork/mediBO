@@ -231,14 +231,21 @@ void main() {
       // are applied on the BILL, not per product. The net rate did not go
       // anywhere — the product page still prints it with its GST breakup,
       // where there is room to say what it includes.
+      //
+      // CHANGED AGAIN BY #1895 — the CAPTION beside that number is gone. The
+      // sale line is one backend string (`price_display`), and for an entitled
+      // viewer that string is the amount. The word "PTR" is what the SAME
+      // field carries when the viewer may not see the rate, so printing it
+      // beside an amount would say two contradictory things at once.
       await _pump(tester, _full());
 
       expect(find.text('₹82.50'), findsOneWidget,
           reason: 'ptr_display verbatim — the app never computes a trade rate');
       expect(find.text('₹117.19'), findsOneWidget,
           reason: 'mrp_display verbatim, in the struck position');
-      expect(find.text('PTR'), findsOneWidget,
-          reason: 'the caption is a backend word, never typed in Dart');
+      expect(find.text('PTR'), findsNothing,
+          reason: '#1895 — the word is the LOCKED sale line, never a caption '
+              'over an amount');
     });
 
     testWidgets('the ribbon is the payload two lines', (tester) async {

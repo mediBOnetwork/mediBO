@@ -30,7 +30,7 @@ import '../../utils/safe_parse.dart';
 import '../../services/admin_date_scope.dart'; // CHANGE #545
 import '../../services/admin_zone_scope.dart'; // CHANGE #609
 import '../../services/date_labels.dart'; // CHANGE #548
-import '../../fulfill/supplier_toggle_chips.dart';
+import '../../fulfill/readiness_header_block.dart';
 import '../../services/ui_copy.dart';
 import '../../widgets/backend_chip.dart'; // CHANGE #606
 import '../../widgets/backend_table.dart'; // CHANGE #607
@@ -247,6 +247,25 @@ class AdminSupplierScreen extends StatefulWidget {
   /// Called by the shell when this screen becomes the active page.
   static void triggerFocus() =>
       _screenKey.currentState?._onScreenFocus();
+
+  /// CMD #1891 — open one of this screen's own sub-tabs on the shell's
+  /// instance, by the SAME key the tab row uses (`pending`, `staging`, …).
+  /// The counterpart of [AdminCustomerScreen.openTab], and it retries for a
+  /// few frames for the same reason: the caller is the Dashboard, tapping a
+  /// tile the frame BEFORE this screen's state exists. Null, empty, unknown
+  /// or not-granted is ignored rather than thrown on — a sub-tab key must
+  /// never widen a grant (#528).
+  static void openTab(String? filterName, {int tries = 12}) {
+    if (filterName == null || filterName.isEmpty) return;
+    final st = _screenKey.currentState;
+    if (st != null) {
+      st._openTabByName(filterName);
+      return;
+    }
+    if (tries <= 0) return;
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => openTab(filterName, tries: tries - 1));
+  }
 
   @override
   State<AdminSupplierScreen> createState() => _AdminSupplierScreenState();
@@ -479,6 +498,17 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           _tabOn(_tabKeys[_tabOrder[i]] ?? ''));
 
   bool _filterAllowed(_SupFilter f) => _tabAllowed(_tabOrder.indexOf(f));
+
+  /// CMD #1891 — see [AdminSupplierScreen.openTab]. The grant check is the
+  /// same one initState uses, so a tile can never open a tab #528 hid.
+  void _openTabByName(String filterName) {
+    for (final f in _SupFilter.values) {
+      if (f.name != filterName || !_filterAllowed(f)) continue;
+      if (!mounted) return;
+      setState(() => _filter = f);
+      return;
+    }
+  }
   _SupSortMode _sortMode = _SupSortMode.spnDesc;
   // Server-side search over the Suppliers list via admin_list_suppliers RPC
   // (matches company names, not just supplier name/code/city).
@@ -625,14 +655,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   late final MatchStatusService _matchService;
   void Function()? _matchServiceListener;
 
-  // ── Auto-meta toggle (persisted via get/set_app_setting) ─────────────────
-  bool _autoMeta = false;
-  bool _autoMetaLoading = false;
-
-  // ── Supplier Orders auto-meta toggle ─────────────────────────────────────
-  bool _orderAutoMeta = false;
-  bool _orderAutoMetaLoading = false;
-
   // ── CHANGE #277: current-holder filter ───────────────────────────────────
   // Keys: "supplier_name_lower|product_id" for live order_items
   Set<String> _liveOrderItemKeys = {};
@@ -640,12 +662,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   // ── Allocation mode toggle ────────────────────────────────────────────────
   String _allocationMode = 'first_available'; // 'first_available' | 'fewest_baskets'
 
-  /// CHANGE #754 — the AutoFlow / Bundle chips, exactly as
-  /// `supplier_toggle_chips()` sent them. Their labels, their ON/OFF words and
-  /// the toast each one shows are the backend's; this screen only knows which
-  /// setting RPC a key belongs to.
-  SupplierToggleChipSet _chipSet = SupplierToggleChipSet.empty;
-  bool _allocationLoading = false;
+  // CMD #1941 — switching the allocation mode moved to the Dashboard's
+  // AUTOMATION block; this screen only READS the mode, to label its rows.
 
   // ── Manual move overlay (per inquiry_id) ─────────────────────────────────
   OverlayEntry? _movePickerOverlay;
@@ -701,7 +719,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     AdminZoneScope.instance.ensureLoaded();
     _load();
     _loadAllocationMode();
-    _loadToggleChips();
     _subscribeRealtime();
     // CHANGE #446: re-check send-all readiness whenever order hours change.
     _orderHoursModel = OrderHoursState.read(context);
@@ -1236,6 +1253,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             // are chips on the readiness line — which left a blank strip with
             // a ⋮ floating in it.
             if (_headerHasContent) _buildHeader(isDesktop),
+            // CMD #1941 — the Automation strip that #1890 put here now lives
+            // at the top of the Dashboard grid: on the mobile PWA these two
+            // sub-tabs are reached by a chip row, and the toggles under them
+            // were the one control a phone could not get to.
             _buildContent(isDesktop),
           ]),
         ),
@@ -1249,9 +1270,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   /// the per-tab controls, and on inquiry there are none any more.
   bool get _headerHasContent {
     if (!widget.embedded) return true;
-    if (_filter == _SupFilter.orders) return true;   // the AutoFlow chip
+    // CHANGE #1890 — the order tab's AutoFlow chip moved to the Automation
+    // strip, so this row has nothing left to draw on that tab either and is
+    // skipped exactly as it already was on inquiry.
     if (_filter == _SupFilter.suppliers) return true; // sort + map companies
-    return _filter != _SupFilter.inquiry;
+    return _filter != _SupFilter.inquiry && _filter != _SupFilter.orders;
   }
 
   Widget _buildHeader(bool isDesktop) {
@@ -1300,20 +1323,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               ]),
             ),
           ),
-          // ── CHANGE #754 — the AutoFlow chip, on the tab header line ────────
-          // Om: on the Supplier order tab the ⋮ sat alone on an otherwise empty
-          // row, and everything it held was this one toggle. So the toggle
-          // comes out as a chip and the ⋮ goes. It is the SAME chip on mobile
-          // and on desktop — a control that hides itself behind a menu at one
-          // width is how the empty row happened in the first place.
-          if (_filter == _SupFilter.orders) ...[
-            SizedBox(width: Ds.space.x8),
-            SupplierToggleChipRow(
-              chips: _chipSet.order,
-              busyKeys: _busyChipKeys,
-              onToggle: _onToggleChip,
-            ),
-          ],
+          // ── CHANGE #1890 — the AutoFlow chip is NOT on this line any more.
+          // #754 moved it here off the ⋮ menu; it now lives in the Automation
+          // strip under the tab bar, which is the ONE place both tabs' toggles
+          // are drawn. See the Dashboard's AUTOMATION block (CMD #1941).
           // ── MOBILE: 3-dot overflow menu holds all controls ─────────────────
           // CHANGE #754 — only where it still holds something that is NOT a
           // toggle. On inquiry and order it held toggles only, and both are
@@ -1570,141 +1583,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }
   }
 
-  Future<void> _loadAutoMeta() async {
-    if (!mounted) return;
-    setState(() => _autoMetaLoading = true);
-    try {
-      final result = await Supabase.instance.client
-          .rpc('get_app_setting', params: {'p_key': 'inquiry_auto_meta'});
-      final val = result as bool? ?? false;
-      if (mounted) {
-        setState(() { _autoMeta = val; _autoMetaLoading = false; });
-        RenderLog.write(val ? 'toggle_loaded_on' : 'toggle_loaded_off', 'autoMeta:$val');
-      }
-    } catch (e) {
-      if (mounted) setState(() => _autoMetaLoading = false);
-      RenderLog.write('toggle_loaded_off', 'err:$e');
-    }
-  }
-
-  Future<void> _saveAutoMeta(bool val) async {
-    setState(() { _autoMeta = val; _autoMetaLoading = true; });
-    try {
-      await Supabase.instance.client.rpc('set_app_setting', params: {
-        'p_key': 'inquiry_auto_meta',
-        'p_value': val,
-      });
-      if (mounted) {
-        setState(() => _autoMetaLoading = false);
-        // CHANGE #754 — the toast is `supplier_toggle_chips().toast_on/off`.
-        showToast(context, _chipSet.toast(val));
-        RenderLog.write(val ? 'toggle_saved_on' : 'toggle_saved_off', 'autoMeta:$val');
-        _loadToggleChips();
-        _fetchInquiryOverview(silent: true);
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() { _autoMeta = !val; _autoMetaLoading = false; });
-        showToast(context, cf('admin_supplier.failed_save_setting', {'a': '$e'}), isError: true);
-      }
-    }
-  }
-
-  Future<void> _loadOrderAutoMeta() async {
-    if (!mounted) return;
-    setState(() => _orderAutoMetaLoading = true);
-    try {
-      final result = await Supabase.instance.client
-          .rpc('get_app_setting', params: {'p_key': 'supplier_order_auto_meta'});
-      final val = result as bool? ?? false;
-      if (mounted) {
-        setState(() { _orderAutoMeta = val; _orderAutoMetaLoading = false; });
-        RenderLog.write('order_auto_meta_toggle_rendered', 'loaded:$val');
-      }
-    } catch (e) {
-      if (mounted) setState(() => _orderAutoMetaLoading = false);
-    }
-  }
-
-  Future<void> _saveOrderAutoMeta(bool val) async {
-    setState(() { _orderAutoMeta = val; _orderAutoMetaLoading = true; });
-    try {
-      if (val) {
-        // Attempt Meta edge function — expect meta_not_configured
-        final resp = await Supabase.instance.client.functions.invoke(
-          'meta-send-inquiry',
-          body: {'suppliers': []},
-        );
-        final data = resp.data as Map<String, dynamic>? ?? {};
-        if (data['error'] == 'meta_not_configured') {
-          RenderLog.write('order_meta_not_configured', 'true');
-          if (mounted) {
-            showToast(context, c('admin_supplier.meta_not_configured_disabled'), isError: true);
-            setState(() { _orderAutoMeta = false; _orderAutoMetaLoading = false; });
-          }
-          await Supabase.instance.client.rpc('set_app_setting', params: {
-            'p_key': 'supplier_order_auto_meta',
-            'p_value': false,
-          });
-          _loadToggleChips();
-          return;
-        }
-      }
-      await Supabase.instance.client.rpc('set_app_setting', params: {
-        'p_key': 'supplier_order_auto_meta',
-        'p_value': val,
-      });
-      if (mounted) {
-        setState(() => _orderAutoMetaLoading = false);
-        showToast(context, _chipSet.toast(val));
-        _loadToggleChips();
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() { _orderAutoMeta = !val; _orderAutoMetaLoading = false; });
-        showToast(context, cf('admin_supplier.failed_save_setting', {'a': '$e'}), isError: true);
-      }
-    }
-  }
-
   // ── Allocation mode ──────────────────────────────────────────────────────
-
-  /// CHANGE #754 — one call for both tabs' chips. Re-read after every toggle
-  /// so the chip's word comes back from the SERVER rather than being flipped
-  /// locally: the order tab's AutoFlow can refuse to turn on (Meta not
-  /// configured) and the chip has to tell the truth about that.
-  Future<void> _loadToggleChips() async {
-    try {
-      final res = await Supabase.instance.client.rpc('supplier_toggle_chips');
-      if (!mounted) return;
-      setState(() => _chipSet =
-          SupplierToggleChipSet.fromJson((res as Map?)?.cast<String, dynamic>()));
-    } catch (_) {
-      // A failed read leaves the previous answer in place; it never invents one.
-    }
-  }
-
-  /// A chip tap routes to the setting RPC that already owned that toggle.
-  void _onToggleChip(SupplierToggleChip chip, bool next) {
-    switch (chip.key) {
-      case 'auto_meta':
-        _saveAutoMeta(next);
-        break;
-      case 'order_auto_meta':
-        _saveOrderAutoMeta(next);
-        break;
-      case 'bundle':
-        _applyAllocationMode(next);
-        break;
-    }
-    RenderLog.write('c754_toggle_chip', '${chip.key}=$next');
-  }
-
-  Set<String> get _busyChipKeys => {
-        if (_autoMetaLoading) 'auto_meta',
-        if (_orderAutoMetaLoading) 'order_auto_meta',
-        if (_allocationLoading) 'bundle',
-      };
 
   Future<void> _loadAllocationMode() async {
     try {
@@ -1714,68 +1593,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       if (mounted) setState(() => _allocationMode = mode);
       RenderLog.write('allocation_toggle_rendered', mode);
     } catch (_) {}
-  }
-
-  Future<void> _applyAllocationMode(bool fewest) async {
-    if (_allocationLoading) return;
-    final newMode = fewest ? 'fewest_baskets' : 'first_available';
-    final prevMode = _allocationMode;
-    setState(() { _allocationMode = newMode; _allocationLoading = true; });
-    try {
-      final res = await Supabase.instance.client
-          .rpc('apply_allocation_mode', params: {'p_mode': newMode}) as Map;
-      if (!mounted) return;
-      if (res['status'] == 'ok') {
-        setState(() => _allocationLoading = false);
-        if (fewest) {
-          final detail = res['detail'] as Map? ?? {};
-          final n = detail['items_assigned'] ?? 0;
-          final b = detail['baskets'] ?? 0;
-          showToast(context, cf('admin_supplier.bundled_items', {'a': n, 'b': b}));
-          RenderLog.write('allocation_mode_on', 'items:$n baskets:$b');
-        } else {
-          showToast(context, c('admin_supplier.back_to_first_available'));
-          RenderLog.write('allocation_mode_off', 'true');
-        }
-        _loadToggleChips();
-        _fetchInquiryOverview(silent: true);
-        _fetchUnassignedItems(silent: true);
-      } else {
-        setState(() { _allocationMode = prevMode; _allocationLoading = false; });
-        showToast(context, cf('admin_supplier.error_detail', {'a': res['error'] ?? 'unknown'}), isError: true);
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() { _allocationMode = prevMode; _allocationLoading = false; });
-        showToast(context, cf('admin_supplier.failed', {'a': '$e'}), isError: true);
-      }
-    }
-  }
-
-  Future<void> _reoptimize() async {
-    if (_allocationLoading) return;
-    setState(() => _allocationLoading = true);
-    try {
-      final res = await Supabase.instance.client
-          .rpc('run_fewest_baskets_allocation') as Map;
-      if (!mounted) return;
-      setState(() => _allocationLoading = false);
-      if (res['status'] == 'ok') {
-        final n = res['items_assigned'] ?? 0;
-        final b = res['baskets'] ?? 0;
-        showToast(context, cf('admin_supplier.re_optimized', {'a': n, 'b': b}));
-        RenderLog.write('allocation_reoptimize_ok', 'items:$n baskets:$b');
-        _fetchInquiryOverview(silent: true);
-        _fetchUnassignedItems(silent: true);
-      } else {
-        showToast(context, cf('admin_supplier.error_detail', {'a': res['error'] ?? 'unknown'}), isError: true);
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _allocationLoading = false);
-        showToast(context, cf('admin_supplier.re_optimize_failed', {'a': '$e'}), isError: true);
-      }
-    }
   }
 
   // ── Manual move overlay ───────────────────────────────────────────────────
@@ -2134,7 +1951,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     if (f == _SupFilter.inquiry) {
       _fetchInquiryOverview();
       _fetchUnassignedItems();
-      _loadAutoMeta();
       try { RenderLog.write('c458_timers', 0); } catch (_) {}
       _subscribeInquiryRt(); // CHANGE #458: broadcast realtime, no poll (Today only)
       _subscribeInquiryDbChanges(); // CHANGE #509: direct table realtime, no poll
@@ -2151,8 +1967,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           _fetchInquiryOverview(silent: true);
         }
       });
-    } else if (f == _SupFilter.orders) {
-      _loadOrderAutoMeta();
     }
     // Auto-load fresh data on every tab open (debounced; no-op if already in flight).
     _autoLoad(key: f.name);
@@ -2818,6 +2632,18 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       try { RenderLog.write('c468_inquiry_toggle_off_always', (!locked || sliderEnabled).toString()); } catch (_) {}
     }
     try { RenderLog.write('c503_readiness_collapsed_default', 'true'); } catch (_) {}
+    // CHANGE #1890 — the label is on a row of its own and the header block is
+    // the same height in both states. Both are read straight off the widgets
+    // that draw them, so a regression shows up in the render-log, not in a
+    // screenshot nobody took.
+    try {
+      RenderLog.write('c1890_readiness_label_row', 'own_row');
+      RenderLog.write('c1890_readiness_header_h',
+          ReadinessHeaderBlock.blockHeight.toStringAsFixed(0));
+      // Open or closed, so the proof of "the header block is the same height
+      // in both states" can be read off a live page rather than inferred.
+      RenderLog.write('c1890_readiness_open', _readinessExpanded.toString());
+    } catch (_) {}
 
     return Padding(
       padding: EdgeInsets.fromLTRB(pad, 12, pad, 4),
@@ -2832,47 +2658,17 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           ),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             // CHANGE #503 C: collapsed-by-default header — title, status pill,
-            // date. The whole row is tappable; no chevron icon needed.
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
+            // date. The whole block is tappable; no chevron icon needed.
+            // CHANGE #1890 — the block itself lives in ReadinessHeaderBlock so
+            // its one rule (the label never shares a Row with a flexible
+            // child) is pinned by a protected test instead of by a comment.
+            ReadinessHeaderBlock(
+              title: title,
+              statusLabel: statusLabel,
+              statusBg: statusLabel == null ? null : _readinessToneBg(statusTone),
+              statusFg: statusLabel == null ? null : _readinessToneFg(statusTone),
+              dateLabel: dateLabel,
               onTap: () => setState(() => _readinessExpanded = !_readinessExpanded),
-              child: Row(children: [
-                Expanded(
-                  child: Text(title,
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
-                          letterSpacing: 0.6, color: Color(0xFF6B7280))),
-                ),
-                if (statusLabel != null) ...[
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: _readinessToneBg(statusTone),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Text(statusLabel,
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
-                            color: _readinessToneFg(statusTone))),
-                  ),
-                  const SizedBox(width: 8),
-                ],
-                if (dateLabel != null)
-                  Text(dateLabel,
-                      style: const TextStyle(
-                          fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF))),
-                // CHANGE #754 — AutoFlow and Bundle, on the line Om asked for:
-                // readiness on the left, the chips on the right. Each chip is
-                // its own tap target, so tapping one toggles the setting and
-                // never expands the readiness card underneath.
-                if (_chipSet.inquiry.isNotEmpty) ...[
-                  SizedBox(width: Ds.space.x8),
-                  SupplierToggleChipRow(
-                    chips: _chipSet.inquiry,
-                    busyKeys: _busyChipKeys,
-                    onToggle: _onToggleChip,
-                    onAction: (_) => _reoptimize(),
-                  ),
-                ],
-              ]),
             ),
             // Expanding/collapsing is purely visual — no re-fetch — so it can
             // animate instantly on whatever's already cached in `readiness`.

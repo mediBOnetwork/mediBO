@@ -66,29 +66,39 @@ class CartPill extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(width: 10),
-                          Text(
-                            cart.pillItemsLabel,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
+                          // CMD #1896 — an empty backend string renders
+                          // NOTHING, here as everywhere else. The pill is
+                          // built even while hidden (it slides out rather than
+                          // popping), so an unguarded Text left two empty text
+                          // nodes on every page that floats it.
+                          if (cart.pillItemsLabel.isNotEmpty)
+                            Text(
+                              cart.pillItemsLabel,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
-                          ),
-                          const SizedBox(width: 8),
-                          Container(
-                            width: 1,
-                            height: 16,
-                            color: Colors.white24,
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            cart.pillCta,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
+                          if (cart.pillItemsLabel.isNotEmpty &&
+                              cart.pillCta.isNotEmpty) ...[
+                            const SizedBox(width: 8),
+                            Container(
+                              width: 1,
+                              height: 16,
+                              color: Colors.white24,
                             ),
-                          ),
+                          ],
+                          const SizedBox(width: 8),
+                          if (cart.pillCta.isNotEmpty)
+                            Text(
+                              cart.pillCta,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
                           const Icon(Icons.chevron_right,
                               color: Colors.white, size: 18),
                         ],
@@ -103,4 +113,19 @@ class CartPill extends StatelessWidget {
       ),
     );
   }
+}
+
+/// CMD #1896 — "open the cart" as a request, not a call.
+///
+/// The cart is a panel INSIDE HomeShell, so a screen pushed on top of the
+/// shell (the product page) has no handle on it. Bumping this notifier is that
+/// screen saying "the buyer asked for the cart"; HomeShell listens and opens
+/// its own panel. Nothing about the cart is decided here — this carries an
+/// intent, not state, which is why it is an int that only ever goes up.
+final ValueNotifier<int> kOpenCartRequest = ValueNotifier<int>(0);
+
+/// Pop back to the shell and ask it for the cart. Safe from any route depth.
+void requestOpenCart(BuildContext context) {
+  Navigator.of(context).popUntil((r) => r.isFirst);
+  kOpenCartRequest.value = kOpenCartRequest.value + 1;
 }

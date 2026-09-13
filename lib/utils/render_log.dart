@@ -88,6 +88,40 @@ class RenderLog {
     _scheduleSupabaseFlush(_log['build'] as String?);
   }
 
+  /// CMD #1950 — MOBILE-FIRST: the app reports its own overflow.
+  ///
+  /// Flutter web paints to canvas, so no browser tool can measure a clipped
+  /// row or a RenderFlex that ran off the right edge — but the framework
+  /// already knows, and says so through FlutterError. main.dart routes those
+  /// here, so the post-deploy responsive sweep can load every top screen at
+  /// 320/360/412/480 px and read a NUMBER out of the render log instead of
+  /// guessing from pixels.
+  ///
+  /// `overflow_errors` is the count the sweep asserts is 0. `overflow_first`
+  /// keeps the first message (trimmed) so a red sweep names the widget, and
+  /// `overflow_at_w` the viewport width it happened at.
+  static void noteOverflow(String message, {int? viewportWidth}) {
+    final n = ((_log['overflow_errors'] as int?) ?? 0) + 1;
+    _log['overflow_errors'] = n;
+    if (_log['overflow_first'] == null) {
+      _log['overflow_first'] =
+          message.length > 160 ? message.substring(0, 160) : message;
+      if (viewportWidth != null) _log['overflow_at_w'] = viewportWidth;
+    }
+    _writeToDOM();
+    _scheduleSupabaseFlush(_log['build'] as String?);
+  }
+
+  /// The viewport the sweep is currently looking at, so a red count can be
+  /// attributed to a width. Written by the app on every metrics change.
+  static void noteViewport(int width, int height) {
+    if (_log['viewport_w'] == width && _log['viewport_h'] == height) return;
+    _log['viewport_w'] = width;
+    _log['viewport_h'] = height;
+    _writeToDOM();
+    _scheduleSupabaseFlush(_log['build'] as String?);
+  }
+
   /// CHANGE #559: write and flush IMMEDIATELY, with no debounce.
   ///
   /// The normal 800 ms debounce is fine for render counts, but useless for

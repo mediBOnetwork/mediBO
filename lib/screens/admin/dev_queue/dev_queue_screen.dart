@@ -836,6 +836,15 @@ class _Row extends StatelessWidget {
             label: (row['anomaly_chip']).toString(),
             tone: toneByName((row['anomaly_tone'] ?? 'danger').toString()),
             icon: Icons.local_fire_department_outlined),
+      // CMD #1950 — MOBILE-FIRST. 99% of mediBO users are on phones, so the
+      // card says whether this command was actually proven on one: the chip
+      // appears once a 360px AND a 412px capture are in dev-cmd-proofs.
+      // _dev_phone_proof_chip composes the label and the tone; Dart prints it.
+      if ((row['phone_proof_chip'] ?? '').toString().isNotEmpty)
+        ToneChip(
+            label: (row['phone_proof_chip']).toString(),
+            tone: toneByName((row['phone_proof_tone'] ?? 'neutral').toString()),
+            icon: Icons.smartphone_outlined),
       if ((row['preview_chip'] ?? '').toString().isNotEmpty)
         ToneChip(
             label: (row['preview_chip']).toString(),

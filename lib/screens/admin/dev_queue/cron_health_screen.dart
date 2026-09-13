@@ -14,6 +14,7 @@ import 'runner_sessions_section.dart';
 import 'guard_lane_section.dart';
 import 'deploy_lane_section.dart';
 import 'dev_queue_common.dart';
+import 'dev_queue_detail.dart';
 import 'dev_queue_service.dart';
 
 /// CHANGE #273 — Cron health.
@@ -157,6 +158,20 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
         RenderLog.write(
           'c324_deploy_lane',
           _lane['ok'] == true ? 'ok' : (_lane.isEmpty ? 'absent' : 'refused'),
+        );
+        // CMD #1961 — painted-proof for the block that replaced Recent
+        // batches: how many completed rows the card drew, and whether the
+        // deploy lock printed a holder chip.
+        RenderLog.write(
+          'c1961_completed_rows',
+          (((_lane['completed'] as Map?)?['rows'] as List?) ?? const []).length,
+        );
+        RenderLog.write(
+          'c1961_lock_chip',
+          ((((_lane['lane'] as Map?)?['holder_chip'] as String?) ?? '')
+                  .isNotEmpty)
+              ? 'shown'
+              : 'none',
         );
         // CHANGE #1822 — painted-proof for the renewal line: 'ok' only when
         // deploy_lane_status() sent a renewal sentence and the card drew it.
@@ -321,7 +336,17 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
                     // must not take the deploy lane down with it.
                     if (_lane.isNotEmpty) ...[
                       SizedBox(height: Ds.space.x24),
-                      DeployLaneSection(data: _lane),
+                      DeployLaneSection(
+                        data: _lane,
+                        // CMD #1961 — a Recently completed row opens that
+                        // command; the id is the backend's, never parsed
+                        // back out of a label here.
+                        onOpenCommand: (id) =>
+                            Navigator.of(context).push(MaterialPageRoute(
+                          builder: (_) =>
+                              DevQueueDetail(id: id, service: _svc),
+                        )),
+                      ),
                     ],
                     // And again its own condition: the build lane is the one
                     // that proves nothing waited on a file.

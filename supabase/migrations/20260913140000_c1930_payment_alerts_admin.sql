@@ -501,3 +501,169 @@ insert into public.ui_copy (key, value) values
   ('pay_rule.f_vpa_hint',        to_jsonb('([a-z0-9._-]+@[a-z]+)'::text)),
   ('pay_rule.f_sender_hint',     to_jsonb('from ([A-Za-z ]+)'::text))
 on conflict (key) do nothing;
+
+-- ── 8. THE MONEY TAB'S OWN ENTRY ─────────────────────────────────────────────
+-- #1929 registered the nav row in feature_registry under category 'home_money',
+-- and the home guard rehomed it to the More grid because no nav_category row
+-- called 'home_money' claims the Money tab. Two fixes, both data:
+--   a. give the Money tab its category, but never overwrite one that is
+--      already pointed somewhere on purpose;
+--   b. put the row back where #1929 asked for it.
+-- icon_key is a foreign key into ui_icon and that table differs per
+-- environment, so the icon is whatever is already installed — the category
+-- exists for its home_tab, not for its picture.
+insert into public.nav_category (category_key, label, icon_key, sort_order, is_active, home_tab)
+select 'home_money', 'Money',
+       coalesce((select i.icon_key from public.ui_icon i
+                  where i.icon_key in ('rupee','currency_rupee','payments') limit 1),
+                (select i.icon_key from public.ui_icon i order by i.icon_key limit 1)),
+       30, true, 'money'
+ where exists (select 1 from public.ui_icon)
+on conflict (category_key) do update
+  set home_tab  = coalesce(public.nav_category.home_tab, 'money'),
+      is_active = true;
+
+update public.feature_registry
+   set category = 'home_money'
+ where feature_key = 'admin.payment_alerts'
+   and category <> 'home_money';
+
+-- The Money SCREEN itself now carries the entry, so the queue is one tap from
+-- where an admin already counts money — and the badge beside it is the same
+-- number the nav tile shows, because both read _pa_badge_count().
+create or replace function public.admin_money_home()
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $fn$
+declare v_claims int; v_unmatched int; v_bills int; v_recv numeric; v_alerts int;
+begin
+  if not is_admin() then raise exception 'not_authorized'; end if;
+
+  select count(*)::int into v_claims from payment_claims where status='received';
+  select count(*)::int into v_unmatched from payment_claims
+   where order_id is null and coalesce(status,'') not in ('rejected','cancelled');
+  select count(*)::int into v_bills from pending_bills where coalesce(status,'pending')='pending';
+  select coalesce(sum(round(coalesce(o.total_amount,0) - coalesce(paid.amt,0),2)),0)
+    into v_recv
+    from orders o
+    left join lateral (select sum(p.amount) amt from payment_claims p
+                        where p.order_id=o.id and p.status='verified') paid on true
+   where coalesce(o.status,'pending') in ('pending','accepted')
+     and coalesce(o.fulfillment_status,'open') <> 'cancelled'
+     and round(coalesce(o.total_amount,0) - coalesce(paid.amt,0),2) > 0;
+
+  v_alerts := public._pa_badge_count()::int;
+
+  return jsonb_build_object(
+    'ok', true,
+    'title', 'Money',
+    'subtitle', 'What is owed, what arrived, and what is still waiting on somebody.',
+    -- Rows that leave this screen for another one. Rendered above the tabs,
+    -- in payload order; an unknown route_key is skipped, never a crash.
+    'links', jsonb_build_array(
+      jsonb_build_object(
+        'route_key',  'payment_alerts',
+        'icon_key',   'phonelink_ring',
+        'label',      public.uic('pay_alert.nav_label','Payment alerts'),
+        'sub_label',  public.uic('pay_alert.subtitle',
+                        'Payment notifications forwarded from the partner phone'),
+        'badge',      case when v_alerts > 0 then v_alerts::text else '' end,
+        'badge_tone', case when v_alerts > 0 then 'warn' else 'good' end,
+        'badge_label',case when v_alerts = 0 then ''
+                          when v_alerts = 1 then public.uic('pay_alert.badge_one','1 payment needs a look')
+                          else replace(public.uic('pay_alert.badge_tpl','{n} payments need a look'),
+                                       '{n}', v_alerts::text) end)),
+    'tabs', jsonb_build_array(
+      jsonb_build_object('tab_key','receivables', 'label','Owed to us',
+        'badge', case when v_recv > 0 then public.inr_money_compact(v_recv) else '' end,
+        'badge_tone', case when v_recv > 0 then 'bad' else 'good' end),
+      jsonb_build_object('tab_key','claims', 'label','To verify',
+        'badge', case when v_claims > 0 then v_claims::text else '' end,
+        'badge_tone', case when v_claims > 0 then 'warn' else 'good' end),
+      jsonb_build_object('tab_key','unmatched', 'label','Unattached money',
+        'badge', case when v_unmatched > 0 then v_unmatched::text else '' end,
+        'badge_tone', case when v_unmatched > 0 then 'bad' else 'good' end),
+      jsonb_build_object('tab_key','bills', 'label','Supplier bills',
+        'badge', case when v_bills > 0 then v_bills::text else '' end,
+        'badge_tone', case when v_bills > 0 then 'warn' else 'good' end)
+    ),
+    'unknown_tab_label', '');
+end $fn$;
+
+insert into public.ui_copy (key, value) values
+  ('pay_alert.badge_one', to_jsonb('1 payment needs a look'::text)),
+  ('pay_alert.badge_tpl', to_jsonb('{n} payments need a look'::text))
+on conflict (key) do nothing;
+
+
+-- ── 9. THE ROW SHAPE GAINS ITS THIRD BUTTON ─────────────────────────────────
+-- Every other label on the card already arrives from payment_alert_state();
+-- the link button must not be the one string Dart is trusted to know.
+CREATE OR REPLACE FUNCTION public.payment_alert_state(p_alert_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  a public.payment_alerts%rowtype; v_rule text; v_cust text; v_code text;
+begin
+  select * into a from public.payment_alerts where id = p_alert_id;
+  if a.id is null then
+    return jsonb_build_object('ok', false, 'error','not_found',
+      'message', public.uic('pay_alert.not_found','That payment alert is gone.'));
+  end if;
+
+  select coalesce(label, package_name) into v_rule
+    from public.payment_alert_rules where id = a.parse_rule_id;
+  select coalesce(nullif(btrim(pp.pharmacy_name),''), '') into v_cust
+    from public.pharmacy_profiles pp where pp.id = a.matched_customer_id;
+  select coalesce(nullif(btrim(o.order_code),''),
+                  'PO-'||upper(right(replace(o.id::text,'-',''),4)))
+    into v_code from public.orders o where o.id = a.matched_order_id;
+
+  return jsonb_build_object(
+    'ok', true,
+    'alert_id',      a.id,
+    'status',        a.status,
+    'status_label',  public.uic('pay_alert.status.'||a.status, initcap(a.status)),
+    'status_tone',   case a.status when 'matched' then 'success'
+                                   when 'unmatched' then 'warning'
+                                   when 'ignored' then 'muted'
+                                   else 'info' end,
+    'source',        a.parse_source,
+    'source_label',  public.uic('pay_alert.source.'||a.parse_source, a.parse_source),
+    'rule_label',    coalesce(v_rule, ''),
+    'app_label',     coalesce(v_rule, a.package_name),
+    'amount',        a.parsed_amount,
+    'amount_label',  case when a.parsed_amount is null
+                          then public.uic('pay_alert.no_amount','No amount read')
+                          else public.inr_money(a.parsed_amount) end,
+    'utr_label',     coalesce(nullif(a.parsed_utr,''),
+                              public.uic('pay_alert.no_utr','No UTR in the notification')),
+    'has_utr',       nullif(a.parsed_utr,'') is not null,
+    'sender_label',  coalesce(nullif(a.parsed_sender,''), nullif(a.parsed_vpa,''),
+                              public.uic('pay_alert.no_sender','Sender not named')),
+    'vpa',           coalesce(a.parsed_vpa,''),
+    'raw_title',     coalesce(a.raw_title,''),
+    'raw_text',      coalesce(a.raw_text,''),
+    'posted_label',  to_char(a.posted_at at time zone 'Asia/Kolkata','DD Mon, hh12:mi am'),
+    'match_reason',  coalesce(a.match_reason, a.parse_note, ''),
+    -- Both buttons on the card. Absent on a matched row, because a verified
+    -- payment is not re-matched or ignored from this screen.
+    'retry_match_label', case when a.status = 'matched' then ''
+                              else public.uic('pay_alert.retry_match','Match again') end,
+    'ignore_label',      case when a.status = 'matched' then ''
+                              else public.uic('pay_alert.ignore','Ignore') end,
+    -- CMD #1930 — the third button. Present for exactly as long as the other
+    -- two are: a verified payment is not re-linked from this screen.
+    'link_label',        case when a.status = 'matched' then ''
+                              else public.uic('pay_alert.link_label','Link to an order') end,
+    'claim_id',      a.matched_claim_id,
+    'order_id',      a.matched_order_id,
+    'order_code',    coalesce(v_code,''),
+    'customer_id',   a.matched_customer_id,
+    'customer_label',coalesce(nullif(v_cust,''), ''),
+    'zone_id',       a.zone_id,
+    'business_date', a.business_date);
+end $function$;

@@ -23,8 +23,10 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../design_tokens.dart';
+import '../../services/access.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
+import 'payment_alerts_screen.dart';
 
 typedef MoneyRpc =
     Future<Map<String, dynamic>> Function(String fn, Map<String, dynamic> args);
@@ -143,6 +145,11 @@ class _AdminMoneyScreenState extends State<AdminMoneyScreen> {
                         ),
                       ),
                     ),
+                  // CMD #1930 — rows that leave this screen, drawn in payload
+                  // order above the tabs. A route_key this build has never
+                  // heard of is SKIPPED, never a crash: a new Money entry is
+                  // an INSERT, exactly like a fifth tab.
+                  _MoneyLinks(links: _rows(_home['links'])),
                   _TabBar(
                     tabs: tabs,
                     active: _tab,
@@ -156,6 +163,89 @@ class _AdminMoneyScreenState extends State<AdminMoneyScreen> {
               ),
             ),
     );
+  }
+}
+
+/// CMD #1930 — the Money screen's links block.
+///
+/// One row per entry the backend sent: its label, its sub-label, its badge and
+/// the badge's tone are all payload. The only thing Dart knows is which screen
+/// a route_key opens — and an unknown one draws nothing at all.
+class _MoneyLinks extends StatelessWidget {
+  const _MoneyLinks({required this.links});
+
+  final List<Map<String, dynamic>> links;
+
+  static Widget? _screenFor(String routeKey, bool isSuper) {
+    switch (routeKey) {
+      case 'payment_alerts':
+        return PaymentAlertsScreen(isSuperAdmin: isSuper);
+      default:
+        return null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isSuper = Access.instance.isSuper;
+    final drawn = <Widget>[];
+    for (final l in links) {
+      final screen = _screenFor(_s(l['route_key']), isSuper);
+      if (screen == null) continue;
+      final badge = _s(l['badge']);
+      drawn.add(Padding(
+        padding: EdgeInsets.only(bottom: Ds.space.x12),
+        child: InkWell(
+          onTap: () => Navigator.push(
+              context, MaterialPageRoute(builder: (_) => screen)),
+          borderRadius: Ds.r.rCard,
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 44),
+            padding: EdgeInsets.all(Ds.space.x16),
+            decoration: BoxDecoration(
+              color: Ds.c.surface,
+              borderRadius: Ds.r.rCard,
+              boxShadow: Ds.elevation.e1,
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(_s(l['label']), style: Ds.t.subtitle),
+                      if (_s(l['sub_label']).isNotEmpty) ...[
+                        SizedBox(height: Ds.space.x4),
+                        Text(_s(l['sub_label']), style: Ds.t.caption),
+                      ],
+                    ],
+                  ),
+                ),
+                if (badge.isNotEmpty) ...[
+                  SizedBox(width: Ds.space.x8),
+                  Container(
+                    padding: EdgeInsets.symmetric(
+                        horizontal: Ds.space.x12, vertical: Ds.space.x4),
+                    decoration: BoxDecoration(
+                      color: moneyToneSoft(_s(l['badge_tone'])),
+                      borderRadius: Ds.r.rChip,
+                    ),
+                    child: Text(badge,
+                        style: Ds.t.caption
+                            .copyWith(color: moneyToneColor(_s(l['badge_tone'])))),
+                  ),
+                ],
+                SizedBox(width: Ds.space.x8),
+                Icon(Icons.chevron_right, color: Ds.c.textSecondary),
+              ],
+            ),
+          ),
+        ),
+      ));
+    }
+    if (drawn.isEmpty) return const SizedBox.shrink();
+    RenderLog.write('c1930_money_links', drawn.length);
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: drawn);
   }
 }
 

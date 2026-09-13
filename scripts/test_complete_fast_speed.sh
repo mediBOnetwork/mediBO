@@ -39,33 +39,55 @@ GUARDS=(c641_complete_fast_under_2s c641_no_rg_in_http_rpcs)
 
 [ -x "$DEVCMD" ] || { echo "complete_fast probe: devcmd not found at $DEVCMD — UNREACHABLE"; exit 2; }
 
-# A reply that is the TRANSPORT talking, not the guard. Kept in step with
-# public._journey_contention_phrase(), which classifies the same sentences for
-# journeys (dev_journey_runs) and QA (qa_report).
+# CMD #1951 — #956 TAUGHT THIS FUNCTION POSTGREST'S DIALECT, NOT HTTP'S.
+# On 2026-09-13 production's origin stopped answering (supavisor: FATAL Failed
+# to connect to database {:error, :timeout}) and Cloudflare served its own error
+# page, which is also perfectly valid JSON:
+#     {"title":"Error 522: Connection timed out","status":522,
+#      "detail":"Cloudflare could not establish a TCP connection to the origin
+#       server...","error_code":522,"error_name":"connection_timeout",
+#      "error_category":"origin"}
+# There is no `.code`, no `.message`, no `.error`, no `.details` — every field
+# this function read. So `.ok` was absent, the guard printed "RED — unknown",
+# and the deploy lane evicted three branches in ninety seconds (#1951, #1974,
+# #1975) for an outage none of them caused. That is #956 exactly, one layer out:
+# the transport was down, not the feature.
+#
+# An HTTP STATUS is the tell. A guard verdict is `{ok:bool, error:text}` and
+# carries no status/error_code field at all, so keying on one is precise: any
+# body carrying a 5xx (or 408/429) status, or Cloudflare's error_category
+# "origin", is the transport talking and is reported UNREACHABLE, never red.
+#
+# Kept in step with public._journey_contention_phrase(), which classifies the
+# same sentences for journeys (dev_journey_runs) and QA (qa_report).
 is_transport_error() {
   local body="$1"
   case "$(jq -r '.code // ""' <<<"$body")" in PGRST*) return 0;; esac
-  # CMD #1975 — the EDGE is transport too. On 2026-09-13 Supabase's origin went
-  # unreachable and Cloudflare answered every RPC with its own error document:
-  #     {"title":"Error 522: Connection timed out","status":522,
-  #      "error_code":522,"error_name":"connection_timeout", ...}
-  # It has no .message, .error or .details, so the classifier read "unknown",
-  # the guard reported RED, and two deploys (#1975, #1951) were failed for a
-  # database outage — the exact thing the header of this script says must never
-  # happen. A 5xx status or an error_name/title from the edge is UNREACHABLE.
-  local st; st="$(jq -r '(.status // .error_code // empty) | tostring' <<<"$body" 2>/dev/null)"
-  case "$st" in 5[0-9][0-9]) return 0;; esac
+  # An HTTP error page (Cloudflare 5xx, a gateway, PostgREST behind one).
+  # CMD #1975 found the same hole from the other side on the same day: the edge
+  # answers with its own error document ({title,status,error_code,error_name,
+  # error_category}) carrying none of the PostgREST fields this function used to
+  # read, so the classifier said "unknown" and the guard went RED for a database
+  # outage. Both readings are kept: a 5xx/408/429 status, Cloudflare's
+  # error_category "origin", or a bare error_name is the transport talking.
+  local st
+  st="$(jq -r '(.status // .error_code // empty) | tostring' <<<"$body" 2>/dev/null)"
+  case "$st" in
+    5[0-9][0-9]|408|429) return 0;;
+  esac
+  [ "$(jq -r '.error_category // ""' <<<"$body")" = "origin" ] && return 0
   [ -n "$(jq -r '.error_name // empty' <<<"$body" 2>/dev/null)" ] && return 0
   local msg
-  msg="$(jq -r '((.message // "") + " " + (.error // "") + " " + (.details // "")
-                 + " " + (.title // "") + " " + (.detail // "")) | ascii_downcase' <<<"$body")"
+  msg="$(jq -r '((.message // "") + " " + (.error // "") + " " + (.details // "") + " " + (.detail // "") + " " + (.title // "") + " " + (.error_name // "")) | ascii_downcase' <<<"$body")"
   case "$msg" in
     *"schema cache"*|*"could not query the database"*|*"lock timeout"*|\
     *"statement timeout"*|*"deadlock detected"*|*"too many clients"*|\
     *"remaining connection slots"*|*"server closed the connection"*|\
     *"terminating connection due to"*|*"connection refused"*|\
     *"connection reset by peer"*|*"service unavailable"*|*"gateway"*|\
-    *"connection timed out"*|*"tcp connection"*|*"origin"*|*"unreachable"*) return 0;;
+    *"connection timed out"*|*"connection_timeout"*|*"failed to connect to database"*|\
+    *"could not establish a tcp connection"*|*"tcp connection"*|*"origin is overloaded"*|\
+    *"origin server"*|*"origin"*|*"handshake timed out"*|*"unreachable"*) return 0;;
   esac
   return 1
 }
@@ -113,9 +135,14 @@ for g in "${GUARDS[@]}"; do
     fi
     if is_transport_error "$out"; then
       [ "$attempt" -lt 3 ] && { sleep 10; continue; }
+      # CMD #1951 — name what answered. A Cloudflare page has none of the
+      # PostgREST fields, so printing only .code/.message left the operator a
+      # blank reason for a lane-wide stall.
       echo "  $g: UNREACHABLE — the transport answered, the guard did not:" \
-           "$(jq -r '[.code, .status, .error_name] | map(select(. != null) | tostring) | join(" ")' <<<"$out")" \
-           "$(jq -r '[.message, .error, .title, .detail] | map(select(. != null)) | join(" — ") | .[0:160]' <<<"$out")"
+           "$(jq -r '[(.code // empty), ((.status // .error_code // empty)|tostring),
+                      (.error_name // empty), (.title // empty),
+                      (.message // .error // .detail // .details // empty)]
+                     | map(select(. != "" and . != null)) | join(" ") | .[0:200]' <<<"$out")"
       exit 2
     fi
     break

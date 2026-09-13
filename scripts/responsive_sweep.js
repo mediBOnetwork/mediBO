@@ -83,14 +83,30 @@ const SCREENS = [
 ];
 
 async function readRenderLog(page) {
-  return page.evaluate(() => {
-    try {
-      const el = document.getElementById('medibo-render-log');
-      if (el && el.textContent) return JSON.parse(el.textContent);
-      if (window.__mediboRenderLog) return window.__mediboRenderLog;
-    } catch (_) {}
-    return null;
+  const text = await page.evaluate(() => {
+    const el = document.getElementById('medibo-render-log');
+    return el ? (el.textContent || el.innerText || '') : '';
   });
+  if (!text || !text.trim()) return null;
+  const out = {};
+  for (const line of text.split('\n')) {
+    const i = line.indexOf('=');
+    if (i > 0) out[line.slice(0, i)] = line.slice(i + 1);
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+// Wait for the app to say it painted rather than sleeping a fixed amount: a
+// 320px cold load on a slow edge takes longer than a 480px warm one, and a
+// blank page read too early is indistinguishable from a broken one.
+async function waitForPaint(page, budgetMs) {
+  const deadline = Date.now() + budgetMs;
+  while (Date.now() < deadline) {
+    const log = await readRenderLog(page);
+    if (log && String(log.boot_status || '') === 'painted') return log;
+    await page.waitForTimeout(1000);
+  }
+  return readRenderLog(page);
 }
 
 (async () => {
@@ -126,8 +142,10 @@ async function readRenderLog(page) {
           const sep = route.includes('?') ? '&' : '?';
           await page.goto(`${TARGET}${route}${sep}responsive_audit=1&min_touch=${minTouch}`,
             { waitUntil: 'domcontentloaded', timeout: 45000 });
-          // The audit re-measures for ~16s after boot; give the screen its RPC.
-          await page.waitForTimeout(9000);
+          // Wait for the app's own "painted", then let the audit re-measure
+          // while the screen's RPC lands before reading the counts.
+          await waitForPaint(page, 30000);
+          await page.waitForTimeout(6000);
           log = await readRenderLog(page);
         } catch (e) {
           failures.push(`${label} @${width}px did not load (${String(e.message).slice(0, 80)})`);

@@ -244,8 +244,21 @@ class _DesktopProfileButton extends StatelessWidget {
     // and one place it comes from.
     final displayName = auth.headerTitle;
     final initial = displayName.isNotEmpty ? displayName[0].toUpperCase() : '?';
-    final shortName =
-        displayName.length > 16 ? '${displayName.substring(0, 14)}…' : displayName;
+    // CMD #1947 — the pill used to print "Hello masteromprakashsahu@gmail…",
+    // an email cut mid-word, and it ate the width the date·zone chip now needs.
+    // my_session() carries header_short (the backend's own short name: an
+    // override row, else the profile name's first word, else the email's local
+    // part, truncated THERE) and header_email. The pill prints the short name;
+    // the full address moved into the dropdown's first row. Nothing about
+    // either string is decided here — the fallback is the old client-side trim
+    // only for a session that predates the field.
+    final shortName = auth.headerShort.isNotEmpty
+        ? auth.headerShort
+        : (displayName.length > 16
+            ? '${displayName.substring(0, 14)}…'
+            : displayName);
+    final fullEmail =
+        auth.headerEmail.isNotEmpty ? auth.headerEmail : displayName;
     final hasAdminNav = onAdminNav != null;
 
     return ConstrainedBox(
@@ -260,6 +273,13 @@ class _DesktopProfileButton extends StatelessWidget {
           RenderLog.write('c206_dropdown_bills', 1);
         }
         return [
+        // CMD #1947 — the address the pill no longer shows, in full, first.
+        if (fullEmail.isNotEmpty)
+          PopupMenuItem<String>(
+            enabled: false,
+            child: Text(fullEmail, style: Ds.t.caption),
+          ),
+        if (fullEmail.isNotEmpty) const PopupMenuDivider(),
         for (final row in NavProfileMenu.items.value)
           if ((row['feature_key'] ?? '') != 'identity.logout')
             PopupMenuItem(
@@ -356,7 +376,7 @@ class _DesktopProfileButton extends StatelessWidget {
             const SizedBox(width: 9),
             Flexible(
               child: Text(
-                cf('home_shell.hello_a', {'a': shortName}),
+                shortName,
                 style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
@@ -588,6 +608,59 @@ class _MobileProfileButton extends StatelessWidget {
 ///
 /// The chip row, the recent strip and the rows are all one `search_page()`
 /// payload, so the filters above the list can never disagree with the list.
+/// CMD #1905/#1910, on the shared header (CMD #1906) — a tapped suggestion
+/// opens WHAT IT IS.
+///
+/// The backend named the destination in the item's `nav` block. This function
+/// only knows which screen renders which kind, which is the one thing the app
+/// owns. Nothing here re-runs a tapped row as a text query: that is what put
+/// "SUN PHARMACEUTICAL INDUSTRIES LTD" into a product-name search and found
+/// nothing. The Catalogue's router is the same switch on the same fields, so
+/// the one header behaves identically whichever tab it is mounted on.
+void _shellPickSuggestion(_HomeShellState st, SearchSuggestion s) {
+  RenderLog.write('c1905_suggest_nav', '${s.navKind}:${s.navId}');
+  switch (s.navKind) {
+    case 'product':
+      Navigator.of(st.context).pushNamed('/product/${s.navId}');
+    case 'company':
+      Navigator.of(st.context)
+          .pushNamed('/company/${Uri.encodeComponent(s.navId)}');
+    case 'salt':
+      st._openCatalogueScope(
+          CatalogueRoute(tab: 'salts', listKind: 'salt', listKey: s.navId));
+    case 'condition':
+      // CMD #1910 — "fever" is a USE, and the backend sent its id. Opening the
+      // scope is the whole point of the typed row: a text search for the word
+      // finds product NAMES containing it, which is a much worse answer.
+      st._openCatalogueScope(CatalogueRoute(
+          tab: 'conditions', listKind: 'condition', listKey: s.navId));
+    case 'category':
+      st._openCatalogueScope(
+          CatalogueRoute(tab: 'browse', path: [s.navId], listKind: 'tree'));
+    case 'tab':
+      // "See all companies" / "See all salts": that tab, narrowed by what was
+      // typed. Still not a product-name search.
+      st._openCatalogueScope(CatalogueRoute(tab: s.navTab, query: s.navQuery));
+    default:
+      // 'search' — the one nav that IS a text query, because the backend said
+      // so.
+      st._handleSearchSubmit(s.navId.isNotEmpty ? s.navId : s.query);
+  }
+}
+
+/// One option tap on the shared chip row. The group and the option are the
+/// backend's own; the state change is the only thing decided here.
+void _shellFilterPick(_HomeShellState st, SearchFilterGroup g, SearchOption o) {
+  final next = st._search.withOption(g, o);
+  if (!next.hasQuery && g.key == 'category') {
+    // No query yet: the category chips are still the browse filter they
+    // always were.
+    st._selectCategory(o.key);
+    return;
+  }
+  st._applySearch(next);
+}
+
 Widget _shellSearchHeader(_HomeShellState s, {Widget? trailing}) => SearchChrome(
       controller: s._searchCtrl,
       focusNode: s._searchFocus,
@@ -597,7 +670,8 @@ Widget _shellSearchHeader(_HomeShellState s, {Widget? trailing}) => SearchChrome
       repo: s._repo,
       trailing: trailing,
       onSubmit: s._handleSearchSubmit,
-      onFilterPick: s._handleFilterPick,
+      onPickSuggestion: (sug) => _shellPickSuggestion(s, sug),
+      onFilterPick: (g, o) => _shellFilterPick(s, g, o),
       onClear: () => s._applySearch(SearchQueryState.blank),
       onRecentCleared: () {
         if (s._search.hasQuery) s._applySearch(s._search, push: false);

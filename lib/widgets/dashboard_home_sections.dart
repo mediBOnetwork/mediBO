@@ -17,6 +17,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../design_tokens.dart';
+import '../fulfill/supplier_toggle_chips.dart'; // CMD #1941
 import '../screens/admin/nav_registry_view.dart';
 import '../utils/render_log.dart';
 
@@ -29,6 +30,21 @@ typedef DashboardTileTap = void Function(Map<String, dynamic> tile);
 /// CMD #1893 — a tile was held down. The Pin / Unpin sheet is the host's, not
 /// the tile's: the tile only reports which one was held.
 typedef DashboardTileHold = void Function(Map<String, dynamic> tile);
+
+/// CMD #1941 — a pill in the AUTOMATION block was tapped. The screen runs
+/// `dashboard_automation_set(key, next)` and hands back whatever it replied;
+/// the block re-draws from that reply, so the ON/OFF word on screen is always
+/// the one the SERVER just wrote, never a locally flipped guess.
+typedef DashboardAutomationSet = Future<Map<String, dynamic>> Function(
+    String key, bool next);
+
+/// The Bundle pill's extra affordance — `dashboard_automation_action(key)`.
+typedef DashboardAutomationAct = Future<Map<String, dynamic>> Function(
+    String key);
+
+/// A sentence the backend sent, shown as a toast. The wording is never this
+/// widget's; it only decides whether the toast is an error one.
+typedef DashboardToast = void Function(String message, bool isError);
 
 /// The section drawn as full-width rows rather than as a tile grid. It is the
 /// one section whose items are all badged, so a row can afford to spend the
@@ -72,10 +88,20 @@ class DashboardHomeSections extends StatefulWidget {
     required this.onOpen,
     this.onHold,
     this.revision,
+    this.automationSet,
+    this.automationAction,
+    this.onToast,
   });
 
   final DashboardHomeLoad load;
   final DashboardTileTap onOpen;
+
+  /// CMD #1941 — the AUTOMATION block's two doors. Null on a surface that does
+  /// not offer the toggles; the block then never draws, whatever the payload
+  /// said.
+  final DashboardAutomationSet? automationSet;
+  final DashboardAutomationAct? automationAction;
+  final DashboardToast? onToast;
 
   /// CMD #1893 — long-press a tile to pin or unpin it. Null on a surface that
   /// has no Quick actions row to pin into.
@@ -92,6 +118,13 @@ class DashboardHomeSections extends StatefulWidget {
 class _DashboardHomeSectionsState extends State<DashboardHomeSections> {
   Map<String, dynamic> _home = const {};
   bool _loading = true;
+
+  /// CMD #1941 — `dashboard_home().automation`, replaced wholesale by whatever
+  /// `dashboard_automation_set()` replies. Never patched field by field.
+  Map<String, dynamic> _automation = const {};
+
+  /// Pills whose RPC is in flight; those spin and refuse taps.
+  final Set<String> _busy = <String>{};
 
   @override
   void initState() {
@@ -112,6 +145,9 @@ class _DashboardHomeSectionsState extends State<DashboardHomeSections> {
       if (!mounted) return;
       setState(() {
         _home = m;
+        _automation = (m['automation'] is Map)
+            ? Map<String, dynamic>.from(m['automation'] as Map)
+            : const {};
         _loading = false;
       });
       RenderLog.write('c1891_dashboard_sections',
@@ -120,6 +156,40 @@ class _DashboardHomeSectionsState extends State<DashboardHomeSections> {
       // The previous payload stays on screen — a failed refresh is not an
       // empty dashboard.
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  /// CMD #1941 — the AUTOMATION pills. `show:false` (a login that may not
+  /// switch them) and a surface with no `automationSet` both mean no block.
+  List<SupplierToggleChip> get _autoChips =>
+      (widget.automationSet == null || _automation['show'] != true)
+          ? const []
+          : SupplierToggleChip.listFrom(_automation['items']);
+
+  /// Tap. The reply IS the new state — including a refusal, which re-draws the
+  /// pill exactly as the server still has it.
+  Future<void> _runAutomation(
+      String key, Future<Map<String, dynamic>> Function() call) async {
+    if (_busy.contains(key)) return;
+    setState(() => _busy.add(key));
+    try {
+      final res = await call();
+      if (!mounted) return;
+      final ok = res['ok'] == true;
+      final next = (res['automation'] is Map)
+          ? Map<String, dynamic>.from(res['automation'] as Map)
+          : null;
+      setState(() {
+        if (next != null) _automation = next;
+        _busy.remove(key);
+      });
+      final msg = (ok ? (res['toast'] ?? '') : (res['message'] ?? '')).toString();
+      if (msg.isNotEmpty) widget.onToast?.call(msg, !ok);
+      RenderLog.write('c1941_automation_set', '$key=$ok');
+    } catch (_) {
+      // A failed call leaves the previous answer on screen; it never invents
+      // one, and the pill stops spinning.
+      if (mounted) setState(() => _busy.remove(key));
     }
   }
 
@@ -135,12 +205,44 @@ class _DashboardHomeSectionsState extends State<DashboardHomeSections> {
     if (_loading && _home.isEmpty) return const DashboardSectionsSkeleton();
     if (_home['ok'] != true) return const SizedBox.shrink();
     final sections = _visible();
-    if (sections.isEmpty) return const SizedBox.shrink();
+    final autoChips = _autoChips;
+    if (sections.isEmpty && autoChips.isEmpty) return const SizedBox.shrink();
     RenderLog.write('c1892_dashboard_layout', sections.length);
     return Column(
       key: const Key('c1891_dashboard_sections'),
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // CMD #1941 — AUTOMATION first: the toggles that used to hide under the
+        // Supplier inquiry and Supplier orders sub-tabs, where a phone could
+        // not reach them. Its heading is the payload's, like every other one.
+        if (autoChips.isNotEmpty) ...[
+          DashboardSectionLabel(_s(_automation, 'label')),
+          Builder(builder: (_) {
+            RenderLog.write('c1941_automation_block', autoChips.length);
+            return SupplierToggleChipRow(
+              key: const Key('c1941_automation'),
+              chips: autoChips,
+              busyKeys: _busy,
+              onToggle: (chip, next) => _runAutomation(
+                  chip.key, () => widget.automationSet!(chip.key, next)),
+              onAction: widget.automationAction == null
+                  ? null
+                  : (chip) => _runAutomation(
+                      chip.key, () => widget.automationAction!(chip.key)),
+              onSettings: (chip) => showAutomationSettingsSheet(
+                context,
+                chip,
+                onToggle: (c, next) => _runAutomation(
+                    c.key, () => widget.automationSet!(c.key, next)),
+                onAction: widget.automationAction == null
+                    ? null
+                    : (c) => _runAutomation(
+                        c.key, () => widget.automationAction!(c.key)),
+              ),
+            );
+          }),
+          SizedBox(height: Ds.space.x24),
+        ],
         for (final s in sections) ...[
           DashboardSectionLabel(_s(s, 'label')),
           if (_list(s, 'items').isEmpty)

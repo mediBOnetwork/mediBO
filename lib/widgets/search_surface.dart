@@ -38,6 +38,8 @@ class SearchHeaderBar extends StatefulWidget {
     this.isLoading = false,
     this.onClear,
     this.trailing,
+    this.chip = SearchChip.none,
+    this.onChipClear,
   });
 
   final TextEditingController controller;
@@ -58,6 +60,13 @@ class SearchHeaderBar extends StatefulWidget {
 
   /// An extra control on the right of the field (the desktop Search button).
   final Widget? trailing;
+
+  /// CMD #1905, shared by CMD #1906 — the scope a tapped suggestion opened.
+  /// With a chip up the box IS the chip: the field had "SUN PHARMACEUTICAL
+  /// INDUSTRIES LTD" in it while the screen below was a company page. Both
+  /// strings are the backend's (`chip_label`, `clear_label`).
+  final SearchChip chip;
+  final VoidCallback? onChipClear;
 
   /// One height for both screens, so the two headers cannot drift apart.
   static const double fieldHeight = 46;
@@ -115,6 +124,14 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
                     child: Icon(Icons.search,
                         color: Ds.c.textSecondary, size: Ds.space.x16 + 4),
                   ),
+                  if (widget.chip.has)
+                    Expanded(
+                      child: SearchBoxChip(
+                        chip: widget.chip,
+                        onClear: widget.onChipClear ?? () {},
+                      ),
+                    )
+                  else
                   Expanded(
                     child: TextField(
                       controller: widget.controller,
@@ -686,6 +703,7 @@ class SearchChrome extends StatefulWidget {
     this.trailing,
     this.onRecentCleared,
     this.repo,
+    this.onPickSuggestion,
   });
 
   /// The live `search_page()` answer, when the screen has one. Its filter
@@ -703,6 +721,15 @@ class SearchChrome extends StatefulWidget {
   final VoidCallback? onRecentCleared;
   final MedicineRepository? repo;
 
+  /// CMD #1905/#1910, moved into the shared header by CMD #1906 — a tapped
+  /// suggestion opens WHAT IT IS. The host is handed the backend's whole item
+  /// (its `nav` block included) and routes it; this component never re-runs a
+  /// tapped row as a text query, which is what pasted "SUN PHARMACEUTICAL
+  /// INDUSTRIES LTD" into a product-name search and found nothing. Both the
+  /// Catalogue and the shell pass their own router here, so there is exactly
+  /// one panel and one chip in the app.
+  final ValueChanged<SearchSuggestion>? onPickSuggestion;
+
   @override
   State<SearchChrome> createState() => _SearchChromeState();
 }
@@ -716,6 +743,11 @@ class _SearchChromeState extends State<SearchChrome> {
   /// Loaded here rather than by every screen, so a screen that mounts the
   /// header gets the chips and the recent strip for free.
   SearchPagePayload? _chrome;
+
+  /// The scope the last tapped suggestion opened, or [SearchChip.none]. It
+  /// lives here rather than on each screen: two copies were what let the
+  /// desktop header and the Catalogue header drift apart in the first place.
+  SearchChip _chip = SearchChip.none;
 
   @override
   void initState() {
@@ -752,7 +784,40 @@ class _SearchChromeState extends State<SearchChrome> {
   void _submit(String q) {
     _suggest.close();
     _debounce.cancel();
+    // A typed query is not the scope the chip names, so the chip goes.
+    if (_chip.has) setState(() => _chip = SearchChip.none);
     widget.onSubmit(q);
+  }
+
+  /// A suggestion tap: put the backend's chip in the box, then let the host
+  /// open the destination the backend named.
+  void _pick(SearchSuggestion s) {
+    _suggest.close();
+    widget.focusNode.unfocus();
+    setState(() {
+      _chip = s.chipLabel.isEmpty
+          ? SearchChip.none
+          : SearchChip(label: s.chipLabel, clearLabel: _suggest.clearLabel);
+      if (_chip.has) widget.controller.text = '';
+    });
+    final onPick = widget.onPickSuggestion;
+    if (onPick != null) {
+      onPick(s);
+      return;
+    }
+    // No router supplied: the old string contract, which is all a payload
+    // without a `nav` block can support anyway.
+    final q = s.navId.isNotEmpty ? s.navId : s.query;
+    widget.controller.text = q;
+    _submit(q);
+  }
+
+  /// The × on the chip is the same × as the field's: it puts the shopper back
+  /// on the catalogue they came from.
+  void _clearChip() {
+    setState(() => _chip = SearchChip.none);
+    widget.controller.clear();
+    widget.onClear();
   }
 
   /// Every keystroke: the suggestion panel asks the backend, and nothing else
@@ -776,8 +841,10 @@ class _SearchChromeState extends State<SearchChrome> {
           isLoading: widget.isLoading,
           onChanged: _changed,
           onSubmit: _submit,
-          onClear: widget.onClear,
+          onClear: _chip.has ? _clearChip : widget.onClear,
           trailing: widget.trailing,
+          chip: _chip,
+          onChipClear: _clearChip,
         ),
         // The suggestion popup, from the SAME `search_suggest()` both screens
         // call. Tapping a row searches the BACKEND's query for it, which for a
@@ -789,10 +856,7 @@ class _SearchChromeState extends State<SearchChrome> {
                   padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
                   child: SearchSuggestions(
                     payload: _suggest.payload,
-                    onPick: (q) {
-                      widget.controller.text = q;
-                      _submit(q);
-                    },
+                    onPick: _pick,
                   ),
                 )
               : const SizedBox.shrink(),

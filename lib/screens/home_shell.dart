@@ -26,6 +26,7 @@ import '../widgets/animations.dart';
 import '../widgets/search_surface.dart';
 import '../widgets/cart_pill.dart'; // C636
 import '../widgets/notification_bell.dart'; // CHANGE #298
+import '../widgets/scope_chip.dart'; // CMD #1947 — the header date·zone chip
 import '../services/push_service.dart'; // CHANGE #298
 import 'admin/admin_push_screen.dart'; // CHANGE #298
 import 'admin/catalogue_health_screen.dart'; // CHANGE #460
@@ -537,6 +538,10 @@ class _HomeShellState extends State<HomeShell> {
   /// Applies a new search state: the screen, the box and the URL all move
   /// together, so there is never a URL that describes a different search from
   /// the one on screen.
+  /// CMD #1906 — the last scope the shared header opened, handed to the
+  /// Catalogue. A new instance per tap is what tells that screen to render it.
+  CatalogueRoute? _catScope;
+
   void _applySearch(SearchQueryState next, {bool push = true}) {
     setState(() {
       _search = next;
@@ -576,6 +581,7 @@ class _HomeShellState extends State<HomeShell> {
     // need to: an unknown path already falls through to this shell, which
     // reads the URL here. The screen is pushed after the first frame because
     // the navigator does not exist yet inside initState.
+    if (shellOpenCartOnPath(path, () => mounted ? _openCart() : null)) return;
     if (path == '/admin/order-alerts') {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _handleAdminNav('order_alerts');
@@ -1436,8 +1442,6 @@ class _HomeShellState extends State<HomeShell> {
     );
   }
 
-  // Desktop web search trigger — shared by _DesktopSearchRow's onChanged
-  // debounce and the type-anywhere global key handler above (CHANGE #440).
   /// CMD #1906 — one submit handler for both breakpoints. A query REPLACES the
   /// search; clearing the box returns to the browse feed and clears the URL
   /// with it.
@@ -1454,17 +1458,16 @@ class _HomeShellState extends State<HomeShell> {
     setState(() => _scrollTrigger++);
   }
 
-  /// One option tap on the shared chip row. The group and the option are the
-  /// backend's own; the state change is the only thing decided here.
-  void _handleFilterPick(SearchFilterGroup g, SearchOption o) {
-    final next = _search.withOption(g, o);
-    if (!next.hasQuery && g.key == 'category') {
-      // No query yet: the category chips are still the browse filter they
-      // always were.
-      _selectCategory(o.key);
-      return;
-    }
-    _applySearch(next);
+  /// Open the Catalogue tab on a scope the shared header picked. The switch
+  /// that decides WHICH scope lives with the header it was tapped in, in
+  /// shell_header_chrome.dart; this is only the state move and the URL.
+  void _openCatalogueScope(CatalogueRoute r) {
+    setState(() {
+      _index = 12;
+      _cartOpen = false;
+      _catScope = r;
+    });
+    pushUrl(r.url);
   }
 
   void _selectCategory(String c) {
@@ -1729,6 +1732,7 @@ class _HomeShellState extends State<HomeShell> {
           // moving between the two tabs keeps query, filters and page.
           CatalogueScreen(
             active: _index == 12,
+            shellScope: _catScope,
             shellSearch: _search,
             onSearchChanged: (s) => setState(() {
               _search = s;

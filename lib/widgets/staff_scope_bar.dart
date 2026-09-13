@@ -1,104 +1,30 @@
 import 'package:flutter/material.dart';
 import '../design_tokens.dart';
-import '../services/admin_date_scope.dart';
-import '../services/admin_zone_scope.dart';
 import '../services/staff_nav.dart';
 import '../utils/render_log.dart';
-import 'admin_date_picker.dart';
-import 'admin_zone_picker.dart';
 import 'offline_banner.dart';
 
-/// CHANGE #1017 (1) — zone and date live ONCE, in the header, for every
-/// staff tab. This is that header row: the backend's own scope labels, the two
-/// pickers that already exist (they write through admin_zone_scope /
-/// admin_date_scope exactly as before), and the offline banner beneath.
+/// CHANGE #1017 (1) → CMD #1947 — zone and date live ONCE for every staff tab,
+/// and that one place is now the HEADER ROW itself: a single date·zone chip
+/// (widgets/scope_chip.dart) sitting beside the logo on a phone and beside the
+/// user menu on the web. The full-width second row this file used to draw —
+/// AdminDatePicker + AdminZonePicker under the header, on every staff screen —
+/// is gone with it; the two pickers moved into the chip's bottom sheet and
+/// still write through admin_set_date_scope / admin_set_zone_scope exactly as
+/// before, so every scoped tab follows the header as it always did.
 ///
-/// It reads `staff_nav().scope` and `staff_nav().copy` verbatim. A partner
-/// (zone_locked) gets a static label, never a picker. After a change the nav
-/// is re-read so the labels — and every scoped screen — follow the header.
-class StaffScopeBar extends StatefulWidget {
-  const StaffScopeBar({super.key, this.onScopeChanged});
-  final VoidCallback? onScopeChanged;
-
-  @override
-  State<StaffScopeBar> createState() => _StaffScopeBarState();
-}
-
-class _StaffScopeBarState extends State<StaffScopeBar> {
-  // The pickers write through the two scope services; this bar listens to
-  // those, so a pick anywhere re-reads the nav and the labels follow.
-  @override
-  void initState() {
-    super.initState();
-    AdminZoneScope.instance.addListener(_changed);
-    AdminDateScope.instance.addListener(_changed);
-  }
-
-  @override
-  void dispose() {
-    AdminZoneScope.instance.removeListener(_changed);
-    AdminDateScope.instance.removeListener(_changed);
-    super.dispose();
-  }
-
-  void _changed() {
-    StaffNav.load();
-    widget.onScopeChanged?.call();
-  }
+/// What stays here is the row's other half: the offline banner, whose template
+/// is staff_nav().copy — it is not a scope control and had nowhere else to go.
+class StaffOfflineBanner extends StatelessWidget {
+  const StaffOfflineBanner({super.key});
 
   @override
   Widget build(BuildContext context) => ValueListenableBuilder<StaffNavPayload>(
         valueListenable: StaffNav.value,
         builder: (context, nav, _) {
           if (!nav.ok || nav.isLegacy) return const SizedBox.shrink();
-          final scope = nav.scope;
-          final zoneLocked = scope['zone_locked'] == true;
-          final canPickZone = scope['can_pick_zone'] == true;
-          final canPickDate = scope['can_pick_date'] != false;
-          final zoneLabel = (scope['zone_label'] ?? '').toString();
-          final lockedLabel = (scope['zone_locked_label'] ?? '').toString();
-          // the live proof reads this: which chrome drew the bar, and for whom
-          RenderLog.write('c1017_scope_bar',
-              '${zoneLocked ? "locked" : (canPickZone ? "pick" : "none")};zone=$zoneLabel;date=${scope['date_label'] ?? ''}');
-
-          return Column(mainAxisSize: MainAxisSize.min, children: [
-            Material(
-              color: Ds.c.surface,
-              child: Container(
-                key: const Key('c1017_scope_bar'),
-                height: Ds.touch.minTarget + Ds.space.x8,
-                padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-                decoration: BoxDecoration(
-                  border: Border(bottom: BorderSide(color: Ds.c.divider)),
-                ),
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(children: [
-                    if (canPickDate) const AdminDatePicker(key: Key('c1017_date_pick'), bare: true),
-                    if (canPickDate) SizedBox(width: Ds.space.x8),
-                    if (canPickZone && !zoneLocked)
-                      const AdminZonePicker(key: Key('c1017_zone_pick'))
-                    else if (zoneLabel.isNotEmpty)
-                      // a partner's zone is a fact, not a choice
-                      Container(
-                        padding: EdgeInsets.symmetric(horizontal: Ds.space.x12, vertical: Ds.space.x8),
-                        decoration: BoxDecoration(color: Ds.c.brandSoft, borderRadius: Ds.r.rChip),
-                        child: Row(mainAxisSize: MainAxisSize.min, children: [
-                          Icon(Icons.place_outlined, size: Ds.space.x16, color: Ds.c.brand),
-                          SizedBox(width: Ds.space.x4),
-                          Text(zoneLabel, style: Ds.t.caption.copyWith(color: Ds.c.brand, fontWeight: FontWeight.w600)),
-                          if (lockedLabel.isNotEmpty) ...[
-                            SizedBox(width: Ds.space.x4),
-                            Text('· $lockedLabel', style: Ds.t.caption),
-                          ],
-                        ]),
-                      ),
-                  ]),
-                ),
-              ),
-            ),
-            OfflineBanner(template: nav.copyOf('offline_banner')),
-          ]);
+          RenderLog.write('c1947_scope_bar_removed', 1);
+          return OfflineBanner(template: nav.copyOf('offline_banner'));
         },
       );
 }

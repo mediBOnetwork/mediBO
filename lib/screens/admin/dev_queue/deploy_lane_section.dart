@@ -20,7 +20,11 @@ import 'dev_queue_common.dart';
 /// shared palette. It renders them in payload order.
 class DeployLaneSection extends StatelessWidget {
   final Map<String, dynamic> data;
-  const DeployLaneSection({super.key, required this.data});
+
+  /// CMD #1961 — a Recently completed row opens that command. The screen owns
+  /// the navigation; this widget only hands back the id the backend sent.
+  final void Function(int commandId)? onOpenCommand;
+  const DeployLaneSection({super.key, required this.data, this.onOpenCommand});
 
   @override
   Widget build(BuildContext context) {
@@ -44,13 +48,15 @@ class DeployLaneSection extends StatelessWidget {
         (data['metrics'] as Map?)?.cast<String, dynamic>() ?? const {};
     final waiting = (queue['rows'] as List?) ?? const [];
     final recent = (data['recent'] as List?) ?? const [];
-    // CHANGE #1836 — the recent BATCHES and their real notes. Six batches failed
-    // in a row on 6 Sep while this card could only ever show the one that was
-    // open, so the hour was legible in merge_worker.journal and nowhere else.
-    // has:false draws nothing at all.
-    final batches =
-        (data['batches'] as Map?)?.cast<String, dynamic>() ?? const {};
-    final batchRows = (batches['rows'] as List?) ?? const [];
+    // CMD #1961 — RECENTLY COMPLETED, where Recent batches used to be. The
+    // batch table stopped moving on 7 Sep when #1859 turned the merge lane off,
+    // so the card reported a six-day-old "Last batch failed" as the state of a
+    // lane that had deployed all week. Every string here (heading, each row's
+    // label, its CHANGE #/duration/tokens line, the empty state and the
+    // footnote) is deploy_recent_completed()'s. has:false draws nothing.
+    final completed =
+        (data['completed'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final completedRows = (completed['rows'] as List?) ?? const [];
     final stale = (data['stale'] as List?) ?? const [];
     // CMD #1866 — the WAIT GATE's own decisions. #1863 parked on the deploy
     // lock its own deploy was holding and cold-read its whole context; the only
@@ -98,14 +104,32 @@ class DeployLaneSection extends StatelessWidget {
           // CMD #1866 — WHOSE deploy holds the lock. "deploy lock — #1863 (own)"
           // and "deploy lock — #1864" are one backend string with one backend
           // tone; ownership is never re-derived here from a holder name.
-          if (((lane['lock_label'] as String?) ?? '').isNotEmpty) ...[
+          // CMD #1961 — and the LIVE holder chip beside it: "#1962 · runner-2 ·
+          // 9m 25s · frees in ~15m 35s" when the lock is held, "Lock free" when
+          // it is not. One backend string, one backend tone; the chips wrap on a
+          // narrow phone instead of overflowing the row.
+          if (((lane['lock_label'] as String?) ?? '').isNotEmpty ||
+              ((lane['holder_chip'] as String?) ?? '').isNotEmpty) ...[
             SizedBox(height: Ds.space.x8),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: ToneChip(
-                label: (lane['lock_label'] as String?) ?? '',
-                tone: toneByName((lane['lock_tone'] as String?) ?? 'neutral'),
-              ),
+            Wrap(
+              spacing: Ds.space.x8,
+              runSpacing: Ds.space.x8,
+              children: [
+                if (((lane['lock_label'] as String?) ?? '').isNotEmpty)
+                  ToneChip(
+                    label: (lane['lock_label'] as String?) ?? '',
+                    tone: toneByName(
+                      (lane['lock_tone'] as String?) ?? 'neutral',
+                    ),
+                  ),
+                if (((lane['holder_chip'] as String?) ?? '').isNotEmpty)
+                  ToneChip(
+                    label: (lane['holder_chip'] as String?) ?? '',
+                    tone: toneByName(
+                      (lane['holder_chip_tone'] as String?) ?? 'neutral',
+                    ),
+                  ),
+              ],
             ),
           ],
 
@@ -205,61 +229,37 @@ class DeployLaneSection extends StatelessWidget {
             ],
           ],
 
-          // ── recent batches, and whether they are failing in a row ──────
-          // CHANGE #1836. Every string here is deploy_lane_batches()' — the
-          // streak sentence, each batch's value word ("worker died — retried"
-          // for an expired batch, which is a dead worker and not a verdict) and
-          // the note, which is now the error line deploy.sh actually printed
-          // rather than its exit code. Nothing is recomputed from `status`.
-          if (batches['has'] == true) ...[
+          // ── what finished, and what it cost ────────────────────────────
+          // CMD #1961. One compact row per completed command: #id · title,
+          // then CHANGE #n · duration · tokens as the backend worded it.
+          // Tapping a row opens that command.
+          if (completed['has'] == true) ...[
             SizedBox(height: Ds.space.x24),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    (batches['heading'] as String?) ?? '',
-                    style: Ds.t.body.copyWith(
-                      fontWeight: FontWeight.w600,
-                      color: kTextHi,
-                    ),
-                  ),
-                ),
-                if (((batches['streak_label'] as String?) ?? '').isNotEmpty)
-                  ToneChip(
-                    label: (batches['streak_label'] as String?) ?? '',
-                    tone: toneByName(
-                      (batches['streak_tone'] as String?) ?? 'neutral',
-                    ),
-                  ),
-              ],
+            Text(
+              (completed['heading'] as String?) ?? '',
+              style: Ds.t.body.copyWith(
+                fontWeight: FontWeight.w600,
+                color: kTextHi,
+              ),
             ),
-            if (batchRows.isEmpty) ...[
+            if (completedRows.isEmpty) ...[
               SizedBox(height: Ds.space.x4),
               Text(
-                (batches['empty_label'] as String?) ?? '',
+                (completed['empty_label'] as String?) ?? '',
                 style: Ds.t.caption.copyWith(color: kTextLo),
               ),
             ] else
-              for (final b in batchRows) ...[
+              for (final r in completedRows.whereType<Map>()) ...[
                 SizedBox(height: Ds.space.x12),
-                _row(
-                  ((b as Map)['label'] as String?) ?? '',
-                  (b['sub_label'] as String?) ?? '',
-                  (b['value_label'] as String?) ?? '',
-                  (b['tone'] as String?) ?? 'neutral',
+                _CompletedRow(
+                  row: r.cast<String, dynamic>(),
+                  onOpen: onOpenCommand,
                 ),
-                if (((b['when_label'] as String?) ?? '').isNotEmpty) ...[
-                  SizedBox(height: Ds.space.x4),
-                  Text(
-                    (b['when_label'] as String?) ?? '',
-                    style: Ds.t.caption.copyWith(color: kTextLo),
-                  ),
-                ],
               ],
-            if (((batches['footnote'] as String?) ?? '').isNotEmpty) ...[
+            if (((completed['footnote'] as String?) ?? '').isNotEmpty) ...[
               SizedBox(height: Ds.space.x8),
               Text(
-                (batches['footnote'] as String?) ?? '',
+                (completed['footnote'] as String?) ?? '',
                 style: Ds.t.caption.copyWith(color: kTextLo),
               ),
             ],
@@ -447,4 +447,75 @@ class DeployLaneSection extends StatelessWidget {
       if (value.isNotEmpty) ToneChip(label: value, tone: toneByName(tone)),
     ],
   );
+}
+
+/// One Recently completed row: #id · title on one line, then the backend's
+/// CHANGE #n · duration · tokens line, with the change chip on the right.
+/// It computes nothing — not the duration, not the token figure, not the chip
+/// word — and the whole row is one ≥44px tap target onto that command.
+class _CompletedRow extends StatelessWidget {
+  final Map<String, dynamic> row;
+  final void Function(int commandId)? onOpen;
+  const _CompletedRow({required this.row, this.onOpen});
+
+  @override
+  Widget build(BuildContext context) {
+    final id = row['command_id'];
+    final label = (row['label'] as String?) ?? '';
+    final sub = (row['sub_label'] as String?) ?? '';
+    final when = (row['when_label'] as String?) ?? '';
+    final value = (row['value_label'] as String?) ?? '';
+    final tone = toneByName((row['tone'] as String?) ?? 'neutral');
+    final body = ConstrainedBox(
+      constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  label,
+                  style: Ds.t.body.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: kTextHi,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (sub.isNotEmpty) ...[
+                  SizedBox(height: Ds.space.x4),
+                  Text(
+                    sub,
+                    style: Ds.t.caption.copyWith(color: kTextLo),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+                if (when.isNotEmpty) ...[
+                  SizedBox(height: Ds.space.x4),
+                  Text(
+                    when,
+                    style: Ds.t.caption.copyWith(color: kTextLo),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          SizedBox(width: Ds.space.x8),
+          if (value.isNotEmpty) ToneChip(label: value, tone: tone),
+        ],
+      ),
+    );
+    if (onOpen == null || id is! int) return body;
+    return InkWell(
+      onTap: () => onOpen!(id),
+      borderRadius: Ds.r.rCard,
+      child: body,
+    );
+  }
 }

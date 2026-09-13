@@ -740,6 +740,16 @@ for i in $(seq 1 $MAX); do
     # shipped); dev_cmd_complete() is what refuses a red guard.
     bash scripts/rg_after_deploy.sh "${DEPLOY_CMD_ID:-}" || true
 
+    # ── CMD #1950: MOBILE-FIRST. 99% of mediBO users are on phones, so every
+    # deploy re-proves the phone layout. Neither step can fail a deploy that is
+    # already live — they write a VERDICT, and rg_check's behaviour tests
+    # (mobile_first_rule_present / responsive_no_overflow) are what turn red.
+    bash scripts/mobile_first_check.sh || true
+    if [ "${MEDIBO_SKIP_RESPONSIVE_SWEEP:-0}" != "1" ]; then
+      timeout 900 node scripts/responsive_sweep.js --quiet \
+        || echo "⚠️   responsive sweep reported a phone-layout problem — see rg_runner_verdict"
+    fi
+
     # CHANGE #1836 — a deploy that is LIVE never exits 1. If the only thing that
     # went wrong is the edge-cache purge, that is exit 3 and the reason is on
     # record, so the lane stops reading "failed" over a working deploy.

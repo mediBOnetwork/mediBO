@@ -288,13 +288,16 @@ class _StaffRailItem extends StatelessWidget {
   }
 }
 
-/// CHANGE #1017 — the staff chrome the shell mounts ONCE under either header:
-/// the preview banner (only while a super admin previews a role) and the
-/// scope bar (zone + date, chosen here and nowhere else). Both verbatim from
-/// staff_nav(). Kept here so home_shell stays the shell (#340 size guard).
+/// CHANGE #1017 → CMD #1947 — the staff chrome the shell mounts ONCE under
+/// either header. The scope bar that used to sit here is gone: zone and date
+/// are ONE chip in the header row now (widgets/scope_chip.dart), so a staff
+/// screen starts at the top of the viewport instead of one row down. What
+/// remains is the preview banner (only while a super admin previews a role)
+/// and the offline banner — both verbatim from staff_nav(). Kept here so
+/// home_shell stays the shell (#340 size guard).
 Widget shellStaffChrome(bool isAdmin) => isAdmin
     ? const Column(mainAxisSize: MainAxisSize.min,
-        children: [StaffPreviewBanner(), StaffScopeBar()])
+        children: [StaffPreviewBanner(), StaffOfflineBanner()])
     : const SizedBox.shrink();
 
 /// CHANGE #1017 (6) — on a tablet the staff tabs stand in a rail on the left

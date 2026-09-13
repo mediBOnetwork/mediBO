@@ -38,6 +38,7 @@ import '../widgets/catalogue_product_card.dart';
 import '../widgets/product_row_card.dart';
 import '../widgets/product_image.dart';
 import '../widgets/search_surface.dart';
+import '../widgets/search_typeahead.dart'; // CMD #1905 — SearchSuggestion's nav block
 import 'admin/nav_registry_view.dart' show NavGlyph;
 import 'catalogue_extras.dart'; // CHANGE #748
 
@@ -212,6 +213,12 @@ class CatalogueScreen extends StatefulWidget {
   /// Test seam for the shared search RPC.
   final MedicineRepository? repo;
 
+  /// CMD #1906 — a scope the SHARED header opened from another tab. The one
+  /// search header lives on Home as well now, and a salt, a use or a class
+  /// tapped there has to land on the screen that renders lists, which is this
+  /// one. The shell writes the URL; this screen renders it.
+  final CatalogueRoute? shellScope;
+
   const CatalogueScreen({
     super.key,
     this.active = false,
@@ -220,6 +227,7 @@ class CatalogueScreen extends StatefulWidget {
     this.shellSearch = SearchQueryState.blank,
     this.onSearchChanged,
     this.repo,
+    this.shellScope,
   });
 
   @override
@@ -268,6 +276,10 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
   bool _searchLoadingMore = false;
   bool _searchFailed = false;
 
+  // CMD #1905's chip moved into SearchChrome with CMD #1906: the box that
+  // shows it is the shared one now, so the state belongs with the box rather
+  // than being kept a second time here.
+
   final List<CatRow> _rows = [];
   int _nextOffset = 0;
   bool _rowsHaveMore = false;
@@ -302,6 +314,13 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
     if (widget.shellSearch.toQueryString() != old.shellSearch.toQueryString() &&
         widget.shellSearch.toQueryString() != _route.search.toQueryString()) {
       _adoptSearch(widget.shellSearch, report: false, push: widget.active);
+    }
+    // CMD #1905/#1910 — a suggestion tapped in the header while Home was the
+    // visible tab. The shell has already pushed the URL, so this only renders
+    // the scope it names.
+    final scope = widget.shellScope;
+    if (scope != null && !identical(scope, old.shellScope)) {
+      _go(scope, push: false);
     }
   }
 
@@ -397,6 +416,9 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         final fn = switch (_route.tab) {
           'companies' => 'catalogue_companies',
           'salts' => 'catalogue_salts',
+          // CMD #1910 — the fourth door. Same payload shape as companies and
+          // salts, so everything below this line is unchanged.
+          'conditions' => 'catalogue_conditions',
           _ => 'catalogue_tree',
         };
         // CMD #1908 — companies, salts and classes all take the same letter,
@@ -408,6 +430,11 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
               'p_offset': 0, 'p_limit': _rowPage,
             },
           'salts' => {
+              'p_letter': _route.query.isEmpty ? _route.letter : null,
+              'p_q': _route.query.isEmpty ? null : _route.query,
+              'p_offset': 0, 'p_limit': _rowPage,
+            },
+          'conditions' => {
               'p_letter': _route.query.isEmpty ? _route.letter : null,
               'p_q': _route.query.isEmpty ? null : _route.query,
               'p_offset': 0, 'p_limit': _rowPage,
@@ -443,9 +470,63 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
   // packs" strip on the PRODUCT PAGE, which is the one place a buyer is
   // choosing between packs rather than scanning for one.
 
+  /// CMD #1905 — a tapped suggestion opens WHAT IT IS.
+  ///
+  /// The backend named the destination in the item's `nav` block; this method
+  /// only knows which screen renders which kind, which is the one thing the
+  /// app owns (the URL is the browser's, not the database's). Nothing here
+  /// re-runs a text query — that is what pasted "SUN PHARMACEUTICAL
+  /// INDUSTRIES LTD" into a product-name search and found nothing.
+  void _pickSuggestion(SearchSuggestion s) {
+    _searchFocus.unfocus();
+    RenderLog.write('c1905_suggest_nav', '${s.navKind}:${s.navId}');
+    switch (s.navKind) {
+      case 'product':
+        Navigator.of(context).pushNamed('/product/${s.navId}');
+      case 'company':
+        Navigator.of(context)
+            .pushNamed('/company/${Uri.encodeComponent(s.navId)}');
+      case 'salt':
+        _go(_route.copy(tab: 'salts', path: const [], listKind: 'salt',
+            listKey: s.navId, query: '', letter: null));
+      case 'condition':
+        // CMD #1910 — "fever" is a USE, and the backend sent its id. Opening
+        // the scope is the whole point of the typed row: a text search for
+        // the word "fever" finds product NAMES containing it, which is a
+        // different and much worse answer.
+        _go(_route.copy(tab: 'conditions', path: const [], listKind: 'condition',
+            listKey: s.navId, query: '', letter: null));
+      case 'category':
+        _go(_route.copy(tab: 'browse', path: [s.navId], listKind: 'tree',
+            listKey: null, query: '', letter: null));
+      case 'tab':
+        // "See all companies" / "See all salts": the tab, narrowed by what
+        // was typed. Still not a product-name search.
+        _searchCtrl.text = s.navQuery;
+        _go(_route.copy(tab: s.navTab, path: const [], listKind: null,
+            listKey: null, query: s.navQuery, letter: null));
+      default:
+        // 'search' — the one nav that IS a text query, because the backend
+        // said so: a product family whose name really is a prefix of its own
+        // products' names, or "See all products" for what was typed.
+        _searchCtrl.text = s.navId;
+        _go(_route.copy(tab: 'browse', path: const [], listKind: 'search',
+            listKey: s.navId, query: s.navId, letter: null));
+    }
+  }
+
+  /// CMD #1910 — the one seam the door's test uses. It drives the SAME method
+  /// a real tap drives, so the test can assert what a typed suggestion opens
+  /// without building the overlay the typeahead lives in.
+  @visibleForTesting
+  void pickSuggestionForTest(SearchSuggestion s) => _pickSuggestion(s);
+
   void _go(CatalogueRoute next, {bool push = true}) {
     setState(() {
       _route = next;
+      // CMD #1906 — the controller is shared with the header now, so only
+      // write when it actually differs: an identical assignment moves the
+      // caret to the end while the shopper is still typing.
       if (_searchCtrl.text != next.query) _searchCtrl.text = next.query;
       _rows.clear();
       _cursor = null;
@@ -558,7 +639,11 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
   Future<void> _moreRows() async {
     setState(() => _loadingMore = true);
     try {
-      final fn = _route.tab == 'companies' ? 'catalogue_companies' : 'catalogue_salts';
+      final fn = switch (_route.tab) {
+        'companies' => 'catalogue_companies',
+        'conditions' => 'catalogue_conditions',
+        _ => 'catalogue_salts',
+      };
       final args = {
         'p_letter': _route.query.isEmpty ? _route.letter : null,
         'p_q': _route.query.isEmpty ? null : _route.query,
@@ -596,6 +681,8 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         _go(_route.copy(listKind: 'company', listKey: r.key));
       case 'salts':
         _go(_route.copy(listKind: 'salt', listKey: r.key));
+      case 'conditions':
+        _go(_route.copy(listKind: 'condition', listKey: r.key));
       default:
         final b = _browse;
         final next = [..._route.path, r.key];
@@ -639,6 +726,10 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
             hasQuery: _route.showsSearch,
             isLoading: _route.showsSearch && _loading,
             repo: _repo,
+            // CMD #1905/#1910 — a tapped suggestion opens what it IS. The
+            // header draws the panel and the chip; this screen only knows
+            // which of its own tabs renders which kind.
+            onPickSuggestion: _pickSuggestion,
             onSubmit: (q) {
               final t = q.trim();
               if (t.isEmpty) {
@@ -1489,8 +1580,10 @@ class _CatEmpty extends StatelessWidget {
 }
 
 /// CHANGE #799 — an empty scope names itself, says why it is empty, and offers
-/// the two ways out: request the product, or clear the filters. Which of those
-/// is offered is the payload's `has` flag, never a guess made here.
+/// the ways out. WHICH ones, in WHICH order and how loudly are all the
+/// payload's `buttons`, never a guess made here — CMD #1905 moved "Clear
+/// filters" ahead of "Request this product" when filters are on, and that is
+/// a backend edit, not a layout one.
 class _CatEmptyState extends StatelessWidget {
   final CatEmptyState empty;
   final VoidCallback onAction;
@@ -1500,6 +1593,14 @@ class _CatEmptyState extends StatelessWidget {
     required this.onAction,
     required this.onClear,
   });
+
+  /// The button's `kind` is the backend's word for what it does. Two kinds
+  /// exist; an unknown one is drawn and does nothing rather than guessing.
+  VoidCallback? _onTap(String kind) => switch (kind) {
+        'request' => onAction,
+        'clear_filters' => onClear,
+        _ => null,
+      };
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -1513,28 +1614,24 @@ class _CatEmptyState extends StatelessWidget {
               SizedBox(height: Ds.space.x8),
               Text(empty.hint, textAlign: TextAlign.center, style: Ds.t.caption),
             ],
-            if (empty.action.has) ...[
-              SizedBox(height: Ds.space.x24),
+            for (var i = 0; i < empty.buttons.length; i++) ...[
+              SizedBox(height: i == 0 ? Ds.space.x24 : Ds.space.x12),
               SizedBox(
                 height: Ds.touch.minTarget,
                 width: double.infinity,
-                child: FilledButton(
-                  onPressed: onAction,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: Ds.c.brand,
-                    shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
-                  ),
-                  child: Text(empty.action.label),
-                ),
-              ),
-            ],
-            if (empty.clear.has) ...[
-              SizedBox(height: Ds.space.x12),
-              SizedBox(
-                height: Ds.touch.minTarget,
-                width: double.infinity,
-                child: OutlinedButton(
-                    onPressed: onClear, child: Text(empty.clear.label)),
+                child: empty.buttons[i].tone == 'primary'
+                    ? FilledButton(
+                        onPressed: _onTap(empty.buttons[i].kind),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Ds.c.brand,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: Ds.r.rButton),
+                        ),
+                        child: Text(empty.buttons[i].label),
+                      )
+                    : OutlinedButton(
+                        onPressed: _onTap(empty.buttons[i].kind),
+                        child: Text(empty.buttons[i].label)),
               ),
             ],
           ],

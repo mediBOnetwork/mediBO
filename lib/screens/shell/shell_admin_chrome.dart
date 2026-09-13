@@ -105,6 +105,19 @@ class _AdminDesktopHeader extends StatelessWidget {
           // events they are recipients of are events too.
           if (UserState.of(context).isAuthenticated)
             NotificationBell(key: bellKey),
+          // CMD #1947 — the date·zone chip sits immediately LEFT of the user
+          // menu, at nav height, and it is the ONLY date/zone control on the
+          // web surface now (the Dashboard's second row is gone). Below
+          // _kChipCompactWidth it drops its text for the backend's compact
+          // form — the calendar icon plus the zone code — so the nav row never
+          // wraps on a narrow desktop.
+          Padding(
+            padding: EdgeInsets.only(right: Ds.space.x8),
+            child: ScopeChip(
+              compact: MediaQuery.sizeOf(context).width < _kChipCompactWidth,
+              maxWidth: _kChipMaxWidth,
+            ),
+          ),
           _DesktopProfileButton(onLogin: () {}, onAdminNav: onAdminNav, isSuperAdmin: isSuperAdmin),
           const SizedBox(width: 24),
         ],
@@ -112,6 +125,14 @@ class _AdminDesktopHeader extends StatelessWidget {
     );
   }
 }
+
+/// CMD #1947 — the desktop shell itself starts at 900 px, so "below ~900" is
+/// the first width at which this row is genuinely tight. Above it the chip
+/// prints the full "12 Sep · Raipur"; below it, the compact form.
+const double _kChipCompactWidth = 1000;
+
+/// The chip never takes more than this from the nav row; it truncates instead.
+const double _kChipMaxWidth = 200;
 
 // ─────────────────────── Admin mobile bottom bar ──────────────────────────────
 

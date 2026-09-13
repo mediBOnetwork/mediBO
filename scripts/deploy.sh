@@ -742,43 +742,19 @@ for i in $(seq 1 $MAX); do
     echo "commit=${SHORT} size=${BUNDLE_SIZE} change=${CHANGE_LABEL} built=${BUILT}" > ~/.medibo/lastgood.txt
     echo "[lastgood] updated: commit=${SHORT} size=${BUNDLE_SIZE}"
 
-    # ── SELF-PRUNE — stop disk creeping between nightly cleanups ────────────
-    # Runs only on a proven-good deploy (we are past the live-assert) and after
-    # the git push, so nothing here can change what shipped.
-    #
-    # build/ is deliberately NOT deleted: build/web is git-tracked, so removing
-    # it leaves main dirty with ~71 deletions and the NEXT deploy's
-    # `git pull --ff-only` refuses to run. `flutter clean` at the top of this
-    # script already discards it every time. .dart_tool IS safe to drop — it is
-    # gitignored and the next build regenerates it.
-    git worktree prune 2>/dev/null || true
-    rm -rf "$MEDIBO_REPO/.dart_tool" 2>/dev/null || true
-    FREE_MB=$(df -Pm / | awk 'NR==2{print $4}')
-    echo "[self-prune] worktrees pruned, .dart_tool dropped — free ${FREE_MB}MB"
-    if [ "$FREE_MB" -lt 2048 ]; then
-      echo "[self-prune] under 2GB — invoking cleanup_vm.sh"
-      # cleanup_vm.sh is lock-aware. If the caller gave us a lock token, hand it
-      # straight through: without it cleanup would either see lane_busy=true and
-      # skip, or try to take a lock we are already holding.
-      DEPLOY_LOCK_TOKEN="${DEPLOY_LOCK_TOKEN:-}" bash scripts/cleanup_vm.sh \
-        || echo "⚠️   cleanup_vm.sh returned non-zero (the deploy itself is fine)"
-    fi
-
-    bash scripts/verify_live.sh
-
-    # CHANGE #273: the schema/RPC guard runs HERE — after the bundle is live —
-    # not in the pre-build gate. It never fails the deploy (the bundle already
-    # shipped); dev_cmd_complete() is what refuses a red guard.
-    bash scripts/rg_after_deploy.sh "${DEPLOY_CMD_ID:-}" || true
-
-    # ── CMD #1950: MOBILE-FIRST. 99% of mediBO users are on phones, so every
-    # deploy re-proves the phone layout. Neither step can fail a deploy that is
-    # already live — they write a VERDICT, and rg_check's behaviour tests
-    # (mobile_first_rule_present / responsive_no_overflow) are what turn red.
-    bash scripts/mobile_first_check.sh || true
-    if [ "${MEDIBO_SKIP_RESPONSIVE_SWEEP:-0}" != "1" ]; then
-      timeout 900 node scripts/responsive_sweep.js --quiet \
-        || echo "⚠️   responsive sweep reported a phone-layout problem — see rg_runner_verdict"
+    # ── POST-DEPLOY CHECKS — LOCK-FREE (CMD #1973) ─────────────────────────
+    # The disk prune, verify_live.sh, the regression guard, the mobile-first
+    # check and the responsive sweep all used to run HERE, inline, while
+    # direct_deploy.sh still held deploy_lock: 12 of CHANGE #1333's 890s lock
+    # hold were these. They only READ production, and the bundle is already on
+    # the edge and past the live-assert, so the lane must not pay for them.
+    # They live in scripts/post_deploy_checks.sh now; MEDIBO_DEFER_POST=1 says
+    # the caller will run that script itself once it has released the lock.
+    if [ "${MEDIBO_DEFER_POST:-0}" = "1" ]; then
+      echo "[phase] post-deploy checks deferred to the caller — they do not need the deploy lock"
+    else
+      MEDIBO_REPO="$MEDIBO_REPO" DEPLOY_LOCK_TOKEN="${DEPLOY_LOCK_TOKEN:-}" \
+        bash scripts/post_deploy_checks.sh "${DEPLOY_CMD_ID:-}" || true
     fi
 
     # CHANGE #1836 — a deploy that is LIVE never exits 1. If the only thing that

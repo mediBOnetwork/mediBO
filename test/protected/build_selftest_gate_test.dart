@@ -163,6 +163,71 @@ void main() {
         }
       }
     });
+
+    // The second half of the same measurement. CHANGE #1333 shipped with the
+    // prep split working — 586s of tests and build ran with the lane free —
+    // and STILL held the deploy lock 890s, because the tail of deploy.sh's
+    // upload phase (disk prune, a second verify_live.sh, the regression guard,
+    // the mobile-first check and a `timeout 900` responsive sweep) ran inside
+    // it. Every one of those only reads production, on a bundle already past
+    // the live-assert. They belong to scripts/post_deploy_checks.sh, which the
+    // deployer runs once the lock is back.
+    test('the post-deploy checks are a separate, lock-free script', () {
+      final postFile = File('$repoRoot/scripts/post_deploy_checks.sh');
+      expect(postFile.existsSync(), isTrue,
+          reason: 'the lock must not pay for checks that only read production');
+      final post = _code(postFile.readAsStringSync());
+      final deploy = _code(deployFile.readAsStringSync());
+
+      for (final step in [
+        'scripts/verify_live.sh',
+        'scripts/rg_after_deploy.sh',
+        'scripts/mobile_first_check.sh',
+        'scripts/responsive_sweep.js',
+      ]) {
+        expect(post.contains(step), isTrue,
+            reason: '$step is post-deploy work, so it lives here');
+      }
+
+      expect(deploy.contains('scripts/post_deploy_checks.sh'), isTrue,
+          reason: 'a plain deploy.sh run still owes every one of these');
+      expect(deploy.contains('MEDIBO_DEFER_POST'), isTrue,
+          reason: 'the deployer holding the lock says it will run them itself');
+      expect(deploy.contains('scripts/responsive_sweep.js'), isFalse,
+          reason: 'the sweep may not also stay inline — that is the 12 minutes');
+    });
+
+    test('nothing in the post-deploy script can take or extend the lock', () {
+      final post =
+          _code(File('$repoRoot/scripts/post_deploy_checks.sh').readAsStringSync());
+      for (final forbidden in [
+        'deploy_lock_try',
+        'deploy_lock_touch',
+        'deploy_lock_release',
+        'wrangler',
+      ]) {
+        expect(post.contains(forbidden), isFalse,
+            reason: 'post-deploy runs with the lane free and publishes nothing; '
+                'found $forbidden');
+      }
+    });
+
+    // Dropping .dart_tool after every deploy is what made the NEXT build a full
+    // one, which is the cost this command just removed. It stays as a disk
+    // valve, gated on the disk actually being short.
+    test('the incremental state survives a healthy deploy', () {
+      final post =
+          _code(File('$repoRoot/scripts/post_deploy_checks.sh').readAsStringSync());
+      expect(post.contains('.dart_tool'), isTrue,
+          reason: 'the disk valve is still needed');
+      final drop = post
+          .split('\n')
+          .firstWhere((l) => l.contains('rm -rf') && l.contains('.dart_tool'),
+              orElse: () => '');
+      expect(drop, isNot(''), reason: 'the drop must still exist');
+      expect(post.contains('PRUNE_BELOW_MB'), isTrue,
+          reason: 'and it must be gated on free disk, not run every deploy');
+    });
   });
 
   group('selftest.sh gates the build on tests', () {
@@ -220,22 +285,34 @@ void main() {
               'to selftest.sh defaults cannot silently put it back');
     });
 
-    test('deploy.sh runs the guard after the upload, and it cannot abort it', () {
+    // CMD #1973 moved the body of the post-deploy block into
+    // scripts/post_deploy_checks.sh so it can run with the deploy lock back in
+    // the register. #273's invariant is unchanged and still asserted here: the
+    // guard runs after the upload and can never abort a deploy that is live.
+    // Only the file it is written in moved.
+    test('the guard runs after the upload, and it cannot abort it', () {
       final code = _code(deployFile.readAsStringSync());
+      final postFile = File('$repoRoot/scripts/post_deploy_checks.sh');
+      final post =
+          postFile.existsSync() ? _code(postFile.readAsStringSync()) : '';
 
-      final rgIndex = code.indexOf('scripts/rg_after_deploy.sh');
-      expect(rgIndex, greaterThan(-1),
+      final delegates = code.indexOf('scripts/post_deploy_checks.sh');
+      final inline = code.indexOf('scripts/rg_after_deploy.sh');
+      expect(delegates > -1 || inline > -1, isTrue,
           reason: 'deploy.sh must still run rg_check somewhere — after the '
               'deploy, not before the build');
 
       final uploadIndex = code.indexOf('wrangler pages deploy');
       expect(uploadIndex, greaterThan(-1),
           reason: 'deploy.sh should still upload the bundle');
-      expect(rgIndex, greaterThan(uploadIndex),
+      expect(delegates > -1 ? delegates : inline, greaterThan(uploadIndex),
           reason: 'the guard must run AFTER the upload — that is the whole '
               'point of #273');
 
-      final rgLine = code
+      final host = delegates > -1 ? post : code;
+      expect(host.contains('scripts/rg_after_deploy.sh'), isTrue,
+          reason: 'wherever the post-deploy block lives, rg_check is in it');
+      final rgLine = host
           .split('\n')
           .firstWhere((l) => l.contains('scripts/rg_after_deploy.sh'),
               orElse: () => '');

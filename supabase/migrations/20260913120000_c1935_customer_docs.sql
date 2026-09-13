@@ -1043,3 +1043,17 @@ begin
   end if;
   return new;
 end $function$;
+
+-- ── 16. The door is declared, not just wired ──────────────────────────────
+-- CHANGE #821: surface_route is the nav truth the protected suite mirrors. A
+-- shell case with no row here is a screen the gate cannot prove is reachable.
+-- surface_route carries no unique key on route_key, so the upsert is written
+-- as a guarded pair rather than ON CONFLICT.
+update public.surface_route
+   set feature_key = 'admin.customer_doc_types', handled_by = 'home_shell', is_active = true
+ where route_key = 'customer_doc_types';
+insert into public.surface_route(route_key, feature_key, kind, handled_by, note, is_active)
+select 'customer_doc_types', 'admin.customer_doc_types', 'feature', 'home_shell',
+       'CMD #1935 — Admin › Customer documents, opened from shell/shell_extra_routes.dart',
+       true
+ where not exists (select 1 from public.surface_route where route_key = 'customer_doc_types');

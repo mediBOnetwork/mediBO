@@ -105,6 +105,66 @@ void main() {
     });
   });
 
+  // ── CMD #1973 — the gate got FASTER, and must not have got weaker ────────
+  // The protected suite used to run twice per ship (direct_deploy.sh's own prep
+  // phase, then deploy.sh's gate on the same bytes) and the second six minutes
+  // were spent inside the deploy lock. The fix is a CONTENT-ADDRESSED receipt,
+  // not a skip flag: it records that one exact tree was green, and only a run
+  // that really executed the suite may write one. And `flutter clean` is now
+  // conditional on the toolchain fingerprint, which is only safe while the
+  // build-output guard and the boot gate stay unconditional.
+  group('CMD #1973 — the fast path cannot become an escape hatch', () {
+    test('the green receipt is written only by a run that really ran', () {
+      final code = _code(selftestFile.readAsStringSync());
+      expect(code.contains('RECEIPT_DIR'), isTrue,
+          reason: 'the receipt is how the suite runs once per tree');
+      expect(RegExp(r'PROTECTED_OK"?\s*=\s*"?passed').hasMatch(code), isTrue,
+          reason: 'a receipt may only be banked when phase 1 actually PASSED — '
+              'a reused run refreshing its own receipt turns a bounded TTL '
+              'into an unbounded one, one deploy at a time');
+    });
+
+    test('the receipt is keyed by the tree, never by a command or a caller', () {
+      final code = _code(selftestFile.readAsStringSync());
+      expect(code.contains('_tree_id'), isTrue);
+      expect(code.contains('rev-parse'), isTrue,
+          reason: 'the key must be derived from the git tree being tested');
+      expect(code.contains('git diff HEAD'), isTrue,
+          reason: 'uncommitted work is part of the tree being certified');
+      for (final escape in const [
+        'SELFTEST_SKIP',
+        'SKIP_SELFTEST',
+        'SELFTEST_ASSUME_GREEN',
+        'SKIP_PROTECTED',
+      ]) {
+        expect(code.contains(escape), isFalse,
+            reason: 'selftest.sh must not offer "$escape" — the receipt is an '
+                'assertion about bytes, an env flag is an opt-out');
+      }
+    });
+
+    test('the incremental build is opt-in and the guards stay unconditional', () {
+      final code = _code(deployFile.readAsStringSync());
+      expect(code.contains('MEDIBO_SKIP_CLEAN'), isTrue,
+          reason: 'CMD #1973 takes the clean off the lock for an unchanged '
+              'toolchain');
+      expect(RegExp(r'MEDIBO_SKIP_CLEAN:-0').hasMatch(code), isTrue,
+          reason: 'unset must mean CLEAN — the 2026-07-03 corrupt-dart2js trap '
+              'is the default, never the exception');
+      expect(code.contains('flutter clean'), isTrue,
+          reason: 'the clean must still be there for every other case');
+      // the two things that catch a corrupt bundle before a byte is uploaded
+      expect(code.contains('guard_bundle_small'), isTrue);
+      expect(code.contains('boot_gate'), isTrue);
+      for (final line in code.split('\n')) {
+        if (line.contains('guard_bundle_small') || line.contains('boot_gate')) {
+          expect(line.contains('MEDIBO_SKIP_CLEAN'), isFalse,
+              reason: 'no guard may be conditional on the fast path');
+        }
+      }
+    });
+  });
+
   group('selftest.sh gates the build on tests', () {
     test('it runs the protected suite and the change\'s own focused test', () {
       final code = _code(selftestFile.readAsStringSync());

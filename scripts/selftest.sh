@@ -97,9 +97,52 @@ RG_OK=skipped
 FAILED_PHASES=()
 LOG="$(mktemp)"
 
+# ── CMD #1973: THE GREEN RECEIPT — one suite run per tree, not per caller ───
+# This gate is called twice for every direct deploy: once by direct_deploy.sh as
+# its own prep phase, and once by deploy.sh, which calls it as a hard gate before
+# it builds. Both ran the full protected suite on the SAME bytes, so every ship
+# paid six minutes twice — and until CMD #1973 the second six minutes were spent
+# inside the deploy lock.
+#
+# The fix is NOT a skip flag. #222 is explicit that an opt-out is how a gate
+# quietly stops being a gate, and this keeps that: there is no env escape hatch
+# and no --skip. The receipt is CONTENT-ADDRESSED — it records that this exact
+# tree (HEAD's tree, plus any uncommitted diff, plus untracked test/lib files,
+# plus the Flutter SDK it would run on) was green, and it is only ever written
+# by a real green run of these phases. A reuse therefore asserts exactly what a
+# re-run would have asserted. Any byte that differs is a different tree and a
+# different receipt, so the suite runs.
+RECEIPT_DIR="$STATE_DIR/work/selftest-green"
+RECEIPT_TTL_S="${SELFTEST_RECEIPT_TTL_S:-21600}"   # 6 h — a tree is only worth trusting for a session
+_tree_id() {
+  { git rev-parse 'HEAD^{tree}' 2>/dev/null || echo no-git
+    git diff HEAD 2>/dev/null
+    cat "$HOME/flutter/version" 2>/dev/null
+    git ls-files --others --exclude-standard -- lib test 2>/dev/null | sort | while IFS= read -r f; do
+      [ -f "$f" ] && sha256sum "$f"
+    done
+  } | sha256sum | cut -c1-40
+}
+TREE_ID="$(_tree_id)"
+RECEIPT="$RECEIPT_DIR/$TREE_ID"
+REUSED=0
+if [ -f "$RECEIPT" ]; then
+  age=$(( $(date +%s) - $(stat -c %Y "$RECEIPT" 2>/dev/null || echo 0) ))
+  if [ "$age" -lt "$RECEIPT_TTL_S" ]; then
+    REUSED=1
+    say "green receipt for tree $TREE_ID (${age}s old) — phases 1 and 2 were run on these exact bytes: $(cat "$RECEIPT" 2>/dev/null | head -1)"
+  else
+    say "green receipt for tree $TREE_ID is ${age}s old (> ${RECEIPT_TTL_S}s) — running the suite again"
+    rm -f "$RECEIPT"
+  fi
+fi
+
 # ── PHASE 1: the protected regression suite ────────────────────────────────
 rule; say "PHASE 1/4 — protected suite (flutter test test/protected/)"
-if timeout 900 flutter test test/protected/ >"$LOG" 2>&1; then
+if [ "$REUSED" = "1" ]; then
+  PROTECTED_OK=reused
+  say "protected: REUSED — green on this exact tree, see the receipt above"
+elif timeout 900 flutter test test/protected/ >"$LOG" 2>&1; then
   PROTECTED_OK=passed
   say "protected: PASSED — $(grep -oE '\+[0-9]+' "$LOG" | tail -1 | tr -d '+') tests"
 else
@@ -114,7 +157,10 @@ fi
 # new *_test.dart outside test/protected/ (already covered by phase 1).
 rule; say "PHASE 2/4 — focused test(s) for this change"
 FOCUS_FILES=()
-if [ ${#FOCUS_ARGS[@]} -gt 0 ]; then
+if [ "$REUSED" = "1" ]; then
+  FOCUS_OK=reused
+  say "focused: REUSED — the receipt covers phase 2 on this tree as well"
+elif [ ${#FOCUS_ARGS[@]} -gt 0 ]; then
   for f in "${FOCUS_ARGS[@]}"; do [ -f "$f" ] && FOCUS_FILES+=("$f"); done
 else
   while IFS= read -r f; do
@@ -131,7 +177,9 @@ else
   )
 fi
 
-if [ ${#FOCUS_FILES[@]} -eq 0 ]; then
+if [ "$REUSED" = "1" ]; then
+  :
+elif [ ${#FOCUS_FILES[@]} -eq 0 ]; then
   say "focused: none detected (no changed/new *_test.dart outside test/protected/)"
 else
   say "focused: running ${#FOCUS_FILES[@]} file(s) — ${FOCUS_FILES[*]}"
@@ -207,6 +255,18 @@ fi
 
 if [ "$OK" = "true" ]; then
   rm -f "$ATTEMPT_FILE"
+  # CMD #1973 — bank the receipt, but only for a run that actually executed the
+  # suite. A reused run must never refresh its own receipt: that would turn a
+  # 6-hour TTL into an unbounded one, one deploy at a time.
+  if [ "$PROTECTED_OK" = "passed" ]; then
+    mkdir -p "$RECEIPT_DIR" 2>/dev/null || true
+    printf 'tree=%s green_at=%s repo=%s commit=%s protected=%s focused=%s\n' \
+      "$TREE_ID" "$(date -u +%FT%TZ)" "$MEDIBO_REPO" \
+      "$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" \
+      "$PROTECTED_OK" "$FOCUS_OK" > "$RECEIPT" 2>/dev/null || true
+    # keep the shelf small: receipts are worthless once their tree is gone
+    find "$RECEIPT_DIR" -type f -mmin +1440 -delete 2>/dev/null || true
+  fi
   say "GREEN — protected=$PROTECTED_OK focused=$FOCUS_OK rg=$RG_OK. Deploy may proceed."
   exit 0
 fi

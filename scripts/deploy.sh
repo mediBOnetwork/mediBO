@@ -267,9 +267,37 @@ CHANGE_LABEL="$N"
 if [ "$DEPLOY_PHASE" != "upload" ]; then
 bash scripts/gen_repo_map.sh || echo "⚠️  REPO_MAP generation failed (continuing)"
 
-# Build release — flutter clean is MANDATORY: skipping it produces a corrupt dart2js
-# bundle (different byte count, fails to boot) even with identical source code.
-flutter clean
+# ── Build release ───────────────────────────────────────────────────────────
+# `flutter clean` was MANDATORY here from 2026-07-03, when skipping it produced
+# a corrupt dart2js bundle (different byte count, fails to boot) from identical
+# source. It cost about four of the nine minutes this phase takes, and CMD #1973
+# measured that those nine minutes were being spent INSIDE the deploy lock while
+# other runners queued 20+ minutes behind it.
+#
+# So the clean is now CONDITIONAL, and the condition is the thing that actually
+# went wrong in July: a stale Dart/Flutter tool state across a toolchain or
+# dependency change. direct_deploy.sh fingerprints pubspec.lock + pubspec.yaml +
+# `flutter --version` + web/index.html and only sets MEDIBO_SKIP_CLEAN=1 while
+# that fingerprint is unchanged and a previous bundle exists. Anything else —
+# an unset variable, a first build in a fresh worktree, a changed dependency —
+# cleans, exactly as before.
+#
+# And the fast path cannot be the reason a bad bundle ships: every incremental
+# bundle still goes through the build-output guard (index.html, base href,
+# fingerprinted bundle >1.5 MB, AssetManifest, version.json) and the boot gate
+# below before a byte is uploaded, and direct_deploy.sh re-runs this phase with
+# MEDIBO_SKIP_CLEAN=0 if either refuses. A corrupt incremental build costs one
+# retry; a mandatory clean cost every deploy four minutes of exclusive lane.
+if [ "${MEDIBO_SKIP_CLEAN:-0}" = "1" ] && [ -f build/web/index.html ]; then
+  echo "[build] incremental — toolchain and pubspec.lock unchanged, keeping the Dart build cache"
+  echo "        (a refused bundle is rebuilt clean by the caller; the guards below are unchanged)"
+  # main.dart.js is renamed to main.<commit>.dart.js after every build, so the
+  # previous run's fingerprinted copies would otherwise pile up in build/web and
+  # be uploaded alongside the new one.
+  rm -f build/web/main.*.dart.js build/web/main.*.dart.js.map 2>/dev/null || true
+else
+  flutter clean
+fi
 # ── CHANGE #473: stamp the crash-reporting release ──────────────────────────
 # The Sentry release id is the CHANGE number, baked into the bundle at BUILD
 # time by the same script that writes it into version.json — so a crash on a
@@ -638,9 +666,12 @@ else
 fi
 
 # ── Poll version.json until live (max 90s — wrangler is fast) ───────────────
+# CMD #1973 — every second of this poll is a second of the deploy lock. 9 x 10 s
+# resolved propagation to the nearest 10 s; 18 x 5 s keeps the same 90 s ceiling
+# and returns as soon as the edge answers.
 echo "Waiting for propagation…"
-MAX=9
-DELAY=10
+MAX=18
+DELAY=5
 for i in $(seq 1 $MAX); do
   LIVE=$(curl -sf --max-time 8 "https://medibo.in/version.json" 2>/dev/null \
          | python3 -c "import sys,json; print(json.load(sys.stdin).get('commit',''))" 2>/dev/null || true)

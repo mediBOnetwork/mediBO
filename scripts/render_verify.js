@@ -178,6 +178,55 @@ const supplierWheel   = parseInt(argVal('--supplier-wheel') || '0', 10);
 // below the shell's 900 px breakpoint — so the one thing that most needed
 // proving could not be photographed by the one tool that can photograph an
 // authenticated Flutter page. `--customer-width 390` drives the phone.
+// CMD #1849 — the admin phase takes a HEIGHT too.
+//
+// --admin-width arrived with the responsive admin proof; the height stayed
+// wired to one number, so a phone capture was 360 px wide and 900 px tall, a
+// viewport no phone has. The customer and supplier phases have had the pair
+// since #536. Same default as theirs.
+const adminHeight = parseInt(argVal('--admin-height') || '900', 10);
+
+// CMD #1849 — a surface that only exists after a TAP.
+//
+// The End & purge sheet is the one place a test session is destroyed, and it is
+// where the outbound receipt is printed — there is no route that renders it, so
+// --admin-path alone can never photograph it. Flutter draws to canvas, so there
+// is nothing in the DOM to click until its semantics tree is switched on; the
+// engine exposes a placeholder button for exactly that. --shot-tap turns
+// semantics on, clicks the node whose aria-label matches, waits for the
+// animation and then captures. `--shot-tap 'End & purge'` is a label;
+// `--shot-tap '297,30'` is raw coordinates for a surface with no semantics.
+const shotTap     = argVal('--shot-tap');
+const shotTapWait = parseInt(argVal('--shot-tap-wait') || '1200', 10);
+
+async function tapBeforeShot(page) {
+  if (!shotTap) return;
+  try {
+    const xy = /^\s*(\d+)\s*,\s*(\d+)\s*$/.exec(shotTap);
+    if (xy) {
+      await page.mouse.click(parseInt(xy[1], 10), parseInt(xy[2], 10));
+      console.log(`  Tapped     : (${xy[1]}, ${xy[2]})`);
+    } else {
+      // Flutter only builds the accessibility DOM once something asks for it.
+      const placeholder = page.locator('flt-semantics-placeholder, [aria-label="Enable accessibility"]').first();
+      if (await placeholder.count()) {
+        await placeholder.click({ timeout: 5000, force: true }).catch(() => {});
+        await page.waitForTimeout(600);
+      }
+      const target = page.locator(`flt-semantics[aria-label=${JSON.stringify(shotTap)}], [aria-label=${JSON.stringify(shotTap)}]`).first();
+      await target.waitFor({ state: 'attached', timeout: 8000 });
+      await target.click({ timeout: 5000, force: true });
+      console.log(`  Tapped     : ${shotTap}`);
+    }
+    await page.waitForTimeout(shotTapWait);
+  } catch (e) {
+    // A tap that misses must be loud: the capture that follows would otherwise
+    // be filed as proof of a surface nobody ever opened.
+    console.log(`  Tapped     : FAILED (${shotTap}) — ${e.message}`);
+    process.exitCode = 1;
+  }
+}
+
 const customerWidth = parseInt(argVal('--customer-width') || '1280', 10);
 const customerHeight = parseInt(argVal('--customer-height') || '800', 10);
 const supplierWidth = parseInt(argVal('--supplier-width') || '1280', 10);
@@ -487,6 +536,7 @@ async function phaseCustomerPath(browser, session, expectedHash) {
           // capture since #447; the customer one never did, so a proof of
           // anything below the fold on a 900px phone was impossible to take.
           await wheelBeforeShot(page);
+          await tapBeforeShot(page);
           await page.screenshot({ path: customerShot, fullPage: false });
           console.log(`  Screenshot : ${customerShot}`);
         } catch (e) {
@@ -625,7 +675,7 @@ async function phaseAdmin(browser, session, expectedHash) {
   for (let attempt = 1; attempt <= MAX_RETRIES && !passed; attempt++) {
     console.log(`  Attempt ${attempt}/${MAX_RETRIES}`);
     const ctx = await browser.newContext({
-      viewport: { width: adminWidth, height: 900 },
+      viewport: { width: adminWidth, height: adminHeight },
     });
     await ctx.addInitScript(({ key, val }) => {
       localStorage.setItem(key, val);
@@ -636,6 +686,7 @@ async function phaseAdmin(browser, session, expectedHash) {
     try {
       await page.goto(TARGET, { waitUntil: 'domcontentloaded', timeout: 30000 });
       await waitForFlutter(page, 10, 'boot_status=painted');
+      console.log(`  Viewport   : ${adminWidth}x${adminHeight}`);
       // Boot first, THEN the deep link: the app resolves auth on the root, and
       // landing straight on a guarded route races that and bounces to home.
       if (adminPath) {
@@ -656,6 +707,7 @@ async function phaseAdmin(browser, session, expectedHash) {
       lastLog = logText;
       if (shotPath) {
         try {
+          await tapBeforeShot(page);
           await page.screenshot({ path: shotPath, fullPage: false });
           console.log(`  Screenshot : ${shotPath}`);
         } catch (e) {

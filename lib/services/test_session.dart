@@ -254,6 +254,23 @@ class TestSessionState {
     return res;
   }
 
+  /// CMD #1849 — the receipt: everything this session WOULD have sent.
+  ///
+  /// No argument, on purpose: `test_session_receipt()` resolves the caller's
+  /// OWN session server-side, so the app never has to hold a session id to ask
+  /// what its own sandbox recorded. A failure comes back as `has:false`, which
+  /// the printer draws as nothing at all — a blocked network must never invent
+  /// a transcript.
+  Future<Map<String, dynamic>> receipt() async {
+    try {
+      final raw = await Supabase.instance.client.rpc('test_session_receipt');
+      if (raw is Map) return Map<String, dynamic>.from(raw);
+    } catch (_) {
+      // fall through
+    }
+    return const <String, dynamic>{'has': false};
+  }
+
   /// One read. A failure leaves the last payload standing: losing the network
   /// must never make a live test session look like production.
   Future<void> refresh() async {

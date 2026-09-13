@@ -17,6 +17,7 @@
 // It decides no display strings: payment_money_lands() in SQL builds every word
 // the admin reads.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { outboundPaymentGate } from '../_shared/outbound_gate.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -161,6 +162,15 @@ async function webhookSubscribe() {
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
+
+  // CMD #1849 — account creation is the one Razorpay endpoint with no prepare
+  // RPC to gate it, so it asks the dispatcher itself. A live test session never
+  // reaches api.razorpay.com; the intent is written to that session's receipt.
+  const gate = await outboundPaymentGate(SUPABASE_URL, SERVICE_KEY, req, 'account.sync');
+  if (!gate.allowed) {
+    return reply({ ok: false, error: 'test_mode_outbound_blocked', message: gate.message });
+  }
+
   const bearer = (req.headers.get('Authorization') ?? '').replace(/^Bearer\s+/i, '').trim();
   if (!(await mayConfigure(bearer))) return reply({ ok: false, error: 'not_authorized' }, 403);
 

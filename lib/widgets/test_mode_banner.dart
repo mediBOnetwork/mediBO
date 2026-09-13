@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../design_tokens.dart';
 import '../services/test_session.dart';
+import 'outbound_receipt_sheet.dart';
 
 /// CHANGE #573 — the unmissable TEST MODE strip.
 ///
@@ -39,6 +40,7 @@ class TestModeBannerHost extends StatelessWidget {
                 payload: payload,
                 clock: clock,
                 onEndPurge: TestSessionState.instance.endAndPurge,
+                onReceipt: TestSessionState.instance.receipt,
                 onPin: TestSessionState.instance.pinClock,
                 onStep: TestSessionState.instance.stepClock,
                 onRelease: TestSessionState.instance.releaseClock,
@@ -61,6 +63,7 @@ class TestModeBanner extends StatelessWidget {
     required this.payload,
     this.clock = const {},
     this.onEndPurge,
+    this.onReceipt,
     this.onPin,
     this.onStep,
     this.onRelease,
@@ -74,6 +77,10 @@ class TestModeBanner extends StatelessWidget {
 
   /// The three clock verbs. Each returns the backend's reply; its `message`
   /// is shown verbatim and nothing is decided here.
+  /// CMD #1849 — reads `test_session_receipt()`: everything this session would
+  /// have sent. Absent, the sheet is exactly the confirm sheet it always was.
+  final Future<Map<String, dynamic>> Function()? onReceipt;
+
   final Future<Map<String, dynamic>> Function(String at)? onPin;
   final Future<Map<String, dynamic>> Function(int minutes)? onStep;
   final Future<Map<String, dynamic>> Function()? onRelease;
@@ -104,51 +111,21 @@ class TestModeBanner extends StatelessWidget {
     final action = _s('end_action');
     final cancel = _s('end_cancel');
     var ok = true;
-    if (confirm.isNotEmpty) {
+    // CMD #1849 — the sheet exists to SHOW something before it destroys
+    // something: the confirm sentence, and now the receipt of everything this
+    // session would have sent. Either one is reason enough to open it; with
+    // neither, the tap still runs straight through as it always did.
+    if (confirm.isNotEmpty || onReceipt != null) {
       ok = await showModalBottomSheet<bool>(
             context: context,
             backgroundColor: Ds.c.surface,
+            isScrollControlled: true,
             shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
-            builder: (ctx) => SafeArea(
-              child: Padding(
-                padding: EdgeInsets.all(Ds.space.x24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(confirm, style: Ds.t.body),
-                    SizedBox(height: Ds.space.x24),
-                    SizedBox(
-                      width: double.infinity,
-                      height: Ds.touch.minTarget,
-                      child: FilledButton(
-                        style: FilledButton.styleFrom(
-                          backgroundColor: Ds.c.danger,
-                          shape: RoundedRectangleBorder(
-                              borderRadius: Ds.r.rButton),
-                        ),
-                        onPressed: () => Navigator.pop(ctx, true),
-                        child: Text(action,
-                            style:
-                                Ds.t.body.copyWith(color: Ds.c.surface)),
-                      ),
-                    ),
-                    if (cancel.isNotEmpty) ...[
-                      SizedBox(height: Ds.space.x8),
-                      SizedBox(
-                        width: double.infinity,
-                        height: Ds.touch.minTarget,
-                        child: TextButton(
-                          onPressed: () => Navigator.pop(ctx, false),
-                          child: Text(cancel,
-                              style: Ds.t.body
-                                  .copyWith(color: Ds.c.textSecondary)),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
+            builder: (ctx) => _EndPurgeSheet(
+              confirm: confirm,
+              action: action,
+              cancel: cancel,
+              onReceipt: onReceipt,
             ),
           ) ==
           true;
@@ -556,6 +533,145 @@ class _ClockChip extends StatelessWidget {
         onPressed: onTap,
         child: Text(label, style: Ds.t.caption),
       ),
+    );
+  }
+}
+
+
+/// The End & purge sheet — CMD #1849.
+///
+/// It asks the backend ONCE for the receipt and prints it above the confirm
+/// sentence, so the last thing seen before a session's rows are destroyed is
+/// the transcript of what that session would have sent. The sheet computes
+/// nothing about the receipt: it hands the payload to [OutboundReceiptView],
+/// which prints it. A refusal, an empty session or no reader at all leaves the
+/// sheet as the plain confirm sheet — never a Dart-worded apology.
+class _EndPurgeSheet extends StatefulWidget {
+  const _EndPurgeSheet({
+    required this.confirm,
+    required this.action,
+    required this.cancel,
+    this.onReceipt,
+  });
+
+  final String confirm;
+  final String action;
+  final String cancel;
+  final Future<Map<String, dynamic>> Function()? onReceipt;
+
+  @override
+  State<_EndPurgeSheet> createState() => _EndPurgeSheetState();
+}
+
+class _EndPurgeSheetState extends State<_EndPurgeSheet> {
+  Map<String, dynamic>? _receipt;
+  bool _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final read = widget.onReceipt;
+    if (read == null) return;
+    _loading = true;
+    read().then((r) {
+      if (!mounted) return;
+      setState(() {
+        _receipt = r;
+        _loading = false;
+      });
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final r = _receipt;
+    return SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.85,
+        ),
+        child: Padding(
+          padding: EdgeInsets.all(Ds.space.x24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (_loading) const _ReceiptSkeleton(),
+                      if (r != null) OutboundReceiptView(payload: r),
+                      if (widget.confirm.isNotEmpty) ...[
+                        if (_loading || r != null)
+                          SizedBox(height: Ds.space.x24),
+                        Text(widget.confirm, style: Ds.t.body),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              SizedBox(height: Ds.space.x24),
+              SizedBox(
+                width: double.infinity,
+                height: Ds.touch.minTarget,
+                child: FilledButton(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Ds.c.danger,
+                    shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+                  ),
+                  onPressed: () => Navigator.pop(context, true),
+                  child: Text(widget.action,
+                      style: Ds.t.body.copyWith(color: Ds.c.surface)),
+                ),
+              ),
+              if (widget.cancel.isNotEmpty) ...[
+                SizedBox(height: Ds.space.x8),
+                SizedBox(
+                  width: double.infinity,
+                  height: Ds.touch.minTarget,
+                  child: TextButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    child: Text(widget.cancel,
+                        style:
+                            Ds.t.body.copyWith(color: Ds.c.textSecondary)),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A skeleton, not a spinner: the receipt is a list, so the wait looks like the
+/// list that is coming.
+class _ReceiptSkeleton extends StatelessWidget {
+  const _ReceiptSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      key: const ValueKey('outbound_receipt_loading'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < 3; i++) ...[
+          Container(
+            height: Ds.space.x16,
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: Ds.c.divider,
+              borderRadius: Ds.r.rChip,
+            ),
+          ),
+          SizedBox(height: Ds.space.x8),
+        ],
+      ],
     );
   }
 }

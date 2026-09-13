@@ -262,8 +262,15 @@ class _RcBanner extends StatelessWidget {
   }
 }
 
-/// One worker: id, its live command (# + title, tap → detail), model·effort and
-/// ETA-left. Idle workers are muted with no command line. All strings backend.
+/// One worker: its slot, its live command (# + title, tap → detail),
+/// model·effort and ETA-left. Idle workers are muted with no command line.
+/// All strings backend.
+///
+/// CMD #1951 — the slot reads exactly as it does on the phone's Code list
+/// ("R4", not "runner-4"), because `short_id` is composed by the very script
+/// that renames the Remote Control session, and `session_name` is that whole
+/// name. The card spells nothing itself: a second formatter here is how one
+/// worker came to carry two names.
 class _WorkerChip extends StatelessWidget {
   final Map<String, dynamic> worker;
   final DevQueueService service;
@@ -271,7 +278,10 @@ class _WorkerChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final id = (worker['id'] ?? '').toString();
+    final idRaw = (worker['id'] ?? '').toString();
+    final shortId = (worker['short_id'] ?? '').toString();
+    final id = shortId.isNotEmpty ? shortId : idRaw;
+    final sessionName = (worker['session_name'] ?? '').toString();
     final cmd = worker['command_id'];
     final building = cmd != null;
     final title = (worker['title'] ?? '').toString();
@@ -297,9 +307,12 @@ class _WorkerChip extends StatelessWidget {
             decoration: BoxDecoration(color: tone.fg, shape: BoxShape.circle),
           ),
           SizedBox(width: Ds.space.x8),
-          Text(id,
-              style: Ds.t.caption.copyWith(
-                  fontWeight: FontWeight.w700, color: Ds.c.text)),
+          Tooltip(
+            message: sessionName.isNotEmpty ? sessionName : idRaw,
+            child: Text(id,
+                style: Ds.t.caption.copyWith(
+                    fontWeight: FontWeight.w700, color: Ds.c.text)),
+          ),
           if (building) ...[
             SizedBox(width: Ds.space.x8),
             Text('#$cmd',

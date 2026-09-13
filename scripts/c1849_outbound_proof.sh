@@ -151,6 +151,34 @@ select 'D2 the raw body still runs and logs identically = ' ||
 -- ===========================================================================
 select 'E1 every outbound call site is routed = ' || (public.outbound_leak_scan()->>'ok');
 
+-- ===========================================================================
+-- F. THE TWO CALL SITES E1 CAUGHT. Routed, so they are recorded rather than
+--    merely blocked at the wire — and the queue row the caller is owed is
+--    still written, which is the whole of "fail open on real work".
+-- ===========================================================================
+set local request.headers = '{"x-medibo-test-session":"c1849-proof-token"}';
+
+select public.geo_enqueue('proof', 'c1849 proof address, nowhere') as geo_id \gset
+
+select 'F1 geocoding is sandboxed, and still queued = ' ||
+       ((:'geo_id' <> '')
+        and exists (select 1 from public.geo_lookup_queue
+                     where id = :'geo_id'::bigint and status = 'queued')
+        and exists (select 1 from public.outbound_receipt
+                     where session_id = :id and channel = 'api'
+                       and event_key = 'geocode' and verdict = 'sandboxed'))::text;
+
+select 'F2 the AI parse is sandboxed, not bought = ' ||
+       (public.outbound_dispatch('api','payment_alert_ai',null,null,null,null,null,
+          '{"fn":"_pa_ai_enqueue"}'::jsonb)->>'decision' = 'sandbox')::text;
+
+-- And its line is a backend sentence, like every other line.
+select 'F3 the external-service line is worded by the backend = ' ||
+       (exists (select 1 from jsonb_array_elements(public.test_session_receipt(:id)->'lines') l
+                 where l->>'channel' = 'api'
+                   and l->>'line' like 'Would have called %'))::text;
+
+
 rollback;
 SQL
 )"

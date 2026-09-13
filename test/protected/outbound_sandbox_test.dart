@@ -35,11 +35,22 @@
 //
 //   6. NOTHING IS PLURALISED IN DART. `count_label` and each group's
 //      `count_label` print exactly as sent, including a deliberately odd one.
+//
+//   7. THE RECEIPT IS REACHABLE, AND IT IS REACHED BEFORE THE ROWS DIE. The
+//      End & purge sheet — the ONE place a session is destroyed — reads the
+//      receipt once and prints it above the confirm sentence. A build that
+//      renders the widget but mounts it nowhere is the failure this holds
+//      down: a receipt nobody can open is the silence it replaced.
+//
+//   8. THE SHEET IS STILL THE BACKEND'S. Confirming still calls End & purge
+//      exactly once and still shows that call's own message; a refused receipt
+//      draws nothing rather than a Dart-worded apology.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pharma_b2b/widgets/outbound_receipt_sheet.dart';
+import 'package:pharma_b2b/widgets/test_mode_banner.dart';
 
 /// A session that messaged one supplier, waited, messaged a second, asked for
 /// money and paged the admin — in that order.
@@ -245,5 +256,115 @@ void main() {
     expect(find.text('1 line (a charge)'), findsOneWidget);
     expect(find.text('3 lines'), findsOneWidget);
     expect(find.text('5 outbound effects recorded'), findsOneWidget);
+  });
+
+  // ── 7-9: the receipt is wired to the one surface that destroys a session ──
+
+  /// The banner payload #1848 renders, unchanged.
+  Map<String, dynamic> live() => {
+        'on': true,
+        'text': 'TEST MODE',
+        'label': 'c1849 run',
+        'badge': 'TEST',
+        'tone': 'danger',
+        'can_end': true,
+        'end_action': 'End & purge',
+        'end_confirm': 'End this test session and delete every row it created?',
+        'end_cancel': 'Keep testing',
+      };
+
+  testWidgets(
+      '7 — the End & purge sheet prints the receipt above the confirm sentence',
+      (tester) async {
+    var reads = 0;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: TestModeBanner(
+          payload: live(),
+          onEndPurge: () async => {'ok': true, 'done': true, 'message': 'Done.'},
+          onReceipt: () async {
+            reads++;
+            return _receipt();
+          },
+        ),
+      ),
+    ));
+
+    await tester.tap(find.byKey(const ValueKey('test_session_end_purge')));
+    await tester.pumpAndSettle();
+
+    // The receipt is on the sheet, in the backend's own words.
+    expect(find.byKey(const ValueKey('outbound_receipt')), findsOneWidget);
+    expect(find.text('What this session would have sent'), findsOneWidget);
+    expect(
+        find.text('Would have charged ₹1,240.00 to Sharma Medicos on MB-1042'),
+        findsOneWidget);
+    // Read once, not once per rebuild.
+    expect(reads, 1);
+    // The transcript comes BEFORE the sentence that destroys it.
+    expect(
+      tester.getTopLeft(find.text('What this session would have sent')).dy <
+          tester
+              .getTopLeft(find.text(
+                  'End this test session and delete every row it created?'))
+              .dy,
+      isTrue,
+    );
+  });
+
+  testWidgets('8 — confirming still runs the backend end & purge exactly once',
+      (tester) async {
+    var calls = 0;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: TestModeBanner(
+          payload: live(),
+          onEndPurge: () async {
+            calls++;
+            return {'ok': true, 'done': true, 'message': 'Rows purged.'};
+          },
+          onReceipt: () async => _receipt(),
+        ),
+      ),
+    ));
+
+    await tester.tap(find.byKey(const ValueKey('test_session_end_purge')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('End & purge').last);
+    await tester.pumpAndSettle();
+
+    expect(calls, 1);
+    expect(find.text('Rows purged.'), findsOneWidget);
+  });
+
+  testWidgets(
+      '9 — a refused receipt draws no Dart apology, and Keep testing still '
+      'ends nothing', (tester) async {
+    var calls = 0;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: TestModeBanner(
+          payload: live(),
+          onEndPurge: () async {
+            calls++;
+            return {'ok': true, 'done': true, 'message': 'Done.'};
+          },
+          // The service returns has:false when the RPC refuses or the network
+          // is gone. The printer draws nothing; nothing here invents wording.
+          onReceipt: () async => const {'has': false},
+        ),
+      ),
+    ));
+
+    await tester.tap(find.byKey(const ValueKey('test_session_end_purge')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('outbound_receipt')), findsNothing);
+    expect(find.byKey(const ValueKey('outbound_receipt_empty')), findsNothing);
+    // The confirm sentence is still there, and Keep testing still cancels.
+    expect(find.text('End this test session and delete every row it created?'),
+        findsOneWidget);
+    await tester.tap(find.text('Keep testing'));
+    await tester.pumpAndSettle();
+    expect(calls, 0);
   });
 }

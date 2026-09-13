@@ -892,6 +892,10 @@ class _DevQueueControlState extends State<DevQueueControl> {
     final recent = (_lock['recent'] as List?) ?? const [];
     final detail = (_lock['detail'] ?? '').toString();
     final renewals = (_lock['renewals_label'] ?? '').toString();
+    // CMD #1961 — the holder as ONE chip: "#1962 · runner-2 · 9m 25s · frees in
+    // ~15m 35s" while it is held, "Lock free" when it is not. The sentence, the
+    // elapsed time and the countdown are all deploy_lock_banner()'s.
+    final holderChip = (_lock['holder_chip'] ?? '').toString();
     return Padding(
       padding: EdgeInsets.symmetric(vertical: Ds.space.x8),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -908,6 +912,15 @@ class _DevQueueControlState extends State<DevQueueControl> {
               label: (_lock['cap_label'] ?? '').toString(),
               tone: toneByName((_lock['tone'] ?? 'neutral').toString())),
         ]),
+        SizedBox(height: Ds.space.x8),
+        if (holderChip.isNotEmpty)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: ToneChip(
+                label: holderChip,
+                tone: toneByName(
+                    (_lock['holder_chip_tone'] ?? 'neutral').toString())),
+          ),
         SizedBox(height: Ds.space.x4),
         Text((_lock['banner'] ?? '').toString(), style: Ds.t.body),
         if (detail.isNotEmpty) ...[
@@ -916,7 +929,10 @@ class _DevQueueControlState extends State<DevQueueControl> {
         ],
         SizedBox(height: Ds.space.x8),
         Text((_lock['recent_label'] ?? '').toString(), style: Ds.t.caption),
-        for (final r in recent.whereType<Map>().take(3)) ...[
+        // CMD #1961 — the list arrives capped at three and de-duplicated by
+        // command; four reaps of one incident used to fill it. Dart takes what
+        // it is sent and never trims the payload itself.
+        for (final r in recent.whereType<Map>()) ...[
           SizedBox(height: Ds.space.x4),
           Row(children: [
             ToneChip(
@@ -925,9 +941,14 @@ class _DevQueueControlState extends State<DevQueueControl> {
             SizedBox(width: Ds.space.x8),
             Expanded(
                 child: Text((r['value_label'] ?? '').toString(),
-                    style: Ds.t.caption)),
+                    style: Ds.t.caption,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis)),
             SizedBox(width: Ds.space.x8),
-            Text((r['at_label'] ?? '').toString(), style: Ds.t.caption),
+            Text((r['at_label'] ?? '').toString(),
+                style: Ds.t.caption,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis),
           ]),
         ],
       ]),

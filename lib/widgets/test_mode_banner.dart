@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../design_tokens.dart';
 import '../services/test_session.dart';
 import 'outbound_receipt_sheet.dart';
+import 'test_purge_outcome.dart';
 
 /// CHANGE #573 — the unmissable TEST MODE strip.
 ///
@@ -21,6 +22,11 @@ import 'outbound_receipt_sheet.dart';
 /// (`owner_label`), when it auto-ends (`ends_label`), and carries the one
 /// action — End & purge — whose every word, confirm sentence and result
 /// message are the backend's.
+///
+/// CMD #1852 — and the answer to that action is no longer a one-line snackbar.
+/// The purge replays an undo journal backwards and fingerprints the affected
+/// tables before and after; `outcome` carries the whole verdict and the banner
+/// prints it in a sheet, verbatim.
 class TestModeBannerHost extends StatelessWidget {
   const TestModeBannerHost({super.key, required this.child});
 
@@ -135,6 +141,20 @@ class TestModeBanner extends StatelessWidget {
     if (run == null) return;
     final res = await run();
     if (!context.mounted) return;
+    // CMD #1852 — THE REPORT IS THE POINT. `test_session_end_purge()` now
+    // answers with the whole verdict: what was reversed, what the sweep took,
+    // what is still held, and whether the before/after fingerprints agreed.
+    // When that verdict is present it is SHOWN, because a purge that says
+    // "done" without saying whether the database is provably back where it
+    // started is the hopeful purge this command exists to end.
+    final raw = res['outcome'];
+    final outcome = raw is Map ? Map<String, dynamic>.from(raw) : null;
+    if (TestPurgeOutcomeSheet.has(outcome)) {
+      await TestPurgeOutcomeSheet.show(context, outcome);
+      return;
+    }
+    // No verdict — an older reply, a refusal, or an error. The backend's own
+    // sentence still shows, exactly as it did before.
     final msg = (res['message'] ?? res['error'] ?? '').toString();
     if (msg.isNotEmpty) {
       ScaffoldMessenger.maybeOf(context)

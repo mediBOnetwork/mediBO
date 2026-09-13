@@ -28,11 +28,18 @@
 //
 //   5. Rows render in PAYLOAD ORDER. The fixture is deliberately not sorted by
 //      label, by value or by tone, so any client-side sort fails here.
+//
+//   6. THE BANNER ACTUALLY SHOWS IT. End & purge is the only way into this
+//      sheet, so the wiring is held down here too: a reply carrying a verdict
+//      opens the sheet and does NOT fall back to the one-line snackbar, and a
+//      reply with no verdict (an older backend, a refusal, an error) still
+//      shows the backend's sentence exactly as it did before.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pharma_b2b/design_tokens.dart';
+import 'package:pharma_b2b/widgets/test_mode_banner.dart';
 import 'package:pharma_b2b/widgets/test_purge_outcome.dart';
 
 Map<String, dynamic> _outcome({
@@ -165,5 +172,114 @@ void main() {
     await tester.pumpWidget(_host(_outcome(lines: const [])));
     expect(find.text('Purge incomplete'), findsOneWidget);
     expect(find.text('Writes reversed'), findsNothing);
+  });
+
+  // ── 6. the banner is the door ──────────────────────────────────────────
+  //
+  // The sheet above is worthless if nothing opens it. `TestModeBanner` is
+  // mounted over every route of every role, and its End & purge action is the
+  // one entry point; these hold the wiring down.
+  group('End & purge opens the verdict sheet', () {
+    const live = <String, dynamic>{
+      'on': true,
+      'session_id': 31,
+      'text': 'TEST MODE — nothing here is real',
+      'badge': 'TEST',
+      'can_end': true,
+      'end_action': 'End & purge',
+    };
+
+    Widget banner(Future<Map<String, dynamic>> Function() run) => MaterialApp(
+          home: Scaffold(
+            body: TestModeBanner(payload: live, onEndPurge: run),
+          ),
+        );
+
+    testWidgets('a reply carrying a verdict opens the sheet, not a snackbar',
+        (tester) async {
+      await tester.pumpWidget(banner(() async => {
+            'ok': true,
+            'done': true,
+            'message': 'Test session ended and its rows purged.',
+            'outcome': _outcome(),
+          }));
+      await tester.tap(find.byKey(const ValueKey('test_session_end_purge')));
+      await tester.pumpAndSettle();
+
+      // The backend's title, its row labels and its fingerprint sentence.
+      expect(find.text('Purge incomplete'), findsOneWidget);
+      expect(find.text('Writes reversed'), findsOneWidget);
+      expect(
+        find.text(
+            'Purge incomplete — these tables still differ: notification_log'),
+        findsOneWidget,
+      );
+      // The old one-line answer is NOT also shown: a sheet and a snackbar
+      // saying different things about the same purge is the bug, not a bonus.
+      expect(find.byType(SnackBar), findsNothing);
+      expect(find.text('Test session ended and its rows purged.'), findsNothing);
+
+      // The close word is the backend's, and it dismisses the sheet.
+      await tester.tap(find.byKey(const ValueKey('test_purge_close')));
+      await tester.pumpAndSettle();
+      expect(find.text('Purge incomplete'), findsNothing);
+    });
+
+    testWidgets('a success verdict is shown in the backend\'s own words too',
+        (tester) async {
+      await tester.pumpWidget(banner(() async => {
+            'ok': true,
+            'done': true,
+            'outcome': {
+              'has': true,
+              'title': 'Test session purged',
+              'tone': 'success',
+              'lines': const [
+                {'label': 'Writes reversed', 'value': '41', 'tone': 'neutral'},
+              ],
+              'verdict':
+                  'The database is byte-for-byte what it was before the session.',
+              'verdict_tone': 'success',
+              'close': 'Done',
+            },
+          }));
+      await tester.tap(find.byKey(const ValueKey('test_session_end_purge')));
+      await tester.pumpAndSettle();
+      expect(find.text('Test session purged'), findsOneWidget);
+      expect(
+        find.text(
+            'The database is byte-for-byte what it was before the session.'),
+        findsOneWidget,
+      );
+      expect(find.text('41'), findsOneWidget);
+    });
+
+    testWidgets('no verdict — the backend\'s sentence still shows, as before',
+        (tester) async {
+      await tester.pumpWidget(banner(() async => {
+            'ok': true,
+            'done': true,
+            'message': 'Test session ended and its rows purged.',
+          }));
+      await tester.tap(find.byKey(const ValueKey('test_session_end_purge')));
+      await tester.pumpAndSettle();
+      expect(find.text('Test session ended and its rows purged.'),
+          findsOneWidget);
+    });
+
+    testWidgets('has:false is an absence of verdict, not an empty sheet',
+        (tester) async {
+      await tester.pumpWidget(banner(() async => {
+            'ok': false,
+            'error': 'not_owner',
+            'message': 'Only the device that started this session can end it.',
+            'outcome': const {'has': false},
+          }));
+      await tester.tap(find.byKey(const ValueKey('test_session_end_purge')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('test_purge_close')), findsNothing);
+      expect(find.text('Only the device that started this session can end it.'),
+          findsOneWidget);
+    });
   });
 }

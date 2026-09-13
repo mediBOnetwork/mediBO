@@ -26,8 +26,10 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../design_tokens.dart';
+import '../data/medicine_repository.dart';
 import '../models/catalogue.dart';
 import '../models/product.dart';
+import '../models/search_page.dart';
 import '../services/ui_copy.dart';
 import '../url_sync.dart';
 import '../utils/render_log.dart';
@@ -35,7 +37,8 @@ import '../widgets/catalogue_alphabet_rail.dart';
 import '../widgets/catalogue_product_card.dart';
 import '../widgets/product_row_card.dart';
 import '../widgets/product_image.dart';
-import '../widgets/search_typeahead.dart';
+import '../widgets/search_surface.dart';
+import '../widgets/search_typeahead.dart'; // CMD #1905 — SearchSuggestion's nav block
 import 'admin/nav_registry_view.dart' show NavGlyph;
 import 'catalogue_extras.dart'; // CHANGE #748
 
@@ -61,6 +64,15 @@ class CatalogueRoute {
   final String sort;
   final String query;
 
+  /// CMD #1906 item 4 — THE search, and the same value Home carries.
+  ///
+  /// [query] narrows a browse LIST (a salt, a company, a class) and is the
+  /// catalogue's own idea; this is the shopper's search, filters and page, in
+  /// the parameter names `SearchQueryState.toParams` writes. `/?q=dolo&sort=name`
+  /// and `/catalogue?q=dolo&sort=name` are therefore the same search on two
+  /// screens: moving between them keeps it, and so does a reload or a link.
+  final SearchQueryState search;
+
   /// CMD #1908 — the A–Z letter, or null for the whole list. It lives in the
   /// ROUTE and not in a field beside it, so the back button and a pasted link
   /// land on the same letter the strip was showing.
@@ -75,9 +87,13 @@ class CatalogueRoute {
     this.sort = 'name',
     this.query = '',
     this.letter,
+    this.search = SearchQueryState.blank,
   });
 
   bool get showsList => listKind != null;
+
+  /// True when this route IS a search — the shared surface, not a browse list.
+  bool get showsSearch => search.hasQuery;
 
   CatalogueRoute copy({
     String? tab,
@@ -88,6 +104,7 @@ class CatalogueRoute {
     String? sort,
     String? query,
     Object? letter = _keep,
+    SearchQueryState? search,
   }) =>
       CatalogueRoute(
         tab: tab ?? this.tab,
@@ -98,6 +115,7 @@ class CatalogueRoute {
         sort: sort ?? this.sort,
         query: query ?? this.query,
         letter: identical(letter, _keep) ? this.letter : letter as String?,
+        search: search ?? this.search,
       );
 
   static const Object _keep = Object();
@@ -105,6 +123,12 @@ class CatalogueRoute {
   /// The URL this state is. Restoring is [parse]'s job and the two are
   /// deliberately adjacent: a link that cannot be read back is not a deep link.
   String get url {
+    // CMD #1906 — a SEARCH serialises as the shared search state and nothing
+    // else, so the string after `?` is byte-identical to the one Home writes.
+    if (showsSearch) {
+      final qs = search.toQueryString();
+      return tab == 'browse' ? '/catalogue?$qs' : '/catalogue?tab=$tab&$qs';
+    }
     final q = <String>[];
     if (tab != 'browse') q.add('tab=$tab');
     if (path.isNotEmpty) q.add('p=${path.map(Uri.encodeComponent).join('/')}');
@@ -123,10 +147,18 @@ class CatalogueRoute {
   static bool matches(String path) =>
       path == '/catalogue' || path.startsWith('/catalogue?') || path.startsWith('/catalogue/');
 
-  static CatalogueRoute parse(String search) {
-    final q = Uri.splitQueryString(search.startsWith('?') ? search.substring(1) : search);
+  static CatalogueRoute parse(String location) {
+    final q = Uri.splitQueryString(
+        location.startsWith('?') ? location.substring(1) : location);
     final raw = q['p'] ?? '';
+    // CMD #1906 — `q=` with no list scope beside it is the SHARED search, read
+    // back with the same reader Home uses. `q=` WITH a scope (`lk=salt&q=para`)
+    // stays what it always was: a browse list narrowed by a word.
+    final shared = q['q'] != null && q['lk'] == null
+        ? SearchQueryState.fromParams(q)
+        : SearchQueryState.blank;
     return CatalogueRoute(
+      search: shared,
       tab: (q['tab'] ?? 'browse'),
       path: raw.isEmpty
           ? const []
@@ -154,6 +186,7 @@ class CatalogueRoute {
         sort: sort,
         query: '',
         letter: null,
+        search: SearchQueryState.blank,
       );
 }
 
@@ -170,7 +203,32 @@ class CatalogueScreen extends StatefulWidget {
   /// The initial deep link. Null in production means "read the browser URL".
   final CatalogueRoute? initialRoute;
 
-  const CatalogueScreen({super.key, this.active = false, this.rpc, this.initialRoute});
+  /// CMD #1906 item 4 — the shell's live search state. The Catalogue lives in
+  /// an IndexedStack beside Home, so a shopper who searches on Home and taps
+  /// Catalogue arrives with the search ALREADY in hand; [onSearchChanged]
+  /// carries it back the other way. One value, two screens, one URL.
+  final SearchQueryState shellSearch;
+  final ValueChanged<SearchQueryState>? onSearchChanged;
+
+  /// Test seam for the shared search RPC.
+  final MedicineRepository? repo;
+
+  /// CMD #1906 — a scope the SHARED header opened from another tab. The one
+  /// search header lives on Home as well now, and a salt, a use or a class
+  /// tapped there has to land on the screen that renders lists, which is this
+  /// one. The shell writes the URL; this screen renders it.
+  final CatalogueRoute? shellScope;
+
+  const CatalogueScreen({
+    super.key,
+    this.active = false,
+    this.rpc,
+    this.initialRoute,
+    this.shellSearch = SearchQueryState.blank,
+    this.onSearchChanged,
+    this.repo,
+    this.shellScope,
+  });
 
   @override
   State<CatalogueScreen> createState() => _CatalogueScreenState();
@@ -201,15 +259,26 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
   final _searchCtrl = TextEditingController();
   final _searchFocus = FocusNode();
 
-  // CHANGE #799 — the typeahead panel under the hero search. The controller
-  // owns the debounce and the last payload; the panel renders it verbatim.
-  final _suggest = SearchSuggestController();
+  // CMD #1906 — the shared search surface's state. `search_page()` answers the
+  // chips, the rows, the recent strip, the paging labels and the empty state in
+  // ONE payload, which is why there is nothing else here.
+  /// The shared search RPC, through this screen's OWN seam: a test that hands
+  /// in [CatalogueScreen.rpc] gets a repository that answers from the same fake,
+  /// so the header and the results need no second seam of their own.
+  late final MedicineRepository _repo = widget.repo ??
+      MedicineRepository(
+        null,
+        widget.rpc == null
+            ? null
+            : (fn, {params}) => widget.rpc!(fn, params ?? const {}),
+      );
+  SearchPagePayload? _searchPayload;
+  bool _searchLoadingMore = false;
+  bool _searchFailed = false;
 
-  // CMD #1905 — what the search box is showing instead of raw text. A tapped
-  // suggestion opened a COMPANY, a salt or a class; leaving its name sitting
-  // in a product-search field was the lie the whole command exists to end.
-  // Both strings are the backend's (`chip_label`, `clear_label`).
-  SearchChip _chip = SearchChip.none;
+  // CMD #1905's chip moved into SearchChrome with CMD #1906: the box that
+  // shows it is the shared one now, so the state belongs with the box rather
+  // than being kept a second time here.
 
   final List<CatRow> _rows = [];
   int _nextOffset = 0;
@@ -225,9 +294,13 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
     // initialSearch(), not currentSearch(): boot's usePathUrlStrategy rewrite
     // has already erased the live query string by the time this runs.
     _route = widget.initialRoute ?? CatalogueRoute.parse(initialSearch());
+    // The shell's search wins over the URL only when the URL carried none:
+    // a pasted `/catalogue?q=…` is the more specific instruction.
+    if (!_route.showsSearch && widget.shellSearch.hasQuery) {
+      _route = _route.copy(search: widget.shellSearch, query: widget.shellSearch.query);
+    }
     _searchCtrl.text = _route.query;
     _scroll.addListener(_onScroll);
-    _suggest.addListener(_onSuggest);
     if (widget.active) _boot();
   }
 
@@ -236,6 +309,37 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
     super.didUpdateWidget(old);
     // First time the tab is actually opened — not at shell boot.
     if (widget.active && !old.active && !_booted) _boot();
+    // CMD #1906 — Home changed the search while this tab was in the stack.
+    // Adopting it here is what makes "move between the two screens" keep it.
+    if (widget.shellSearch.toQueryString() != old.shellSearch.toQueryString() &&
+        widget.shellSearch.toQueryString() != _route.search.toQueryString()) {
+      _adoptSearch(widget.shellSearch, report: false, push: widget.active);
+    }
+    // CMD #1905/#1910 — a suggestion tapped in the header while Home was the
+    // visible tab. The shell has already pushed the URL, so this only renders
+    // the scope it names.
+    final scope = widget.shellScope;
+    if (scope != null && !identical(scope, old.shellScope)) {
+      _go(scope, push: false);
+    }
+  }
+
+  /// One entry point for every search change on this screen: the route moves,
+  /// the URL moves with it, the shell is told, and the payload is refetched.
+  void _adoptSearch(SearchQueryState next, {bool report = true, bool push = true}) {
+    _go(
+      _route.copy(
+        search: next,
+        query: next.query,
+        tab: 'browse',
+        path: const [],
+        listKind: null,
+        listKey: null,
+        letter: null,
+      ),
+      push: push,
+    );
+    if (report) widget.onSearchChanged?.call(next);
   }
 
   @override
@@ -244,8 +348,6 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
     _scroll.dispose();
     _searchCtrl.dispose();
     _searchFocus.dispose();
-    _suggest.removeListener(_onSuggest);
-    _suggest.dispose();
     super.dispose();
   }
 
@@ -281,6 +383,9 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
   /// Load whatever the current route points at. Every navigation in this screen
   /// is "change the route, then call this" — there is no second code path.
   Future<void> _fetch() async {
+    // CMD #1906 — a search is not a browse list. It is `search_page()`, the
+    // same call Home makes, rendered by the same widgets.
+    if (_route.showsSearch) return _loadSearch();
     setState(() { _loading = true; _error = ''; });
     try {
       if (_route.showsList) {
@@ -360,8 +465,6 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
     }
   }
 
-  void _onSuggest() { if (mounted) setState(() {}); }
-
   // CMD #1903 — `catalogue_variants` is no longer called from here. The pack
   // family was a chip row on every card in every list; it is now the "Other
   // packs" strip on the PRODUCT PAGE, which is the one place a buyer is
@@ -375,19 +478,15 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
   /// re-runs a text query — that is what pasted "SUN PHARMACEUTICAL
   /// INDUSTRIES LTD" into a product-name search and found nothing.
   void _pickSuggestion(SearchSuggestion s) {
-    _suggest.close();
     _searchFocus.unfocus();
     RenderLog.write('c1905_suggest_nav', '${s.navKind}:${s.navId}');
     switch (s.navKind) {
       case 'product':
-        _showChip(s);
         Navigator.of(context).pushNamed('/product/${s.navId}');
       case 'company':
-        _showChip(s);
         Navigator.of(context)
             .pushNamed('/company/${Uri.encodeComponent(s.navId)}');
       case 'salt':
-        _showChip(s);
         _go(_route.copy(tab: 'salts', path: const [], listKind: 'salt',
             listKey: s.navId, query: '', letter: null));
       case 'condition':
@@ -395,17 +494,14 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         // the scope is the whole point of the typed row: a text search for
         // the word "fever" finds product NAMES containing it, which is a
         // different and much worse answer.
-        _showChip(s);
         _go(_route.copy(tab: 'conditions', path: const [], listKind: 'condition',
             listKey: s.navId, query: '', letter: null));
       case 'category':
-        _showChip(s);
         _go(_route.copy(tab: 'browse', path: [s.navId], listKind: 'tree',
             listKey: null, query: '', letter: null));
       case 'tab':
         // "See all companies" / "See all salts": the tab, narrowed by what
         // was typed. Still not a product-name search.
-        _clearChip();
         _searchCtrl.text = s.navQuery;
         _go(_route.copy(tab: s.navTab, path: const [], listKind: null,
             listKey: null, query: s.navQuery, letter: null));
@@ -413,7 +509,6 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         // 'search' — the one nav that IS a text query, because the backend
         // said so: a product family whose name really is a prefix of its own
         // products' names, or "See all products" for what was typed.
-        _clearChip();
         _searchCtrl.text = s.navId;
         _go(_route.copy(tab: 'browse', path: const [], listKind: 'search',
             listKey: s.navId, query: s.navId, letter: null));
@@ -426,41 +521,75 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
   @visibleForTesting
   void pickSuggestionForTest(SearchSuggestion s) => _pickSuggestion(s);
 
-  /// Put the backend's chip in the box. The raw text goes with it: the field
-  /// is showing a scope now, not a phrase that was typed.
-  void _showChip(SearchSuggestion s) {
-    if (s.chipLabel.isEmpty) return;
-    setState(() {
-      _chip = SearchChip(label: s.chipLabel, clearLabel: _suggest.clearLabel);
-      _searchCtrl.text = '';
-    });
-  }
-
-  void _clearChip() {
-    if (_chip.has) setState(() => _chip = SearchChip.none);
-  }
-
   void _go(CatalogueRoute next, {bool push = true}) {
     setState(() {
       _route = next;
-      // CMD #1905 — a chip names ONE scope. Any other navigation leaves it
-      // behind rather than letting it describe a screen it did not open.
-      if (next.query.isNotEmpty) _chip = SearchChip.none;
-      _searchCtrl.text = next.query;
+      // CMD #1906 — the controller is shared with the header now, so only
+      // write when it actually differs: an identical assignment moves the
+      // caret to the end while the shopper is still typing.
+      if (_searchCtrl.text != next.query) _searchCtrl.text = next.query;
       _rows.clear();
       _cursor = null;
       _list = null;
       _browse = null;
+      _searchLoadingMore = false;
+      _searchFailed = false;
+      if (next.search.page == 0) _searchPayload = null;
     });
-    _suggest.close();
     if (push) pushUrl(next.url);
     _fetch();
+  }
+
+  /// CMD #1906 — THE search, and the same RPC Home calls. Everything drawn
+  /// afterwards — the chip row, the header line, the rows, the paging labels,
+  /// the empty state — is this one payload.
+  Future<void> _loadSearch() async {
+    final asked = _route.search.toQueryString();
+    setState(() { _loading = true; _error = ''; _searchFailed = false; });
+    try {
+      final p = await _repo.searchPage(_route.search);
+      if (!mounted || _route.search.toQueryString() != asked) return;
+      setState(() { _searchPayload = p; _loading = false; });
+      RenderLog.write(
+        'c1906_search_page',
+        'q=${_route.search.query};rows=${p.items.length};total=${p.total};'
+        'filters=${p.filtersActive};groups=${p.filters.groups.length};'
+        'recent=${p.recent.has ? p.recent.items.length : 0};'
+        'more=${p.paging.hasMore};surface=catalogue',
+      );
+    } catch (e) {
+      if (!mounted || _route.search.toQueryString() != asked) return;
+      setState(() { _loading = false; _searchFailed = true; _error = e.toString(); });
+    }
+  }
+
+  /// The next page of the SAME search. The later payload wins for every label
+  /// and count, because the backend recomputed them for the page it answered.
+  Future<void> _moreSearch() async {
+    final current = _searchPayload;
+    if (current == null || _searchLoadingMore || !current.paging.hasMore) return;
+    final asked = _route.search.toQueryString();
+    setState(() => _searchLoadingMore = true);
+    try {
+      final next = await _repo
+          .searchPage(_route.search.copy(page: current.paging.nextPage));
+      if (!mounted || _route.search.toQueryString() != asked) return;
+      setState(() {
+        _searchPayload = current.appended(next);
+        _searchLoadingMore = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _searchLoadingMore = false);
+    }
   }
 
   void _onScroll() {
     if (!_scroll.hasClients || _loadingMore) return;
     if (_scroll.position.pixels < _scroll.position.maxScrollExtent - 600) return;
-    if (_route.showsList) {
+    if (_route.showsSearch) {
+      if (_searchPayload?.paging.hasMore == true) _moreSearch();
+    } else if (_route.showsList) {
       if (_list?.hasMore == true && _cursor != null) _moreProducts();
     } else if (_rowsHaveMore) {
       _moreRows();
@@ -572,7 +701,8 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
   /// The catalogue's own front page: no tab chosen, no list open, no crumb.
   /// Only here do the doors and the recently-viewed strip appear — inside a
   /// tab they would be furniture in the way of the thing you came for.
-  bool get _isHome => !_route.showsList && _route.tab == 'browse' && _route.path.isEmpty;
+  bool get _isHome =>
+      !_route.showsList && !_route.showsSearch && _route.tab == 'browse' && _route.path.isEmpty;
 
   @override
   Widget build(BuildContext context) {
@@ -585,48 +715,52 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 1. The search bar IS the screen's hero — one field, at the top,
-          //    above everything else, on every state of this tab.
-          _SearchHero(
-            home: home,
+          // 1. CMD #1906 — THE search header, the very widget Home mounts:
+          //    one field, the shared suggestion panel, the backend's filter
+          //    chips in the backend's order, and the shared recent strip.
+          //    There is no second search box in this app any more.
+          SearchChrome(
             controller: _searchCtrl,
-            focus: _searchFocus,
-            suggest: _suggest,
-            chip: _chip,
+            focusNode: _searchFocus,
+            payload: _searchPayload,
+            hasQuery: _route.showsSearch,
+            isLoading: _route.showsSearch && _loading,
+            repo: _repo,
+            // CMD #1905/#1910 — a tapped suggestion opens what it IS. The
+            // header draws the panel and the chip; this screen only knows
+            // which of its own tabs renders which kind.
+            onPickSuggestion: _pickSuggestion,
             onSubmit: (q) {
               final t = q.trim();
-              if (t.isEmpty) return;
-              _suggest.close();
-              _clearChip();
-              _go(_route.copy(tab: 'browse', path: const [], listKind: 'search',
-                  listKey: t, query: t, letter: null));
-            },
-            onPick: _pickSuggestion,
-            onClear: () {
-              _searchCtrl.clear();
-              _suggest.close();
-              // CMD #1905 — the × on the chip is the same × as the field's:
-              // it puts the shopper back on the catalogue they came from.
-              final hadChip = _chip.has;
-              _clearChip();
-              if (hadChip || _route.listKind == 'search') {
-                _go(_route.copy(tab: 'browse', path: const [], listKind: null,
-                    listKey: null, query: '', letter: null));
+              if (t.isEmpty) {
+                _adoptSearch(SearchQueryState.blank);
+                return;
               }
+              // The filters the shopper already set survive a new query —
+              // they narrowed the catalogue, not that one word.
+              _adoptSearch(_route.search.copy(query: t, page: 0));
+            },
+            onFilterPick: (g, o) =>
+                _adoptSearch(_route.search.withOption(g, o)),
+            onClear: () => _adoptSearch(SearchQueryState.blank),
+            onRecentCleared: () {
+              if (_route.showsSearch) _loadSearch();
             },
           ),
           // 2. CMD #1908 — the breadcrumb. Sticky under the search on EVERY
-          //    state of this tab, outside the scroll view, so it cannot
+          //    browse state of this tab, outside the scroll view, so it cannot
           //    scroll away, and held across a reload so it cannot blink out
-          //    while the next payload is in flight.
-          _TrailBar(
-            trail: _trail,
-            onTap: (c) => _go(_route.applyCrumb(c)),
-          ),
+          //    while the next payload is in flight. A SEARCH has no trail:
+          //    its only narrowing is the chip row the header already drew.
+          if (!_route.showsSearch)
+            _TrailBar(
+              trail: _trail,
+              onTap: (c) => _go(_route.applyCrumb(c)),
+            ),
           // 3. The A–Z strip, directly under the breadcrumb. The backend sends
           //    a rail on the company, salt and class lists and none on a
           //    product grid, so there is nothing here to decide.
-          if (!_rail.isEmpty)
+          if (!_rail.isEmpty && !_route.showsSearch)
             CatalogueAlphabetRail(
               rail: _rail,
               active: _route.letter,
@@ -635,6 +769,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
           // 4. The narrowing sentence. It belongs to a SEARCH and to the
           //    catalogue's own front page; inside a company, a salt or a class
           //    the backend sends an empty one and this row is simply absent.
+          if (!_route.showsSearch)
           _SentenceRow(
             sentence: _route.showsList
                 ? (_list?.sentence ?? CatSentence.empty)
@@ -675,6 +810,10 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
   }
 
   Widget _body() {
+    // CMD #1906 — the shared result surface. The same rows, the same header
+    // line, the same Load more and the same empty state Home draws, because it
+    // is the same widget reading the same payload.
+    if (_route.showsSearch) return _searchBody();
     // CHANGE #748 — the Recently-added tab is its own body, fetched by its own
     // RPC. It is reached the same way every other tab is: the backend put a tab
     // in the strip whose `kind` this build knows.
@@ -682,6 +821,37 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
     if (_loading) return const _CatSkeleton();
     if (_error.isNotEmpty) return _CatError(message: _error, onRetry: _fetch);
     return _route.showsList ? _productGrid() : _rowList();
+  }
+
+  Widget _searchBody() {
+    final p = _searchPayload;
+    if (p == null && _loading) return const SearchResultsSkeleton();
+    if (p == null || (_searchFailed && !p.ok)) {
+      return _CatError(message: _error, onRetry: _loadSearch);
+    }
+    return SingleChildScrollView(
+      controller: _scroll,
+      child: SearchResultsView(
+        payload: p,
+        loadingMore: _searchLoadingMore,
+        onOpenProduct: (id) => Navigator.of(context).pushNamed('/product/$id'),
+        onLoadMore: _moreSearch,
+        onEmptyAction: _onSearchEmptyAction,
+      ),
+    );
+  }
+
+  /// CMD #1906 — the empty state's buttons are the backend's, and so is what
+  /// they do: `clear_filters` clears exactly what the shopper narrowed, and
+  /// `request` opens the request sheet `catalogue_extras()` configured — the
+  /// same two behaviours Home gives the same two buttons. Anything else the
+  /// backend sends in a later release is ignored rather than guessed at.
+  void _onSearchEmptyAction(String kind) {
+    if (kind == 'clear_filters') {
+      _adoptSearch(_route.search.cleared());
+      return;
+    }
+    if (kind == 'request') _openRequest();
   }
 
   /// CHANGE #748 — the request sheet. A sheet, not a dialog, per DESIGN.md, and
@@ -935,90 +1105,6 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
 }
 
 // ── pieces ────────────────────────────────────────────────────────────────
-
-/// CHANGE #799 — the hero. One field, at the top, on every state of the tab,
-/// with the typeahead panel #790 built hanging under it.
-class _SearchHero extends StatelessWidget {
-  final CatHome home;
-  final TextEditingController controller;
-  final FocusNode focus;
-  final SearchSuggestController suggest;
-  final ValueChanged<String> onSubmit;
-  final ValueChanged<SearchSuggestion> onPick;
-  final VoidCallback onClear;
-
-  /// CMD #1905 — the scope a tapped suggestion opened, or [SearchChip.none].
-  final SearchChip chip;
-
-  const _SearchHero({
-    required this.home,
-    required this.controller,
-    required this.focus,
-    required this.suggest,
-    required this.onSubmit,
-    required this.onPick,
-    required this.onClear,
-    required this.chip,
-  });
-
-  @override
-  Widget build(BuildContext context) => Container(
-        color: Ds.c.surface,
-        padding: EdgeInsets.fromLTRB(
-            Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SizedBox(
-              height: Ds.touch.minTarget,
-              // CMD #1905 — while a chip is up, the box IS the chip. A field
-              // still holding "SUN PHARMACEUTICAL INDUSTRIES LTD" under a
-              // company page said the shopper had searched for that phrase,
-              // which is exactly what they had not done.
-              child: chip.has
-                  ? SearchBoxChip(chip: chip, onClear: onClear)
-                  : TextField(
-                controller: controller,
-                focusNode: focus,
-                textInputAction: TextInputAction.search,
-                onChanged: suggest.onQueryChanged,
-                onSubmitted: onSubmit,
-                decoration: InputDecoration(
-                  // The placeholder is the payload's. There is no second
-                  // sentence under this field: the field IS the instruction.
-                  hintText: home.searchPlaceholder,
-                  prefixIcon: const Icon(Icons.search),
-                  isDense: true,
-                  suffixIcon: ValueListenableBuilder<TextEditingValue>(
-                    valueListenable: controller,
-                    builder: (context, v, _) => v.text.isEmpty
-                        ? const SizedBox.shrink()
-                        : IconButton(
-                            tooltip: home.searchClearLabel,
-                            icon: const Icon(Icons.close),
-                            onPressed: onClear,
-                          ),
-                  ),
-                ),
-              ),
-            ),
-            // The panel is part of the header, not an overlay: an overlay over
-            // a canvas app is one more layer to composite on a low-end phone,
-            // and this list is already the thing under the finger.
-            ListenableBuilder(
-              listenable: suggest,
-              builder: (context, _) => suggest.isOpen
-                  ? Padding(
-                      padding: EdgeInsets.only(top: Ds.space.x8),
-                      child: SearchSuggestions(
-                          payload: suggest.payload, onPick: onPick),
-                    )
-                  : const SizedBox.shrink(),
-            ),
-          ],
-        ),
-      );
-}
 
 /// CHANGE #799 — "Showing · Tablets · Rx · In my zone".
 ///

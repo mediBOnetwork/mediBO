@@ -9,6 +9,7 @@ import '../models/product.dart';
 import '../models/product_detail.dart';
 import '../models/product_reviews.dart';
 import '../models/product_compare.dart';
+import '../models/search_page.dart';
 import '../models/storefront_p3.dart';
 import 'storefront_labels.dart';
 
@@ -146,7 +147,14 @@ Future<T?> retryWithBackoff<T>(
 /// Reads are paginated: the storefront pulls [pageSize] rows at a time and
 /// keeps requesting the next page as the user scrolls.
 class MedicineRepository {
-  final SupabaseClient _client;
+  /// The client this repository was HANDED, or null for "ask Supabase when you
+  /// actually need one". CMD #1906 — the search header is constructed by two
+  /// screens whose widget tests never boot Supabase, and a repository that
+  /// resolves the client in its constructor makes merely BUILDING those screens
+  /// throw. Resolution moved to first use; nothing else changed.
+  final SupabaseClient? _handedClient;
+
+  SupabaseClient get _client => _handedClient ?? Supabase.instance.client;
 
   /// Hook every [fetchPage] RPC call goes through. Production code always
   /// forwards to the real client's `.rpc()`; tests substitute a fake so
@@ -157,7 +165,7 @@ class MedicineRepository {
   MedicineRepository([
     SupabaseClient? client,
     Future<dynamic> Function(String fn, {Map<String, dynamic>? params})? rpc,
-  ]) : _client = client ?? Supabase.instance.client {
+  ]) : _handedClient = client {
     _rpc = rpc ?? (fn, {params}) => _client.rpc(fn, params: params);
   }
 
@@ -711,6 +719,89 @@ class MedicineRepository {
     }
   }
 
+  /// CMD #1906 — SEARCH is ONE RPC, for Home and for the Catalogue.
+  ///
+  /// `search_page(q, filters, page)` ranks with the same matcher Home has
+  /// always used, applies the Catalogue's filter vocabulary on top and returns
+  /// every string either screen prints: the placeholder, the header line, the
+  /// filter groups in the order they are drawn, the empty state with its
+  /// buttons, the paging labels and the recent-search strip.
+  ///
+  /// THROWS on a dead call rather than swallowing it: the two screens tell an
+  /// empty result from an unreachable backend, and only the second one keeps
+  /// the last good list on screen.
+  Future<SearchPagePayload> searchPage(
+    SearchQueryState state, {
+    int? pageSize,
+  }) async {
+    final res = await _rpc('search_page', params: {
+      'p_q': state.query,
+      'p_filters': state.toFilters(),
+      'p_page': state.page,
+      'p_page_size': pageSize,
+    });
+    if (res is! Map) return SearchPagePayload.failed;
+    final m = Map<String, dynamic>.from(res);
+    // CHANGE #497's instant chip row, kept: the header's chrome — the filter
+    // set and the empty state, with no rows in it — is the same on every cold
+    // start, so the last one is written to the device and repainted before the
+    // network answers. The cache is a render fallback, never an authority.
+    if (!state.hasQuery) unawaited(_persistSearchChrome(m));
+    return SearchPagePayload.fromMap(m);
+  }
+
+  static const _kSearchChromeKey = 'search_chrome_v1';
+
+  Future<void> _persistSearchChrome(Map<String, dynamic> payload) async {
+    try {
+      final sp = await SharedPreferences.getInstance();
+      await sp.setString(
+          _kSearchChromeKey, jsonEncode({...payload, 'items': const []}));
+    } catch (_) {
+      // A device that refuses storage still gets a live header.
+    }
+  }
+
+  /// The last header chrome this device saw, or null when there is none.
+  Future<SearchPagePayload?> cachedSearchChrome() async {
+    try {
+      final sp = await SharedPreferences.getInstance();
+      final raw = sp.getString(_kSearchChromeKey);
+      if (raw == null || raw.isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return null;
+      return SearchPagePayload.fromMap(Map<String, dynamic>.from(decoded));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// CMD #1906 — the catalogue's extras block, which carries the "Request this
+  /// product" form the empty state offers. Home's search opens the SAME sheet,
+  /// so the empty state is one behaviour rather than two.
+  ///
+  /// Best-effort: a dead call returns an empty map and the sheet simply is not
+  /// offered, exactly as it behaves on the Catalogue.
+  Future<Map<String, dynamic>> catalogueExtras() async {
+    try {
+      final res = await _rpc('catalogue_extras');
+      if (res is! Map) return const {};
+      return Map<String, dynamic>.from(res);
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  /// Empties this viewer's recent-search strip. The backend owns the toast it
+  /// answers with; a failure leaves the strip exactly where it was.
+  Future<void> clearRecentSearches() async {
+    try {
+      await _rpc('search_recent_clear');
+    } catch (_) {
+      // The strip is a convenience; a dead call is not worth a banner.
+    }
+  }
+
   /// CHANGE #636 — the product page is ONE RPC.
   ///
   /// `product_detail()` returns the whole page render-ready: header, images,
@@ -996,9 +1087,20 @@ class MedicineRepository {
 
   /// Fire-and-forget: increments sales_count by 1 each time a product is
   /// added to cart, so the popularity sort improves over time.
+  ///
+  /// CMD #1906 — it swallows its OWN failures. The card calls this from a tap
+  /// handler inside a `try`, which only ever caught the constructor resolving
+  /// `Supabase.instance`; now that the client is resolved on first use
+  /// (see [_client]) the throw happens after the first `await`, where no
+  /// caller's `try` can reach it. A popularity ping must never be able to
+  /// break an add-to-cart, so the guard lives here.
   Future<void> incrementSalesCount(String medicineId) async {
     final id = int.tryParse(medicineId);
     if (id == null) return;
-    await _client.rpc('increment_sales', params: {'medicine_id': id});
+    try {
+      await _client.rpc('increment_sales', params: {'medicine_id': id});
+    } catch (_) {
+      // The cart write is the real work and has already been sent.
+    }
   }
 }

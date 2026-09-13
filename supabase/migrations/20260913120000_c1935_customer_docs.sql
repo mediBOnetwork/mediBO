@@ -262,6 +262,11 @@ begin
 
   return jsonb_build_object(
     'ok', true,
+    -- WHERE the file goes is the backend's answer, exactly as it is for
+    -- kyc_my_panel: upload_prefix is the folder the storage policy admits for
+    -- THIS login, and it is auth.uid(), never the profile id.
+    'bucket', 'kyc-docs',
+    'upload_prefix', auth.uid()::text,
     'title', public._c('custdoc.title'),
     'step_label', public._c('custdoc.step_label'),
     'subtitle', public._c('custdoc.subtitle'),
@@ -880,6 +885,161 @@ begin
             message = coalesce(nullif(v_docs,''), nullif(v_gate->>'message',''), 'kyc_not_verified'),
             detail  = 'kyc_not_verified',
             hint    = 'kyc_gate: '||coalesce(v_gate->'state'->>'state','');
+  end if;
+  return new;
+end $function$;
+
+-- ── 13. The door ──────────────────────────────────────────────────────────
+-- Backend without a reachable frontend is half a feature. The admin editor
+-- lives on the Customers dashboard category, and the registry is what puts it
+-- there; shell_extra_routes.dart maps the route key to the screen.
+-- The registry's icon is a foreign key, so the icon exists before the tile does.
+insert into public.ui_icon(icon_key, label) values ('fact_check','Fact check')
+on conflict (icon_key) do nothing;
+
+insert into public.feature_registry(
+  feature_key, label, group_label, icon_key, route_key, sort_order, owner,
+  partner_eligible, default_access, is_active, category, surface, roles_allowed,
+  deep_link, description, canonical_key, test_entry, test_roles, test_steps,
+  test_expect, test_automatable)
+values (
+  'admin.customer_doc_types', 'Customer documents', 'Customers', 'fact_check',
+  'customer_doc_types', 60, 'medibo', false, 'none', true,
+  'home_customers', 'dashboard', array['admin','super_admin'],
+  '/admin/go/customer_doc_types',
+  'CMD #1935 — the document checklist every new customer is asked for. Required, collected and order are rows: a change is live on the customer''s next read, with no deploy.',
+  'admin.customer_doc_types', '/admin/go/customer_doc_types',
+  array['admin','super_admin'],
+  '[{"kind":"auth","role":"{role}"},{"kind":"goto","path":"/admin/go/customer_doc_types"},{"ms":6000,"kind":"settle"}]'::jsonb,
+  '{"key":"boot_status","kind":"visible","equals":"painted","source":"render_log"}'::jsonb,
+  true)
+on conflict (feature_key) do update
+  set is_active = true,
+      route_key = excluded.route_key,
+      deep_link = excluded.deep_link,
+      category  = excluded.category,
+      surface   = excluded.surface;
+
+-- ── 14. Approve on SUBMITTED, not only on verified ────────────────────────
+-- The spec is explicit: "account can be approved only when every required doc
+-- is submitted or verified". kyc_gate's approve branch demanded a fully
+-- VERIFIED state, so a customer who had uploaded everything still could not be
+-- approved until a reviewer had been through it — which is a different rule,
+-- and not this one. A pharmacy is now blocked exactly when a required document
+-- is missing, rejected or expired; a document waiting for review is not a
+-- blocker. Suppliers keep the stricter rule they already had.
+create or replace function public.kyc_gate(p_owner_kind text, p_owner_id uuid, p_action text default 'trade')
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path to 'public'
+as $function$
+declare
+  st jsonb := public.kyc_state(p_owner_kind, p_owner_id);
+  v_state text; v_blocked boolean; v_msg text; v_warn text; v_kind text; v_docs text := '';
+begin
+  if not coalesce((st->>'ok')::boolean, false) then
+    return jsonb_build_object('allowed', true, 'blocked', false, 'reason','unknown_owner',
+                              'title','', 'message','', 'warn', false, 'state', st);
+  end if;
+  v_state := st->>'state';
+  v_kind  := lower(btrim(coalesce(p_owner_kind,'')));
+
+  if lower(coalesce(p_action,'trade')) = 'approve' then
+    if v_kind = 'pharmacy' then
+      v_blocked := coalesce((st->>'enforce')::boolean, true)
+                   and v_state not in ('verified','pending');
+      begin v_docs := public.customer_docs_missing_sentence(p_owner_id);
+      exception when others then v_docs := ''; end;
+    else
+      v_blocked := coalesce((st->>'enforce')::boolean, true) and v_state <> 'verified';
+    end if;
+    v_msg := coalesce(nullif(v_docs,''), public._c('kyc_gate.approve_blocked'));
+  else
+    v_msg := case v_state
+               when 'pending'  then public._c('kyc_gate.block_pending')
+               when 'rejected' then public._c('kyc_gate.block_rejected')
+               when 'expired'  then public._c('kyc_gate.block_expired')
+               else public._c('kyc_gate.block_missing') end;
+    -- CMD #1815 — a PHARMACY is never blocked from trading by this gate.
+    -- Approval decides that, and approval already happened by hand.
+    v_blocked := (v_kind <> 'pharmacy')
+                 and coalesce((st->>'enforce')::boolean, true)
+                 and v_state <> 'verified'
+                 and not coalesce((st->>'in_grace')::boolean, false);
+  end if;
+
+  v_warn := case v_state
+              when 'verified' then ''
+              when 'pending'  then public._c('kyc_gate.warn_pending')
+              when 'rejected' then public._c('kyc_gate.warn_rejected')
+              when 'expired'  then public._c('kyc_gate.warn_expired')
+              else public._c('kyc_gate.warn_missing') end;
+
+  return jsonb_build_object(
+    'allowed', not v_blocked,
+    'blocked', v_blocked,
+    'warn',    (v_state <> 'verified'),
+    'reason',  case when v_blocked then 'kyc_'||v_state
+                    when v_state <> 'verified' then 'warn_'||v_state
+                    else 'none' end,
+    'title',   case when v_blocked then public._c('kyc_gate.block_title') else '' end,
+    'message', case when v_blocked then v_msg else '' end,
+    'warn_message', v_warn,
+    'action_label', public._c('kyc_gate.action_label'),
+    'action_route', public._c('kyc_gate.action_route'),
+    'grace_note', '',
+    'state', st);
+end $function$;
+
+-- ── 15. The OCR queue follows the table too ───────────────────────────────
+-- The enqueue trigger named the three legacy kinds, so a dl_20b or an fssai
+-- upload was never read at all — the autofill in §9 would have had nothing to
+-- apply. A document is queued when customer_doc_types says it carries a number
+-- (ocr_field), or when it is one of the legacy three. A skip row
+-- (status not_available, no file) is never queued: there is nothing to read.
+create or replace function public._kyc_ocr_enqueue()
+returns trigger
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+declare v_key text; v_enabled boolean; v_wanted boolean;
+begin
+  select ocr_enabled into v_enabled from kyc_verify_config where id = 1;
+
+  if coalesce(new.status,'') = 'not_available'
+     or btrim(coalesce(new.path,'')) = '' then
+    return new;
+  end if;
+
+  v_wanted := new.kind in ('drug_licence','gst_certificate','pan')
+              or exists (select 1 from public.customer_doc_types t
+                          where t.key = new.kind
+                            and btrim(coalesce(t.ocr_field,'')) <> '');
+  if not v_wanted then return new; end if;
+
+  insert into kyc_doc_extract(doc_id, owner_kind, owner_id, kind, status)
+  values (new.id, new.owner_kind, new.owner_id, new.kind,
+          case when coalesce(v_enabled,true) then 'queued' else 'skipped' end)
+  on conflict (doc_id) do nothing;
+
+  -- The deterministic half of verification does not wait for a picture: a wrong
+  -- checksum or a duplicate licence is refused the moment it is written.
+  begin perform public.kyc_verify_doc(new.id, 'upload'); exception when others then null; end;
+
+  if coalesce(v_enabled,true) then
+    begin
+      select decrypted_secret into v_key from vault.decrypted_secrets
+       where name = 'SERVICE_ROLE_KEY' limit 1;
+      perform net.http_post(
+        url := 'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/kyc-verify',
+        headers := jsonb_build_object('Content-Type','application/json',
+                     'Authorization', 'Bearer '||coalesce(v_key,'')),
+        body := jsonb_build_object('doc_id', new.id));
+    exception when others then null;
+    end;
   end if;
   return new;
 end $function$;

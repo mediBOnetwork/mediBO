@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../design_tokens.dart';
 import '../screens/admin/nav_registry_view.dart' show navIcon;
@@ -470,6 +471,105 @@ class ProfileUnreadDot extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// CMD #1935 — the "Complete registration" banner.
+///
+/// The registration flow is never force-opened on launch: that is what made
+/// closing it leave a blank screen, because it was the root of the stack. It
+/// is ADVERTISED instead — one persistent line on Home, for exactly as long as
+/// the backend says something is still owed.
+///
+/// It decides nothing. `customer_registration_banner()` answers whether to
+/// show at all, which sentence to print, what the button says and which
+/// address it opens; an account with nothing outstanding gets `show:false` and
+/// this widget renders a zero-height box.
+class RegistrationBanner extends StatefulWidget {
+  const RegistrationBanner({super.key});
+
+  /// Test seam — the same shape every screen in this app uses.
+  @visibleForTesting
+  static Future<dynamic> Function(String fn, Map<String, dynamic>? params)?
+      rpcTransport;
+
+  static Future<dynamic> rpc(String fn, [Map<String, dynamic>? params]) {
+    final t = rpcTransport;
+    if (t != null) return t(fn, params);
+    return Supabase.instance.client.rpc(fn, params: params);
+  }
+
+  @override
+  State<RegistrationBanner> createState() => _RegistrationBannerState();
+}
+
+class _RegistrationBannerState extends State<RegistrationBanner> {
+  Map<String, dynamic> _b = const {};
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final r = await RegistrationBanner.rpc('customer_registration_banner');
+      if (!mounted) return;
+      setState(() => _b = r is Map ? Map<String, dynamic>.from(r) : const {});
+      RenderLog.write('c1935_reg_banner', _b['show'] == true ? 1 : 0);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _b = const {});
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_b['show'] != true) return const SizedBox.shrink();
+    final title = (_b['title'] ?? '').toString();
+    final line = (_b['line'] ?? '').toString();
+    final cta = (_b['cta'] ?? '').toString();
+    final route = (_b['route'] ?? '').toString();
+    return Container(
+      width: double.infinity,
+      margin: EdgeInsets.fromLTRB(
+          Ds.space.x16, Ds.space.x8, Ds.space.x16, Ds.space.x4),
+      padding: EdgeInsets.all(Ds.space.x12),
+      decoration: BoxDecoration(
+        color: Ds.c.warningSoft,
+        borderRadius: Ds.r.rCard,
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (title.isNotEmpty) Text(title, style: Ds.t.bodyStrong),
+                if (line.isNotEmpty) ...[
+                  SizedBox(height: Ds.space.x4),
+                  Text(line, style: Ds.t.caption),
+                ],
+              ],
+            ),
+          ),
+          SizedBox(width: Ds.space.x12),
+          if (cta.isNotEmpty && route.isNotEmpty)
+            SizedBox(
+              height: Ds.touch.minTarget,
+              child: FilledButton(
+                onPressed: () async {
+                  await Navigator.of(context).pushNamed(route);
+                  if (mounted) await _load();
+                },
+                child: Text(cta),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

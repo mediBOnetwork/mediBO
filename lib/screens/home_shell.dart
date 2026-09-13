@@ -1847,6 +1847,7 @@ class _HomeShellState extends State<HomeShell> {
                 // used to sit here (and in the desktop header below) is
                 // deleted, not hidden. c455_banners proves zero render.
                 shellStaffChrome(isAdmin), // CHANGE #1017
+                if (!isAdmin) const RegistrationBanner(),
                 Builder(builder: (_) {
                   RenderLog.write('c455_banners', 0);
                   return const SizedBox.shrink();
@@ -1942,6 +1943,7 @@ class _HomeShellState extends State<HomeShell> {
                 ),
               // ── Search + chips: storefront only (index 0) ─────────────────
               shellStaffChrome(isAdmin), // CHANGE #1017
+              if (!isAdmin) const RegistrationBanner(),
               if (_index == 0) _shellSearchHeader(this),
               Expanded(
                 child: NotificationListener<ScrollNotification>(

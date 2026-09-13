@@ -481,21 +481,25 @@ class _LoginScreenState extends State<LoginScreen> {
       final s = await _api.session();
       if (!mounted) return;
       if (s['signed_in'] != true) return;
-      final route = landingRoute(s);
-      if (route.isEmpty) return;
-      _goTo(route);
+      final plan = landingPlan(s);
+      if (plan.home.isEmpty) return;
+      _goTo(plan.home, overlay: plan.overlay);
     } catch (_) {
       // No local error copy — the view keeps showing the last backend message.
     }
   }
 
-  void _goTo(String route) {
+  /// See the panel's field of the same name: onHome lands before onOverlay is
+  /// called, so the overlay address is read when the push actually happens.
+  String _pendingOverlay = '';
+
+  void _goTo(String route, {String overlay = ''}) {
     if (_navigated || !mounted) return;
     _navigated = true;
     try {
       RenderLog.write('c554_home_route', route);
     } catch (_) {}
-    unawaited(_landOn(route));
+    unawaited(_landOn(route, overlay: overlay));
   }
 
   /// CHANGE #566 — every login path reaches here after setSession and after
@@ -504,7 +508,7 @@ class _LoginScreenState extends State<LoginScreen> {
   /// fetched cart_state() for it; the WhatsApp OTP path sets the session in
   /// place with no reload, so without this the badge and the delivery bar
   /// landed empty until the cart screen was opened by hand.
-  Future<void> _landOn(String route) async {
+  Future<void> _landOn(String route, {String overlay = ''}) async {
     final cart = _cart;
     if (cart != null) {
       try {
@@ -517,12 +521,20 @@ class _LoginScreenState extends State<LoginScreen> {
       } catch (_) {}
     }
     if (!mounted) return;
-    _navigate(route);
+    _navigate(route, overlay);
   }
 
-  void _navigate(String route) {
+  /// CMD #1935 — Home is the ROOT, the form is a PUSH.
+  ///
+  /// The registration form used to replace the whole stack, so its own Close
+  /// popped the last route in the app and the user was left looking at a blank
+  /// screen. Home goes down first and the form goes on top of it; Close is a
+  /// pop, and the flow is advertised by the Home banner rather than forced.
+  void _navigate(String route, [String overlay = '']) {
     try {
       Navigator.of(context).pushNamedAndRemoveUntil(route, (r) => false);
+      final over = overlay.isNotEmpty ? overlay : _pendingOverlay;
+      if (over.isNotEmpty) Navigator.of(context).pushNamed(over);
     } catch (_) {
       // Navigation fallback only — never leave the user stranded on /login.
       if (Navigator.canPop(context)) {
@@ -541,7 +553,12 @@ class _LoginScreenState extends State<LoginScreen> {
             // LoginView owns its own full-height layout (wash band + thumb-reach
             // actions) and its own scrolling, so it must not be boxed here.
             // It goes first so the route back button paints above it.
-            Positioned.fill(child: LoginView(api: _api, onHome: _goTo)),
+            Positioned.fill(
+                child: LoginView(
+              api: _api,
+              onHome: (r) => _goTo(r),
+              onOverlay: (r) => _pendingOverlay = r,
+            )),
             Positioned(
               top: 8,
               left: 8,
@@ -638,9 +655,9 @@ class _LoginPanelViewState extends State<LoginPanelView> {
       final s = await _api.session();
       if (!mounted) return;
       if (s['signed_in'] != true) return;
-      final route = landingRoute(s);
-      if (route.isEmpty) return;
-      await _land(route);
+      final plan = landingPlan(s);
+      if (plan.home.isEmpty) return;
+      await _land(plan.home, overlay: plan.overlay);
     } catch (_) {
       // No local error copy — the view keeps showing the last backend message.
     }
@@ -649,7 +666,12 @@ class _LoginPanelViewState extends State<LoginPanelView> {
   /// Loads the signed-in cart (bounded), closes the panel, and navigates to the
   /// backend home_route — mirrors _LoginScreenState._landOn so WhatsApp/Google
   /// behave the same whether login is a full screen or this panel.
-  Future<void> _land(String route) async {
+  /// CMD #1935 — LoginView calls onHome first and onOverlay immediately after,
+  /// while _land is still awaiting the cart. The address is therefore read at
+  /// NAVIGATION time, not at call time.
+  String _pendingOverlay = '';
+
+  Future<void> _land(String route, {String overlay = ''}) async {
     if (_landed) return;
     _landed = true;
     final cart = _cart;
@@ -664,7 +686,11 @@ class _LoginPanelViewState extends State<LoginPanelView> {
     if (!mounted) return;
     widget.onClose();
     try {
+      // CMD #1935 — Home first, the registration form pushed on top of it, so
+      // Close pops back to Home instead of emptying the stack.
       Navigator.of(context).pushNamedAndRemoveUntil(route, (r) => false);
+      final over = overlay.isNotEmpty ? overlay : _pendingOverlay;
+      if (over.isNotEmpty) Navigator.of(context).pushNamed(over);
     } catch (_) {}
   }
 
@@ -673,8 +699,10 @@ class _LoginPanelViewState extends State<LoginPanelView> {
     // LoginView owns its own full-height layout (wash band + thumb-reach
     // actions). The panel gives it a bounded (panelW × viewport-height) box, so
     // it renders exactly like mobile, just within the 420px panel.
-    return LoginView(api: _api, onHome: (route) {
-      _land(route);
-    });
+    return LoginView(
+      api: _api,
+      onHome: (route) => _land(route),
+      onOverlay: (route) => _pendingOverlay = route,
+    );
   }
 }

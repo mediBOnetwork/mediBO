@@ -40,11 +40,18 @@ class BusinessDetailsScreen extends StatefulWidget {
   final String phone;
   final String email;
 
+  /// CMD #1935 — what happens after a successful save. The form used to pop
+  /// unconditionally, which is right when it was opened from a list but wrong
+  /// during signup: step 2 (the document checklist) follows it. Null keeps the
+  /// old behaviour, so every existing caller is unchanged.
+  final VoidCallback? onSaved;
+
   const BusinessDetailsScreen({
     super.key,
     required this.userId,
     required this.phone,
     this.email = '',
+    this.onSaved,
   });
 
   @override
@@ -229,7 +236,10 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
         case _Role.company: await _saveCompany(); break;
         case _Role.deliveryPartner: await _saveDeliveryPartner(); break;
       }
-      if (mounted) Navigator.of(context).pop();
+      if (mounted) {
+        final after = widget.onSaved;
+        if (after != null) { after(); } else { Navigator.of(context).pop(); }
+      }
     } on PostgrestException catch (e) {
       if (!mounted) return;
       if (e.code == '23505') {

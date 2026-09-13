@@ -59,7 +59,22 @@ Return this exact JSON shape:
 Return this exact JSON shape:
 {"pan":"","name":"","father_name":"","dob":"","confidence":"high|medium|low"}
 - pan: the 10-character permanent account number exactly as printed.` + RULES,
+
+  fssai: `This image is an Indian FSSAI licence/registration certificate.
+Return this exact JSON shape:
+{"fssai_number":"","business_name":"","address":"","valid_from":"","valid_to":"","confidence":"high|medium|low"}
+- fssai_number: the 14-digit licence/registration number exactly as printed.
+- business_name: the name of the food business operator, verbatim.
+- valid_from / valid_to: ISO yyyy-mm-dd, or "" if not printed.` + RULES,
 }
+
+// CMD #1935 — customer_doc_types renamed the documents a customer uploads
+// (dl_20b, dl_21b, gst) without changing what is printed on any of them, so
+// each new key reads the SAME prompt as the kind it is. Aliases rather than
+// copies: one prompt per document, and a new key is one line here.
+PROMPTS.dl_20b = PROMPTS.drug_licence
+PROMPTS.dl_21b = PROMPTS.drug_licence
+PROMPTS.gst = PROMPTS.gst_certificate
 
 function b64(bytes: Uint8Array): string {
   let out = ''

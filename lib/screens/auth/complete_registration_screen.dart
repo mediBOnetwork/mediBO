@@ -65,6 +65,9 @@ class SignupGate {
 class CompleteRegistrationScreen extends StatefulWidget {
   const CompleteRegistrationScreen({super.key});
 
+  /// Step 2. Named here so the two screens of one flow agree on one address.
+  static const String docsRoute = '/customer/documents';
+
   @override
   State<CompleteRegistrationScreen> createState() =>
       _CompleteRegistrationScreenState();
@@ -128,6 +131,12 @@ class _CompleteRegistrationScreenState
         userId: gate.userId,
         phone: gate.phone,
         email: gate.email,
+        // CMD #1935 — step 1 is the form, step 2 is the documents. Saving does
+        // not close the flow, it advances it; Close (the form's own X) still
+        // pops, and after CMD #1935 that pop lands on Home rather than on a
+        // blank screen, because this route is pushed ON TOP of home_route.
+        onSaved: () => Navigator.of(context)
+            .pushReplacementNamed(CompleteRegistrationScreen.docsRoute),
       );
     }
 

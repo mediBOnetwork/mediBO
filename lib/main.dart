@@ -23,6 +23,7 @@ import 'url_sync.dart' show captureInitialPath;
 import 'services/crash_reporting.dart'; // CHANGE #473
 import 'services/version_watcher.dart';
 import 'utils/render_log.dart';
+import 'utils/responsive_audit.dart';
 import 'view_as_state.dart';
 import 'models/cart_model.dart';
 import 'models/order_hours_model.dart';
@@ -289,10 +290,24 @@ void main() {
     WidgetsFlutterBinding.ensureInitialized();
 
     // Flutter framework errors: log and swallow — never let them crash the boot.
+    // CMD #1950 — MOBILE-FIRST. The post-deploy responsive sweep opens each top
+    // screen with ?responsive_audit=1&min_touch=<from build_rules> and reads the
+    // audit back out of the render log. Inert for every real visitor.
+    try {
+      ResponsiveAudit.configureFromQuery(Uri.base.queryParameters);
+    } catch (_) {}
+
     FlutterError.onError = (details) {
       try {
         final msg = details.exceptionAsString();
         RenderLog.write('flutter_error', msg.length > 120 ? msg.substring(0, 120) : msg);
+        // CMD #1950 — a layout that overflows on a phone is the one failure a
+        // canvas app cannot be photographed into admitting. Flutter names it
+        // ("A RenderFlex overflowed by 23 pixels on the right"), so it is
+        // counted here and the post-deploy responsive sweep reads the count.
+        if (msg.contains('overflowed')) {
+          RenderLog.noteOverflow(msg);
+        }
       } catch (_) {}
       // CHANGE #473 — the same error, off the device: to Sentry when a DSN
       // exists, to the backend crash queue when it does not. Swallowed as
@@ -738,7 +753,8 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
             theme: buildTheme(),
             scrollBehavior: const SmoothScrollBehavior(),
             // Belt-and-suspenders: clear any stray text decoration on Flutter web.
-            builder: (context, child) => DefaultTextStyle.merge(
+            builder: (context, child) => _NoteViewport(
+              child: DefaultTextStyle.merge(
               style: const TextStyle(decoration: TextDecoration.none, decorationColor: Color(0x00000000)),
               // CHANGE #286 — the slim update bar lives here, above every
               // route, so it can sit over the bottom nav and the floating cart
@@ -760,6 +776,7 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                   ]),
                 ),
               ),
+            ),
             ),
             home: _AppRoot(auth: _auth),
             // Public inquiry form — no auth required, handles /inquiry/<token>
@@ -1575,6 +1592,31 @@ class _SuperOnly extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (!UserState.of(context).isSuperAdmin) return HomeShell();
+    return child;
+  }
+}
+
+/// CMD #1950 — MOBILE-FIRST: the app tells the render log which viewport it is
+/// painting at. 99% of mediBO users are on phones, so the post-deploy
+/// responsive sweep loads every top screen at 320/360/412/480 px and reads
+/// `viewport_w` + `overflow_errors` back out of the render log. A canvas app
+/// cannot be measured from outside; this is how it measures itself.
+///
+/// It renders nothing of its own and reflows nothing — it reads the MediaQuery
+/// its parent already built and writes two numbers.
+class _NoteViewport extends StatelessWidget {
+  const _NoteViewport({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    // Never let diagnostics be the thing that breaks a boot (boot resilience).
+    try {
+      RenderLog.noteViewport(size.width.round(), size.height.round());
+      ResponsiveAudit.schedule();
+    } catch (_) {}
     return child;
   }
 }

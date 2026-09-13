@@ -662,6 +662,7 @@ void _shellFilterPick(_HomeShellState st, SearchFilterGroup g, SearchOption o) {
 }
 
 Widget _shellSearchHeader(_HomeShellState s, {Widget? trailing}) => SearchChrome(
+      surface: 'home',
       controller: s._searchCtrl,
       focusNode: s._searchFocus,
       payload: s._searchPayload,

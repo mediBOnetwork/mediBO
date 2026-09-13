@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../data/medicine_repository.dart';
 import '../design_tokens.dart';
 import '../models/search_page.dart';
+import '../utils/render_log.dart';
 import 'product_row_card.dart';
 import 'scan_mic_search_controls.dart';
 import 'search_typeahead.dart';
@@ -540,6 +541,7 @@ class SearchResultsView extends StatelessWidget {
     this.loadingMore = false,
     this.shrinkWrap = true,
     this.physics,
+    this.surface = 'unknown',
   });
 
   final SearchPagePayload payload;
@@ -550,8 +552,15 @@ class SearchResultsView extends StatelessWidget {
   final bool shrinkWrap;
   final ScrollPhysics? physics;
 
+  /// CMD #1906 — which screen mounted this ONE surface. It exists only so the
+  /// render-log can PROVE the shared-surface claim on the live site: a Flutter
+  /// canvas cannot be read by Puppeteer and a string in the JS bundle only
+  /// proves the code compiled, never that the widget rendered.
+  final String surface;
+
   @override
   Widget build(BuildContext context) {
+    RenderLog.write('c1906_rows_$surface', payload.items.length);
     if (payload.items.isEmpty) {
       return SearchEmptyView(empty: payload.empty, onAction: onEmptyAction);
     }
@@ -704,6 +713,7 @@ class SearchChrome extends StatefulWidget {
     this.onRecentCleared,
     this.repo,
     this.onPickSuggestion,
+    this.surface = 'unknown',
   });
 
   /// The live `search_page()` answer, when the screen has one. Its filter
@@ -729,6 +739,9 @@ class SearchChrome extends StatefulWidget {
   /// Catalogue and the shell pass their own router here, so there is exactly
   /// one panel and one chip in the app.
   final ValueChanged<SearchSuggestion>? onPickSuggestion;
+
+  /// CMD #1906 — which screen mounted this ONE header. See [SearchResultsView.surface].
+  final String surface;
 
   @override
   State<SearchChrome> createState() => _SearchChromeState();
@@ -823,13 +836,29 @@ class _SearchChromeState extends State<SearchChrome> {
   /// Every keystroke: the suggestion panel asks the backend, and nothing else
   /// happens until the shopper submits or taps a suggestion.
   void _changed(String v) {
-    _suggest.onQueryChanged(v);
+    if (_suggestOn) {
+      _suggest.onQueryChanged(v);
+    } else {
+      _suggest.close();
+    }
     if (v.trim().isEmpty && widget.hasQuery) widget.onClear();
   }
+
+  /// CMD #1906, Om's call on 2026-09-13 — the typeahead panel is the
+  /// BACKEND's to offer. `search_page()` carries `suggest_enabled` from
+  /// app_settings.search_suggest_enabled, which is off: on Home the panel was
+  /// the only thing a keystroke produced, so typing a brand drew one card
+  /// offering to search for the word already in the box while the page behind
+  /// it sat unchanged. Nothing here is deleted — the panel, the chip and
+  /// #1905's navigation all still work — so turning it back on anywhere is an
+  /// UPDATE, never a deploy.
+  bool get _suggestOn =>
+      (widget.payload ?? _chrome)?.suggestEnabled ?? false;
 
   @override
   Widget build(BuildContext context) {
     final p = widget.payload ?? _chrome;
+    RenderLog.write('c1906_chrome_${widget.surface}', 1);
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -851,7 +880,7 @@ class _SearchChromeState extends State<SearchChrome> {
         // Hindi word is the salt and not the word.
         AnimatedBuilder(
           animation: _suggest,
-          builder: (_, _) => _suggest.isOpen
+          builder: (_, _) => _suggest.isOpen && _suggestOn
               ? Padding(
                   padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
                   child: SearchSuggestions(

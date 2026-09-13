@@ -23,9 +23,31 @@ if [ -z "$COMMIT" ]; then
   COMMIT=$(python3 -c "import json,sys; print(json.load(open('build/web/version.json'))['commit'])" 2>/dev/null || true)
 fi
 
-# Fall back to current git HEAD.
+# CMD #1906 — a PLACEHOLDER is not a commit. web/version.json is committed as
+# {"commit":"pending",...} and `flutter build web` copies web/ -> build/web/
+# verbatim, so build/web/version.json reads "pending" for the whole build, until
+# deploy.sh stamps it just before the upload. Every deploy shares ONE worktree
+# (~/medibo-direct): when #1906's lock renewal was refused mid-build the next
+# command started `flutter clean` + build in that same tree, and #1906's verify
+# then read ITS unstamped version.json. verify_live.sh asked the edge for
+# main.pending.dart.js, got the 71 kB SPA shell six times, and exited 3
+# ("NOT THIS TREE") on a deploy it had ALREADY announced healthy on 6269dc80 —
+# failing a verified-live CHANGE #1331 and blocking its promotion.
+# A commit is 7-40 hex characters or it is not a commit: anything else (pending,
+# unknown, a half-written file) falls through to git HEAD, exactly as an absent
+# value already does.
+if ! printf '%s' "$COMMIT" | grep -qE '^[0-9a-f]{7,40}$'; then
+  [ -n "$COMMIT" ] && echo "   note: ignoring non-commit '$COMMIT' from build/web/version.json (placeholder or half-built tree)"
+  COMMIT=""
+fi
+
+# Fall back to current git HEAD — ABBREVIATED, because the bundle is
+# fingerprinted with deploy.sh's `SHORT=$(git rev-parse --short HEAD)`. This
+# fallback used the full 40-char sha, so main.<40 chars>.dart.js was a URL that
+# had never been uploaded and the fallback could not pass on ANY tree, not even
+# the deploy worktree whose HEAD really is live (CMD #1906).
 if [ -z "$COMMIT" ]; then
-  COMMIT=$(git rev-parse HEAD 2>/dev/null || true)
+  COMMIT=$(git rev-parse --short HEAD 2>/dev/null || true)
 fi
 
 if [ -z "$COMMIT" ]; then

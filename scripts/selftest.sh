@@ -138,18 +138,58 @@ if [ -f "$RECEIPT" ]; then
 fi
 
 # ── PHASE 1: the protected regression suite ────────────────────────────────
+#
+# CMD #1974 — THE 900 s WALL WAS MANUFACTURING RED SUITES.
+# This box runs a worker POOL, and nothing stopped four preps from running
+# `flutter test test/protected/` at the same time. At load 13 with no swap a
+# 5-minute suite stretches to 15, `timeout 900` then killed flutter_tools
+# mid-stream, and the harness died printing
+#   loading <whatever file was next> [E]
+#   Bad state: Cannot close sink while adding stream
+#       package:flutter_tools/src/test/flutter_platform.dart  _startTest
+# — so the gate reported a REGRESSION, naming an innocent test file, on trees
+# whose only change was one SQL migration. #1947 died on
+# customer360_stock_test.dart at 14:29 and #1974 on wa_campaigns_screen_test.dart
+# at 14:52: different files, same wall, and both files pass on their own.
+#
+# Three things, in order of how much they matter:
+#   1. QUEUE, don't collide — the suite takes a fleet-wide flock, so the
+#      contention that tripled the runtime does not happen. The wait is bounded
+#      (`-w`) and failing to get the lock is NOT fatal: it runs anyway, because a
+#      gate that can be blocked by a stale lock file has stopped being a gate.
+#   2. A wall a contended run still fits inside.
+#   3. Say TIMED OUT when it times out. A timeout is not a regression, and the
+#      file named in the output is the victim, not the cause.
+SELFTEST_PROTECTED_TIMEOUT_S="${SELFTEST_PROTECTED_TIMEOUT_S:-1500}"
+SELFTEST_SEM_WAIT_S="${SELFTEST_SEM_WAIT_S:-1200}"
+SELFTEST_SEM="${SELFTEST_SEM:-$HOME/mediBO-runner/.selftest.sem}"
+
 rule; say "PHASE 1/4 — protected suite (flutter test test/protected/)"
 if [ "$REUSED" = "1" ]; then
   PROTECTED_OK=reused
   say "protected: REUSED — green on this exact tree, see the receipt above"
-elif timeout 900 flutter test test/protected/ >"$LOG" 2>&1; then
-  PROTECTED_OK=passed
-  say "protected: PASSED — $(grep -oE '\+[0-9]+' "$LOG" | tail -1 | tr -d '+') tests"
 else
-  PROTECTED_OK=failed
-  FAILED_PHASES+=("protected")
-  say "protected: FAILED"
-  tail -40 "$LOG"
+  _prc=0
+  _sem_held=0
+  ( flock -w "$SELFTEST_SEM_WAIT_S" 9 && echo "selftest: suite semaphore held" \
+      || echo "selftest: suite semaphore busy for ${SELFTEST_SEM_WAIT_S}s — running anyway"
+    timeout "$SELFTEST_PROTECTED_TIMEOUT_S" flutter test test/protected/
+  ) >"$LOG" 2>&1 9>"$SELFTEST_SEM" || _prc=$?
+  grep -q 'semaphore held' "$LOG" && _sem_held=1
+  if [ "$_prc" = 0 ]; then
+    PROTECTED_OK=passed
+    say "protected: PASSED — $(grep -oE '\+[0-9]+' "$LOG" | tail -1 | tr -d '+') tests$([ "$_sem_held" = 1 ] || echo ' (semaphore not held — the box was busy)')"
+  elif [ "$_prc" = 124 ]; then
+    PROTECTED_OK=failed
+    FAILED_PHASES+=("protected")
+    say "protected: TIMED OUT after ${SELFTEST_PROTECTED_TIMEOUT_S}s — a contended box, NOT a regression. The file named below is the one that was loading when the harness was killed; it is the victim. Re-run the deploy."
+    tail -40 "$LOG"
+  else
+    PROTECTED_OK=failed
+    FAILED_PHASES+=("protected")
+    say "protected: FAILED"
+    tail -40 "$LOG"
+  fi
 fi
 
 # ── PHASE 2: this command's own focused test(s) ────────────────────────────

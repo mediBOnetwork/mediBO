@@ -720,6 +720,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
           //    chips in the backend's order, and the shared recent strip.
           //    There is no second search box in this app any more.
           SearchChrome(
+            surface: 'catalogue',
             controller: _searchCtrl,
             focusNode: _searchFocus,
             payload: _searchPayload,
@@ -832,6 +833,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
     return SingleChildScrollView(
       controller: _scroll,
       child: SearchResultsView(
+        surface: 'catalogue',
         payload: p,
         loadingMore: _searchLoadingMore,
         onOpenProduct: (id) => Navigator.of(context).pushNamed('/product/$id'),

@@ -247,6 +247,15 @@ class SearchPagePayload {
   final SearchPaging paging;
   final List<Product> items;
 
+  /// CMD #1906 — does the header offer the typeahead panel at all?
+  ///
+  /// It arrives from `search_page()` (app_settings.search_suggest_enabled), so
+  /// turning the panel back on is an UPDATE and never a deploy. Om turned it
+  /// OFF on 2026-09-13: on Home the panel was the only thing a keystroke did,
+  /// so a shopper who typed a brand saw one card offering to search for what
+  /// they had already typed, with the page behind it unchanged.
+  final bool suggestEnabled;
+
   const SearchPagePayload({
     required this.ok,
     required this.query,
@@ -260,6 +269,7 @@ class SearchPagePayload {
     required this.recent,
     required this.paging,
     required this.items,
+    this.suggestEnabled = false,
   });
 
   static const failed = SearchPagePayload(
@@ -297,6 +307,7 @@ class SearchPagePayload {
             .whereType<Map>()
             .map((r) => Product.fromHomeCard(Map<String, dynamic>.from(r)))
             .toList(growable: false),
+        suggestEnabled: m['suggest_enabled'] == true,
       );
 
   /// The same payload with another page's rows appended. Used by "Load more":
@@ -315,6 +326,7 @@ class SearchPagePayload {
         recent: next.recent,
         paging: next.paging,
         items: [...items, ...next.items],
+        suggestEnabled: next.suggestEnabled,
       );
 
   /// The same payload with the recent strip emptied. "Clear" is answered by
@@ -333,6 +345,7 @@ class SearchPagePayload {
         recent: SearchRecent.empty,
         paging: paging,
         items: items,
+        suggestEnabled: suggestEnabled,
       );
 }
 

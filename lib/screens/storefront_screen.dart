@@ -830,6 +830,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       return _InlineError(onRetry: _resetAndLoad);
     }
     return SearchResultsView(
+      surface: 'home',
       payload: p,
       loadingMore: _searchLoadingMore,
       onOpenProduct: (id) =>

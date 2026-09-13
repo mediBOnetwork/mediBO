@@ -42,6 +42,7 @@ import 'package:pharma_b2b/screens/catalogue_screen.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/widgets/product_row_card.dart';
 import 'package:pharma_b2b/widgets/search_surface.dart';
+import 'package:pharma_b2b/widgets/search_typeahead.dart';
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
@@ -76,9 +77,11 @@ Map<String, dynamic> _searchPage({
   bool hasMore = false,
   Map<String, dynamic>? recent,
   Map<String, dynamic>? empty,
+  bool suggestEnabled = false,
 }) =>
     {
       'ok': true,
+      'suggest_enabled': suggestEnabled,
       'query': 'dolo',
       'has_query': true,
       'placeholder': 'Search a medicine, salt or company',
@@ -384,6 +387,98 @@ void main() {
 
       expect(reported, isNotNull);
       expect(reported!.query, 'dolo');
+    });
+  });
+
+  // ── 6. the typeahead panel is the BACKEND's to offer ──────────────────────
+
+  /// CMD #1906, Om's call on 2026-09-13, from a phone screenshot of Home:
+  /// "dont give this suggestion". He had typed a brand and the ONLY thing the
+  /// keystrokes produced was one card offering to search for the word already
+  /// in the box — the page behind it had not moved.
+  ///
+  /// Nothing was deleted for that. The panel, the chip and #1905's suggestion
+  /// navigation all still work; what changed is that the panel is only OFFERED
+  /// when `search_page()` says so, via app_settings.search_suggest_enabled.
+  /// That is the difference between a preference Om can change with an UPDATE
+  /// and one that needs a deploy, and this test is what keeps it that way:
+  /// the same keystrokes, the same stubbed `search_suggest()` answer, and the
+  /// panel appears or does not appear PURELY on the backend's flag.
+  group("6 — the typeahead panel is the backend's to offer", () {
+    setUp(() {
+      SearchSuggestController.rpcTransport = (fn, params) async => {
+            'ready': true,
+            'clear_label': 'Clear',
+            'groups': [
+              {
+                'key': 'products',
+                'label': 'Products',
+                'items': [
+                  {
+                    'label': 'Monticope Tablet',
+                    'sub': 'by MANKIND PHARMA LTD',
+                    'meta': '3 variants',
+                    'q': 'Monticope',
+                  },
+                ],
+              },
+            ],
+          };
+    });
+    tearDown(() => SearchSuggestController.rpcTransport = null);
+
+    Future<void> typeInto(WidgetTester tester) async {
+      await tester.enterText(find.byType(TextField), 'monticope');
+      // Past the controller's own 180 ms debounce, then let the future land.
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump();
+      await tester.pump();
+    }
+
+    testWidgets('suggest_enabled:false — typing draws no panel', (tester) async {
+      await _pump(
+        tester,
+        answers: {
+          'catalogue_home': _catHome(),
+          'search_page': _searchPage(),
+        },
+        route: const CatalogueRoute(
+            search: SearchQueryState(query: 'dolo'), query: 'dolo'),
+      );
+
+      await typeInto(tester);
+
+      expect(find.byType(SearchSuggestions), findsNothing);
+      expect(find.text('Monticope Tablet'), findsNothing);
+    });
+
+    testWidgets('suggest_enabled:true — the same keystrokes draw it',
+        (tester) async {
+      await _pump(
+        tester,
+        answers: {
+          'catalogue_home': _catHome(),
+          'search_page': _searchPage(suggestEnabled: true),
+        },
+        route: const CatalogueRoute(
+            search: SearchQueryState(query: 'dolo'), query: 'dolo'),
+      );
+
+      await typeInto(tester);
+
+      expect(find.byType(SearchSuggestions), findsOneWidget);
+      expect(find.text('Monticope Tablet'), findsOneWidget);
+    });
+
+    test('the flag is the payload\'s, and absent means off', () {
+      expect(SearchPagePayload.fromMap(_searchPage()).suggestEnabled, isFalse);
+      expect(
+          SearchPagePayload.fromMap(_searchPage(suggestEnabled: true))
+              .suggestEnabled,
+          isTrue);
+      // A backend that has not been taught the key yet must not light it up.
+      expect(
+          SearchPagePayload.fromMap(const {'ok': true}).suggestEnabled, isFalse);
     });
   });
 }

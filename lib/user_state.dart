@@ -84,6 +84,10 @@ class AuthNotifier extends ChangeNotifier {
   /// Display name with the backend's own fallback ('My Account'), so no Dart
   /// string is invented when a name is missing.
   String get headerTitle => _session.headerTitle;
+
+  /// CMD #1947 — the backend's short staff name and the full login address.
+  String get headerShort => _session.headerShort;
+  String get headerEmail => _session.headerEmail;
   String get displayName => _session.displayName;
   String get statusLabel => _session.statusLabel;
 

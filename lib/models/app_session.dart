@@ -191,6 +191,8 @@ class AppSession {
     this.partnerZoneLabel = '',
     this.surfaceName = '',
     this.headerTitle = '',
+    this.headerShort = '',
+    this.headerEmail = '',
     this.statusLabel = '',
     this.supplierId = '',
     this.supplierName = '',
@@ -281,6 +283,16 @@ class AppSession {
   final String surfaceName;
 
   final String headerTitle;
+
+  /// CMD #1947 — my_session().header_short: the short staff name the web user
+  /// menu prints ("Om"). Decided entirely in the backend
+  /// (staff_short_name()) — an override row, else the profile name's first
+  /// word, else the email's local part, already truncated.
+  final String headerShort;
+
+  /// CMD #1947 — my_session().header_email: the full login address, shown in
+  /// the dropdown now that the pill carries only the short name.
+  final String headerEmail;
   final String statusLabel;
   final String supplierId;
   final String supplierName;
@@ -386,6 +398,8 @@ class AppSession {
       homeLabel: s('home_label'),
       surfaceName: s('surface'),
       headerTitle: s('header_title'),
+      headerShort: s('header_short'),
+      headerEmail: s('header_email'),
       statusLabel: s('status_label'),
       supplierId: s('supplier_id'),
       supplierName: s('supplier_name'),

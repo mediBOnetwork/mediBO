@@ -24,6 +24,7 @@ import '../utils/responsive.dart';
 import '../widgets/animations.dart';
 import '../widgets/cart_pill.dart'; // C636
 import '../widgets/notification_bell.dart'; // CHANGE #298
+import '../widgets/scope_chip.dart'; // CMD #1947 — the header date·zone chip
 import '../services/push_service.dart'; // CHANGE #298
 import 'admin/admin_push_screen.dart'; // CHANGE #298
 import 'admin/catalogue_health_screen.dart'; // CHANGE #460

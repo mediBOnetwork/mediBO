@@ -517,8 +517,21 @@ class _DesktopProfileButton extends StatelessWidget {
     // and one place it comes from.
     final displayName = auth.headerTitle;
     final initial = displayName.isNotEmpty ? displayName[0].toUpperCase() : '?';
-    final shortName =
-        displayName.length > 16 ? '${displayName.substring(0, 14)}…' : displayName;
+    // CMD #1947 — the pill used to print "Hello masteromprakashsahu@gmail…",
+    // an email cut mid-word, and it ate the width the date·zone chip now needs.
+    // my_session() carries header_short (the backend's own short name: an
+    // override row, else the profile name's first word, else the email's local
+    // part, truncated THERE) and header_email. The pill prints the short name;
+    // the full address moved into the dropdown's first row. Nothing about
+    // either string is decided here — the fallback is the old client-side trim
+    // only for a session that predates the field.
+    final shortName = auth.headerShort.isNotEmpty
+        ? auth.headerShort
+        : (displayName.length > 16
+            ? '${displayName.substring(0, 14)}…'
+            : displayName);
+    final fullEmail =
+        auth.headerEmail.isNotEmpty ? auth.headerEmail : displayName;
     final hasAdminNav = onAdminNav != null;
 
     return ConstrainedBox(
@@ -533,6 +546,13 @@ class _DesktopProfileButton extends StatelessWidget {
           RenderLog.write('c206_dropdown_bills', 1);
         }
         return [
+        // CMD #1947 — the address the pill no longer shows, in full, first.
+        if (fullEmail.isNotEmpty)
+          PopupMenuItem<String>(
+            enabled: false,
+            child: Text(fullEmail, style: Ds.t.caption),
+          ),
+        if (fullEmail.isNotEmpty) const PopupMenuDivider(),
         for (final row in NavProfileMenu.items.value)
           if ((row['feature_key'] ?? '') != 'identity.logout')
             PopupMenuItem(
@@ -629,7 +649,7 @@ class _DesktopProfileButton extends StatelessWidget {
             const SizedBox(width: 9),
             Flexible(
               child: Text(
-                cf('home_shell.hello_a', {'a': shortName}),
+                shortName,
                 style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,

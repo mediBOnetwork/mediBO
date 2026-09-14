@@ -725,12 +725,24 @@ class _SearchChromeState extends State<SearchChrome> {
   /// is the one thing this widget watches.
   bool _focused = false;
 
+  /// One idle-chrome fetch in flight at a time, and never a second one once
+  /// an answer has landed.
+  bool _chromeAsked = false;
+
   @override
   void initState() {
     super.initState();
     _focused = widget.focusNode.hasFocus;
     widget.focusNode.addListener(_onFocus);
-    _loadChrome();
+    _maybeLoadChrome();
+  }
+
+  @override
+  void didUpdateWidget(covariant SearchChrome old) {
+    super.didUpdateWidget(old);
+    // The shopper cleared the box: the idle chrome is wanted again, and this
+    // is the first moment it can be asked for without racing the live search.
+    if (old.hasQuery && !widget.hasQuery) _maybeLoadChrome();
   }
 
   @override
@@ -743,6 +755,19 @@ class _SearchChromeState extends State<SearchChrome> {
   void _onFocus() {
     final f = widget.focusNode.hasFocus;
     if (f != _focused && mounted) setState(() => _focused = f);
+    if (f) _maybeLoadChrome();
+  }
+
+  /// The idle chrome is `search_page()` with NOTHING typed, so it is asked for
+  /// only while the host is not already showing a search. Firing it next to a
+  /// live query put a blank `p_q` on the wire AFTER the real one — the screen
+  /// still rendered its own payload, but the last thing the backend was asked
+  /// was the wrong question. It is asked again the moment the box is focused
+  /// or the query is cleared, which is when the rail is actually wanted.
+  void _maybeLoadChrome() {
+    if (_chromeAsked || widget.hasQuery) return;
+    _chromeAsked = true;
+    _loadChrome();
   }
 
   /// CHANGE #497's instant chip row, carried over — with CMD #2010's fix to
@@ -769,6 +794,8 @@ class _SearchChromeState extends State<SearchChrome> {
       setState(() => _chrome = p);
     } catch (_) {
       // Whatever the cache painted stays; never chips this file invented.
+      // A failed refresh may be asked again on the next focus.
+      _chromeAsked = false;
     }
   }
 

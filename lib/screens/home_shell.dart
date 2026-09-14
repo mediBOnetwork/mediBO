@@ -1459,18 +1459,6 @@ class _HomeShellState extends State<HomeShell> {
     setState(() => _scrollTrigger++);
   }
 
-  /// Open the Catalogue tab on a scope the shared header picked. The switch
-  /// that decides WHICH scope lives with the header it was tapped in, in
-  /// shell_header_chrome.dart; this is only the state move and the URL.
-  void _openCatalogueScope(CatalogueRoute r) {
-    setState(() {
-      _index = 12;
-      _cartOpen = false;
-      _catScope = r;
-    });
-    pushUrl(r.url);
-  }
-
   void _selectCategory(String c) {
     setState(() {
       _category = c;

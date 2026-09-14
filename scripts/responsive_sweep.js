@@ -23,6 +23,9 @@
 //   node scripts/responsive_sweep.js [--target https://medibo.in] [--quiet]
 
 const { chromium } = require('playwright');
+// CMD #2012 — the rule for what an unreadable combination means lives in its
+// own module so a test can hold it down without opening a browser.
+const { classifyUnmeasured, previousUnmeasured } = require('./lib/responsive_verdict');
 
 const argVal = (flag, dflt) => {
   const i = process.argv.indexOf(flag);
@@ -193,7 +196,7 @@ async function measure(page, nav, budgetMs) {
 // in time would otherwise turn the whole guard red, and a screen that is
 // genuinely broken fails every attempt. Nothing else is retried — an overflow
 // or an undersized tap target is a number the app reported, and it stands.
-async function probe(browser, label, route, width, minTouch) {
+async function probe(browser, label, route, width, minTouch, budgetMs) {
   const ctx = await browser.newContext({
     viewport: { width, height: 900 },
     isMobile: width < 900,
@@ -215,12 +218,12 @@ async function probe(browser, label, route, width, minTouch) {
     const sep = route.includes('?') ? '&' : '?';
     await page.goto(`${TARGET}${route}${sep}responsive_audit=1&min_touch=${minTouch}`,
       { waitUntil: 'domcontentloaded', timeout: 45000 });
-    log = await measure(page, nav, COMBO_BUDGET_MS);
+    log = await measure(page, nav, Math.max(5000, Number(budgetMs) || COMBO_BUDGET_MS));
   } catch (e) {
     err = String(e && e.message).slice(0, 80);
     if (NAV_RACE.test(String(e && e.message))) {
       try { await page.waitForLoadState('domcontentloaded', { timeout: 3000 }); } catch (_) {}
-      try { log = await measure(page, nav, Math.min(COMBO_BUDGET_MS, 20000)); } catch (_) {}
+      try { log = await measure(page, nav, Math.min(Number(budgetMs) || COMBO_BUDGET_MS, 20000)); } catch (_) {}
     }
   }
   let url = null;
@@ -253,6 +256,9 @@ async function probe(browser, label, route, width, minTouch) {
   const failures = [];
   const seen = [];
   const skipped = [];
+  const unmeasured = [];            // attempted, answered with no render log
+  const tried = {};                 // label -> combinations started
+  const dead  = {};                 // label -> combinations that answered nothing
   const browser = await chromium.launch({ args: ['--no-sandbox', '--disable-gpu'] });
 
   try {
@@ -260,16 +266,29 @@ async function probe(browser, label, route, width, minTouch) {
       for (const [label, route] of SCREENS) {
         if (!wanted(label, width)) continue;
         if (Date.now() >= deadline) { skipped.push(`${label} @${width}px`); continue; }
+        tried[label] = (tried[label] || 0) + 1;
         let log = null, err = null, finalUrl = null, navCount = 0;
         for (let attempt = 1; attempt <= COMBO_ATTEMPTS && !log; attempt++) {
-          const shot = await probe(browser, label, route, width, minTouch);
+          // CMD #2012 — a combination that will not answer must never eat the
+          // tail of the sweep. The run that filed #2012 spent both attempts
+          // (120 s) on storefront home @412px and two combinations at 768px
+          // were never measured at all. A probe gets what is left of the
+          // sweep's own budget, and a retry only happens with room for it.
+          const left = deadline - Date.now();
+          if (left <= 0) break;
+          const shot = await probe(browser, label, route, width, minTouch,
+                                   Math.min(COMBO_BUDGET_MS, left));
           log = shot.log; err = shot.err; finalUrl = shot.url; navCount = shot.navs;
           if (!log && attempt < COMBO_ATTEMPTS) {
+            if (deadline - Date.now() < COMBO_BUDGET_MS) break;
             say(`  ${String(width).padStart(4)}px  ${label.padEnd(16)} no render log — attempt ${attempt + 1}`);
           }
         }
         if (!log) {
-          failures.push(`${label} @${width}px did not load (${err || 'wrote no render log'})`);
+          dead[label] = (dead[label] || 0) + 1;
+          unmeasured.push({ combo: `${label} @${width}px`, screen: label, width,
+                            why: err || 'wrote no render log' });
+          say(`  ${String(width).padStart(4)}px  ${label.padEnd(16)} UNMEASURED  ${err || 'wrote no render log'}`);
           continue;
         }
         const overflow = Number(log.overflow_errors || 0);
@@ -295,8 +314,32 @@ async function probe(browser, label, route, width, minTouch) {
   // An unmeasured combination is not a regression (the behaviour test says the
   // same about a verdict that has never been written) — it is reported, not
   // failed, so the budget can never turn the guard red on its own.
+  //
+  // CMD #2012 — and neither is a combination the harness could not READ.
+  // Every red this behaviour has produced since CMD #1950 was a screen the
+  // sweep failed to read, never a number the app reported: the run that filed
+  // #2012 measured 37 of 40 combinations with overflow=0 and small taps=0
+  // everywhere, and the 38th (storefront home @412px) passed on a re-run
+  // minutes later. So an unmeasured combination is REPORTED, and only turns
+  // the guard red when it is EVIDENCE rather than noise:
+  //   · it was unmeasured on the previous sweep too (it is not transient), or
+  //   · the screen answered at none of the widths it was tried at (it is down).
+  // Anything the app itself reported — an overflow, a small tap target, a page
+  // that never painted — still fails on sight. Those are numbers, not reads.
+  let prevUnmeasured = [];
+  if (unmeasured.length && !NO_WRITE && !ONLY.length) {
+    try {
+      prevUnmeasured = previousUnmeasured(
+        await rpc('rg_runner_verdict_read', { p_name: 'responsive_no_overflow' }));
+    } catch (e) { say(`  (previous verdict unreadable: ${e.message})`); }
+  }
+  for (const f of classifyUnmeasured(unmeasured, tried, dead, prevUnmeasured)) failures.push(f);
+
   const ok = failures.length === 0;
-  const tail = skipped.length ? ` · ${skipped.length} not measured inside the budget` : '';
+  const tails = [];
+  if (unmeasured.length) tails.push(`${unmeasured.length} unmeasured (reported, not failed)`);
+  if (skipped.length) tails.push(`${skipped.length} not measured inside the budget`);
+  const tail = tails.length ? ` · ${tails.join(' · ')}` : '';
   const detail = (ok
     ? `${seen.length} screen/width combinations clean at ${widths.join('/')}px`
     : failures.slice(0, 6).join(' · ')) + tail;
@@ -304,7 +347,7 @@ async function probe(browser, label, route, width, minTouch) {
 
   if (!NO_WRITE && !ONLY.length) await rpc('rg_runner_verdict_write', {
     p_name: 'responsive_no_overflow', p_ok: ok, p_detail: detail,
-    p_payload: { widths, min_touch_px: minTouch, checked: seen, failures, skipped },
+    p_payload: { widths, min_touch_px: minTouch, checked: seen, failures, skipped, unmeasured },
     p_build_hash: build,
   });
 

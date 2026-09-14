@@ -29,6 +29,7 @@ import 'models/cart_model.dart';
 import 'models/order_hours_model.dart';
 import 'models/inquiry_lock_model.dart';
 import 'screens/auth/complete_registration_screen.dart';
+import 'screens/auth/customer_docs_screen.dart';
 import 'screens/auth/login_screen.dart';
 
 import 'screens/customer/customer_staff_screen.dart'; // CMD #438: /customer/staff
@@ -191,6 +192,12 @@ final Map<String, WidgetBuilder> kAppRoutes = <String, WidgetBuilder>{
   // one. A real route (not a push from inside the login panel) is what lets the
   // form survive the page reload the OAuth round trip performs.
   '/complete-registration': (_) => const CompleteRegistrationScreen(),
+  // CMD #1935 — step 2 of registration, at a real address for the same reason
+  // step 1 has one: the Home banner sends people here, and the backend names
+  // the route (customer_registration_banner().route) rather than the app
+  // guessing it. The screen guards nothing — kyc_doc_checklist() answers who
+  // the viewer is and renders the backend's own sentence for a signed-out one.
+  '/customer/documents': (_) => const CustomerDocsScreen(),
   // CHANGE #631 (PART A) — the delivery-partner registration form.
   // delivery_partner_register() stamps auth.uid() itself, so the
   // screen asks for a sign-in rather than inventing an anonymous

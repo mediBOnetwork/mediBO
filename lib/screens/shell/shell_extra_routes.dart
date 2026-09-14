@@ -43,6 +43,7 @@ import '../admin/damage_report_screen.dart';
 import '../partner/zone_pnl_screen.dart';
 import '../admin/wa_assistant_screen.dart';
 import '../admin/admin_conditions_screen.dart';
+import '../admin/customer_doc_types_screen.dart';
 import '../admin/search_synonyms_screen.dart';
 import '../admin/support_threads_screen.dart';
 import '../partner/partner_tasks_screen.dart';
@@ -209,6 +210,11 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       // and the screen renders that refusal itself, so the fence is the
       // RPC's and this line is only the door.
       'admin_conditions' => const AdminConditionsScreen(),
+      // CMD #1935 — Admin → Customer documents: the checklist every new
+      // customer is asked for, as rows. customer_doc_types_admin() gates on
+      // is_admin() and the screen prints that refusal, so this line is only
+      // the door.
+      'customer_doc_types' => const CustomerDocTypesScreen(),
       // CHANGE #695 — the GST tax invoice raised on every settled period, its
       // credit notes and the monthly GSTR-1 register.
       //

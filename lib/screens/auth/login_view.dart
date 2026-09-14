@@ -51,6 +51,26 @@ String landingRoute(Map<String, dynamic> s) {
   return (s['home_route'] as String?) ?? '';
 }
 
+/// CMD #1935 — the same payload, read as a STACK instead of a destination.
+///
+/// `signup_route` used to be pushed with `pushNamedAndRemoveUntil`, which made
+/// the registration form the ROOT of the navigation stack: its own Close
+/// button then popped the last route in the app and left a blank screen behind
+/// it. The backend names two addresses, and they are two different things —
+/// `home_route` is where this user LIVES and `signup_route` is what they still
+/// owe — so home is what the stack is reset to, and the form is pushed on top
+/// of it. Close is then an ordinary pop that always lands on Home.
+///
+/// [overlay] is empty for everybody who owes no form, which is the normal
+/// login and the normal boot. When the backend names nowhere to live, the form
+/// becomes the destination rather than an overlay over nothing.
+({String home, String overlay}) landingPlan(Map<String, dynamic> s) {
+  final signup = (s['signup_route'] as String?) ?? '';
+  final home = (s['home_route'] as String?) ?? '';
+  if (home.isEmpty) return (home: signup, overlay: '');
+  return (home: home, overlay: signup);
+}
+
 abstract class LoginApi {
   /// rpc login_screen_config()
   Future<Map<String, dynamic>> config();
@@ -98,6 +118,7 @@ class LoginView extends StatefulWidget {
     super.key,
     required this.api,
     required this.onHome,
+    this.onOverlay,
     this.pollInterval = const Duration(seconds: 2),
     this.pollTimeout = const Duration(seconds: 15),
   });
@@ -106,6 +127,11 @@ class LoginView extends StatefulWidget {
 
   /// Called with home_route from my_session() once a session exists.
   final void Function(String homeRoute) onHome;
+
+  /// CMD #1935 — called with signup_route AFTER [onHome], for the account that
+  /// still owes the registration form. Null (the default) means the caller has
+  /// no stack to push onto, and the form simply never opens itself.
+  final void Function(String overlayRoute)? onOverlay;
 
   final Duration pollInterval;
   final Duration pollTimeout;
@@ -513,9 +539,10 @@ class _LoginViewState extends State<LoginView> {
     // Only leave once the backend says a session exists; otherwise home_route
     // is the login route itself.
     if (s['signed_in'] != true) return;
-    final route = landingRoute(s);
-    if (route.isEmpty) return;
-    widget.onHome(route);
+    final plan = landingPlan(s);
+    if (plan.home.isEmpty) return;
+    widget.onHome(plan.home);
+    if (plan.overlay.isNotEmpty) widget.onOverlay?.call(plan.overlay);
   }
 
   // ── Build ──────────────────────────────────────────────────────────────────

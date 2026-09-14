@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'kyc/kyc_panel.dart';
+import 'customer_documents_screen.dart'; // CMD #1937
 
 import '../models/account_registration.dart';
 import '../models/app_session.dart';
@@ -480,11 +480,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                   ),
 
-                  // CHANGE #705 — the licence-and-documents panel. Same
-                  // widget the supplier sees; kyc_my_panel() resolves which
-                  // account is asking and words every line, so this is one
-                  // constructor and no configuration.
-                  const KycPanel(),
+                  // CHANGE #705 / CMD #1937 — the licence-and-documents panel.
+                  //
+                  // It was KycPanel on kyc_my_panel(), which lists the legacy
+                  // four required kinds and words its own chips. The shop and
+                  // the reviewer were therefore reading two different lists
+                  // with two different status vocabularies for the same
+                  // documents. This is the SAME widget the reviewer's Documents
+                  // tab draws, on the same customer_documents_screen() payload:
+                  // every configured customer_doc_type, one row each —
+                  // thumbnail, number, valid-till, one chip — and Upload or
+                  // Replace where the backend allowed it.
+                  const CustomerDocumentsPanel(embedded: true),
 
                   // Business details
                   _SectionCard(

@@ -24,6 +24,7 @@ import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
 import '../../widgets/backend_chip.dart';
 import '../../widgets/payout_upi_card.dart';
+import '../customer_documents_screen.dart'; // CMD #1937
 import '../kyc/kyc_panel.dart';
 import 'profile_account_menu.dart' show customerMenuScreen;
 
@@ -999,6 +1000,13 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
   }
 
   Widget _tabBody(Map<String, dynamic> page) {
+    // CMD #1937 — Licence & documents is the SAME widget the reviewer sees, on
+    // the same payload, so a status word can never read one way here and
+    // another on the admin side. Which tabs exist and which RPC each calls is
+    // still admin_customer_tab (cust_rpc / cust_label / cust_sort).
+    if (_s(_tabDef(_tabKey)?['rpc']) == 'customer_documents_screen') {
+      return const CustomerDocumentsPanel(embedded: false);
+    }
     if (_loadingTab) return const Center(child: CircularProgressIndicator());
     final tab = _tab;
     if (tab == null) {

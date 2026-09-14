@@ -393,6 +393,18 @@ begin
     'clause_heading', public._c('partner_agree.clause_heading'),
     'clause_new_label', public._c('partner_agree.clause_new'),
     'clause_empty', public._c('partner_agree.clause_empty'),
+    'save_label', public._c('partner_agree.save'),
+    'valid_from_hint', public._c('partner_agree.valid_from_hint'),
+    'valid_to_hint', public._c('partner_agree.valid_to_hint'),
+    'renew_hint', public._c('partner_agree.renew_hint'),
+    'title_hint', public._c('partner_agree.title_hint'),
+    'clause_n_hint', public._c('partner_agree.clause_n_hint'),
+    'clause_head_hint', public._c('partner_agree.clause_head_hint'),
+    'clause_body_hint', public._c('partner_agree.clause_body_hint'),
+    'clause_save_label', public._c('partner_agree.clause_save'),
+    'clause_delete_label', public._c('partner_agree.clause_delete'),
+    'flag_editable_label', public._c('partner_agree.flag_editable'),
+    'flag_required_label', public._c('partner_agree.flag_required'),
     'token_help', public._c('partner_agree.token_help'),
     'tokens', jsonb_build_array('operator','operator_udyam','operator_gstin','partner',
        'partner_gstin','partner_dl20b','partner_dl21b','partner_address','zone',
@@ -1520,7 +1532,17 @@ insert into public.ui_copy(key, value) values
  ('partner_agree.ask_unsigned',     '"Version {v} of the mediBO partner agreement is still unsigned. Ordering in your area pauses if it stays unsigned."'::jsonb),
  ('partner_agree.renew_title',      '"Your mediBO partner agreement is due for renewal"'::jsonb),
  ('partner_agree.renew_body',       '"{partner}: the partner agreement is valid to {d} — {n} days left. Please renew it in the app."'::jsonb),
- ('partner_agree.void_banner',      '"This agreement was voided"'::jsonb)
+ ('partner_agree.void_banner',      '"This agreement was voided"'::jsonb),
+ ('partner_agree.save',             '"Save"'::jsonb),
+ ('partner_agree.title_hint',       '"Document title"'::jsonb),
+ ('partner_agree.valid_from_hint',  '"Valid from (YYYY-MM-DD)"'::jsonb),
+ ('partner_agree.valid_to_hint',    '"Valid to (YYYY-MM-DD, blank for none)"'::jsonb),
+ ('partner_agree.renew_hint',       '"Remind this many days before it expires"'::jsonb),
+ ('partner_agree.clause_n_hint',    '"Clause number"'::jsonb),
+ ('partner_agree.clause_head_hint', '"Clause heading"'::jsonb),
+ ('partner_agree.clause_body_hint', '"Clause text — use {{partner}}, {{split_pct}} and the other tokens"'::jsonb),
+ ('partner_agree.clause_save',      '"Save clause"'::jsonb),
+ ('partner_agree.clause_delete',    '"Remove this clause"'::jsonb)
 on conflict (key) do update set value = excluded.value, updated_at = now();
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -1589,11 +1611,71 @@ grant execute on function public.agreement_version_publish(jsonb)   to authentic
 grant execute on function public.agreement_clause_save(jsonb)       to authenticated;
 grant execute on function public.agreement_proposal_raise(jsonb)    to authenticated;
 grant execute on function public.agreement_proposal_decide(jsonb)   to authenticated;
-grant execute on function public.agreement_health(bigint)           to authenticated;
-grant execute on function public.agreement_diff(bigint)             to authenticated;
-grant execute on function public.agreement_render(bigint, bigint)   to authenticated;
-grant execute on function public.agreement_tokens(bigint)           to authenticated;
-grant execute on function public.agreement_terms(bigint)            to authenticated;
-grant execute on function public.agreement_zone_block(bigint)       to authenticated, anon;
-grant execute on function public.agreement_resolve(text, jsonb)     to authenticated;
-grant execute on function public._c1985_sha256(text)                to authenticated;
+-- These four take a bare partner id and do NOT clamp it — they are the INSIDE
+-- of partner_agreement_card()/agreement_admin_versions(), which clamp first.
+-- Handing them to `authenticated` would let one partner read another partner's
+-- negotiated clause text, so the door stays shut and the wrappers are the door.
+revoke all on function public.agreement_health(bigint)         from authenticated, anon;
+revoke all on function public.agreement_diff(bigint)           from authenticated, anon;
+revoke all on function public.agreement_render(bigint, bigint) from authenticated, anon;
+revoke all on function public.agreement_tokens(bigint)         from authenticated, anon;
+revoke all on function public.agreement_terms(bigint)          from authenticated, anon;
+revoke all on function public.agreement_resolve(text, jsonb)   from authenticated, anon;
+revoke all on function public._c1985_sha256(text)              from authenticated, anon;
+revoke all on function public.agreement_zone_block(bigint)     from authenticated, anon;
+revoke all on function public.agreement_resign_ask(bigint, text) from authenticated, anon;
+revoke all on function public.agreement_renewal_sweep()        from authenticated, anon;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 22. THE DOOR. Lesson 203: a route wired only in partnerDestination() is a
+--     dead tile. handled_by reads 'home_shell' and the case lives in
+--     shellExtraRouteScreen(), so the tap lands on the screen.
+-- ─────────────────────────────────────────────────────────────────────────────
+insert into public.feature_registry(
+  feature_key, label, group_label, icon_key, route_key, sort_order, owner,
+  partner_eligible, default_access, is_active, category, surface, roles_allowed,
+  deep_link, description, canonical_key, test_entry, test_roles, test_steps,
+  test_expect, test_automatable)
+values (
+  'admin.agreement_versions', 'Partner agreement', 'Partners', 'rule',
+  'agreement_versions', 62, 'medibo', false, 'none', true,
+  'home_partners', 'dashboard', array['super_admin'],
+  '/admin/go/agreement_versions',
+  'CMD #1985 — the partner agreement as a living document: clauses carrying {{tokens}}, versions with validity, and the clause changes partners have asked for.',
+  'admin.agreement_versions', '/admin/go/agreement_versions',
+  array['super_admin'],
+  '[{"kind":"auth","role":"{role}"},{"kind":"goto","path":"/admin/go/agreement_versions"},{"ms":6000,"kind":"settle"}]'::jsonb,
+  '{"key":"boot_status","kind":"visible","equals":"painted","source":"render_log"}'::jsonb,
+  true)
+on conflict (feature_key) do update
+  set is_active = true, route_key = excluded.route_key, label = excluded.label,
+      deep_link = excluded.deep_link, category = excluded.category,
+      surface = excluded.surface, roles_allowed = excluded.roles_allowed;
+
+update public.surface_route
+   set feature_key = 'admin.agreement_versions', handled_by = 'home_shell', is_active = true
+ where route_key = 'agreement_versions';
+insert into public.surface_route(route_key, feature_key, kind, handled_by, note, is_active)
+select 'agreement_versions', 'admin.agreement_versions', 'feature', 'home_shell',
+       'CMD #1985 — Admin › Partner agreement, opened from shell/shell_extra_routes.dart',
+       true
+ where not exists (select 1 from public.surface_route where route_key = 'agreement_versions');
+
+-- The partner's own door already exists (`partner_documents`); this only makes
+-- sure the row still names the shared shell rather than the dead resolver.
+update public.surface_route
+   set handled_by = 'home_shell', is_active = true
+ where route_key = 'partner_documents' and handled_by <> 'home_shell';
+
+-- The ONE new RPC a partner calls directly. It resolves the partner from the
+-- CALLER via _c692_pid(), so the row guard's clamp check is satisfied by the
+-- same helper every other partner.documents RPC already uses.
+do $$ begin
+  if to_regclass('public.partner_rpc_allow') is not null then
+    insert into public.partner_rpc_allow(proname, source, note)
+    values ('agreement_proposal_raise', 'cmd-1985',
+            'Partner proposes a change to a clause flagged editable_by_partner')
+    on conflict (proname) do nothing;
+  end if;
+  begin perform public.partner_rpc_allow_refresh(); exception when others then null; end;
+end $$;

@@ -239,7 +239,10 @@ class _CustPayPanelState extends State<CustPayPanel> {
       _CustStatCard(
         label: c('cust_pay.card_advance'),
         headline: advance['value']?.toString() ?? '',
-        sub: '',
+        // CMD #1932 — which rung of the advance ladder this order froze
+        // ("2nd order — 15% advance"), worded by the backend. Empty until the
+        // payload carries it, so an older payload just shows no sub-line.
+        sub: advance['reason_label']?.toString() ?? '',
         fill: (safeParseInt(advance['pct'])).clamp(0, 100) / 100,
         barColor: const Color(0xFF1B7A43),
         badge: _backendBadge(

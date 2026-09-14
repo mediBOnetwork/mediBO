@@ -20,8 +20,10 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../design_tokens.dart';
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import '../partner/partner_ui.dart';
+import 'agreement_document_screen.dart';
 
 class AgreementVersionsScreen extends StatefulWidget {
   const AgreementVersionsScreen({super.key});
@@ -139,6 +141,8 @@ class _AgreementVersionsScreenState extends State<AgreementVersionsScreen> {
                         Text(_s(_p, 'sub'), style: Ds.t.bodySecondary),
                         SizedBox(height: Ds.space.x16),
                         _newVersionButton(),
+                        SizedBox(height: Ds.space.x12),
+                        _printedDocumentButton(),
                         SizedBox(height: Ds.space.x24),
                         for (final v in _rows('rows')) _versionCard(v),
                         SizedBox(height: Ds.space.x24),
@@ -152,6 +156,25 @@ class _AgreementVersionsScreenState extends State<AgreementVersionsScreen> {
       ),
     );
   }
+
+  /// CMD #1986 — the door to everything the PDF prints: recitals, defined
+  /// terms, the schedules themselves and every heading, label and note. Pushed
+  /// from here rather than declared as its own route_key, so it can never
+  /// become a tile whose tap falls through the shell's switch (lesson 203).
+  Widget _printedDocumentButton() => SizedBox(
+        width: double.infinity,
+        height: Ds.touch.minTarget,
+        child: OutlinedButton.icon(
+          onPressed: _busy
+              ? null
+              : () => Navigator.of(context).push(MaterialPageRoute<void>(
+                    builder: (_) =>
+                        AgreementDocumentScreen(versionId: _selected),
+                  )),
+          icon: const Icon(Icons.article_outlined),
+          label: Text(c('agree_edit.open_label')),
+        ),
+      );
 
   Widget _newVersionButton() => SizedBox(
         width: double.infinity,

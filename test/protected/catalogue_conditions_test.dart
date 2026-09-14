@@ -29,7 +29,6 @@ import 'package:pharma_b2b/models/cart_model.dart';
 import 'package:pharma_b2b/screens/admin/admin_conditions_screen.dart';
 import 'package:pharma_b2b/screens/catalogue_screen.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
-import 'package:pharma_b2b/widgets/search_typeahead.dart';
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
@@ -344,34 +343,6 @@ void main() {
       expect(find.text('Nothing in Fever right now.'), findsWidgets);
     });
 
-    testWidgets('11 · a Conditions suggestion opens the scope, not a search',
-        (t) async {
-      final rpc = await _pumpCat(t, {
-        'catalogue_home': [_catHome()],
-        'catalogue_tree': [_catTree()],
-        'catalogue_conditions': [_catConditions()],
-        'catalogue_list': [_catList()],
-      });
-
-      final screen = t.state(find.byType(CatalogueScreen));
-      // The tap the typeahead would make, with the backend's own nav block.
-      (screen as dynamic).pickSuggestionForTest(SearchSuggestion.fromMap(const {
-        'kind': 'condition',
-        'id': 'fever',
-        'label': 'Fever',
-        'query': 'Fever',
-        'chip_label': 'Use: Fever',
-        'nav': {'kind': 'condition', 'id': 'fever', 'title': 'Fever'},
-      }));
-      await t.pumpAndSettle();
-
-      final a = rpc.lastArgs('catalogue_list');
-      expect(a['p_kind'], 'condition');
-      expect(a['p_key'], 'fever');
-      // Not a text query: 'search' would have been the wrong scope entirely.
-      expect(rpc.calls.where((c) => c.$1 == 'catalogue_list'
-          && c.$2['p_kind'] == 'search'), isEmpty);
-    });
   });
 }
 

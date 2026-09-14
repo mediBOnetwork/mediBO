@@ -1669,7 +1669,6 @@ class _HomeShellState extends State<HomeShell> {
             },
             onSearchChanged: _applySearch,
             onCategorySelected: _selectCategory,
-            onSuggestionTap: (s) => _applySearch(_search.copy(query: s)),
             repo: _repo,
             browseAll: _browseAll,
             onBrowseAll: _browseAllProducts,

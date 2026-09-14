@@ -29,7 +29,6 @@ import 'package:pharma_b2b/app_state.dart';
 import 'package:pharma_b2b/models/cart_model.dart';
 import 'package:pharma_b2b/screens/catalogue_screen.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
-import 'package:pharma_b2b/widgets/search_typeahead.dart';
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
@@ -227,27 +226,6 @@ void main() {
       expect(find.text('No use matches this search.'), findsWidgets);
     });
 
-    testWidgets('5 · a Conditions suggestion opens the phrase scope', (t) async {
-      final rpc = await _pumpPhone(t, {
-        'catalogue_conditions': [_conditions()],
-        'catalogue_list': [_list()],
-      });
-
-      final screen = t.state(find.byType(CatalogueScreen));
-      (screen as dynamic).pickSuggestionForTest(SearchSuggestion.fromMap(const {
-        'kind': 'condition',
-        'id': 'Pain relief',
-        'label': 'Pain relief',
-        'query': 'Pain relief',
-        'chip_label': 'Use: Pain relief',
-        'nav': {'kind': 'condition', 'id': 'Pain relief', 'title': 'Pain relief'},
-      }));
-      await t.pumpAndSettle();
-
-      final a = rpc.lastArgs('catalogue_list');
-      expect(a['p_kind'], 'condition');
-      expect(a['p_key'], 'Pain relief');
-    });
   });
 
   group('a phrase key is a deep link', () {

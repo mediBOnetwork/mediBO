@@ -448,7 +448,7 @@ class _MobileCartIconState extends State<_MobileCartIcon>
 // here, both painted on a solid Ds.c.brand band (CHANGE #274). They are gone.
 //
 // Home and the Catalogue now draw ONE header — SearchHeaderBar +
-// SearchFilterChips + SearchRecentStrip in lib/widgets/search_surface.dart —
+// SearchFilterChips + SearchIdleRail in lib/widgets/search_surface.dart —
 // on a white ground with a grey rounded field and outlined grey chips, the
 // selected chip in brand green. Two headers for one search was why the same
 // query looked like two different features depending on which box a pharmacy

@@ -608,50 +608,11 @@ class _MobileProfileButton extends StatelessWidget {
 /// headers. [SearchChrome] IS the Catalogue's header, and both breakpoints of
 /// the shell now mount that very widget — white ground, grey rounded field,
 /// outlined grey chips with the selected chip in brand green, the backend's
-/// placeholder, the shared suggestion panel and the shared recent strip.
+/// placeholder, and — with the box focused and nothing typed — the backend's
+/// own idle rail.
 ///
-/// The chip row, the recent strip and the rows are all one `search_page()`
-/// payload, so the filters above the list can never disagree with the list.
-/// CMD #1905/#1910, on the shared header (CMD #1906) — a tapped suggestion
-/// opens WHAT IT IS.
-///
-/// The backend named the destination in the item's `nav` block. This function
-/// only knows which screen renders which kind, which is the one thing the app
-/// owns. Nothing here re-runs a tapped row as a text query: that is what put
-/// "SUN PHARMACEUTICAL INDUSTRIES LTD" into a product-name search and found
-/// nothing. The Catalogue's router is the same switch on the same fields, so
-/// the one header behaves identically whichever tab it is mounted on.
-void _shellPickSuggestion(_HomeShellState st, SearchSuggestion s) {
-  RenderLog.write('c1905_suggest_nav', '${s.navKind}:${s.navId}');
-  switch (s.navKind) {
-    case 'product':
-      Navigator.of(st.context).pushNamed('/product/${s.navId}');
-    case 'company':
-      Navigator.of(st.context)
-          .pushNamed('/company/${Uri.encodeComponent(s.navId)}');
-    case 'salt':
-      st._openCatalogueScope(
-          CatalogueRoute(tab: 'salts', listKind: 'salt', listKey: s.navId));
-    case 'condition':
-      // CMD #1910 — "fever" is a USE, and the backend sent its id. Opening the
-      // scope is the whole point of the typed row: a text search for the word
-      // finds product NAMES containing it, which is a much worse answer.
-      st._openCatalogueScope(CatalogueRoute(
-          tab: 'conditions', listKind: 'condition', listKey: s.navId));
-    case 'category':
-      st._openCatalogueScope(
-          CatalogueRoute(tab: 'browse', path: [s.navId], listKind: 'tree'));
-    case 'tab':
-      // "See all companies" / "See all salts": that tab, narrowed by what was
-      // typed. Still not a product-name search.
-      st._openCatalogueScope(CatalogueRoute(tab: s.navTab, query: s.navQuery));
-    default:
-      // 'search' — the one nav that IS a text query, because the backend said
-      // so.
-      st._handleSearchSubmit(s.navId.isNotEmpty ? s.navId : s.query);
-  }
-}
-
+/// The chip row, the rail and the rows are all one `search_page()` payload, so
+/// the filters above the list can never disagree with the list.
 /// One option tap on the shared chip row. The group and the option are the
 /// backend's own; the state change is the only thing decided here.
 void _shellFilterPick(_HomeShellState st, SearchFilterGroup g, SearchOption o) {
@@ -675,10 +636,6 @@ Widget _shellSearchHeader(_HomeShellState s, {Widget? trailing}) => SearchChrome
       repo: s._repo,
       trailing: trailing,
       onSubmit: s._handleSearchSubmit,
-      onPickSuggestion: (sug) => _shellPickSuggestion(s, sug),
       onFilterPick: (g, o) => _shellFilterPick(s, g, o),
       onClear: () => s._applySearch(SearchQueryState.blank),
-      onRecentCleared: () {
-        if (s._search.hasQuery) s._applySearch(s._search, push: false);
-      },
     );

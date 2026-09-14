@@ -38,7 +38,6 @@ import '../widgets/catalogue_product_card.dart';
 import '../widgets/product_row_card.dart';
 import '../widgets/product_image.dart';
 import '../widgets/search_surface.dart';
-import '../widgets/search_typeahead.dart'; // CMD #1905 — SearchSuggestion's nav block
 import 'admin/nav_registry_view.dart' show NavGlyph;
 import 'catalogue_extras.dart'; // CHANGE #748
 
@@ -326,7 +325,8 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
 
   /// One entry point for every search change on this screen: the route moves,
   /// the URL moves with it, the shell is told, and the payload is refetched.
-  void _adoptSearch(SearchQueryState next, {bool report = true, bool push = true}) {
+  void _adoptSearch(SearchQueryState next,
+      {bool report = true, bool push = true, bool replace = false}) {
     _go(
       _route.copy(
         search: next,
@@ -338,6 +338,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         letter: null,
       ),
       push: push,
+      replace: replace,
     );
     if (report) widget.onSearchChanged?.call(next);
   }
@@ -470,58 +471,10 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
   // packs" strip on the PRODUCT PAGE, which is the one place a buyer is
   // choosing between packs rather than scanning for one.
 
-  /// CMD #1905 — a tapped suggestion opens WHAT IT IS.
-  ///
-  /// The backend named the destination in the item's `nav` block; this method
-  /// only knows which screen renders which kind, which is the one thing the
-  /// app owns (the URL is the browser's, not the database's). Nothing here
-  /// re-runs a text query — that is what pasted "SUN PHARMACEUTICAL
-  /// INDUSTRIES LTD" into a product-name search and found nothing.
-  void _pickSuggestion(SearchSuggestion s) {
-    _searchFocus.unfocus();
-    RenderLog.write('c1905_suggest_nav', '${s.navKind}:${s.navId}');
-    switch (s.navKind) {
-      case 'product':
-        Navigator.of(context).pushNamed('/product/${s.navId}');
-      case 'company':
-        Navigator.of(context)
-            .pushNamed('/company/${Uri.encodeComponent(s.navId)}');
-      case 'salt':
-        _go(_route.copy(tab: 'salts', path: const [], listKind: 'salt',
-            listKey: s.navId, query: '', letter: null));
-      case 'condition':
-        // CMD #1910 — "fever" is a USE, and the backend sent its id. Opening
-        // the scope is the whole point of the typed row: a text search for
-        // the word "fever" finds product NAMES containing it, which is a
-        // different and much worse answer.
-        _go(_route.copy(tab: 'conditions', path: const [], listKind: 'condition',
-            listKey: s.navId, query: '', letter: null));
-      case 'category':
-        _go(_route.copy(tab: 'browse', path: [s.navId], listKind: 'tree',
-            listKey: null, query: '', letter: null));
-      case 'tab':
-        // "See all companies" / "See all salts": the tab, narrowed by what
-        // was typed. Still not a product-name search.
-        _searchCtrl.text = s.navQuery;
-        _go(_route.copy(tab: s.navTab, path: const [], listKind: null,
-            listKey: null, query: s.navQuery, letter: null));
-      default:
-        // 'search' — the one nav that IS a text query, because the backend
-        // said so: a product family whose name really is a prefix of its own
-        // products' names, or "See all products" for what was typed.
-        _searchCtrl.text = s.navId;
-        _go(_route.copy(tab: 'browse', path: const [], listKind: 'search',
-            listKey: s.navId, query: s.navId, letter: null));
-    }
-  }
-
-  /// CMD #1910 — the one seam the door's test uses. It drives the SAME method
-  /// a real tap drives, so the test can assert what a typed suggestion opens
-  /// without building the overlay the typeahead lives in.
-  @visibleForTesting
-  void pickSuggestionForTest(SearchSuggestion s) => _pickSuggestion(s);
-
-  void _go(CatalogueRoute next, {bool push = true}) {
+  /// CMD #2010 — [replace] is what live typing uses: the URL still follows the
+  /// search, but a five-letter word leaves ONE history entry rather than four
+  /// the Back button has to be pressed through.
+  void _go(CatalogueRoute next, {bool push = true, bool replace = false}) {
     setState(() {
       _route = next;
       // CMD #1906 — the controller is shared with the header now, so only
@@ -534,9 +487,17 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
       _browse = null;
       _searchLoadingMore = false;
       _searchFailed = false;
-      if (next.search.page == 0) _searchPayload = null;
+      // CMD #2010 — the rows are cleared only when the SEARCH is over. While
+      // the shopper is still typing the previous answer stays under the box
+      // and is replaced when the next one lands: one grid, filtering, rather
+      // than a skeleton flashing on every keystroke.
+      if (next.search.page == 0 && !next.search.hasQuery) _searchPayload = null;
     });
-    if (push) pushUrl(next.url);
+    if (push) {
+      pushUrl(next.url);
+    } else if (replace) {
+      replaceUrl(next.url);
+    }
     _fetch();
   }
 
@@ -554,7 +515,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         'c1906_search_page',
         'q=${_route.search.query};rows=${p.items.length};total=${p.total};'
         'filters=${p.filtersActive};groups=${p.filters.groups.length};'
-        'recent=${p.recent.has ? p.recent.items.length : 0};'
+        'rail=${p.rail.has ? p.rail.kind : 'none'};'
         'more=${p.paging.hasMore};surface=catalogue',
       );
     } catch (e) {
@@ -716,8 +677,8 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           // 1. CMD #1906 — THE search header, the very widget Home mounts:
-          //    one field, the shared suggestion panel, the backend's filter
-          //    chips in the backend's order, and the shared recent strip.
+          //    one field, the backend's filter chips in the backend's order,
+          //    and — focused with nothing typed — the backend's idle rail.
           //    There is no second search box in this app any more.
           SearchChrome(
             surface: 'catalogue',
@@ -727,10 +688,9 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
             hasQuery: _route.showsSearch,
             isLoading: _route.showsSearch && _loading,
             repo: _repo,
-            // CMD #1905/#1910 — a tapped suggestion opens what it IS. The
-            // header draws the panel and the chip; this screen only knows
-            // which of its own tabs renders which kind.
-            onPickSuggestion: _pickSuggestion,
+            // CMD #2010 — this fires on the debounced keystroke as well as on
+            // Enter, so the grid below IS the answer to what is in the box.
+            // The URL is REPLACED rather than pushed while typing.
             onSubmit: (q) {
               final t = q.trim();
               if (t.isEmpty) {
@@ -739,14 +699,12 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
               }
               // The filters the shopper already set survive a new query —
               // they narrowed the catalogue, not that one word.
-              _adoptSearch(_route.search.copy(query: t, page: 0));
+              _adoptSearch(_route.search.copy(query: t, page: 0),
+                  push: false, replace: true);
             },
             onFilterPick: (g, o) =>
                 _adoptSearch(_route.search.withOption(g, o)),
             onClear: () => _adoptSearch(SearchQueryState.blank),
-            onRecentCleared: () {
-              if (_route.showsSearch) _loadSearch();
-            },
           ),
           // 2. CMD #1908 — the breadcrumb. Sticky under the search on EVERY
           //    browse state of this tab, outside the scroll view, so it cannot

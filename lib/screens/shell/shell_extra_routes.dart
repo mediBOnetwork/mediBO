@@ -67,21 +67,6 @@ import '../partner/partner_scorecard_card.dart'; // CHANGE #693 — own scorecar
 /// costing the shell an import line of its own. WHETHER to ask is
 /// `order_feedback_pending()`'s answer — see order_feedback_sheet.dart.
 export '../customer/order_feedback_sheet.dart' show maybeAskOrderFeedback;
-// CHANGE #790 — the typeahead panel and its controller, re-exported so the
-// shell's PART files (shell_header_chrome.dart) can see them without adding a
-// line to home_shell.dart, which sits at 1,998 of a hard 2,000-line guard.
-// CMD #1905 — SearchSuggestion / SearchChip / SearchBoxChip joined the list
-// when a suggestion stopped being a string. A type used by a PART file must be
-// re-exported here or the part cannot name it, and `dart analyze` on one file
-// will not say so — it compiles only when the whole library does.
-export '../../widgets/search_typeahead.dart'
-    show
-        SearchSuggestions,
-        SearchSuggestController,
-        SearchSuggestion,
-        SearchChip,
-        SearchBoxChip;
-
 /// CMD #1912 — /cart is a real URL.
 ///
 /// The cart is a PANEL inside the shell, not a pushed route, so until now the

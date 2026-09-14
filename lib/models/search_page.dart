@@ -6,7 +6,7 @@ import 'product.dart';
 /// search surface prints arrives here already worded, already ordered and
 /// already decided: the placeholder in the box, the header line above the
 /// list, the filter groups in the order they are drawn, the empty state with
-/// its buttons, the paging labels and the recent-search strip.
+/// its buttons, the paging labels and the idle rail.
 ///
 /// Nothing in this file computes. There is no pluralising, no counting, no
 /// "N results" built in Dart, no client-side sort and no default filter — a
@@ -156,39 +156,41 @@ class SearchEmpty {
       );
 }
 
-/// The recent-search strip. `has` is the backend's — an anonymous viewer, an
-/// empty history and a disabled strip all arrive as `has:false`, and the app
-/// never draws the strip on a guess.
-class SearchRecent {
+/// CMD #2010 — the idle rail: what the search surface offers when the box is
+/// focused and nothing has been typed.
+///
+/// WHICH rail this is (`kind`) and what it is CALLED (`title`) are the
+/// backend's answers, from `search_idle_rail()`: this customer's previously
+/// ordered products when there are any, the zone's top sellers when there are
+/// none. Nothing here decides either, and `has:false` draws nothing rather
+/// than an empty heading.
+class SearchRail {
   final bool has;
+
+  /// 'last_ordered' or 'top_sellers'. Carried for the render-log and for
+  /// tests — never branched on to change a label.
+  final String kind;
   final String title;
-  final String clearLabel;
 
-  /// Each entry's `q` is what gets searched; `label` is what is printed.
-  final List<({String q, String label})> items;
+  /// Home-card maps, the same shape every other rail in the app renders.
+  final List<Map<String, dynamic>> items;
 
-  const SearchRecent(
+  const SearchRail(
       {required this.has,
+      required this.kind,
       required this.title,
-      required this.clearLabel,
       required this.items});
 
-  static const empty = SearchRecent(
-      has: false,
-      title: '',
-      clearLabel: '',
-      items: <({String q, String label})>[]);
+  static const empty = SearchRail(
+      has: false, kind: '', title: '', items: <Map<String, dynamic>>[]);
 
-  factory SearchRecent.fromMap(Map<String, dynamic> m) => SearchRecent(
+  factory SearchRail.fromMap(Map<String, dynamic> m) => SearchRail(
         has: m['has'] == true,
+        kind: (m['kind'] ?? '').toString(),
         title: (m['title'] ?? '').toString(),
-        clearLabel: (m['clear_label'] ?? '').toString(),
         items: ((m['items'] as List?) ?? const [])
             .whereType<Map>()
-            .map((e) => (
-                  q: (e['q'] ?? '').toString(),
-                  label: (e['label'] ?? '').toString()
-                ))
+            .map((e) => Map<String, dynamic>.from(e))
             .toList(growable: false),
       );
 }
@@ -243,18 +245,9 @@ class SearchPagePayload {
   final SearchFilters filters;
   final bool filtersActive;
   final SearchEmpty empty;
-  final SearchRecent recent;
+  final SearchRail rail;
   final SearchPaging paging;
   final List<Product> items;
-
-  /// CMD #1906 — does the header offer the typeahead panel at all?
-  ///
-  /// It arrives from `search_page()` (app_settings.search_suggest_enabled), so
-  /// turning the panel back on is an UPDATE and never a deploy. Om turned it
-  /// OFF on 2026-09-13: on Home the panel was the only thing a keystroke did,
-  /// so a shopper who typed a brand saw one card offering to search for what
-  /// they had already typed, with the page behind it unchanged.
-  final bool suggestEnabled;
 
   const SearchPagePayload({
     required this.ok,
@@ -266,10 +259,9 @@ class SearchPagePayload {
     required this.filters,
     required this.filtersActive,
     required this.empty,
-    required this.recent,
+    required this.rail,
     required this.paging,
     required this.items,
-    this.suggestEnabled = false,
   });
 
   static const failed = SearchPagePayload(
@@ -282,7 +274,7 @@ class SearchPagePayload {
     filters: SearchFilters.empty,
     filtersActive: false,
     empty: SearchEmpty.empty,
-    recent: SearchRecent.empty,
+    rail: SearchRail.empty,
     paging: SearchPaging.empty,
     items: <Product>[],
   );
@@ -299,15 +291,14 @@ class SearchPagePayload {
         filtersActive: m['filters_active'] == true,
         empty: SearchEmpty.fromMap(
             Map<String, dynamic>.from((m['empty'] as Map?) ?? const {})),
-        recent: SearchRecent.fromMap(
-            Map<String, dynamic>.from((m['recent'] as Map?) ?? const {})),
+        rail: SearchRail.fromMap(
+            Map<String, dynamic>.from((m['rail'] as Map?) ?? const {})),
         paging: SearchPaging.fromMap(
             Map<String, dynamic>.from((m['paging'] as Map?) ?? const {})),
         items: ((m['items'] as List?) ?? const [])
             .whereType<Map>()
             .map((r) => Product.fromHomeCard(Map<String, dynamic>.from(r)))
             .toList(growable: false),
-        suggestEnabled: m['suggest_enabled'] == true,
       );
 
   /// The same payload with another page's rows appended. Used by "Load more":
@@ -323,30 +314,11 @@ class SearchPagePayload {
         filters: next.filters,
         filtersActive: next.filtersActive,
         empty: next.empty,
-        recent: next.recent,
+        rail: next.rail,
         paging: next.paging,
         items: [...items, ...next.items],
-        suggestEnabled: next.suggestEnabled,
       );
 
-  /// The same payload with the recent strip emptied. "Clear" is answered by
-  /// the backend (search_recent_clear), but the strip must go the moment it is
-  /// tapped rather than on the next fetch.
-  SearchPagePayload withoutRecent() => SearchPagePayload(
-        ok: ok,
-        query: query,
-        hasQuery: hasQuery,
-        placeholder: placeholder,
-        headerLabel: headerLabel,
-        total: total,
-        filters: filters,
-        filtersActive: filtersActive,
-        empty: empty,
-        recent: SearchRecent.empty,
-        paging: paging,
-        items: items,
-        suggestEnabled: suggestEnabled,
-      );
 }
 
 /// The search STATE — query, filters, page — as one value.

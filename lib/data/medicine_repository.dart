@@ -89,7 +89,6 @@ typedef StorefrontProduct = ({String status, bool gated, Product? item});
 // ─── Session-scoped in-memory caches (cleared on app restart) ────────────────
 // Keyed by "$term|$category|$offset[|buyable]". Cap at 50 entries per cache.
 final Map<String, FetchPageResult> _resultCache = {};
-final Map<String, List<String>> _suggestCache = {};
 const int _kMaxCacheEntries = 50;
 
 /// CMD #434 — one short, log-safe line for an exception. The render log is a
@@ -792,16 +791,6 @@ class MedicineRepository {
     }
   }
 
-  /// Empties this viewer's recent-search strip. The backend owns the toast it
-  /// answers with; a failure leaves the strip exactly where it was.
-  Future<void> clearRecentSearches() async {
-    try {
-      await _rpc('search_recent_clear');
-    } catch (_) {
-      // The strip is a convenience; a dead call is not worth a banner.
-    }
-  }
-
   /// CHANGE #636 — the product page is ONE RPC.
   ///
   /// `product_detail()` returns the whole page render-ready: header, images,
@@ -1062,27 +1051,6 @@ class MedicineRepository {
     );
     _cacheSet(_resultCache, cacheKey, result);
     return result;
-  }
-
-  /// Returns up to 3 product names similar to [query] for "Did you mean?"
-  /// suggestions. Never throws — returns empty list on any error.
-  Future<List<String>> fetchSuggestions(String query) async {
-    final term = query.replaceAll(RegExp(r'[,()*%_]'), ' ').trim();
-    if (term.isEmpty) return const [];
-    final key = term.toLowerCase();
-    final cached = _suggestCache[key];
-    if (cached != null) return cached;
-    try {
-      final rows = await _client.rpc('suggest_medicines', params: {'search_term': term});
-      final result = (rows as List)
-          .map((r) => (r as Map<String, dynamic>)['product_name'] as String? ?? '')
-          .where((s) => s.isNotEmpty)
-          .toList();
-      _cacheSet(_suggestCache, key, result);
-      return result;
-    } catch (_) {
-      return const [];
-    }
   }
 
   /// Fire-and-forget: increments sales_count by 1 each time a product is

@@ -82,6 +82,12 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
     RenderLog.write('c307_fsi', d.known ? (d.granted ? 'granted' : 'denied') : 'unknown');
   }
 
+  /// CMD #2016 — order_alert_popup_labels(): every word on the new-order
+  /// popup, with its own caption, so the wording is edited here instead of
+  /// being redeployed. Null until the read lands; absent for a partner.
+  Map<String, dynamic>? _popupLabels;
+  final Map<String, TextEditingController> _popupFields = {};
+
   Future<void> _load() async {
     setState(() {
       _loading = true;
@@ -90,7 +96,9 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
     try {
       final s = _asMap(await _db.rpc('order_alert_settings'));
       final c = _asMap(await _db.rpc('customer_credit_list'));
+      final pl = _asMap(await _db.rpc('order_alert_popup_labels'));
       if (!mounted) return;
+      _adoptPopupLabels(pl);
       for (final f in (s?['fields'] as List? ?? const [])) {
         if (f is! Map) continue;
         final key = f['key'] as String? ?? '';
@@ -101,6 +109,7 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
       setState(() {
         _data = s;
         _credit = c;
+        _popupLabels = pl;
         _loading = false;
       });
       RenderLog.write('c306_alert_screen', '${(s?['open'] as List?)?.length ?? 0}');
@@ -293,6 +302,11 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
                         'enforce_credit_block', 'purchase_gate_enabled']),
                       SizedBox(height: Ds.space.x16),
                       ..._creditRows(),
+                      if (_popupLabelRows().isNotEmpty) ...[
+                        SizedBox(height: Ds.space.x32),
+                        _section(_popupLabels?['title'] as String? ?? ''),
+                        ..._popupLabelRows(),
+                      ],
                       SizedBox(height: Ds.space.x32),
                       _section(_sectionLabel('device')),
                       ..._iconRows(),
@@ -707,6 +721,89 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
       ),
     );
     if (go == true) await _openFsiSettings();
+  }
+
+  /// The controllers follow the payload: a row the backend stops sending
+  /// disappears, and a value it changes lands in the box.
+  void _adoptPopupLabels(Map<String, dynamic>? pl) {
+    for (final r in (pl?['rows'] as List? ?? const [])) {
+      if (r is! Map) continue;
+      final key = '${r['key'] ?? ''}';
+      if (key.isEmpty) continue;
+      (_popupFields[key] ??= TextEditingController()).text = '${r['value'] ?? ''}';
+    }
+  }
+
+  Future<void> _savePopupLabels() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final patch = <String, dynamic>{};
+    for (final r in (_popupLabels?['rows'] as List? ?? const [])) {
+      if (r is! Map) continue;
+      final key = '${r['key'] ?? ''}';
+      final ctrl = _popupFields[key];
+      if (key.isEmpty || ctrl == null) continue;
+      patch[key] = ctrl.text;
+    }
+    try {
+      final res =
+          _asMap(await _db.rpc('order_alert_popup_labels_set', params: {'p_patch': patch}));
+      if (!mounted) return;
+      _adoptPopupLabels(res);
+      setState(() {
+        _popupLabels = res ?? _popupLabels;
+        _busy = false;
+      });
+      showToast(context, (res?['saved_label'] as String?) ?? '');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      showToast(context, '$e', isError: true);
+    }
+  }
+
+  /// The popup's wording, as the backend lists it. An admin-only door: a
+  /// partner gets ok:false and this section simply is not drawn.
+  List<Widget> _popupLabelRows() {
+    final rows = (_popupLabels?['rows'] as List?) ?? const [];
+    if (_popupLabels?['ok'] != true || rows.isEmpty) return const [];
+    final out = <Widget>[];
+    final subtitle = _popupLabels?['subtitle'] as String? ?? '';
+    if (subtitle.isNotEmpty) {
+      out.add(Padding(
+        padding: EdgeInsets.only(bottom: Ds.space.x16),
+        child: Text(subtitle, style: Ds.t.caption),
+      ));
+    }
+    for (final r in rows) {
+      if (r is! Map) continue;
+      final key = '${r['key'] ?? ''}';
+      if (key.isEmpty) continue;
+      final ctrl = _popupFields[key] ??=
+          TextEditingController(text: '${r['value'] ?? ''}');
+      final hint = '${r['hint'] ?? ''}';
+      out.add(Padding(
+        padding: EdgeInsets.only(bottom: Ds.space.x12),
+        child: TextField(
+          controller: ctrl,
+          minLines: 1,
+          maxLines: 3,
+          decoration: InputDecoration(
+            labelText: '${r['label'] ?? ''}',
+            helperText: hint.isEmpty ? null : hint,
+          ),
+        ),
+      ));
+    }
+    out.add(SizedBox(
+      width: double.infinity,
+      height: Ds.touch.minTarget,
+      child: OutlinedButton(
+        onPressed: _busy ? null : _savePopupLabels,
+        child: Text(_popupLabels?['save_label'] as String? ?? ''),
+      ),
+    ));
+    return out;
   }
 
   List<Widget> _fieldRows(List<String> keys) {

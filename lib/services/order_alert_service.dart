@@ -30,16 +30,16 @@ class OrderAlertService extends ChangeNotifier with WidgetsBindingObserver {
   /// The last order_alert_feed() payload, verbatim. Null until the first read.
   Map<String, dynamic>? feed;
 
-  /// CMD #1988 — the last order_alert_strip() payload, verbatim. This is the
-  /// ONE in-app surface an unactioned order gets: a slim tappable strip. The
-  /// centre dialog that used to fight the lock-screen alert is gone, so this
-  /// object decides everything the strip shows — its two sentences, its tone,
-  /// its action word, and whether the web sound rings at all.
-  Map<String, dynamic>? strip;
+  /// CMD #2016 — the last order_alert_popup() payload, verbatim. This is the
+  /// ONE in-app surface an unactioned order gets: a centre modal popup. The
+  /// strip that sat above the header is gone, so this object decides
+  /// everything the popup shows — every sentence, the pill's tone, both button
+  /// words, the "+N more" line, and whether the web sound rings at all.
+  Map<String, dynamic>? popup;
 
-  bool get stripShow => strip?['show'] == true;
-  bool get stripRing => strip?['ring'] == true;
-  String get stripOrderId => (strip?['order_id'] as String?) ?? '';
+  bool get popupShow => popup?['show'] == true;
+  bool get popupRing => popup?['ring'] == true;
+  String get popupOrderId => (popup?['order_id'] as String?) ?? '';
 
   Timer? _poll;
   bool _started = false;
@@ -143,19 +143,48 @@ class OrderAlertService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  /// The strip, on its own. Cheap enough to ride every refresh, and the only
+  /// The popup, on its own. Cheap enough to ride every refresh, and the only
   /// thing a screen that does not want the whole feed has to ask for.
-  Future<void> refreshStrip() async {
+  ///
+  /// It is asked PER DEVICE: "Later" is a dismissal this browser/phone made,
+  /// and the server keeps it — so a popup put aside here still shows on the
+  /// admin's other device, and the order never leaves Awaiting action.
+  Future<void> refreshPopup() async {
     try {
-      final raw = await _db.rpc('order_alert_strip');
+      final raw = await _db.rpc('order_alert_popup',
+          params: {'p_device_id': await deviceId()});
       final m = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
       if (m is Map) {
-        strip = Map<String, dynamic>.from(m);
-        RenderLog.write('c1988_alert_strip', stripShow ? '1' : '0');
+        popup = Map<String, dynamic>.from(m);
+        RenderLog.write('c2016_alert_popup_rpc', popupShow ? '1' : '0');
         notifyListeners();
       }
     } catch (e) {
-      debugPrint('[order_alert] strip failed: $e');
+      debugPrint('[order_alert] popup failed: $e');
+    }
+  }
+
+  /// "Later" — this device puts the popup aside. The alert stays ringing, the
+  /// feed still lists it and the nav badge still counts it; only the popup
+  /// goes. The reply IS the next popup payload, so one round trip both
+  /// dismisses and re-reads.
+  Future<void> popupLater(String orderId) async {
+    if (orderId.isEmpty) return;
+    try {
+      final raw = await _db.rpc('order_alert_popup_later', params: {
+        'p_order_id': orderId,
+        'p_device_id': await deviceId(),
+      });
+      final m = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
+      if (m is Map) {
+        popup = Map<String, dynamic>.from(m);
+        RenderLog.write('c2016_alert_popup_later', popupShow ? '1' : '0');
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('[order_alert] popup later failed: $e');
+      // A failed dismissal must not leave the popup wedged open: re-read.
+      await refreshPopup();
     }
   }
 
@@ -164,13 +193,16 @@ class OrderAlertService extends ChangeNotifier with WidgetsBindingObserver {
   /// if it is still unactioned after rering_after_s.
   Future<Map<String, dynamic>> seen(String orderId, {String source = 'app'}) async {
     try {
-      final raw = await _db.rpc('order_alert_seen',
-          params: {'p_order_id': orderId, 'p_source': source});
+      final raw = await _db.rpc('order_alert_seen', params: {
+        'p_order_id': orderId,
+        'p_source': source,
+        'p_device_id': await deviceId(),
+      });
       final m = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
       final out = m is Map ? Map<String, dynamic>.from(m) : <String, dynamic>{};
-      final st = out['strip'];
+      final st = out['popup'];
       if (st is Map) {
-        strip = Map<String, dynamic>.from(st);
+        popup = Map<String, dynamic>.from(st);
         notifyListeners();
       }
       await stopRinging();
@@ -229,7 +261,7 @@ class OrderAlertService extends ChangeNotifier with WidgetsBindingObserver {
         'p_device_label': deviceLabel,
       });
       final m = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
-      await refreshStrip();
+      await refreshPopup();
       return m is Map ? Map<String, dynamic>.from(m) : <String, dynamic>{};
     } catch (e) {
       debugPrint('[order_alert] snooze failed: $e');
@@ -242,7 +274,7 @@ class OrderAlertService extends ChangeNotifier with WidgetsBindingObserver {
       final raw = await _db
           .rpc('order_alert_quiet_set', params: {'p_from': from, 'p_to': to});
       final m = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
-      await refreshStrip();
+      await refreshPopup();
       return m is Map ? Map<String, dynamic>.from(m) : <String, dynamic>{};
     } catch (e) {
       debugPrint('[order_alert] quiet failed: $e');
@@ -251,7 +283,7 @@ class OrderAlertService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> refresh() async {
-    await refreshStrip();
+    await refreshPopup();
     try {
       final raw = await _db.rpc('order_alert_feed');
       final m = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
@@ -322,24 +354,6 @@ class OrderAlertService extends ChangeNotifier with WidgetsBindingObserver {
       debugPrint('[order_alert] icon upload failed: $e');
       return {'ok': false, 'error': 'upload'};
     }
-  }
-
-  /// CMD #1989 — the bottom sheet's whole payload, rendered by
-  /// order_alert_sheet(). Null when the backend says there is nothing to show.
-  Future<Map<String, dynamic>?> sheet([String? orderId]) async {
-    try {
-      final raw = await _db.rpc('order_alert_sheet',
-          params: {'p_order_id': orderId});
-      final m = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
-      if (m is Map) {
-        final out = Map<String, dynamic>.from(m);
-        RenderLog.write('c1989_alert_sheet_rpc', out['show'] == true ? '1' : '0');
-        return out;
-      }
-    } catch (e) {
-      debugPrint('[order_alert] sheet failed: $e');
-    }
-    return null;
   }
 
   /// One order's card, as the popup draws it.

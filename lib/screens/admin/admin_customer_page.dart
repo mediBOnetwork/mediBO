@@ -21,6 +21,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../design_tokens.dart';
+import '../customer_documents_screen.dart'; // CMD #1937
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
 import '../../widgets/backend_chip.dart';
@@ -1245,6 +1246,19 @@ class _AdminCustomerPageState extends State<AdminCustomerPage> {
   }
 
   Widget _tabBody(Map<String, dynamic> page) {
+    // CMD #1937 — a tab whose RPC is the Documents payload is drawn by its own
+    // widget, not by the block renderer: a 56 px thumbnail, a status chip and
+    // per-row Approve / Reject / Replace do not fit kv|tiles|chips|list|table.
+    // WHICH tabs exist, their order, their label and the RPC each one calls all
+    // still come from admin_customer_tab — this only says which renderer that
+    // RPC's shape needs, and it reads the name off the payload rather than
+    // hard-coding a tab_key.
+    if (_s(_tabDef(_tabKey)?['rpc']) == 'customer_documents_screen') {
+      return CustomerDocumentsPanel(
+        customerId: widget.customerId,
+        embedded: false,
+      );
+    }
     if (_loadingTab) return const Center(child: CircularProgressIndicator());
     final tab = _tab;
     if (tab == null) {

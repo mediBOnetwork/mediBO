@@ -64,6 +64,22 @@
                 <action android:name="com.google.firebase.MESSAGING_EVENT"/>
             </intent-filter>
         </service>
+        <!-- CMD #1931 — the payment notification listener. Android binds it
+             itself once the user grants notification access in Settings; it is
+             never started by the app. It reads ONLY the packages the backend
+             listed (payment_listener_boot) and drops everything else on the
+             phone. Play treats this as a sensitive permission: the
+             notification-listener declaration is filed against every release. -->
+        <service
+            android:name=".PaymentNotificationListenerService"
+            android:exported="true"
+            android:label="@string/pay_listener_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService"/>
+            </intent-filter>
+        </service>
+
         <!-- Accept / Reject, tapped straight off the lock screen. -->
         <receiver
             android:name=".OrderAlertActionReceiver"

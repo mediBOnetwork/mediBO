@@ -27,6 +27,7 @@ import '../../services/access.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import 'payment_alerts_screen.dart';
+import 'payment_listener_card.dart';
 
 typedef MoneyRpc =
     Future<Map<String, dynamic>> Function(String fn, Map<String, dynamic> args);
@@ -149,6 +150,11 @@ class _AdminMoneyScreenState extends State<AdminMoneyScreen> {
                   // order above the tabs. A route_key this build has never
                   // heard of is SKIPPED, never a crash: a new Money entry is
                   // an INSERT, exactly like a fifth tab.
+                  // CMD #1931 — "Hear every payment". The backend decides
+                  // whether this phone draws it at all (payment_listener_card
+                  // returns show:false on web and iOS), so there is no
+                  // platform branch here.
+                  const PaymentListenerCard(),
                   _MoneyLinks(links: _rows(_home['links'])),
                   _TabBar(
                     tabs: tabs,

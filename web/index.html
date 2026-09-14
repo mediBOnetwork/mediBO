@@ -664,6 +664,33 @@
           console.warn('[SW] FCM service worker registration failed:', e);
         });
     }
+
+    // ── CMD #1989 ──────────────────────────────────────────────────────────
+    // The app's one call into the notification tray: "this order is open".
+    // The service worker closes the order card for it, wherever it is showing.
+    // Defined unconditionally so the Dart side never has to feature-detect.
+    window.mediboAlertSeen = function (orderId) {
+      try {
+        if (!('serviceWorker' in navigator)) return;
+        navigator.serviceWorker.getRegistrations().then(function (regs) {
+          regs.forEach(function (reg) {
+            if (reg.active) {
+              reg.active.postMessage({ type: 'order_alert_seen', orderId: orderId || '' });
+            }
+          });
+        }).catch(function () {});
+      } catch (e) { /* a browser without SW support simply has no tray */ }
+    };
+
+    // The worker asks the app to open an order when its card is tapped.
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', function (ev) {
+        var m = (ev && ev.data) || {};
+        if (m.type === 'open_order_alert') {
+          try { window.location.hash = '#/admin/order-alerts'; } catch (e) {}
+        }
+      });
+    }
   </script>
 </head>
 <body>

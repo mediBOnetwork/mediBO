@@ -610,6 +610,7 @@ begin
     -- CMD #2015 item 6 — the kill switch. priority:true puts the group at the
     -- top of the screen; the screen never learns the words or the keys.
     'mute_all', coalesce(cfg.mute_all,false),
+    'stop_label', public.oa_label('stop_label'),
     'mute_banner', case when coalesce(cfg.mute_all,false)
                         then public.oa_label('mute_banner') else '' end,
     'groups', jsonb_build_array(

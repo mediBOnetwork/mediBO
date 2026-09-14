@@ -33,7 +33,10 @@ serve(async (req) => {
   const token = (body.token ?? '').trim()
   const action = (body.action ?? '').trim()
   if (!token) return json({ ok: false, error: 'no_token' }, 400)
-  if (action !== 'accept' && action !== 'reject') {
+  // CMD #2015 — 'stop' is the notification's Stop button. It silences the
+  // alert for good and touches nothing else about the order; accept/reject
+  // left this surface in CMD #1988.
+  if (action !== 'accept' && action !== 'reject' && action !== 'stop') {
     return json({ ok: false, error: 'bad_action' }, 400)
   }
 

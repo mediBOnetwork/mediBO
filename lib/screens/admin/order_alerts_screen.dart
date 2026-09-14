@@ -173,6 +173,21 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
     await _load();
   }
 
+  /// CMD #2015 item 5 — Stop from the console. Every word in the toast is
+  /// order_alert_stop()'s.
+  Future<void> _stop(Map<String, dynamic> item) async {
+    if (_busy) return;
+    final alertId = (item['alert_id'] as num?)?.toInt();
+    if (alertId == null) return;
+    setState(() => _busy = true);
+    final res = await OrderAlertService.instance.stop(alertId);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    final msg = (res['message'] as String?) ?? '';
+    if (msg.isNotEmpty) showToast(context, msg, isError: res['ok'] != true);
+    await _load();
+  }
+
   Future<void> _override(Map<String, dynamic> item) async {
     final ctrl = TextEditingController();
     final overrideLabel = (_data?['override_label'] as String?) ?? '';
@@ -250,6 +265,16 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
                         _Note(text: d!['phone_warning'] as String, tone: Ds.c.warning),
                         SizedBox(height: Ds.space.x24),
                       ],
+                      // CMD #2015 item 6 — the kill switch, and the sentence
+                      // that says it is on. Both are the backend's: the group
+                      // carries priority:true, which is the only reason this
+                      // screen draws it first.
+                      if ((d?['mute_banner'] as String? ?? '').isNotEmpty) ...[
+                        _Note(text: d!['mute_banner'] as String, tone: Ds.c.warning),
+                        SizedBox(height: Ds.space.x16),
+                      ],
+                      ..._groupSections(priority: true),
+                      SizedBox(height: Ds.space.x32),
                       _section(_sectionLabel('open')),
                       ..._openCards(),
                       SizedBox(height: Ds.space.x32),
@@ -541,6 +566,10 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
           onAccept: () => _act(item, 'accept'),
           onReject: () => _act(item, 'reject'),
           onOverride: () => _override(item),
+          // CMD #2015 item 5 — Stop, the same door the notification's own
+          // button opens: the sound dies everywhere, the order is untouched.
+          stopLabel: '${_data?['stop_label'] ?? ''}',
+          onStop: () => _stop(item),
         ),
       );
     }).toList();
@@ -741,18 +770,26 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
 
   /// CMD #1847 — the sections the BACKEND declares. A new knob is a row in
   /// order_alert_settings().groups; this screen never learns its name.
-  List<Widget> _groupSections() {
+  List<Widget> _groupSections({bool priority = false}) {
     final groups = (_data?['groups'] as List?) ?? const [];
     final out = <Widget>[];
     for (final g in groups) {
       if (g is! Map) continue;
+      if ((g['priority'] == true) != priority) continue;
       final keys = ((g['fields'] as List?) ?? const [])
           .map((e) => '$e')
           .toList(growable: false);
       final rows = _fieldRows(keys);
       if (rows.isEmpty) continue;
-      out.add(SizedBox(height: Ds.space.x32));
+      if (!priority) out.add(SizedBox(height: Ds.space.x32));
       out.add(_section('${g['label'] ?? ''}'));
+      final note = '${g['note'] ?? ''}';
+      if (note.isNotEmpty) {
+        out.add(Padding(
+          padding: EdgeInsets.only(bottom: Ds.space.x8),
+          child: Text(note, style: Ds.t.caption),
+        ));
+      }
       out.addAll(rows);
     }
     return out;
@@ -942,6 +979,9 @@ class OrderAlertCard extends StatelessWidget {
   final VoidCallback? onReject;
   final VoidCallback? onOverride;
   final VoidCallback? onDismiss;
+  /// CMD #2015 — Stop. The word is the backend's; an empty one draws nothing.
+  final VoidCallback? onStop;
+  final String stopLabel;
 
   const OrderAlertCard({
     super.key,
@@ -951,6 +991,8 @@ class OrderAlertCard extends StatelessWidget {
     this.onReject,
     this.onOverride,
     this.onDismiss,
+    this.onStop,
+    this.stopLabel = '',
   });
 
   @override
@@ -1057,6 +1099,19 @@ class OrderAlertCard extends StatelessWidget {
                 child: TextButton(
                   onPressed: busy ? null : onOverride,
                   child: Text('${item['override_label'] ?? ''}'),
+                ),
+              ),
+            ],
+            // Its own full-width row: at 360 px a third button in the row
+            // above would squeeze all three below a readable width.
+            if (onStop != null && stopLabel.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x8),
+              SizedBox(
+                width: double.infinity,
+                height: Ds.touch.minTarget,
+                child: TextButton(
+                  onPressed: busy ? null : onStop,
+                  child: Text(stopLabel),
                 ),
               ),
             ],

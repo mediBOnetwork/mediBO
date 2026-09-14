@@ -11,6 +11,7 @@
 // here too).
 import 'dart:async';
 
+import 'package:flutter/widgets.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -20,7 +21,7 @@ import '../models/order_alert_fsi.dart';
 import 'order_alert_sw.dart';
 import '../utils/render_log.dart';
 
-class OrderAlertService extends ChangeNotifier {
+class OrderAlertService extends ChangeNotifier with WidgetsBindingObserver {
   OrderAlertService._();
   static final OrderAlertService instance = OrderAlertService._();
 
@@ -60,10 +61,19 @@ class OrderAlertService extends ChangeNotifier {
   bool get _nativeAlerts =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
+  /// CMD #2015 — the last order_alert_reconcile() answer, verbatim.
+  Map<String, dynamic>? reconcileState;
+
   /// Called once the signed-in user is known to be an admin.
   Future<void> start() async {
     if (_started) return;
     _started = true;
+    // CMD #2015 item 1 — BEFORE anything else. A phone that came back holding
+    // a notification the server does not list (the synthetic alert that could
+    // not be dismissed, an alert actioned on another device, an old build's
+    // alarm channel) is cleared here, on every cold start.
+    WidgetsBinding.instance.addObserver(this);
+    await reconcile();
     await refresh();
     // A backstop only: realtime is the live path, this catches a dropped
     // socket. The interval is the backend's own poll_s.
@@ -77,6 +87,61 @@ class OrderAlertService extends ChangeNotifier {
   // it only held a binding open. The alert feed was already refreshed on the
   // backend's own poll_s interval (see _startPolling above), which is what has
   // actually been driving this surface all along.
+
+  /// CMD #2015 item 1 — every foreground asks the server what still exists.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      reconcile();
+      refresh();
+    }
+  }
+
+  /// The ONE question this app asks about which alerts exist: the server's
+  /// list. Nothing here decides anything — the ids, the mute switch and the
+  /// cap all arrive in the payload, and Android is told to match it exactly.
+  /// An empty list means: cancel everything, stop every sound.
+  Future<void> reconcile() async {
+    try {
+      final raw = await _db.rpc('order_alert_reconcile');
+      final m = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
+      if (m is! Map) return;
+      reconcileState = Map<String, dynamic>.from(m);
+      final ids = ((reconcileState?['live_ids'] as List?) ?? const [])
+          .map((e) => (e as num).toInt())
+          .toList(growable: false);
+      RenderLog.write('c2015_reconcile', '${ids.length}');
+      if (!_nativeAlerts) {
+        notifyListeners();
+        return;
+      }
+      await _native.invokeMethod('reconcile', {
+        'live_ids': ids,
+        'mute_all': reconcileState?['mute_all'] == true,
+      });
+      notifyListeners();
+    } catch (e) {
+      debugPrint('[order_alert] reconcile failed: $e');
+    }
+  }
+
+  /// CMD #2015 item 5 — Stop, from inside the app. Same door the
+  /// notification's own button uses: the sound dies, this alert never rings
+  /// again on any device, and the order itself is untouched.
+  Future<Map<String, dynamic>> stop(int alertId) async {
+    await stopRinging();
+    await clearNotification(alertId);
+    try {
+      final raw = await _db.rpc('order_alert_stop', params: {'p_alert_id': alertId});
+      final m = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
+      final out = m is Map ? Map<String, dynamic>.from(m) : <String, dynamic>{};
+      await reconcile();
+      return out;
+    } catch (e) {
+      debugPrint('[order_alert] stop failed: $e');
+      return {'ok': false, 'error': 'network'};
+    }
+  }
 
   /// The strip, on its own. Cheap enough to ride every refresh, and the only
   /// thing a screen that does not want the whole feed has to ask for.
@@ -377,6 +442,7 @@ class OrderAlertService extends ChangeNotifier {
   @override
   void dispose() {
     _poll?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 }

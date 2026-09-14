@@ -47,18 +47,34 @@ class MainActivity : FlutterActivity() {
                         OrderAlert.stopRinging(applicationContext)
                         result.success(true)
                     }
-                    // CHANGE #307 — the device's own answer about the
-                    // full-screen-intent grant, and the one Settings screen
-                    // that can change it. No wording here: Dart wraps these
-                    // facts in the sentences order_alert_fsi() returned.
+                    // CMD #2015 — the order alert no longer raises a
+                    // full-screen intent at all, so there is no grant to ask
+                    // for and nothing for the device card to prompt. The seam
+                    // stays (Dart and the backend copy still ask) and answers
+                    // honestly: not supported, not granted.
                     "fullScreenState" -> {
                         result.success(
                             mapOf(
-                                "supported" to OrderAlert.fullScreenIsAskable(),
-                                "granted" to OrderAlert.canFullScreen(applicationContext),
+                                "supported" to false,
+                                "granted" to false,
                                 "sdk" to android.os.Build.VERSION.SDK_INT,
                             ),
                         )
+                    }
+                    // CMD #2015 item 1 — the server is the only authority on
+                    // which alerts exist. Dart passes order_alert_reconcile()'s
+                    // list straight through; anything else on this phone is
+                    // cancelled and every sound stops.
+                    "reconcile" -> {
+                        val ids = (call.argument<List<Number>>("live_ids") ?: emptyList())
+                            .map { it.toLong() }
+                            .toSet()
+                        OrderAlert.reconcile(
+                            applicationContext,
+                            ids,
+                            call.argument<Boolean>("mute_all") ?: false,
+                        )
+                        result.success(true)
                     }
                     "openFullScreenSettings" -> {
                         result.success(openFullScreenSettings())

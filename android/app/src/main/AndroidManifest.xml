@@ -15,12 +15,13 @@
          deliberately NOT requested. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
-    <!-- CHANGE #306 — the unpaid-order alert rings over the lock screen.
-         On Android 14+ USE_FULL_SCREEN_INTENT is only granted outright to
-         calling/alarm apps; where it is not, Android degrades the alert to a
-         heads-up notification carrying the same Accept / Reject buttons, so it
-         is never lost. VIBRATE and WAKE_LOCK are what make it noticeable. -->
-    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
+    <!-- CMD #2015 — the order alert is an ordinary notification again.
+         The full-screen-intent permission is GONE: a lock-screen takeover is the
+         alarm/calling treatment that let the old alert bypass silent mode,
+         Do Not Disturb and the volume keys. The alert is now a heads-up
+         notification on a normal channel that honours the ringer, with a
+         Stop action on it. VIBRATE stays for the system's own use; WAKE_LOCK
+         is what lets the tray update while the screen is off. -->
     <uses-permission android:name="android.permission.VIBRATE"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <application
@@ -80,13 +81,14 @@
             </intent-filter>
         </service>
 
-        <!-- Accept / Reject, tapped straight off the lock screen. -->
+        <!-- CMD #2015 — Stop. The one button on the notification that kills
+             the sound and the alert on the spot. Accept / Reject left this
+             surface in CMD #1988: a decision is taken on the order screen. -->
         <receiver
             android:name=".OrderAlertActionReceiver"
             android:exported="false">
             <intent-filter>
-                <action android:name="in.medibo.app.ORDER_ALERT_ACCEPT"/>
-                <action android:name="in.medibo.app.ORDER_ALERT_REJECT"/>
+                <action android:name="in.medibo.app.ORDER_ALERT_STOP"/>
             </intent-filter>
         </receiver>
 

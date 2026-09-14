@@ -37,6 +37,7 @@ import '../admin/admin_delivery_waves_screen.dart';
 import '../admin/admin_feedback_screen.dart';
 import '../admin/returns_refunds_screen.dart';
 import '../admin/surface_map_screen.dart';
+import '../admin/admin_cart_bill_screen.dart'; // CMD #2014 — cart bill & rail
 import '../admin/onboarding_notices_screen.dart';
 import '../admin/payment_alerts_screen.dart';
 import '../admin/order_notification_trail_screen.dart';
@@ -95,6 +96,12 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       'delivery_waves' => const AdminDeliveryWavesScreen(),
       'returns_refunds' => const ReturnsRefundsScreen(),
       'surface_map' => const SurfaceMapScreen(),
+      // CMD #2014 — Cart bill & rail: the bill summary rows the customer cart
+      // prints and the suggested rail under them. Registered here rather than
+      // in the shell's own switch for the reason this shard exists, and not
+      // gated here either — admin_cart_bill_list() answers on the caller's own
+      // role and the screen renders its refusal.
+      'cart_bill' => const AdminCartBillScreen(),
       // CMD #1929 — Payment alerts: the notifications the partner phone
       // forwards, and what the backend matched each one to. The door is HERE
       // rather than in the shell's own switch for the reason this shard

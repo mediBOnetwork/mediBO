@@ -20,6 +20,8 @@ import '../util.dart';
 import '../services/ui_copy.dart';
 import '../view_as_state.dart';
 import '../widgets/animations.dart';
+import '../widgets/cart_bill_summary.dart';
+import '../widgets/cart_wishlist_rail.dart';
 import '../widgets/checkout_pay_sheet.dart';
 import '../widgets/companion_rail.dart';
 import 'auth/login_screen.dart';
@@ -190,6 +192,45 @@ class _CartScreenState extends State<CartScreen> {
   // those keep the user's choice across rebuilds; everything else re-derives from
   // added_by every time.
   final Set<String> _viewAsChecked = {};
+
+  // ── CMD #2014 — the bill summary card and the suggested rail ─────────────
+  // One RPC, cart_bill_view(), answers both blocks. Every row's label, icon,
+  // order, visibility, amount and popup copy is a cart_bill_row an admin edits;
+  // the rail's contents, title and order are cart_rail_block()'s decision.
+  // Nothing below is computed here — this state holds payloads, not numbers.
+  Map<String, dynamic> _billPayload = const <String, dynamic>{};
+
+  /// Ids AND quantities: the bill moves when a quantity moves, which the
+  /// availability signature (ids only) deliberately does not.
+  String? _billSignature;
+
+  static String _billSignatureOf(List<CartLine> lines) {
+    final parts = lines
+        .map((l) => '${l.product.id}:${l.quantity}')
+        .toList()
+      ..sort();
+    return parts.join(',');
+  }
+
+  Future<void> _refreshBill(List<CartLine> lines) async {
+    final signature = _billSignatureOf(lines);
+    _billSignature = signature;
+    if (lines.isEmpty) {
+      if (!mounted) return;
+      setState(() => _billPayload = const <String, dynamic>{});
+      return;
+    }
+    try {
+      final res = await Supabase.instance.client.rpc('cart_bill_view');
+      if (!mounted || _billSignature != signature) return;
+      setState(() => _billPayload = Map<String, dynamic>.from(res as Map));
+    } catch (_) {
+      // A bill that cannot be read must never take the cart down with it: the
+      // items, the checkout bar and Place Order all stand on their own.
+      if (!mounted) return;
+      setState(() => _billPayload = const <String, dynamic>{});
+    }
+  }
 
   /// CHANGE #597 — the View As selected-line subtotal, computed AND formatted
   /// by cart_selected_total(). It used to be summed in build() from
@@ -814,6 +855,15 @@ class _CartScreenState extends State<CartScreen> {
       });
     }
 
+    // CMD #2014 — the bill moves with quantities, so it has its own signature.
+    if (_billSignatureOf(cart.lines) != _billSignature) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final lines = cart.lines;
+        if (_billSignatureOf(lines) != _billSignature) _refreshBill(lines);
+      });
+    }
+
     if (cart.lines.isEmpty) {
       return const _EmptyCart();
     }
@@ -880,6 +930,22 @@ class _CartScreenState extends State<CartScreen> {
             ? _UnavailableChip(text: cart.unavailableBadge)
             : null;
 
+    // CMD #2014 — both blocks live INSIDE the page scroll, below the items:
+    // they are handed to _ItemList as trailing rows rather than stacked around
+    // it, so neither is sticky and neither sits under the header. Each returns
+    // null when the backend says it has nothing to draw.
+    final bill = CartBillSummary.fromPayload(_billPayload['bill']);
+    final rail = CartWishlistRail.fromPayload(
+      _billPayload['rail'],
+      (p) => Navigator.of(context).pushNamed('/product/${p.id}'),
+    );
+    if (bill != null) RenderLog.write('c2014_bill_rows', bill.rows.length);
+    if (rail != null) RenderLog.write('c2014_rail_cards', rail.items.length);
+    final scrollFooters = <Widget>[
+      if (bill != null) bill,
+      if (rail != null) rail,
+    ];
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final wide = constraints.maxWidth >= 600;
@@ -915,6 +981,7 @@ class _CartScreenState extends State<CartScreen> {
                               viewAsChecked: cart.isViewAs ? _viewAsChecked : null,
                               onViewAsToggle: cart.isViewAs ? _toggleViewAsChecked : null,
                               lineAvailability: _lineAvailability,
+                              footers: scrollFooters,
                             ),
                           ),
                           const SizedBox(width: 16),
@@ -963,6 +1030,7 @@ class _CartScreenState extends State<CartScreen> {
                 viewAsChecked: cart.isViewAs ? _viewAsChecked : null,
                 onViewAsToggle: cart.isViewAs ? _toggleViewAsChecked : null,
                 lineAvailability: _lineAvailability,
+                footers: scrollFooters,
               ),
             ),
             if (schemeSection != null) schemeSection,
@@ -1320,6 +1388,12 @@ class _ItemList extends StatefulWidget {
   /// CHANGE #553 — product_id → the backend's verdict for that cart line,
   /// from cart_availability(). Empty until the first fetch answers.
   final Map<String, Availability> lineAvailability;
+
+  /// CMD #2014 — blocks that belong BELOW the items and INSIDE this scroll
+  /// (the bill summary card, then the suggested rail). They are trailing rows
+  /// of this ListView rather than siblings of it, which is what keeps them
+  /// scrolling with the page instead of pinning to an edge.
+  final List<Widget> footers;
   const _ItemList({
     super.key,
     required this.cart,
@@ -1327,6 +1401,7 @@ class _ItemList extends StatefulWidget {
     this.viewAsChecked,
     this.onViewAsToggle,
     this.lineAvailability = const {},
+    this.footers = const <Widget>[],
   });
 
   @override
@@ -1454,6 +1529,12 @@ class _ItemListState extends State<_ItemList> {
       if (_showRemoved) afterCount += removed.length;
     }
     if (showCompanions) afterCount += 1;
+    // CMD #2014 — the bill card and the suggested rail follow the companion
+    // rail, still inside this scroll. They only belong under the REAL list: a
+    // search that narrows the cart is not the moment to show a bill for the
+    // whole basket.
+    final footers = searchActive ? const <Widget>[] : widget.footers;
+    afterCount += footers.length;
 
     // CHANGE #639 — index of the first line the BACKEND flagged, so the
     // scroll-to target can be tagged as it is built.
@@ -1526,27 +1607,32 @@ class _ItemListState extends State<_ItemList> {
           extra -= _showRemoved ? removed.length : 0;
         }
 
-        if (showCompanions && extra == 0) {
-          return Padding(
-            padding: EdgeInsets.only(top: Ds.space.x24, bottom: Ds.space.x8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  (companions['title'] ?? '').toString(),
-                  style: Ds.t.subtitle,
-                ),
-                SizedBox(height: Ds.space.x4),
-                Text(
-                  (companions['note'] ?? '').toString(),
-                  style: Ds.t.caption,
-                ),
-                SizedBox(height: Ds.space.x12),
-                CompanionRail(items: companionItems),
-              ],
-            ),
-          );
+        if (showCompanions) {
+          if (extra == 0) {
+            return Padding(
+              padding: EdgeInsets.only(top: Ds.space.x24, bottom: Ds.space.x8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    (companions['title'] ?? '').toString(),
+                    style: Ds.t.subtitle,
+                  ),
+                  SizedBox(height: Ds.space.x4),
+                  Text(
+                    (companions['note'] ?? '').toString(),
+                    style: Ds.t.caption,
+                  ),
+                  SizedBox(height: Ds.space.x12),
+                  CompanionRail(items: companionItems),
+                ],
+              ),
+            );
+          }
+          extra -= 1;
         }
+
+        if (extra >= 0 && extra < footers.length) return footers[extra];
 
         return const SizedBox();
       },

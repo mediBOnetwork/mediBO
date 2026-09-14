@@ -152,7 +152,9 @@ void main() {
     await t.pumpAndSettle();
 
     expect(find.text('Matched'), findsOneWidget);
-    expect(find.text('PO-9F2C'), findsOneWidget);
+    // CMD #1929 pinned the matched claim as ONE joined line — customer, then
+    // code — so that is what is asserted here too, not the two halves.
+    expect(find.text('Sai Medicals · PO-9F2C'), findsOneWidget);
     // Absence is the backend's: empty ignore/retry labels mean no buttons,
     // never a client-side `if (status == matched)`.
     expect(find.text('Ignore'), findsNothing);

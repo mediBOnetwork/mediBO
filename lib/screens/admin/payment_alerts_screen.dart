@@ -65,10 +65,24 @@ Color payAlertToneSoft(String tone) {
 }
 
 class PaymentAlertsScreen extends StatefulWidget {
-  const PaymentAlertsScreen({super.key, this.rpc, this.isSuperAdmin = false});
+  const PaymentAlertsScreen({
+    super.key,
+    this.rpc,
+    this.screenRpc,
+    this.setStatusRpc,
+    this.isSuperAdmin = false,
+  });
 
   /// Injected in tests so the screen is proven against a payload, not a network.
   final PayAlertRpc? rpc;
+
+  /// CMD #1929's two narrow doors, kept verbatim: the protected suite pumps
+  /// this screen through them, and a rewrite that widened the injection point
+  /// must not also change the contract a green test already pins. Either is
+  /// consulted before [rpc] for the one call it stands for.
+  final Future<Map<String, dynamic>> Function(String? status)? screenRpc;
+  final Future<Map<String, dynamic>> Function(String id, String status)?
+      setStatusRpc;
 
   /// Only a super admin is offered the parser editor. The RPCs behind it gate
   /// on the role themselves and render their own refusal — this only decides
@@ -83,10 +97,28 @@ class _PaymentAlertsScreenState extends State<PaymentAlertsScreen> {
   Map<String, dynamic> _payload = const {};
   bool _loading = true;
   String _error = '';
+  /// The refusal carries its OWN retry wording; the last good payload's copy
+  /// must not be what the error box prints, and neither may a Dart literal.
+  String _retryLabel = '';
   String _filter = '';
   String _busy = '';
 
-  PayAlertRpc get _call => widget.rpc ?? payAlertLiveRpc;
+  Future<Map<String, dynamic>> _call(
+    String fn,
+    Map<String, dynamic> args,
+  ) async {
+    if (fn == 'payment_alerts_screen' && widget.screenRpc != null) {
+      final status = args['p_status'];
+      return widget.screenRpc!(status is String ? status : null);
+    }
+    if (fn == 'payment_alert_set_status' && widget.setStatusRpc != null) {
+      return widget.setStatusRpc!(
+        '${args['p_alert_id'] ?? ''}',
+        '${args['p_status'] ?? ''}',
+      );
+    }
+    return (widget.rpc ?? payAlertLiveRpc)(fn, args);
+  }
 
   @override
   void initState() {
@@ -107,6 +139,7 @@ class _PaymentAlertsScreenState extends State<PaymentAlertsScreen> {
     if (!mounted) return;
     setState(() {
       _loading = false;
+      _retryLabel = _s(res['retry_label']);
       if (res['ok'] == true) {
         _payload = res;
         _error = '';
@@ -194,13 +227,26 @@ class _PaymentAlertsScreenState extends State<PaymentAlertsScreen> {
       ),
       body: RefreshIndicator(
         onRefresh: _load,
-        child: ListView(
+        // A Column inside a scroll view, not a lazy ListView: the queue is
+        // capped at 60 rows by the RPC, and a card that is merely OFF-SCREEN
+        // must still exist — "the row never built" and "Dart dropped the row"
+        // look identical from the outside, and the second is the bug this
+        // screen exists to make impossible.
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
           padding: EdgeInsets.all(Ds.space.x16),
-          children: [
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
             if (_s(_payload['subtitle']).isNotEmpty)
               Padding(
-                padding: EdgeInsets.only(bottom: Ds.space.x16),
+                padding: EdgeInsets.only(bottom: Ds.space.x4),
                 child: Text(_s(_payload['subtitle']), style: Ds.t.caption),
+              ),
+            if (_s(_payload['count_label']).isNotEmpty)
+              Padding(
+                padding: EdgeInsets.only(bottom: Ds.space.x16),
+                child: Text(_s(_payload['count_label']), style: Ds.t.caption),
               ),
             if (filters.isNotEmpty) ...[
               _FilterRow(
@@ -216,7 +262,7 @@ class _PaymentAlertsScreenState extends State<PaymentAlertsScreen> {
             if (_loading)
               const _Skeleton()
             else if (_error.isNotEmpty)
-              _ErrorBox(message: _error, retryLabel: _s(_payload['retry_label']), onRetry: _load)
+              _ErrorBox(message: _error, retryLabel: _retryLabel, onRetry: _load)
             else if (rows.isEmpty)
               _EmptyBox(
                 label: _s(_payload['empty_label']),
@@ -240,7 +286,8 @@ class _PaymentAlertsScreenState extends State<PaymentAlertsScreen> {
                     }),
                   ),
                 ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -357,9 +404,21 @@ class _AlertCard extends StatelessWidget {
             ],
           ),
           SizedBox(height: Ds.space.x4),
-          Text(
-            _s(row['app_label']),
-            style: Ds.t.caption,
+          // app_label is which app sent it; source_label is HOW it was read
+          // (a parser rule, or the AI fallback). Both are backend words and
+          // both belong on the card — the second is how an admin knows which
+          // rule to go and fix.
+          // Two words, two Text widgets: joining them in Dart would invent a
+          // separator the backend never sent, and neither half could then be
+          // reworded by an ui_copy UPDATE on its own.
+          Wrap(
+            spacing: Ds.space.x12,
+            children: [
+              if (_s(row['app_label']).isNotEmpty)
+                Text(_s(row['app_label']), style: Ds.t.caption),
+              if (_s(row['source_label']).isNotEmpty)
+                Text(_s(row['source_label']), style: Ds.t.caption),
+            ],
           ),
           SizedBox(height: Ds.space.x12),
           _KeyLine(label: _s(row['posted_label'])),
@@ -374,14 +433,11 @@ class _AlertCard extends StatelessWidget {
                 color: payAlertToneSoft('success'),
                 borderRadius: Ds.r.rButton,
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (orderCode.isNotEmpty)
-                    Text(orderCode, style: Ds.t.bodyStrong),
-                  if (customer.isNotEmpty)
-                    Text(customer, style: Ds.t.caption),
-                ],
+              // CMD #1929 pinned this as ONE line, customer then code: the
+              // matched claim reads as a sentence, not as two stacked fields.
+              child: Text(
+                [customer, orderCode].where((w) => w.isNotEmpty).join(' · '),
+                style: Ds.t.bodyStrong,
               ),
             ),
           ],
@@ -409,7 +465,12 @@ class _AlertCard extends StatelessWidget {
                 if (retryLabel.isNotEmpty)
                   _Action(label: retryLabel, primary: false, onTap: onRetry),
                 if (ignoreLabel.isNotEmpty)
-                  _Action(label: ignoreLabel, primary: false, onTap: onIgnore),
+                  _Action(
+                    label: ignoreLabel,
+                    primary: false,
+                    icon: Icons.block,
+                    onTap: onIgnore,
+                  ),
               ],
             ),
           ],
@@ -459,19 +520,32 @@ class _StatusPill extends StatelessWidget {
 }
 
 class _Action extends StatelessWidget {
-  const _Action({required this.label, required this.primary, required this.onTap});
+  const _Action({
+    required this.label,
+    required this.primary,
+    required this.onTap,
+    this.icon,
+  });
   final String label;
   final bool primary;
   final VoidCallback onTap;
+  final IconData? icon;
 
   @override
   Widget build(BuildContext context) {
     if (label.isEmpty) return const SizedBox.shrink();
+    final text = Text(label);
     return SizedBox(
       height: 44,
       child: primary
-          ? FilledButton(onPressed: onTap, child: Text(label))
-          : OutlinedButton(onPressed: onTap, child: Text(label)),
+          ? FilledButton(onPressed: onTap, child: text)
+          : icon == null
+              ? OutlinedButton(onPressed: onTap, child: text)
+              : OutlinedButton.icon(
+                  onPressed: onTap,
+                  icon: Icon(icon, size: 18),
+                  label: text,
+                ),
     );
   }
 }

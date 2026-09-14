@@ -244,6 +244,18 @@ begin
     if not exists (select 1 from unnest(coalesce(r.proconfig,'{}'::text[])) c
                     where c ilike 'search_path=%' and c ~ '\ymode\y') then
       begin
+        -- An INSERT ... ON CONFLICT and a TRUNCATE cannot address a view, and
+        -- a row being WRITTEN is not a row being SHOWN: pin those two straight
+        -- at the base table first, so putting `mode` in front only ever
+        -- changes what the function READS.
+        v_new := r.def;
+        for t in select table_name from public.mode_scoped_table order by 1 loop
+          v_new := regexp_replace(v_new, '(\yinsert\s+into\s+)' || t || '\y',
+                                  '\1public.' || t, 'gi');
+          v_new := regexp_replace(v_new, '(\ytruncate\s+(table\s+)?)' || t || '\y',
+                                  '\1public.' || t, 'gi');
+        end loop;
+        if v_new <> r.def then execute v_new; end if;
         execute format('alter function public.%I(%s) set search_path to %L, %L',
                        r.proname, pg_get_function_identity_arguments(r.oid), 'mode', 'public');
         v_switched := v_switched + 1;

@@ -314,7 +314,7 @@ begin
       'columns', jsonb_build_array(
         jsonb_build_object('key','licence','label', public._c('agree_pdf.col_licence'),'align','left','width',150),
         jsonb_build_object('key','number','label', public._c('agree_pdf.col_number'),'align','left','width',0),
-        jsonb_build_object('key','expiry','label', public._c('agree_pdf.col_expiry'),'align','right','width',90),
+        jsonb_build_object('key','expiry','label', public._c('agree_pdf.col_expiry'),'align','right','width',112),
         jsonb_build_object('key','state','label', public._c('agree_pdf.col_state'),'align','right','width',90)),
       'rows', v_lic, 'empty_label', public._c('agree_pdf.sch_b_empty'),
       'notes', jsonb_build_array(public._c('agree_pdf.sch_b_note'))),

@@ -455,3 +455,135 @@ class _MobileCartIconState extends State<_MobileCartIcon>
 // typed into.
 
 // ─────────────────────── Cart panel ───────────────────────
+
+// ─── CMD #2019 — the storefront header collapses on scroll ───────────────────
+//
+// The phone gives ~70 px of every screen to the header band (profile · logo ·
+// cart). Scrolling the storefront down hands that band back to the products
+// and scrolling up returns it, which is what a floating+snapping SliverAppBar
+// does — done here rather than with a real sliver because the chrome BELOW it
+// is what has to stay pinned, and that chrome changes height with focus (the
+// search bar, the category chip row, and the idle rail that opens under them).
+// A pinned sliver has to be told its height in advance; a widget that sits
+// outside the scroll view does not, and "outside the scroll view" is already
+// the strongest form of pinned there is. So the search bar and the category
+// row never move, and only the band above them animates.
+//
+// The page's own scrolling is the input: [shellHeaderScroll] reads the deltas
+// that bubble up out of whichever scroll view the storefront is currently
+// showing (home feed, category list or search results) and flips one notifier.
+// A `setState` on the shell would rebuild every page in the IndexedStack on
+// every flick, so the band listens to the notifier by itself.
+
+/// Is the mobile header band currently shown?
+final ValueNotifier<bool> shellHeaderVisible = ValueNotifier<bool>(true);
+
+/// Below this offset the band is always shown: the top of a page keeps its
+/// full chrome, and a page too short to scroll can never hide it.
+const double _kBandFloor = 80;
+
+/// How much uninterrupted travel in one direction flips the band. Small enough
+/// to feel immediate, large enough that a fling's jitter cannot strobe it.
+const double _kBandTravel = 12;
+
+double _bandAcc = 0;
+
+void _bandSet(bool v) {
+  _bandAcc = 0;
+  if (shellHeaderVisible.value != v) shellHeaderVisible.value = v;
+}
+
+/// Put the band back and forget the travel that hid it. Setting the notifier
+/// alone would leave the accumulator mid-flick, so the first delta after a tab
+/// switch could hide the header again before the finger had travelled.
+void shellHeaderBandShow() => _bandSet(true);
+
+/// Feeds [shellHeaderVisible] from the page's own scrolling. Always returns
+/// false: this listens, it never swallows a notification.
+bool shellHeaderScroll(ScrollNotification n, bool enabled) {
+  if (!enabled) {
+    _bandSet(true);
+    return false;
+  }
+  // Horizontal rails (the home feed's carousels, the chip row, the idle rail)
+  // scroll constantly and must never move the band.
+  if (n.metrics.axis != Axis.vertical) return false;
+  if (!n.metrics.hasContentDimensions) return false;
+  if (n.metrics.pixels <= _kBandFloor ||
+      n.metrics.maxScrollExtent <= _kBandFloor) {
+    _bandSet(true);
+    return false;
+  }
+  if (n is! ScrollUpdateNotification) return false;
+  final d = n.scrollDelta ?? 0;
+  if (d == 0) return false;
+  if (d.isNegative != _bandAcc.isNegative) _bandAcc = 0;
+  _bandAcc += d;
+  if (_bandAcc >= _kBandTravel) {
+    _bandSet(false);
+  } else if (_bandAcc <= -_kBandTravel) {
+    _bandSet(true);
+  }
+  return false;
+}
+
+/// The header band, wrapped so it can slide away and come back. [enabled] is
+/// the shell's own verdict — only the customer phone storefront collapses.
+Widget shellCollapsibleBand(bool enabled, Widget child) =>
+    enabled ? _CollapsingBand(child: child) : child;
+
+class _CollapsingBand extends StatefulWidget {
+  const _CollapsingBand({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_CollapsingBand> createState() => _CollapsingBandState();
+}
+
+class _CollapsingBandState extends State<_CollapsingBand>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 180),
+    value: 1,
+  );
+  late final Animation<double> _size =
+      CurvedAnimation(parent: _c, curve: Curves.easeOutCubic);
+
+  @override
+  void initState() {
+    super.initState();
+    shellHeaderVisible.addListener(_sync);
+  }
+
+  void _sync() {
+    if (!mounted) return;
+    if (shellHeaderVisible.value) {
+      _c.forward();
+    } else {
+      _c.reverse();
+    }
+  }
+
+  @override
+  void dispose() {
+    shellHeaderVisible.removeListener(_sync);
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    RenderLog.write('c2019_band', 1);
+    // ClipRect keeps the band's own bottom border from painting outside the
+    // height the transition is currently giving it.
+    return ClipRect(
+      child: SizeTransition(
+        sizeFactor: _size,
+        alignment: Alignment.topCenter,
+        child: widget.child,
+      ),
+    );
+  }
+}

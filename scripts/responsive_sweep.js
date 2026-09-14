@@ -96,6 +96,7 @@ const SCREENS = [
 // flaky edge is retuned with one pool_set and no deploy.
 let READ_RETRIES    = 8;      // evaluate attempts across a navigation
 let COMBO_BUDGET_MS = 60000;  // one screen at one width, paint + settle + retry
+let COMBO_ATTEMPTS  = 2;      // a combination that wrote no log is loaded again
 let SETTLE_MS       = 6000;   // let the audit re-measure once the RPC lands
 let NAV_QUIET_MS    = 2500;   // no main-frame navigation for this long = settled
 // The whole sweep has a budget. post_deploy_checks.sh wraps it in `timeout`,
@@ -186,6 +187,48 @@ async function measure(page, nav, budgetMs) {
   return null;
 }
 
+// One attempt at one combination, in its own context. A combination that comes
+// back without a render log is RETRIED (sweep_combo_attempts) before it is
+// called a failure: over 40 combinations a single cold load that never painted
+// in time would otherwise turn the whole guard red, and a screen that is
+// genuinely broken fails every attempt. Nothing else is retried — an overflow
+// or an undersized tap target is a number the app reported, and it stands.
+async function probe(browser, label, route, width, minTouch) {
+  const ctx = await browser.newContext({
+    viewport: { width, height: 900 },
+    isMobile: width < 900,
+    hasTouch: width < 900,
+    deviceScaleFactor: 1,
+  });
+  const page = await ctx.newPage();
+  // The staff routes bounce an anonymous visitor to the storefront, and the
+  // bounce is what used to kill the read. Track it instead: the last main-frame
+  // navigation says when the page stopped moving, and the URL actually measured
+  // is recorded with the numbers.
+  const nav = { at: Date.now(), count: 0 };
+  page.on('framenavigated', (f) => {
+    if (f === page.mainFrame()) { nav.at = Date.now(); nav.count += 1; }
+  });
+  let log = null;
+  let err = null;
+  try {
+    const sep = route.includes('?') ? '&' : '?';
+    await page.goto(`${TARGET}${route}${sep}responsive_audit=1&min_touch=${minTouch}`,
+      { waitUntil: 'domcontentloaded', timeout: 45000 });
+    log = await measure(page, nav, COMBO_BUDGET_MS);
+  } catch (e) {
+    err = String(e && e.message).slice(0, 80);
+    if (NAV_RACE.test(String(e && e.message))) {
+      try { await page.waitForLoadState('domcontentloaded', { timeout: 3000 }); } catch (_) {}
+      try { log = await measure(page, nav, Math.min(COMBO_BUDGET_MS, 20000)); } catch (_) {}
+    }
+  }
+  let url = null;
+  try { url = page.url(); } catch (_) { /* context already gone */ }
+  await ctx.close();
+  return { log, err, url, navs: nav.count };
+}
+
 (async () => {
   if (!SUPABASE_URL || !SERVICE_KEY) {
     console.error('responsive_sweep: PROD_SUPABASE_URL / PROD_SERVICE_ROLE_KEY are not set');
@@ -200,6 +243,7 @@ async function measure(page, nav, budgetMs) {
   const minTouch = mf.min_touch_px || 44;
   READ_RETRIES    = Number(mf.sweep_read_retries)   || READ_RETRIES;
   COMBO_BUDGET_MS = Number(mf.sweep_combo_budget_ms) || COMBO_BUDGET_MS;
+  COMBO_ATTEMPTS  = Number(mf.sweep_combo_attempts)   || COMBO_ATTEMPTS;
   SETTLE_MS       = Number(mf.sweep_settle_ms)      || SETTLE_MS;
   NAV_QUIET_MS    = Number(mf.sweep_nav_quiet_ms)   || NAV_QUIET_MS;
   BUDGET_MS       = Number(mf.sweep_budget_ms)      || BUDGET_MS;
@@ -216,42 +260,14 @@ async function measure(page, nav, budgetMs) {
       for (const [label, route] of SCREENS) {
         if (!wanted(label, width)) continue;
         if (Date.now() >= deadline) { skipped.push(`${label} @${width}px`); continue; }
-        const ctx = await browser.newContext({
-          viewport: { width, height: 900 },
-          isMobile: width < 900,
-          hasTouch: width < 900,
-          deviceScaleFactor: 1,
-        });
-        const page = await ctx.newPage();
-        // The staff routes bounce an anonymous visitor to the storefront, and
-        // the bounce is what used to kill the read. Track it instead: the last
-        // main-frame navigation says when the page stopped moving, and the URL
-        // we actually measured is recorded with the numbers.
-        const nav = { at: Date.now(), count: 0 };
-        page.on('framenavigated', (f) => {
-          if (f === page.mainFrame()) { nav.at = Date.now(); nav.count += 1; }
-        });
-        let log = null;
-        let err = null;
-        try {
-          const sep = route.includes('?') ? '&' : '?';
-          await page.goto(`${TARGET}${route}${sep}responsive_audit=1&min_touch=${minTouch}`,
-            { waitUntil: 'domcontentloaded', timeout: 45000 });
-          log = await measure(page, nav, COMBO_BUDGET_MS);
-        } catch (e) {
-          err = String(e && e.message).slice(0, 80);
-          // A navigation race is not a verdict — one last look once the page
-          // has stopped moving.
-          if (NAV_RACE.test(String(e && e.message))) {
-            try { await page.waitForLoadState('domcontentloaded', { timeout: 15000 }); } catch (_) {}
-            try {
-              log = await measure(page, nav, Math.min(COMBO_BUDGET_MS, 20000));
-            } catch (_) { /* the page is gone; the missing log is the failure */ }
+        let log = null, err = null, finalUrl = null, navCount = 0;
+        for (let attempt = 1; attempt <= COMBO_ATTEMPTS && !log; attempt++) {
+          const shot = await probe(browser, label, route, width, minTouch);
+          log = shot.log; err = shot.err; finalUrl = shot.url; navCount = shot.navs;
+          if (!log && attempt < COMBO_ATTEMPTS) {
+            say(`  ${String(width).padStart(4)}px  ${label.padEnd(16)} no render log — attempt ${attempt + 1}`);
           }
         }
-        let finalUrl = null;
-        try { finalUrl = page.url(); } catch (_) { /* context already closed */ }
-        await ctx.close();
         if (!log) {
           failures.push(`${label} @${width}px did not load (${err || 'wrote no render log'})`);
           continue;
@@ -261,7 +277,7 @@ async function measure(page, nav, budgetMs) {
         const painted  = String(log.boot_status || '') === 'painted';
         seen.push({ screen: label, width, overflow, small, painted,
                     build: log.build || null, viewport_w: log.viewport_w || null,
-                    url: finalUrl, navs: nav.count });
+                    url: finalUrl, navs: navCount });
         if (!painted) failures.push(`${label} @${width}px never painted (boot_status=${log.boot_status || 'none'})`);
         if (overflow > 0) {
           failures.push(`${label} @${width}px overflowed ${overflow}x — ${log.overflow_first || 'no detail'}`);

@@ -8,10 +8,9 @@ import 'package:pharma_b2b/services/date_labels.dart';
 import 'package:pharma_b2b/services/ui_copy.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 
-import '../../design_tokens.dart';
 import '../../services/order_alert_service.dart';
 import 'alert_audio.dart';
-import 'order_alert_sheet.dart';
+import 'order_alert_popup.dart';
 
 // ── Column skip / label helpers (matches admin_customer_screen) ──────────────
 
@@ -70,14 +69,13 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
   final List<Map<String, dynamic>> _queue = [];
   bool _muted = false;
 
-  // CMD #1989 — the popup. It is a bottom sheet now, and WHETHER it opens is
-  // order_alert_strip().sheet_autoshow: #1988's "one interrupt per order" rule
-  // is still the backend's to enforce, not a flag invented here. This set is
-  // only a memory of what has already been shown, so a poll does not reopen a
-  // sheet the admin just swiped away.
-  final Set<String> _sheetShownFor = {};
-  bool _sheetOpen = false;
-  AnimationController? _sheetCtrl;
+  // CMD #2016 — the popup, and it is the ONLY in-app surface a new order gets.
+  // WHETHER it opens is order_alert_popup().autoshow: #1988's "one interrupt
+  // per order" rule is still the backend's to enforce, not a flag invented
+  // here, and "Later" is a dismissal the SERVER holds per device — so nothing
+  // in this class remembers what has been put aside.
+  bool _popupOpen = false;
+  String _popupOrderId = '';
   bool _detailsOpen = false;
   bool _busy = false;
 
@@ -248,31 +246,32 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
     }
   }
 
-  // CMD #1988 — THE ORDER POPUP IS GONE.
+  // CMD #2016 — A NEW ORDER NEVER ENTERS THIS QUEUE.
   //
-  // Om got a lock-screen alert AND a centre dialog for the same order, and the
-  // dialog would not go silent. Two interrupts for one event is one too many,
-  // so the full-screen alert is now the only interrupt and the app shows a
-  // slim tappable strip instead. Nothing about that strip is decided here:
-  // order_alert_strip() sends both sentences, the tone, the action word and
-  // whether the sound rings at all.
+  // The registration queue below is the flashing centre card for a new SIGN-UP.
+  // An order takes a different road: the app in the background gets a system
+  // notification, and the app in the foreground gets the centre popup that
+  // _syncPopup() opens. Nothing about that popup is decided here —
+  // order_alert_popup() sends every sentence, the pill's tone, both button
+  // words and whether the sound rings at all.
   //
   // Accept and Reject are not on this surface either. They live on the order
   // screen, next to the items and the amount — a decision is never taken from
-  // a notification or from a banner that only knows a total.
+  // a notification or from a popup that only knows a total.
   void _enqueueOrder(Map<String, dynamic> rec, String id) {
     if (id.isNotEmpty && _orderSeenIds.contains(id)) return;
     if (id.isNotEmpty) _orderSeenIds.add(id);
-    // The realtime insert is only a nudge to re-read; the strip is the answer.
-    OrderAlertService.instance.refreshStrip();
+    // The realtime insert is only a nudge to re-read; the popup is the answer.
+    OrderAlertService.instance.refreshPopup();
   }
 
-  /// The strip was tapped: the order is being opened, so the ring stops on
-  /// EVERY device (the backend stamps the row), then the host opens it.
+  /// The popup's Open button was tapped: the order is being opened, so the
+  /// ring stops on EVERY device (the backend stamps the row), then the host
+  /// opens it.
   Future<void> _openOrder(String orderId) async {
     if (orderId.isEmpty) return;
     orderAudioStop();
-    await OrderAlertService.instance.seen(orderId, source: 'strip');
+    await OrderAlertService.instance.seen(orderId, source: 'popup');
     if (!mounted) return;
     if (widget.onOrderStageTap != null) {
       widget.onOrderStageTap!(orderId);
@@ -284,54 +283,70 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
   /// The web sound follows the backend's `ring` flag and nothing else — which
   /// is how quiet hours, a snoozed device and "somebody already opened it"
   /// all reach the speaker without a single client-side rule.
-  void _syncStripAudio() {
-    if (OrderAlertService.instance.stripRing) {
+  void _syncPopupAudio() {
+    if (OrderAlertService.instance.popupRing) {
       orderAudioStart();
     } else {
       orderAudioStop();
     }
   }
 
-  /// CMD #1989 — open the popup when the BACKEND says to.
+  /// CMD #2016 — open the centre popup when the BACKEND says to, and close it
+  /// when the backend stops saying so.
   ///
-  /// `sheet_autoshow` is the whole decision: it is false the moment somebody
-  /// has opened the order anywhere, and false for an alert that is no longer
-  /// ringing, so the sheet can never become the second interrupt #1988 removed.
-  /// Once shown for an order it is not shown again — the strip stays behind it
-  /// as the quiet reminder.
-  void _maybeShowSheet() {
-    final strip = OrderAlertService.instance.strip;
-    if (strip == null || strip['sheet_autoshow'] != true) return;
-    final orderId = (strip['sheet_order_id'] as String?) ?? '';
-    if (orderId.isEmpty || _sheetOpen || _sheetShownFor.contains(orderId)) return;
-    _sheetShownFor.add(orderId);
+  /// `autoshow` is the whole decision: it is false the moment somebody has
+  /// opened the order anywhere, false for an alert that is no longer ringing,
+  /// and the payload itself is absent (show:false) for an alert THIS device has
+  /// put aside with Later. So spec item 4 needs no client rule — a popup on
+  /// screen with no live alert behind it closes itself on the next read.
+  void _syncPopup() {
+    final svc = OrderAlertService.instance;
+    final live = svc.popupShow && svc.popup?['autoshow'] == true;
+    final orderId = svc.popupOrderId;
+
+    if (_popupOpen && (!live || orderId != _popupOrderId)) {
+      // The server alert this popup was drawn for is gone (opened elsewhere,
+      // actioned, expired) — take the popup off the screen.
+      _popupOpen = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && Navigator.of(context).canPop()) {
+          Navigator.of(context).pop(OrderAlertPopupResult.gone);
+        }
+      });
+      return;
+    }
+    if (!live || _popupOpen) return;
+    _popupOpen = true;
+    _popupOrderId = orderId;
     // Out of the build phase: this is reached from an AnimatedBuilder.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _openSheet(orderId));
+    WidgetsBinding.instance.addPostFrameCallback((_) => _openPopup());
   }
 
-  Future<void> _openSheet(String orderId) async {
-    if (!mounted || _sheetOpen) return;
-    final payload = await OrderAlertService.instance.sheet(orderId);
-    if (!mounted || payload == null || payload['show'] != true) return;
-    _sheetOpen = true;
-    _sheetCtrl?.dispose();
-    final ctrl = orderAlertSheetController(this);
-    _sheetCtrl = ctrl;
-    try {
-      await showOrderAlertSheet(
-        context,
-        sheet: payload,
-        controller: ctrl,
-        onOpen: () {
-          Navigator.of(context).pop();
-          _openOrder(orderId);
-        },
-      );
-    } finally {
-      _sheetOpen = false;
-      ctrl.dispose();
-      if (identical(_sheetCtrl, ctrl)) _sheetCtrl = null;
+  Future<void> _openPopup() async {
+    final svc = OrderAlertService.instance;
+    final payload = svc.popup;
+    if (!mounted || payload == null || payload['show'] != true) {
+      _popupOpen = false;
+      return;
     }
+    final orderId = (payload['order_id'] as String?) ?? '';
+    OrderAlertPopupResult? result;
+    try {
+      result = await showOrderAlertPopup(context, popup: payload);
+    } finally {
+      _popupOpen = false;
+      _popupOrderId = '';
+    }
+    if (!mounted) return;
+    if (result == OrderAlertPopupResult.open) {
+      await _openOrder(orderId);
+      return;
+    }
+    if (result == OrderAlertPopupResult.gone) return;
+    // Later — and a tap outside is Later too. The dismissal is the server's to
+    // hold, per device: the order stays in Awaiting action and the nav badge
+    // still counts it.
+    await svc.popupLater(orderId);
   }
 
   void _onFirstAlert() {
@@ -441,8 +456,6 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
     _alertWatch?.dispose();
     audioStop();
     orderAudioStop();
-    _sheetCtrl?.dispose();
-    _sheetCtrl = null;
     _flashCtrl.dispose();
     _slideCtrl.dispose();
     super.dispose();
@@ -453,27 +466,18 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
   @override
   Widget build(BuildContext context) {
     return Stack(children: [
-      // CMD #1988 — the strip sits ABOVE the shell, never over it: it pushes
-      // nothing off screen, steals no tap, and is the only in-app trace of an
-      // unactioned order.
-      Column(children: [
-        AnimatedBuilder(
-          animation: OrderAlertService.instance,
-          builder: (context, _) {
-            _syncStripAudio();
-            _maybeShowSheet();
-            final strip = OrderAlertService.instance.strip;
-            if (strip == null || strip['show'] != true) {
-              return const SizedBox.shrink();
-            }
-            return OrderAlertStrip(
-              strip: strip,
-              onOpen: () => _openOrder((strip['order_id'] as String?) ?? ''),
-            );
-          },
-        ),
-        Expanded(child: widget.child),
-      ]),
+      // CMD #2016 — there is NO in-app strip any more, on any screen. The shell
+      // is the whole tree; a new order reaches an open app as the centre popup
+      // this listener opens, and reaches a closed one as a notification.
+      widget.child,
+      AnimatedBuilder(
+        animation: OrderAlertService.instance,
+        builder: (context, _) {
+          _syncPopupAudio();
+          _syncPopup();
+          return const SizedBox.shrink();
+        },
+      ),
       if (_queue.isNotEmpty) _buildOverlay(_queue.first),
     ]);
   }
@@ -910,146 +914,4 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
       Text(label, style: const TextStyle(fontSize: 12, color: Color(0xFF374151))),
     ],
   );
-}
-
-/// CMD #1988 — the ONE in-app surface an unactioned order gets.
-///
-/// A slim strip, not a dialog: it interrupts nothing, it can be ignored, and
-/// the lock-screen alert stays the only thing that takes over the phone. It
-/// computes nothing — the title, the subtitle, the badge, the action word and
-/// the tone all arrive from order_alert_strip(). Tapping it opens the order,
-/// which is where Accept and Reject live.
-class OrderAlertStrip extends StatelessWidget {
-  final Map<String, dynamic> strip;
-  final VoidCallback onOpen;
-
-  const OrderAlertStrip({super.key, required this.strip, required this.onOpen});
-
-  Color _tone(String tone) {
-    switch (tone) {
-      case 'danger':
-        return Ds.c.danger;
-      case 'info':
-        return Ds.c.info;
-      default:
-        return Ds.c.warning;
-    }
-  }
-
-  Color _toneSoft(String tone) {
-    switch (tone) {
-      case 'danger':
-        return Ds.c.dangerSoft;
-      case 'info':
-        return Ds.c.infoSoft;
-      default:
-        return Ds.c.warningSoft;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final tone = (strip['tone'] as String?) ?? 'warning';
-    final title = (strip['title'] as String?) ?? '';
-    final subtitle = (strip['subtitle'] as String?) ?? '';
-    final action = (strip['action_label'] as String?) ?? '';
-    final risk = (strip['risk_label'] as String?) ?? '';
-    final more = (strip['more_label'] as String?) ?? '';
-    final accent = _tone(tone);
-
-    return Material(
-      color: _toneSoft(tone),
-      child: SafeArea(
-        bottom: false,
-        child: InkWell(
-          onTap: onOpen,
-          child: Container(
-            constraints: BoxConstraints(minHeight: Ds.space.x48),
-            padding: EdgeInsets.symmetric(
-                horizontal: Ds.space.x16, vertical: Ds.space.x8),
-            decoration: BoxDecoration(
-              border: Border(
-                  bottom: BorderSide(color: accent, width: Ds.space.x4 / 2)),
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Container(
-                  width: Ds.space.x8,
-                  height: Ds.space.x8,
-                  decoration:
-                      BoxDecoration(color: accent, shape: BoxShape.circle),
-                ),
-                SizedBox(width: Ds.space.x12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Row(children: [
-                        Flexible(
-                          child: Text(title,
-                              style: Ds.t.bodyStrong,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis),
-                        ),
-                        if (risk.isNotEmpty) ...[
-                          SizedBox(width: Ds.space.x8),
-                          Flexible(
-                              child: Container(
-                            padding: EdgeInsets.symmetric(
-                                horizontal: Ds.space.x8,
-                                vertical: Ds.space.x4 / 2),
-                            decoration: BoxDecoration(
-                                color: Ds.c.surface,
-                                borderRadius: Ds.r.rChip),
-                            child: Text(risk,
-                                style: Ds.t.caption,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis),
-                          )),
-                        ],
-                      ]),
-                      SizedBox(height: Ds.space.x4),
-                      Text(subtitle,
-                          style: Ds.t.caption,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis),
-                      if (more.isNotEmpty) ...[
-                        SizedBox(height: Ds.space.x4),
-                        Text(more, style: Ds.t.caption, maxLines: 1),
-                      ],
-                    ],
-                  ),
-                ),
-                SizedBox(width: Ds.space.x8),
-                // The action word is the backend's and can be any length, so
-                // it shrinks rather than pushing the strip off a 320px phone.
-                Flexible(
-                  child: ConstrainedBox(
-                    constraints:
-                        BoxConstraints(minHeight: Ds.space.x48 - Ds.space.x4),
-                    child: TextButton(
-                      onPressed: onOpen,
-                      style: TextButton.styleFrom(
-                        foregroundColor: accent,
-                        padding:
-                            EdgeInsets.symmetric(horizontal: Ds.space.x8),
-                        shape:
-                            RoundedRectangleBorder(borderRadius: Ds.r.rButton),
-                      ),
-                      child: Text(action,
-                          style: Ds.t.bodyStrong.copyWith(color: accent),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }

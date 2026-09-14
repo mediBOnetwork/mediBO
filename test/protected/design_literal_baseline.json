@@ -83,7 +83,7 @@
   "lib/screens/shell/shell_mobile_chrome.dart": 19,
   "lib/screens/shell/shell_sidebar.dart": 26,
   "lib/screens/shell/shell_view_as.dart": 21,
-  "lib/screens/storefront_screen.dart": 44,
+  "lib/screens/storefront_screen.dart": 42,
   "lib/utils/responsive.dart": 1,
   "lib/utils/toast.dart": 5,
   "lib/widgets/adaptive_map.dart": 12,

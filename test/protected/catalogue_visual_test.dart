@@ -385,38 +385,27 @@ void main() {
     });
   });
 
-  group('the filter row is a sentence the backend wrote', () {
-    testWidgets('chips render in payload order, selected one NOT hoisted',
+  // CMD #2011 — THE NARROWING SENTENCE IS GONE. "Showing everything · Bottle ·
+  // Piece · Strip · Rx only" sat between the search bar and the page and
+  // offered a second way to filter that duplicated the list's own toolbar.
+  // `catalogue_sentence()` is dropped and neither catalogue_home() nor
+  // catalogue_list() sends a `sentence` key any more. The fixture below still
+  // carries one on purpose: an old payload (or a cached one) must draw NOTHING.
+  group('the narrowing sentence row is gone', () {
+    testWidgets('a payload that still carries a sentence draws no row',
         (tester) async {
       await _pump(tester, size: const Size(1400, 900), queued: {
         'catalogue_home': [_home()],
         'catalogue_tree': [_treeRoot()],
       });
-      final chips = tester
-          .widgetList<Text>(find.byType(Text))
-          .map((t) => t.data)
-          .whereType<String>()
-          .where((s) => const {'Strip', 'Rx only', 'In my zone'}.contains(s))
-          .toList();
-      // Payload order. "Rx only" is the SELECTED chip and sits second — a
-      // screen that pulls selected chips to the front fails here.
-      expect(chips, ['Strip', 'Rx only', 'In my zone']);
+      expect(find.text('Showing everything'), findsNothing);
+      expect(find.text('Showing'), findsNothing);
+      expect(find.text('Strip'), findsNothing);
+      expect(find.text('Rx only'), findsNothing);
+      expect(find.text('In my zone'), findsNothing);
     });
 
-    testWidgets('with nothing selected the row prints the backend\'s all_label',
-        (tester) async {
-      final home = _home();
-      home['sentence'] = _sentence(selection: false);
-      await _pump(tester, queued: {
-        'catalogue_home': [home],
-        'catalogue_tree': [_treeRoot()],
-      });
-      expect(find.text('Showing everything'), findsOneWidget);
-      expect(find.text('Clear all'), findsNothing,
-          reason: 'nothing is selected, so there is nothing to clear');
-    });
-
-    testWidgets('a chip tap sends the payload\'s own group and key',
+    testWidgets('and nothing on the front page can set a pack filter',
         (tester) async {
       final rpc = await _pump(tester, size: const Size(1400, 900), queued: {
         'catalogue_home': [_home()],
@@ -424,11 +413,10 @@ void main() {
         'catalogue_list': [_list()],
         'catalogue_variants': [_variants()],
       });
-      await tester.tap(find.text('Strip'));
-      await tester.pumpAndSettle();
-      expect(rpc.lastArgs('catalogue_list')['p_filters'],
-          containsPair('pack_type', ['Strip']),
-          reason: 'the chip carried group:pack_type key:Strip — nothing was matched on the word');
+      expect(find.text('Strip'), findsNothing,
+          reason: 'the chip that carried group:pack_type is not drawn at all');
+      expect(rpc.count('catalogue_list'), 0,
+          reason: 'no list was opened by a chip, because there is no chip');
     });
   });
 

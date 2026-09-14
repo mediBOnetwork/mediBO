@@ -178,7 +178,19 @@ class CatHome {
   final bool hasRecentViewed;
   final String recentViewedTitle;
   final List<Product> recentViewed;
-  final CatSentence sentence;
+
+  /// CMD #2011 — the landing's own breadcrumb, so the one header under the
+  /// search bar is a payload rather than a word written here.
+  final CatTrail trail;
+
+  /// CMD #2011 — what the default landing shows, decided by the backend
+  /// (app_settings.catalogue_landing). The four Browse-by tiles are the
+  /// landing; the class tree moved behind the Category tile, which is why
+  /// [showTree] is false. Nothing here is a style — they are the backend's
+  /// answer to "is this block part of the landing at all".
+  final bool showRecent;
+  final bool showTabs;
+  final bool showTree;
 
   const CatHome({
     required this.ok,
@@ -195,7 +207,10 @@ class CatHome {
     required this.hasRecentViewed,
     required this.recentViewedTitle,
     required this.recentViewed,
-    required this.sentence,
+    this.trail = CatTrail.empty,
+    this.showRecent = true,
+    this.showTabs = true,
+    this.showTree = false,
   });
 
   static CatHome fromMap(Object? raw) {
@@ -229,9 +244,15 @@ class CatHome {
           .whereType<Map>()
           .map((i) => Product.fromHomeCard(Map<String, dynamic>.from(i)))
           .toList(growable: false),
-      sentence: CatSentence.fromMap(m['sentence']),
+      trail: CatTrail.fromMap(m['trail']),
+      showRecent: _landing(m)['show_recent'] != false,
+      showTabs: _landing(m)['show_tabs'] != false,
+      showTree: _landing(m)['show_tree'] == true,
     );
   }
+
+  static Map<String, dynamic> _landing(Map<String, dynamic> m) =>
+      m['landing'] is Map ? Map<String, dynamic>.from(m['landing'] as Map) : const {};
 }
 
 /// One row of any browse list: a class, a company or a salt. `key` is what the
@@ -281,10 +302,6 @@ class CatBrowse {
   /// CMD #1908 — the breadcrumb, worded and routed by the backend.
   final CatTrail trail;
 
-  /// CMD #1908 — the pack/Rx sentence. An index screen sends none, so the row
-  /// simply is not there; the front page and a search still send theirs.
-  final CatSentence sentence;
-
   /// The letter currently applied, or '' for the whole list.
   final String letter;
 
@@ -312,7 +329,6 @@ class CatBrowse {
     required this.allLabel,
     required this.rail,
     required this.trail,
-    required this.sentence,
     required this.letter,
     required this.childOpens,
     required this.productsLabel,
@@ -353,7 +369,6 @@ class CatBrowse {
       allLabel: (m['all_label'] ?? '').toString(),
       rail: CatRail.fromMap(m['rail']),
       trail: CatTrail.fromMap(m['trail']),
-      sentence: CatSentence.fromMap(m['sentence']),
       letter: (m['letter'] ?? '').toString(),
       childOpens: (m['child_opens'] ?? '').toString(),
       productsLabel: (m['products_label'] ?? '').toString(),
@@ -434,9 +449,8 @@ class CatList {
   final CatZone zone;
   final CatFilters filters;
 
-  /// CHANGE #799 — the sticky row that reads like a sentence, and the empty
-  /// state that names the scope and offers a way out of it.
-  final CatSentence sentence;
+  /// CHANGE #799 — the empty state that names the scope and offers a way out
+  /// of it.
   final CatEmptyState empty;
 
   /// CMD #1908 — the breadcrumb for this scope.
@@ -467,7 +481,6 @@ class CatList {
     required this.filtersActiveLabel,
     required this.zone,
     required this.filters,
-    required this.sentence,
     required this.empty,
     required this.trail,
     required this.grouped,
@@ -492,7 +505,6 @@ class CatList {
       filtersActiveLabel: (m['filters_active_label'] ?? '').toString(),
       zone: CatZone.fromMap(m['zone']),
       filters: CatFilters.fromMap(m['filters']),
-      sentence: CatSentence.fromMap(m['sentence']),
       empty: CatEmptyState.fromMap(m['empty'],
           fallbackLabel: (m['empty_label'] ?? '').toString()),
       trail: CatTrail.fromMap(m['trail']),
@@ -622,76 +634,6 @@ class CatDoor {
   /// glyph rule in ONE place for the whole app.
   Map<String, dynamic> get glyphRow =>
       {'icon_key': iconKey, 'icon_letter': iconLetter, 'label': label};
-}
-
-/// One chip of the sticky filter sentence. `group`/`key` are handed straight
-/// back to [CatFilterState.toggle]; `label` is printed verbatim.
-class CatSentencePart {
-  final String group;
-  final String key;
-  final String label;
-  final bool selected;
-  final String mode;
-
-  const CatSentencePart({
-    required this.group,
-    required this.key,
-    required this.label,
-    required this.selected,
-    required this.mode,
-  });
-
-  bool get isSingle => mode == 'single';
-
-  static CatSentencePart fromMap(Map<String, dynamic> m) => CatSentencePart(
-        group: (m['group'] ?? '').toString(),
-        key: (m['key'] ?? '').toString(),
-        label: (m['label'] ?? '').toString(),
-        selected: m['selected'] == true,
-        mode: (m['mode'] ?? 'multi').toString(),
-      );
-}
-
-/// "Showing · Tablets · Rx · In my zone" — the whole row, worded by the
-/// backend down to the dot between the chips.
-class CatSentence {
-  final String lead;
-  final String separator;
-  final String allLabel;
-  final String clearLabel;
-  final bool hasSelection;
-  final List<CatSentencePart> parts;
-
-  const CatSentence({
-    required this.lead,
-    required this.separator,
-    required this.allLabel,
-    required this.clearLabel,
-    required this.hasSelection,
-    required this.parts,
-  });
-
-  static const CatSentence empty = CatSentence(
-    lead: '', separator: '', allLabel: '', clearLabel: '',
-    hasSelection: false, parts: [],
-  );
-
-  bool get isEmpty => parts.isEmpty;
-
-  static CatSentence fromMap(Object? raw) {
-    final m = raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
-    return CatSentence(
-      lead: (m['lead'] ?? '').toString(),
-      separator: (m['separator'] ?? '').toString(),
-      allLabel: (m['all_label'] ?? '').toString(),
-      clearLabel: (m['clear_label'] ?? '').toString(),
-      hasSelection: m['has_selection'] == true,
-      parts: ((m['parts'] as List?) ?? const [])
-          .whereType<Map>()
-          .map((p) => CatSentencePart.fromMap(Map<String, dynamic>.from(p)))
-          .toList(growable: false),
-    );
-  }
 }
 
 /// One action offered by an empty scope. `has` false draws nothing — an empty

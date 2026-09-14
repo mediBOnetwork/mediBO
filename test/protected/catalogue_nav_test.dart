@@ -15,10 +15,11 @@
 //      and builds every letter, so the whole alphabet is reachable.
 //   4. "All" CLEARS. The letter is part of the ROUTE, so it round-trips
 //      through the URL and the back button.
-//   5. NO PACK CHIPS IN A DRILL-DOWN. The backend sends an empty sentence and
-//      empty filter groups for company/salt/class lists; the SORT options
-//      still arrive and still draw. The screen renders what it is given — it
-//      must not resurrect the home page's sentence on a list.
+//   5. NO PACK CHIPS ANYWHERE UNDER THE SEARCH BAR. CMD #2011 deleted the
+//      narrowing sentence outright — catalogue_sentence() is dropped and no
+//      payload carries a `sentence` key — so a drill-down, a browse index and
+//      the front page all draw nothing there. Filter groups stay empty for
+//      company/salt/class lists; the SORT options still arrive and still draw.
 //   6. ONE SEARCH BAR PER SCREEN. The salt list's own "Search a salt…" field
 //      is gone; the hero field is the only TextField on the screen.
 
@@ -104,6 +105,28 @@ Map<String, dynamic> _home() => {
       },
       'tabs': <Map<String, dynamic>>[],
       'filters': _defs(groups: const []),
+    };
+
+/// CMD #2011 — the landing as the backend now sends it: four doors, its own
+/// one-crumb trail, and the flags that say the class tree is NOT part of it.
+Map<String, dynamic> _landing() => {
+      ..._home(),
+      'trail': _trail([_crumb('Catalogue', tab: 'home', current: true)]),
+      'landing': {'show_recent': true, 'show_tabs': true, 'show_tree': false},
+      'doors': [
+        {'key': 'companies', 'kind': 'companies', 'tab': 'companies',
+         'label': 'Company', 'icon_key': 'store', 'icon_letter': 'C',
+         'count_label': '18,563 companies'},
+        {'key': 'salts', 'kind': 'salts', 'tab': 'salts',
+         'label': 'Salt', 'icon_key': 'science', 'icon_letter': 'S',
+         'count_label': '1,06,571 salts'},
+        {'key': 'conditions', 'kind': 'conditions', 'tab': 'conditions',
+         'label': 'Use', 'icon_key': 'medication', 'icon_letter': 'U',
+         'count_label': '2,41,900 products'},
+        {'key': 'browse', 'kind': 'tree', 'tab': 'browse',
+         'label': 'Category', 'icon_key': 'book', 'icon_letter': 'K',
+         'count_label': '3,35,273 products'},
+      ],
     };
 
 Map<String, dynamic> _defs({
@@ -432,6 +455,69 @@ void main() {
         'catalogue_companies': [_companies()],
       }, route: const CatalogueRoute(tab: 'companies'));
       expect(find.text('Strip'), findsNothing);
+    });
+  });
+
+  // ── CMD #2011 ─────────────────────────────────────────────────────────
+  //  7. THE LANDING IS THE FOUR TILES. No list opens under them, so the A–Z
+  //     strip — which belongs to a chosen list — is not on the default view.
+  //     It appears when a tile is tapped and goes again on the way back. The
+  //     tiles' words and counts are the payload's, printed whole.
+  group('the landing is the four Browse-by tiles', () {
+    testWidgets('four tiles, no A–Z strip, and no list is fetched',
+        (tester) async {
+      final rpc = await _pump(tester, size: const Size(360, 900), queued: {
+        'catalogue_home': [_landing()],
+      });
+
+      for (final label in const ['Company', 'Salt', 'Use', 'Category']) {
+        expect(find.text(label), findsOneWidget, reason: '\$label is a tile');
+      }
+      expect(find.text('18,563 companies'), findsOneWidget,
+          reason: 'the count line is the backend string, printed in full');
+      expect(find.byType(CatalogueAlphabetRail), findsNothing,
+          reason: 'the strip belongs to a chosen list, and none is chosen');
+      expect(rpc.called('catalogue_tree'), isFalse,
+          reason: 'no class list opens preselected under the tiles any more');
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('a tile opens ITS list, and the strip arrives with it',
+        (tester) async {
+      final rpc = await _pump(tester, size: const Size(412, 900), queued: {
+        'catalogue_home': [_landing()],
+        'catalogue_companies': [_companies()],
+      });
+      await tester.tap(find.text('Company'));
+      await tester.pumpAndSettle();
+
+      expect(rpc.called('catalogue_companies'), isTrue,
+          reason: 'the door carried tab:companies — that is what opened');
+      expect(find.byType(CatalogueAlphabetRail), findsOneWidget);
+      expect(find.text('ABBOTT'), findsOneWidget);
+    });
+
+    testWidgets('the root crumb goes back, and the strip goes with it',
+        (tester) async {
+      await _pump(tester, size: const Size(412, 900), queued: {
+        'catalogue_home': [_landing()],
+        'catalogue_companies': [
+          _companies(
+              trail: _trail([
+                _crumb('Catalogue', tab: 'home'),
+                _crumb('Company', tab: 'companies', current: true),
+              ])),
+        ],
+      }, route: const CatalogueRoute(tab: 'companies'));
+      expect(find.byType(CatalogueAlphabetRail), findsOneWidget);
+
+      await tester.tap(find.text('Catalogue').first);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(CatalogueAlphabetRail), findsNothing,
+          reason: 'back on the landing the strip is gone, not stale');
+      expect(find.text('Company'), findsOneWidget,
+          reason: 'the tiles are back — Company is a tile again, not a crumb');
     });
   });
 

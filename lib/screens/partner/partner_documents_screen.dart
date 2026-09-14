@@ -51,6 +51,7 @@ class _PartnerDocumentsScreenState extends State<PartnerDocumentsScreen> {
   Map<String, dynamic>? _d;
   bool _loading = true;
   bool _busy = false;
+  bool _previewBusy = false;
 
   @override
   void initState() {
@@ -157,7 +158,9 @@ class _PartnerDocumentsScreenState extends State<PartnerDocumentsScreen> {
           _AgreementCard(
             data: agreement,
             busy: _busy,
+            previewBusy: _previewBusy,
             onSign: () => _signSheet(agreement),
+            onPreview: () => _previewAgreement(agreement),
             onOpen: () => _open(
                 _s(agreement, 'doc_bucket'), _s(agreement, 'doc_path')),
             onPropose: (clause) => _proposeSheet(agreement, clause),
@@ -174,6 +177,56 @@ class _PartnerDocumentsScreenState extends State<PartnerDocumentsScreen> {
         ],
       ),
     );
+  }
+
+  /// CMD #1986 — the unsigned preview. The partner asks for it BEFORE signing,
+  /// and it is the same typeset document the signed copy will be: one renderer,
+  /// two modes, decided in `agreement_contract_doc()`.
+  ///
+  /// `partner_doc_request` queues it and `partner_doc_status` says when the
+  /// file exists; both messages printed here are the backend's own. The poll
+  /// interval is the backend's `poll_ms`, never a number chosen in Dart.
+  Future<void> _previewAgreement(Map<String, dynamic> a) async {
+    if (_previewBusy) return;
+    setState(() => _previewBusy = true);
+    try {
+      var map = await _rpc('partner_doc_request', {
+        'p_kind': 'agreement_preview',
+        'p_ref': _s(a, 'preview_ref'),
+      });
+      if (map['ok'] != true) {
+        if (mounted) {
+          showToast(context, (map['message'] ?? '').toString(), isError: true);
+        }
+        return;
+      }
+      final docId = (map['doc_id'] ?? '').toString();
+      var waited = 0;
+      while (mounted &&
+          map['status'] != 'ready' &&
+          docId.isNotEmpty &&
+          waited < 45000) {
+        final wait = (map['poll_ms'] as num?)?.toInt() ?? 1500;
+        await Future<void>.delayed(Duration(milliseconds: wait));
+        waited += wait;
+        map = await _rpc('partner_doc_status', {'p_id': docId});
+        if (map['ok'] != true) {
+          if (mounted) {
+            showToast(context, (map['message'] ?? '').toString(), isError: true);
+          }
+          return;
+        }
+      }
+      if (map['status'] == 'ready') {
+        await _open((map['bucket'] ?? '').toString(), (map['path'] ?? '').toString());
+      } else if (mounted) {
+        showToast(context, (map['message'] ?? '').toString());
+      }
+    } catch (e) {
+      if (mounted) showToast(context, e.toString(), isError: true);
+    } finally {
+      if (mounted) setState(() => _previewBusy = false);
+    }
   }
 
   /// The payload names the bucket and the path; this signs it. An empty pair
@@ -691,6 +744,8 @@ class _AgreementCard extends StatelessWidget {
   const _AgreementCard({
     required this.data,
     required this.busy,
+    required this.previewBusy,
+    required this.onPreview,
     required this.onSign,
     required this.onOpen,
     required this.onPropose,
@@ -699,6 +754,8 @@ class _AgreementCard extends StatelessWidget {
 
   final Map<String, dynamic> data;
   final bool busy;
+  final bool previewBusy;
+  final VoidCallback onPreview;
   final VoidCallback onSign;
   final VoidCallback onOpen;
   final void Function(Map<String, dynamic> clause) onPropose;
@@ -872,6 +929,30 @@ class _AgreementCard extends StatelessWidget {
                 label: Text(_s('doc_label')),
               ),
             ),
+          ],
+          // CMD #1986 — the typeset preview, reachable BEFORE signing. Full
+          // width and >=44 high so it is a real target on a phone.
+          if (data['can_preview'] == true) ...[
+            SizedBox(height: Ds.space.x12),
+            SizedBox(
+              width: double.infinity,
+              height: Ds.touch.minTarget,
+              child: OutlinedButton.icon(
+                onPressed: previewBusy ? null : onPreview,
+                icon: const Icon(Icons.description_outlined),
+                label: Text(previewBusy
+                    ? _s('preview_building_label')
+                    : _s('preview_label')),
+              ),
+            ),
+            if (_s('preview_hint').isNotEmpty) ...[
+              SizedBox(height: Ds.space.x4),
+              Text(_s('preview_hint'), style: Ds.t.caption),
+            ],
+          ],
+          if (_s('verify_hint').isNotEmpty) ...[
+            SizedBox(height: Ds.space.x12),
+            Text(_s('verify_hint'), style: Ds.t.caption),
           ],
           if (data['can_sign'] == true) ...[
             SizedBox(height: Ds.space.x16),

@@ -556,8 +556,13 @@ begin
 
   -- The version that was current stops being current the moment this one is.
   update public.partner_agreement_version
-     set status = 'retired', effective_to = least(coalesce(effective_to, row.effective_from - 1),
-                                                  row.effective_from - 1)
+     set status = 'retired',
+         -- It stopped being current the day before the new one started — but a
+         -- version never ends before it began, so a same-day replacement reads
+         -- as valid for its own single day rather than for minus one.
+         effective_to = greatest(effective_from,
+                          least(coalesce(effective_to, row.effective_from - 1),
+                                row.effective_from - 1))
    where status = 'published' and id <> row.id;
 
   update public.partner_agreement_version set status = 'published' where id = row.id
@@ -1096,12 +1101,18 @@ begin
          updated_at = now()
    where id = v_pid;
 
-  insert into public.partner_onboarding_state(partner_id, step_key, done, value, updated_by)
-  values (v_pid, 'agreement', true, 'v' || cur.version::text,
-          coalesce(public.my_login_email(),'partner'))
-  on conflict (partner_id, step_key) do update
-    set done = true, value = excluded.value, updated_at = now(),
-        updated_by = excluded.updated_by;
+  -- The onboarding checklist is a NICE-TO-HAVE beside a signature. It is keyed
+  -- to partner_onboarding_step, and a deployment where that row is missing must
+  -- not throw away a signature the partner has just given with a real OTP.
+  begin
+    insert into public.partner_onboarding_state(partner_id, step_key, done, value, updated_by)
+    values (v_pid, 'agreement', true, 'v' || cur.version::text,
+            coalesce(public.my_login_email(),'partner'))
+    on conflict (partner_id, step_key) do update
+      set done = true, value = excluded.value, updated_at = now(),
+          updated_by = excluded.updated_by;
+  exception when others then null;
+  end;
 
   insert into public.partner_audit_log(partner_id, user_id, feature_key, action, detail)
   values (v_pid, auth.uid(), 'partner.documents', 'agreement_signed',
@@ -1550,19 +1561,33 @@ on conflict (key) do update set value = excluded.value, updated_at = now();
 --     name that was TYPED into the old prose becomes a token, which is the
 --     whole point: change the partner and the document follows.
 -- ─────────────────────────────────────────────────────────────────────────────
+-- The clauses land on a NEW published version, and the prose version that was
+-- current is retired rather than rewritten. Editing the old row in place would
+-- change the text under anybody who had signed it — the diff would be right and
+-- the history would be a lie. Retiring it keeps what was signed exactly as it
+-- was signed, and asks every partner for a signature on the tokenised one,
+-- which is what the Raipur change needed in the first place.
 do $$
-declare v_id bigint; v_ver int;
+declare v_id bigint; v_ver int; v_old bigint;
 begin
-  select id into v_id from public.partner_agreement_version
+  -- Run once: if any version already carries clauses, this migration has landed.
+  if exists (select 1 from public.agreement_clause) then return; end if;
+
+  select id into v_old from public.partner_agreement_version
    where status = 'published' order by version desc limit 1;
 
-  if v_id is null then
-    select coalesce(max(version),0) + 1 into v_ver from public.partner_agreement_version;
-    insert into public.partner_agreement_version(version, title, body, effective_from,
-             renew_before_days, status, created_by, updated_by)
-    values (v_ver, 'mediBO Fulfilment Partner Agreement', '', current_date, 30,
-            'published', 'cmd-1985', 'cmd-1985')
-    returning id into v_id;
+  select coalesce(max(version),0) + 1 into v_ver from public.partner_agreement_version;
+  insert into public.partner_agreement_version(version, title, body, effective_from,
+           renew_before_days, status, created_by, updated_by)
+  values (v_ver, 'mediBO Fulfilment Partner Agreement', '', current_date, 30,
+          'published', 'cmd-1985', 'cmd-1985')
+  returning id into v_id;
+
+  if v_old is not null then
+    update public.partner_agreement_version
+       set status = 'retired',
+           effective_to = greatest(effective_from, current_date - 1)
+     where id = v_old;
   end if;
 
   if not exists (select 1 from public.agreement_clause where version_id = v_id) then

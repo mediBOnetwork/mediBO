@@ -290,13 +290,13 @@ class _PartnerDocumentsScreenState extends State<PartnerDocumentsScreen> {
                 Text(_s(diff, 'empty_label'), style: Ds.t.bodySecondary)
               else
                 for (final r in rows) ...[
-                  Row(
+                  Wrap(
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: Ds.space.x8,
+                    runSpacing: Ds.space.x4,
                     children: [
-                      Expanded(
-                        child: Text('${_s(r, 'n')}. ${_s(r, 'heading')}',
-                            style: Ds.t.bodyStrong),
-                      ),
-                      SizedBox(width: Ds.space.x8),
+                      Text('${_s(r, 'n')}. ${_s(r, 'heading')}',
+                          style: Ds.t.bodyStrong),
                       PartnerChip(
                           text: _s(r, 'kind_label'), tone: r['tone'] as String?),
                     ],
@@ -730,10 +730,16 @@ class _AgreementCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          // A Wrap, not a Row: at 360px the heading and a status word as long
+          // as "Needs a fresh signature" do not fit on one line, and a phone is
+          // where 99% of this is read. The chip drops below instead of
+          // overflowing (CMD #1950).
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: Ds.space.x8,
+            runSpacing: Ds.space.x4,
             children: [
-              Expanded(child: Text(_s('heading'), style: Ds.t.subtitle)),
-              SizedBox(width: Ds.space.x8),
+              Text(_s('heading'), style: Ds.t.subtitle),
               PartnerChip(
                   text: _s('status_label'), tone: data['status_tone'] as String?),
             ],
@@ -773,13 +779,12 @@ class _AgreementCard extends StatelessWidget {
             for (final t in terms)
               Padding(
                 padding: EdgeInsets.only(bottom: Ds.space.x4),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                child: Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: Ds.space.x8,
+                  runSpacing: Ds.space.x4,
                   children: [
-                    Expanded(
-                        child: Text((t['label'] ?? '').toString(),
-                            style: Ds.t.caption)),
-                    SizedBox(width: Ds.space.x8),
+                    Text((t['label'] ?? '').toString(), style: Ds.t.caption),
                     Text((t['value'] ?? '').toString(), style: Ds.t.bodyStrong),
                   ],
                 ),
@@ -821,15 +826,15 @@ class _AgreementCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
+                    Wrap(
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: Ds.space.x8,
+                      runSpacing: Ds.space.x4,
                       children: [
-                        Expanded(
-                          child: Text(
-                              '${(pr['clause_n'] ?? '')}. '
-                              '${(pr['heading'] ?? '')}',
-                              style: Ds.t.body),
-                        ),
-                        SizedBox(width: Ds.space.x8),
+                        Text(
+                            '${(pr['clause_n'] ?? '')}. '
+                            '${(pr['heading'] ?? '')}',
+                            style: Ds.t.body),
                         PartnerChip(
                             text: (pr['status_label'] ?? '').toString(),
                             tone: pr['status_tone'] as String?),

@@ -82,11 +82,31 @@ const SCREENS = [
   ['money',           '/money'],
 ];
 
-async function readRenderLog(page) {
-  const text = await page.evaluate(() => {
+// Timings. The rule owns them (dev_runner_config.build_rules.mobile_first);
+// these are only the fallback for a config that has not named them yet, so a
+// flaky edge is retuned with one pool_set and no deploy.
+let READ_RETRIES    = 8;      // evaluate attempts across a navigation
+let PAINT_BUDGET_MS = 30000;  // how long to wait for boot_status=painted
+let SETTLE_MS       = 6000;   // let the audit re-measure once the RPC lands
+let NAV_QUIET_MS    = 2500;   // no main-frame navigation for this long = settled
+
+// CMD #2009 — a destroyed execution context is NOT a measurement.
+// Every staff route sends an anonymous visitor to the storefront, and the
+// Flutter bootstrap itself re-navigates once while it installs. Both tear the
+// page's execution context down underneath page.evaluate, and the sweep booked
+// that as "did not load": 8 of 40 combinations in CHANGE #1371, while all 32 it
+// DID read reported overflow=0 and tap_targets_small=0. Read through the
+// navigation instead — only an exhausted budget is a failure.
+const NAV_RACE = /Execution context was destroyed|Execution context is not available|Target closed|frame was detached|page has been closed/i;
+
+async function evalRenderLog(page) {
+  return page.evaluate(() => {
     const el = document.getElementById('medibo-render-log');
     return el ? (el.textContent || el.innerText || '') : '';
   });
+}
+
+function parseRenderLog(text) {
   if (!text || !text.trim()) return null;
   const out = {};
   for (const line of text.split('\n')) {
@@ -94,6 +114,21 @@ async function readRenderLog(page) {
     if (i > 0) out[line.slice(0, i)] = line.slice(i + 1);
   }
   return Object.keys(out).length ? out : null;
+}
+
+// One read that survives a navigation: re-evaluate against the new document.
+async function readRenderLog(page, tries) {
+  const n = Math.max(1, Number(tries) || READ_RETRIES);
+  for (let i = 0; i < n; i++) {
+    try {
+      return parseRenderLog(await evalRenderLog(page));
+    } catch (e) {
+      if (!NAV_RACE.test(String(e && e.message))) throw e;
+      try { await page.waitForLoadState('domcontentloaded', { timeout: 15000 }); } catch (_) {}
+      try { await page.waitForTimeout(500); } catch (_) { return null; }
+    }
+  }
+  return null;
 }
 
 // Wait for the app to say it painted rather than sleeping a fixed amount: a
@@ -104,9 +139,19 @@ async function waitForPaint(page, budgetMs) {
   while (Date.now() < deadline) {
     const log = await readRenderLog(page);
     if (log && String(log.boot_status || '') === 'painted') return log;
-    await page.waitForTimeout(1000);
+    try { await page.waitForTimeout(1000); } catch (_) { break; }
   }
   return readRenderLog(page);
+}
+
+// Let the redirect flap finish AND the audit re-measure while the screen's RPC
+// lands, then read. `nav` is the last main-frame navigation timestamp.
+async function settle(page, nav, settleMs, quietMs) {
+  const deadline = Date.now() + settleMs + quietMs;
+  try { await page.waitForTimeout(settleMs); } catch (_) { return; }
+  while (Date.now() < deadline && Date.now() - nav.at < quietMs) {
+    try { await page.waitForTimeout(500); } catch (_) { return; }
+  }
 }
 
 (async () => {
@@ -121,6 +166,10 @@ async function waitForPaint(page, budgetMs) {
   const widths = (mf.sweep_widths && mf.sweep_widths.length ? mf.sweep_widths : [320, 360, 412, 480])
     .concat([mf.tablet_width || 768]);
   const minTouch = mf.min_touch_px || 44;
+  READ_RETRIES    = Number(mf.sweep_read_retries)   || READ_RETRIES;
+  PAINT_BUDGET_MS = Number(mf.sweep_paint_budget_ms) || PAINT_BUDGET_MS;
+  SETTLE_MS       = Number(mf.sweep_settle_ms)      || SETTLE_MS;
+  NAV_QUIET_MS    = Number(mf.sweep_nav_quiet_ms)   || NAV_QUIET_MS;
   say(`responsive sweep · ${TARGET} · widths ${widths.join('/')} · min touch ${minTouch}px`);
 
   const failures = [];
@@ -137,31 +186,50 @@ async function waitForPaint(page, budgetMs) {
           deviceScaleFactor: 1,
         });
         const page = await ctx.newPage();
+        // The staff routes bounce an anonymous visitor to the storefront, and
+        // the bounce is what used to kill the read. Track it instead: the last
+        // main-frame navigation says when the page stopped moving, and the URL
+        // we actually measured is recorded with the numbers.
+        const nav = { at: Date.now(), count: 0 };
+        page.on('framenavigated', (f) => {
+          if (f === page.mainFrame()) { nav.at = Date.now(); nav.count += 1; }
+        });
         let log = null;
+        let err = null;
         try {
           const sep = route.includes('?') ? '&' : '?';
           await page.goto(`${TARGET}${route}${sep}responsive_audit=1&min_touch=${minTouch}`,
             { waitUntil: 'domcontentloaded', timeout: 45000 });
-          // Wait for the app's own "painted", then let the audit re-measure
-          // while the screen's RPC lands before reading the counts.
-          await waitForPaint(page, 30000);
-          await page.waitForTimeout(6000);
+          // Wait for the app's own "painted", let the redirect flap finish and
+          // the audit re-measure while the screen's RPC lands, then read.
+          await waitForPaint(page, PAINT_BUDGET_MS);
+          await settle(page, nav, SETTLE_MS, NAV_QUIET_MS);
           log = await readRenderLog(page);
         } catch (e) {
-          failures.push(`${label} @${width}px did not load (${String(e.message).slice(0, 80)})`);
+          err = String(e && e.message).slice(0, 80);
+          // A navigation race is not a verdict — one last look once the page
+          // has stopped moving.
+          if (NAV_RACE.test(String(e && e.message))) {
+            try { await page.waitForLoadState('domcontentloaded', { timeout: 15000 }); } catch (_) {}
+            try {
+              await settle(page, nav, 2000, NAV_QUIET_MS);
+              log = await readRenderLog(page);
+            } catch (_) { /* the page is gone; the missing log is the failure */ }
+          }
         }
+        let finalUrl = null;
+        try { finalUrl = page.url(); } catch (_) { /* context already closed */ }
         await ctx.close();
         if (!log) {
-          if (!failures.some((f) => f.startsWith(`${label} @${width}px`))) {
-            failures.push(`${label} @${width}px wrote no render log`);
-          }
+          failures.push(`${label} @${width}px did not load (${err || 'wrote no render log'})`);
           continue;
         }
         const overflow = Number(log.overflow_errors || 0);
         const small    = Number(log.tap_targets_small || 0);
         const painted  = String(log.boot_status || '') === 'painted';
         seen.push({ screen: label, width, overflow, small, painted,
-                    build: log.build || null, viewport_w: log.viewport_w || null });
+                    build: log.build || null, viewport_w: log.viewport_w || null,
+                    url: finalUrl, navs: nav.count });
         if (!painted) failures.push(`${label} @${width}px never painted (boot_status=${log.boot_status || 'none'})`);
         if (overflow > 0) {
           failures.push(`${label} @${width}px overflowed ${overflow}x — ${log.overflow_first || 'no detail'}`);

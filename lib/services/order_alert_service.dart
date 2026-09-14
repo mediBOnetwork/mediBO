@@ -17,6 +17,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/order_alert_fsi.dart';
+import 'order_alert_sw.dart';
 import '../utils/render_log.dart';
 
 class OrderAlertService extends ChangeNotifier {
@@ -108,6 +109,10 @@ class OrderAlertService extends ChangeNotifier {
         notifyListeners();
       }
       await stopRinging();
+      // CMD #1989 item 8 — "clears automatically when the order is opened
+      // anywhere". The row is already stamped; this is the same truth reaching
+      // the browser's own notification tray, which no RPC can touch.
+      webClearOrderNotification(orderId);
       return out;
     } catch (e) {
       debugPrint('[order_alert] seen failed: $e');
@@ -194,6 +199,24 @@ class OrderAlertService extends ChangeNotifier {
     } catch (e) {
       debugPrint('[order_alert] feed failed: $e');
     }
+  }
+
+  /// CMD #1989 — the bottom sheet's whole payload, rendered by
+  /// order_alert_sheet(). Null when the backend says there is nothing to show.
+  Future<Map<String, dynamic>?> sheet([String? orderId]) async {
+    try {
+      final raw = await _db.rpc('order_alert_sheet',
+          params: {'p_order_id': orderId});
+      final m = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
+      if (m is Map) {
+        final out = Map<String, dynamic>.from(m);
+        RenderLog.write('c1989_alert_sheet_rpc', out['show'] == true ? '1' : '0');
+        return out;
+      }
+    } catch (e) {
+      debugPrint('[order_alert] sheet failed: $e');
+    }
+    return null;
   }
 
   /// One order's card, as the popup draws it.

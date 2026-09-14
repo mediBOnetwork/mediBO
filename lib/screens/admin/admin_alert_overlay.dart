@@ -11,6 +11,7 @@ import 'package:pharma_b2b/utils/toast.dart';
 import '../../design_tokens.dart';
 import '../../services/order_alert_service.dart';
 import 'alert_audio.dart';
+import 'order_alert_sheet.dart';
 
 // ── Column skip / label helpers (matches admin_customer_screen) ──────────────
 
@@ -68,6 +69,15 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
     with TickerProviderStateMixin {
   final List<Map<String, dynamic>> _queue = [];
   bool _muted = false;
+
+  // CMD #1989 — the popup. It is a bottom sheet now, and WHETHER it opens is
+  // order_alert_strip().sheet_autoshow: #1988's "one interrupt per order" rule
+  // is still the backend's to enforce, not a flag invented here. This set is
+  // only a memory of what has already been shown, so a poll does not reopen a
+  // sheet the admin just swiped away.
+  final Set<String> _sheetShownFor = {};
+  bool _sheetOpen = false;
+  AnimationController? _sheetCtrl;
   bool _detailsOpen = false;
   bool _busy = false;
 
@@ -282,6 +292,48 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
     }
   }
 
+  /// CMD #1989 — open the popup when the BACKEND says to.
+  ///
+  /// `sheet_autoshow` is the whole decision: it is false the moment somebody
+  /// has opened the order anywhere, and false for an alert that is no longer
+  /// ringing, so the sheet can never become the second interrupt #1988 removed.
+  /// Once shown for an order it is not shown again — the strip stays behind it
+  /// as the quiet reminder.
+  void _maybeShowSheet() {
+    final strip = OrderAlertService.instance.strip;
+    if (strip == null || strip['sheet_autoshow'] != true) return;
+    final orderId = (strip['sheet_order_id'] as String?) ?? '';
+    if (orderId.isEmpty || _sheetOpen || _sheetShownFor.contains(orderId)) return;
+    _sheetShownFor.add(orderId);
+    // Out of the build phase: this is reached from an AnimatedBuilder.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _openSheet(orderId));
+  }
+
+  Future<void> _openSheet(String orderId) async {
+    if (!mounted || _sheetOpen) return;
+    final payload = await OrderAlertService.instance.sheet(orderId);
+    if (!mounted || payload == null || payload['show'] != true) return;
+    _sheetOpen = true;
+    _sheetCtrl?.dispose();
+    final ctrl = orderAlertSheetController(this);
+    _sheetCtrl = ctrl;
+    try {
+      await showOrderAlertSheet(
+        context,
+        sheet: payload,
+        controller: ctrl,
+        onOpen: () {
+          Navigator.of(context).pop();
+          _openOrder(orderId);
+        },
+      );
+    } finally {
+      _sheetOpen = false;
+      ctrl.dispose();
+      if (identical(_sheetCtrl, ctrl)) _sheetCtrl = null;
+    }
+  }
+
   void _onFirstAlert() {
     // Orders never enter this queue any more (CMD #1988) — registrations and
     // supplier registrations share the same alert sound.
@@ -389,6 +441,8 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
     _alertWatch?.dispose();
     audioStop();
     orderAudioStop();
+    _sheetCtrl?.dispose();
+    _sheetCtrl = null;
     _flashCtrl.dispose();
     _slideCtrl.dispose();
     super.dispose();
@@ -407,6 +461,7 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
           animation: OrderAlertService.instance,
           builder: (context, _) {
             _syncStripAudio();
+            _maybeShowSheet();
             final strip = OrderAlertService.instance.strip;
             if (strip == null || strip['show'] != true) {
               return const SizedBox.shrink();

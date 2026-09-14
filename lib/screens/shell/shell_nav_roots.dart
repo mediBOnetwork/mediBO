@@ -85,7 +85,7 @@ extension _ShellNavRoots on _HomeShellState {
       case ShellTabTap.catalogueRoot:
         _goCatalogue();
       case ShellTabTap.showPage:
-        _setIndex(page);
+        _showPage(page);
     }
   }
 
@@ -122,5 +122,24 @@ extension _ShellNavRoots on _HomeShellState {
       case ShellBack.exit:
         break; // canPop was true — the framework already popped.
     }
+  }
+
+  /// Show a tab and push the matching URL — the plain case, unchanged since
+  /// CHANGE #614. Every caller that is not a bottom-bar tap (the footer links,
+  /// the desktop header, a placed order returning to Orders) arrives here
+  /// through `_setIndex`, which is now the dispatcher above.
+  void _showPage(int i) {
+    _navSetState(() {
+      _index = i;
+      _cartOpen = false;
+      // CHANGE #614 — the Orders tab lives in an IndexedStack, which keeps its
+      // State alive precisely so tab switches do NOT rebuild it. That also
+      // means it never re-fetched: whatever it loaded once, at shell build,
+      // was what it kept showing. Bumping the signal here makes opening the
+      // tab an actual fetch, so the list is never older than the tap.
+      if (i == 1) _ordersRefreshSignal++;
+      shellHeaderBandShow(); // CMD #2019 — a new tab starts full-chrome.
+    });
+    pushUrl(_urlForState());
   }
 }

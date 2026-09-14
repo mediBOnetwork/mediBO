@@ -751,21 +751,12 @@ class _HomeShellState extends State<HomeShell> {
     });
   }
 
-  // Change tab and push the matching URL to browser history.
-  void _setIndex(int i) {
-    setState(() {
-      _index = i;
-      _cartOpen = false;
-      // CHANGE #614 — the Orders tab lives in an IndexedStack, which keeps its
-      // State alive precisely so tab switches do NOT rebuild it. That also
-      // means it never re-fetched: whatever it loaded once, at shell build,
-      // was what it kept showing. Bumping the signal here makes opening the
-      // tab an actual fetch, so the list is never older than the tap.
-      if (i == 1) _ordersRefreshSignal++;
-      shellHeaderBandShow(); // CMD #2019 — a new tab starts full-chrome.
-    });
-    pushUrl(_urlForState());
-  }
+  /// Select a tab. CHANGE #630 — the bottom bar hands back the PAGE its
+  /// registry row named, never a slot position; CMD #2021 — and landing on a
+  /// page means landing at that page's ROOT. Both live in one place:
+  /// `shell/shell_nav_roots.dart`, where `_onNavTap` dispatches to `_goHome`,
+  /// `_goCatalogue` or the plain `_showPage`.
+  void _setIndex(int i) => _onNavTap(i);
 
   // Admin section indices in the pages list: 3=Dashboard, 4=AddMedicine,
   // 5=Suppliers, 6=Customers
@@ -1812,8 +1803,8 @@ class _HomeShellState extends State<HomeShell> {
                     slots: slots,
                     // The bar hands back the PAGE its row named, so there is
                     // no ladder here that has to agree with the slot order.
-                    // CMD #2021 — what landing on it MEANS is _onNavTap.
-                    onPageTap: _onNavTap,
+                    // CMD #2021 — and landing on it means its ROOT.
+                    onPageTap: _setIndex,
                   ),
                 )),
       body: shellStaffBody(

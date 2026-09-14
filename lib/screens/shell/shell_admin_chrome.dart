@@ -76,6 +76,10 @@ class _AdminDesktopHeader extends StatelessWidget {
               ),
             ),
           ),
+          // CMD #1964 — the TEST badge, beside the logo, on the desktop
+          // header too. Same widget, same payload: absent while
+          // test_session_banner() says on:false.
+          const TestModeBadge(),
           const Spacer(),
           // Rendered from kAdminTopNav so the row's contents are enumerable —
           // a nav entry added to one surface and forgotten in the others is

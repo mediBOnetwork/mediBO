@@ -23,6 +23,13 @@
 // labels, the rollout sentence, the "Play read 3m ago" line, chip tones —
 // arrives inside app_update_state(). No status→label switch, no percentage
 // formatting, no date maths.
+//
+// CMD #1956 adds the gate CHECKLIST: the four conditions the newest build has
+// to meet before a phone is offered it (Play says published, rolled out to
+// 100 %, on the production track, review completed), each with the backend's
+// own Met / Not yet word. Four builds went out as 1.3.25 and the panel could
+// only say "submitted" — it could not say WHICH clause was holding the prompt
+// shut. Every label, value and tone in that list is the payload's.
 
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -117,13 +124,16 @@ class AppUpdateGateView extends StatelessWidget {
     final prompt = _block('prompt');
     final published = _block('published');
     final submitted = _block('submitted');
+    final gate = _block('gate');
+    final gateRows = (gate['rows'] as List?) ?? const [];
     final log = (state['log'] as List?) ?? const [];
 
     try {
       RenderLog.write(
         'c1922_update_gate',
         'prompt_on=${prompt['is_on'] == true};published=${published['has'] == true};'
-            'submitted=${submitted['has'] == true};log=${log.length}',
+            'submitted=${submitted['has'] == true};log=${log.length};'
+            'gate_rows=${gateRows.length}',
       );
     } catch (_) {}
 
@@ -135,9 +145,12 @@ class AppUpdateGateView extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(child: Text(_s(state, 'title'), style: Ds.t.subtitle)),
-              ToneChip(
-                label: _s(prompt, 'label'),
-                tone: toneByName(_s(prompt, 'tone')),
+              SizedBox(width: Ds.space.x8),
+              Flexible(
+                child: ToneChip(
+                  label: _s(prompt, 'label'),
+                  tone: toneByName(_s(prompt, 'tone')),
+                ),
               ),
             ],
           ),
@@ -149,6 +162,18 @@ class AppUpdateGateView extends StatelessWidget {
           _release(published),
           SizedBox(height: Ds.space.x16),
           _release(submitted),
+          if (gateRows.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x24),
+            Text(_s(gate, 'heading'), style: Ds.t.subtitle),
+            SizedBox(height: Ds.space.x8),
+            ...gateRows.map(
+              (e) => _gateRow(Map<String, dynamic>.from(e as Map)),
+            ),
+            if (_s(gate, 'note').isNotEmpty) ...[
+              SizedBox(height: Ds.space.x8),
+              Text(_s(gate, 'note'), style: Ds.t.caption),
+            ],
+          ],
           SizedBox(height: Ds.space.x16),
           Text(_s(state, 'checked_label'), style: Ds.t.caption),
           SizedBox(height: Ds.space.x24),
@@ -198,12 +223,34 @@ class AppUpdateGateView extends StatelessWidget {
             ],
           ),
         ),
-        if (has)
-          ToneChip(
-            label: _s(r, 'status_label'),
-            tone: toneByName(_s(r, 'status_tone')),
+        if (has) ...[
+          SizedBox(width: Ds.space.x8),
+          Flexible(
+            child: ToneChip(
+              label: _s(r, 'status_label'),
+              tone: toneByName(_s(r, 'status_tone')),
+            ),
           ),
+        ],
       ],
+    );
+  }
+
+  /// One gate condition. The label, the Met/Not yet word and the tone are all
+  /// the backend's; this only lays them out. The label takes whatever width is
+  /// left and wraps onto a second line, so a long condition on a 360 px phone
+  /// grows downwards instead of overflowing sideways.
+  Widget _gateRow(Map<String, dynamic> g) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(child: Text(_s(g, 'label'), style: Ds.t.body)),
+          SizedBox(width: Ds.space.x8),
+          ToneChip(label: _s(g, 'value'), tone: toneByName(_s(g, 'tone'))),
+        ],
+      ),
     );
   }
 

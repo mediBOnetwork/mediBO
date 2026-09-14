@@ -39,6 +39,7 @@ const Map<String, dynamic> kPlayPayload = {
   'action_label': 'Update on Google Play',
   'dismiss_label': 'Not now',
   'dismiss_key': 'app_update:android:24',
+  'dismiss_seconds': 86400,
 };
 
 final Map<String, dynamic> kSideloadPayload = {
@@ -154,7 +155,7 @@ void main() {
     expect(find.text('Not now'), findsNothing);
   });
 
-  testWidgets('dismissing stores the backend key and silences that prompt only',
+  testWidgets('dismissing stores the backend key WITH the moment it was tapped',
       (tester) async {
     final first = await _pump(tester, isAndroid: true, payload: kPlayPayload);
     await tester.tap(find.text('Not now'));
@@ -162,18 +163,72 @@ void main() {
     expect(first.opened, isEmpty);
 
     final prefs = await SharedPreferences.getInstance();
-    expect(prefs.getString(kUpdateDismissedPref), 'app_update:android:24');
+    final stored = prefs.getString(kUpdateDismissedPref)!;
+    // CMD #1956 — "<the backend's key>|<millis>". The key alone silenced the
+    // build forever; the timestamp is what lets it come back after 24 h.
+    expect(stored, startsWith('app_update:android:24|'));
+    final at = int.parse(stored.split('|').last);
+    expect(
+      DateTime.now().millisecondsSinceEpoch - at,
+      lessThan(const Duration(minutes: 1).inMilliseconds),
+    );
 
-    // Same prompt again → stays quiet.
+    // Same prompt again, inside the window → stays quiet.
     await _pump(tester, isAndroid: true, payload: kPlayPayload);
     expect(find.text('A new version of mediBO is ready'), findsNothing);
 
-    // A NEW release sends a new key → the prompt comes back on its own.
+    // A NEWER version CODE is a different key → the prompt asks again at once,
+    // without waiting out the window.
     await _pump(tester, isAndroid: true, payload: {
       ...kPlayPayload,
       'version_code': 25,
       'dismiss_key': 'app_update:android:25',
     });
+    expect(find.text('A new version of mediBO is ready'), findsOneWidget);
+  });
+
+  testWidgets('the dismissal expires after the backend window and asks again',
+      (tester) async {
+    // Tapped 25 hours ago, window 24 h → the prompt is due again.
+    final long = DateTime.now()
+        .subtract(const Duration(hours: 25))
+        .millisecondsSinceEpoch;
+    SharedPreferences.setMockInitialValues(
+        {kUpdateDismissedPref: 'app_update:android:24|$long'});
+    await _pump(tester, isAndroid: true, payload: kPlayPayload);
+    expect(find.text('A new version of mediBO is ready'), findsOneWidget);
+  });
+
+  testWidgets('inside the backend window the same build stays silent',
+      (tester) async {
+    final recent = DateTime.now()
+        .subtract(const Duration(hours: 23))
+        .millisecondsSinceEpoch;
+    SharedPreferences.setMockInitialValues(
+        {kUpdateDismissedPref: 'app_update:android:24|$recent'});
+    await _pump(tester, isAndroid: true, payload: kPlayPayload);
+    expect(find.text('A new version of mediBO is ready'), findsNothing);
+  });
+
+  testWidgets('the window is the backend\'s: 0 seconds never silences anything',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({
+      kUpdateDismissedPref:
+          'app_update:android:24|${DateTime.now().millisecondsSinceEpoch}',
+    });
+    await _pump(tester, isAndroid: true, payload: {
+      ...kPlayPayload,
+      'dismiss_seconds': 0,
+    });
+    expect(find.text('A new version of mediBO is ready'), findsOneWidget);
+  });
+
+  testWidgets('a pre-#1956 forever-dismissal is asked once more', (tester) async {
+    // Stored before this change: the key with no timestamp, which used to mean
+    // "never show this build again".
+    SharedPreferences.setMockInitialValues(
+        {kUpdateDismissedPref: 'app_update:android:24'});
+    await _pump(tester, isAndroid: true, payload: kPlayPayload);
     expect(find.text('A new version of mediBO is ready'), findsOneWidget);
   });
 

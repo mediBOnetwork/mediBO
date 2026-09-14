@@ -221,6 +221,20 @@ refresh_tracks() {
     sync=$("$DEVCMD" rpc app_release_play_sync "$(cat "$o.rpc")" 2>/dev/null || true)
     if [ "$(jq -r '.ok // false' <<<"$sync" 2>/dev/null)" = "true" ]; then
       log "update prompt: offering $(jq -r '.published_name // "nothing"' <<<"$sync") ($(jq -r '.published_code // "-"' <<<"$sync")) · production=$(jq -r '.live_status // "?"' <<<"$sync") · $(jq -r '.transitions // 0' <<<"$sync") transition(s)"
+      # CMD #1956 — the release row records what PLAY reports, never what the
+      # upload replied. review_status used to be the committed edit echoed back
+      # at us; the track state below is the Play Developer API's own answer,
+      # read after the publish, with the moment it was read.
+      if [ -n "$REL_ID" ]; then
+        "$DEVCMD" rpc play_publish_progress "$(jq -nc --argjson id "$REL_ID" \
+           --argjson sync "$sync" \
+           '{p_id:$id,p_status:"",p_patch:{
+               play_status:      ($sync.live_status // null),
+               play_rollout_pct: ($sync.rollout_pct // null),
+               play_review:      ($sync.review_status // null),
+               play_track_name:  ($sync.gate_track // null),
+               play_checked_at:  ($sync.checked_at // null)}}')" >/dev/null 2>&1
+      fi
     else
       log "WARNING: app_release_play_sync did not apply — $(jq -rc '.' <<<"$sync" 2>/dev/null | head -c 160)"
     fi
@@ -326,42 +340,71 @@ KS_SHA1=$(keytool -list -v -keystore "android/$STORE" -alias "$ALIAS" \
   || die "WRONG SIGNING KEY: keystore SHA-1 $KS_SHA1 is not the upload certificate Play expects for in.medibo.app ($EXPECT_SHA1). Refusing to build an unpublishable artifact."
 log "upload key verified ($KS_SHA1)"
 
-# ── 2. version — never reuse a code ─────────────────────────────────────────
+# ── 2. version — ONE bump, code and name together (CMD #1956) ───────────────
+# The old code here read the CODE from Play and the NAME from the working tree,
+# then bumped each in its own branch. Five workers share that checkout and it is
+# reset between commands, so the tree kept answering 1.3.24 while Play's code
+# climbed: play_release 102/103/104 all went out as 1.3.25 on codes 43, 44 and
+# 45, and the in-app prompt then offered "1.3.25" for a build Play was already
+# serving. There is now exactly ONE place a release number is decided —
+# app_release_next_version() on the backend, which owns both halves and refuses
+# to hand back a name already recorded — and exactly one place both files are
+# written: bump_version(). No path may move one without the other.
 progress building '{}'
 MAX=$(python3 scripts/play_publish.py maxcode --sa "$SA" 2>>"$LOG" | jq -r '.highest_version_code // empty')
 [ -n "$MAX" ] || die "could not read the published version codes from Play (see the log for the API error)"
-CODE=$((MAX + 1))
 
 CUR_CODE=$(grep -oP 'versionCode = \K\d+' android/app/build.gradle.kts | head -1)
 CUR_NAME=$(grep -oP 'versionName = "\K[^"]+' android/app/build.gradle.kts | head -1)
-if [ "$CUR_CODE" = "$CODE" ]; then
-  # Someone (a previous command) already staged exactly this release — keep the
-  # name they chose rather than renaming their work.
-  NAME="$CUR_NAME"
-else
-  # Bump the patch of the name in the tree — it is never behind what Play has,
-  # and the code above already came from Play's own answer.
-  IFS=. read -r MA MI PA <<<"$CUR_NAME"
-  PA=$(( ${PA:-0} + 1 ))
-  NAME="${MA:-1}.${MI:-0}.$PA"
-fi
-log "version: $NAME ($CODE)   [Play's highest so far: $MAX; tree: $CUR_NAME ($CUR_CODE)]"
-progress building "$(jq -nc --arg n "$NAME" --argjson c "$CODE" '{version_name:$n,version_code:($c|tostring)}')"
 
-# versionCode lives in TWO files and they must stay in lockstep — the in-app
-# updater compares the backend's latest code against kAndroidVersionCode.
+# next_version — the backend decides, Play's highest code is the input.
+# Prints "<code> <name>". A backend that cannot answer is fatal: guessing here
+# is what produced four builds with the same name.
+next_version() {
+  local reply code name
+  reply=$("$DEVCMD" rpc app_release_next_version \
+            "$(jq -nc --argjson m "$MAX" '{p_platform:"android",p_play_max_code:$m}')" 2>>"$LOG")
+  [ "$(jq -r '.ok // false' <<<"$reply")" = "true" ] \
+    || die "app_release_next_version() refused to name the next release — $(jq -rc '.' <<<"$reply" | head -c 200)"
+  code=$(jq -r '.version_code' <<<"$reply")
+  name=$(jq -r '.version_name' <<<"$reply")
+  [ -n "$code" ] && [ "$code" != "null" ] && [ -n "$name" ] && [ "$name" != "null" ] \
+    || die "app_release_next_version() returned an incomplete version — $(jq -rc '.' <<<"$reply" | head -c 200)"
+  printf '%s %s' "$code" "$name"
+}
+
+# bump_version <code> <name> — the ONLY writer of a version anywhere in mediBO.
+# versionCode and versionName move together, in both files, or not at all.
 # CHANGE #985 — only rewrite when something changes: an unconditional sed -i
 # bumps the file's mtime even when the values are identical, which made
 # --reuse-aab see a "stale" bundle every time and rebuild it.
-if [ "$CUR_CODE" != "$CODE" ] || [ "$CUR_NAME" != "$NAME" ]; then
-  sed -i "s/versionCode = .*/versionCode = $CODE/; s/versionName = \".*\"/versionName = \"$NAME\"/" \
-    android/app/build.gradle.kts
-  sed -i "s/const int kAndroidVersionCode = .*/const int kAndroidVersionCode = $CODE;/" \
-    lib/services/android_update_check.dart
+bump_version() {
+  local code="$1" name="$2"
+  if [ "$CUR_CODE" != "$code" ] || [ "$CUR_NAME" != "$name" ]; then
+    sed -i "s/versionCode = .*/versionCode = $code/; s/versionName = \".*\"/versionName = \"$name\"/" \
+      android/app/build.gradle.kts
+    sed -i "s/const int kAndroidVersionCode = .*/const int kAndroidVersionCode = $code;/" \
+      lib/services/android_update_check.dart
+  fi
+  grep -q "versionCode = $code" android/app/build.gradle.kts \
+    && grep -q "versionName = \"$name\"" android/app/build.gradle.kts \
+    && grep -q "kAndroidVersionCode = $code;" lib/services/android_update_check.dart \
+    || die "version bump did not apply to every file — refusing to build out of lockstep"
+}
+
+if [ "$CUR_CODE" = "$((MAX + 1))" ]; then
+  # A previous run of THIS release already staged exactly this code into the
+  # tree. Keep its name — re-deciding would rename a build that may already be
+  # half-built — but it must still be the name the backend would have chosen or
+  # a name nothing else owns.
+  CODE="$CUR_CODE"; NAME="$CUR_NAME"
+  log "version: reusing the staged $NAME ($CODE) — Play's highest is $MAX"
+else
+  read -r CODE NAME <<<"$(next_version)"
+  log "version: $NAME ($CODE)   [Play's highest so far: $MAX; tree: $CUR_NAME ($CUR_CODE)]"
 fi
-grep -q "versionCode = $CODE" android/app/build.gradle.kts \
-  && grep -q "kAndroidVersionCode = $CODE;" lib/services/android_update_check.dart \
-  || die "version bump did not apply to both files — refusing to build out of lockstep"
+progress building "$(jq -nc --arg n "$NAME" --argjson c "$CODE" '{version_name:$n,version_code:($c|tostring)}')"
+bump_version "$CODE" "$NAME"
 
 # ── 3. the signed bundle + the #278 gates ───────────────────────────────────
 AAB="build/app/outputs/bundle/release/app-release.aab"

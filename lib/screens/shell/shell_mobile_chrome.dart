@@ -118,6 +118,25 @@ class _LocationHeader extends StatelessWidget {
                       isSuperAdmin: isSuperAdmin,
                       deletionCount: deletionCount,
                       alertCount: alertCount),
+                  // CMD #1964 — the TEST badge stands with the avatar, inside
+                  // the SAME half-width reserve the date·zone chip obeys on the
+                  // other side, so switching a session on can never push the
+                  // centred logo off centre or collide with it. Flexible +
+                  // loose fit means it takes its natural width when there is
+                  // room and clips when there is not; it is absent entirely
+                  // (SizedBox.shrink, gap included) while the banner says
+                  // on:false, which is every real session.
+                  Flexible(
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                            maxWidth: (sideMax - Ds.touch.minTarget)
+                                .clamp(0.0, box.maxWidth)),
+                        child: const TestModeBadge(),
+                      ),
+                    ),
+                  ),
                   const Spacer(),
                   // RIGHT: staff get the date·zone chip that replaced the old
                   // second row of filters; a customer keeps the cart.

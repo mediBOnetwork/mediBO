@@ -113,6 +113,10 @@ class _DesktopHeader extends StatelessWidget {
               ),
             ),
           ),
+          // CMD #1964 — the TEST badge, beside the logo, on the desktop
+          // header too. Same widget, same payload: absent while
+          // test_session_banner() says on:false.
+          const TestModeBadge(),
           const Spacer(),
           // Customer nav: My Shop, Bulk Upload, Orders, Cart
           if (showMyShop) ...[

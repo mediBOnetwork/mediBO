@@ -47,6 +47,7 @@ import 'screens/home_shell.dart';
 import 'screens/public/inquiry_form_screen.dart';
 import 'screens/delivery/agency_dispatch_screen.dart'; // C704: /agency/dispatch
 import 'screens/public/stock_update_form_screen.dart'; // C639: /stock-update/<token>
+import 'screens/public/agreement_verify_screen.dart'; // C1986: /verify-agreement/<code>
 import 'screens/public/supplier_return_ack_screen.dart'; // C710: /return-ack/<token>
 import 'screens/public/kyc_upload_form_screen.dart'; // C705: /kyc-upload/<token>
 import 'screens/public/order_feedback_form_screen.dart'; // C697: /feedback/<token>
@@ -1037,6 +1038,24 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                   return MaterialPageRoute(
                     settings: settings,
                     builder: (_) => SupplierReturnAckScreen(token: token),
+                  );
+                }
+              }
+              // CMD #1986 — /verify-agreement/<code>: the page the QR printed
+              // in the partner agreement's footer opens. PUBLIC and anonymous,
+              // exactly like /stock-update/<token>: the code in the URL carries
+              // the hash fragment that was printed on the paper, and
+              // agreement_verify() is granted to anon for that and nothing
+              // else. A bank or an inspector holding the contract has no mediBO
+              // login and must still be able to check it. Declared above the
+              // trailing /:code guard so the code is never read as a product.
+              if (name.startsWith('/verify-agreement/')) {
+                final code =
+                    name.substring('/verify-agreement/'.length).split('?').first;
+                if (code.isNotEmpty) {
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => AgreementVerifyScreen(code: code),
                   );
                 }
               }

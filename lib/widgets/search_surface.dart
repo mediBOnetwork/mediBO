@@ -210,6 +210,7 @@ class SearchFilterChips extends StatelessWidget {
     required this.filters,
     required this.onPick,
     this.showSheetGroups = true,
+    this.showChipRow = true,
   });
 
   final SearchFilters filters;
@@ -221,12 +222,18 @@ class SearchFilterChips extends StatelessWidget {
   /// passes false and shows the category row alone.
   final bool showSheetGroups;
 
+  /// CMD #2011 — does THIS surface draw the inline category row at all? The
+  /// answer is the backend's (`search_page().chip_row_surfaces`): on Home the
+  /// chips ARE the browse filter, while the Catalogue tab has the four
+  /// Browse-by tiles instead and drew the row twice over.
+  final bool showChipRow;
+
   static const double rowHeight = 52;
   static const double _chipHeight = 34;
 
   @override
   Widget build(BuildContext context) {
-    final row = filters.chipRowGroup;
+    final row = showChipRow ? filters.chipRowGroup : null;
     final sheets = showSheetGroups ? filters.sheetGroups : const <SearchFilterGroup>[];
     if (row == null && sheets.isEmpty) return const SizedBox.shrink();
 
@@ -852,6 +859,10 @@ class _SearchChromeState extends State<SearchChrome> {
         SearchFilterChips(
           filters: p?.filters ?? SearchFilters.empty,
           showSheetGroups: widget.hasQuery,
+          // CMD #2011 — the surface list is the BACKEND's; a payload that
+          // names none (an old cache) draws the row the way every surface
+          // did before this change.
+          showChipRow: p?.drawsChipRow(widget.surface) ?? true,
           onPick: widget.onFilterPick,
         ),
         if (_railOpen)

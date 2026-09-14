@@ -249,6 +249,19 @@ class SearchPagePayload {
   final SearchPaging paging;
   final List<Product> items;
 
+  /// CMD #2011 — WHICH surfaces draw the inline category chip row under the
+  /// search box. `search_page()` sends it from
+  /// app_settings.search_chip_row_surfaces, so the row moves between screens
+  /// with an UPDATE and no deploy. The Catalogue tab is not in the list: its
+  /// Therapeutic class list further down the page is the way in. A payload
+  /// with no such key at all (an old cache) draws the row everywhere, which is
+  /// what every surface did before this change.
+  final List<String>? chipRowSurfaces;
+
+  /// True when [surface] is one the backend named. Absent list = every surface.
+  bool drawsChipRow(String surface) =>
+      chipRowSurfaces == null || chipRowSurfaces!.contains(surface);
+
   const SearchPagePayload({
     required this.ok,
     required this.query,
@@ -262,6 +275,7 @@ class SearchPagePayload {
     required this.rail,
     required this.paging,
     required this.items,
+    this.chipRowSurfaces,
   });
 
   static const failed = SearchPagePayload(
@@ -299,6 +313,9 @@ class SearchPagePayload {
             .whereType<Map>()
             .map((r) => Product.fromHomeCard(Map<String, dynamic>.from(r)))
             .toList(growable: false),
+        chipRowSurfaces: (m['chip_row_surfaces'] as List?)
+            ?.map((e) => e.toString())
+            .toList(growable: false),
       );
 
   /// The same payload with another page's rows appended. Used by "Load more":
@@ -317,6 +334,7 @@ class SearchPagePayload {
         rail: next.rail,
         paging: next.paging,
         items: [...items, ...next.items],
+        chipRowSurfaces: next.chipRowSurfaces,
       );
 
 }

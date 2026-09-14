@@ -278,6 +278,14 @@ begin
     'sort', v_sort,
     'category', v_cat,
     'filters', public.search_filter_defs(v_f),
+    -- CMD #2011 — WHICH SURFACE draws the inline category chip row is the
+    -- backend's call, not the widget's. The Catalogue tab lost that row (the
+    -- Therapeutic class list further down the page is the way in); Home keeps
+    -- it, because there the chips ARE the browse filter. One UPDATE of
+    -- app_settings.search_chip_row_surfaces moves it, with no deploy.
+    'chip_row_surfaces', coalesce(
+      (select value from public.app_settings where key = 'search_chip_row_surfaces'),
+      '["home"]'::jsonb),
     'filters_active', v_filtered,
     'filters_active_label', case when v_filtered
       then public.uic('search.filters_on','Filters on') else '' end,

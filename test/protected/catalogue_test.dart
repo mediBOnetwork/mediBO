@@ -197,6 +197,11 @@ class _Rpc {
   int count(String fn) => calls.where((c) => c.$1 == fn).length;
 }
 
+/// CMD #2011 — the class tree is the CATEGORY TILE's destination now, not the
+/// default view: the landing is the four Browse-by tiles, with no list under
+/// them and no A–Z strip. A test that drives the tree opens the tree.
+const CatalogueRoute _tree = CatalogueRoute(tab: 'browse');
+
 Future<_Rpc> _pump(
   WidgetTester tester, {
   required Map<String, List<Map<String, dynamic>>> queued,
@@ -238,7 +243,7 @@ void main() {
       await _pump(tester, queued: {
         'catalogue_home': [_home()],
         'catalogue_tree': [_treeRoot()],
-      });
+      }, route: _tree);
 
       // The honest test: row 2 carries n:99999 and the label "3 products".
       // A screen that formats counts itself would print "99,999 products" and
@@ -253,7 +258,7 @@ void main() {
       await _pump(tester, queued: {
         'catalogue_home': [_home()],
         'catalogue_tree': [_treeRoot()],
-      });
+      }, route: _tree);
       final labels = tester
           .widgetList<Text>(find.byType(Text))
           .map((t) => t.data)
@@ -313,7 +318,7 @@ void main() {
       await _pump(tester, queued: {
         'catalogue_home': [_home()],
         'catalogue_tree': [_treeRoot()],
-      });
+      }, route: _tree);
       expect(find.byType(Switch), findsNothing);
       expect(find.text('Available in my zone'), findsNothing);
       expect(find.text('Showing what suppliers in your zone can send.'),
@@ -324,7 +329,7 @@ void main() {
       final rpc = await _pump(tester, queued: {
         'catalogue_home': [_home()],
         'catalogue_tree': [_treeRoot()],
-      });
+      }, route: _tree);
       for (final fn in const ['catalogue_home', 'catalogue_tree']) {
         expect(rpc.lastArgs(fn).containsKey('p_zone'), isFalse,
             reason: '$fn must ask for the WHOLE catalogue, with no zone '
@@ -336,7 +341,7 @@ void main() {
       await _pump(tester, queued: {
         'catalogue_home': [_home()],
         'catalogue_tree': [_treeRoot()],
-      });
+      }, route: _tree);
       expect(find.text('In my zone'), findsNothing);
     });
   });
@@ -346,7 +351,7 @@ void main() {
       final rpc = await _pump(tester, queued: {
         'catalogue_home': [_home()],
         'catalogue_tree': [_treeRoot(), _treeRoot()],
-      });
+      }, route: _tree);
       await tester.tap(find.text('ANTI INFECTIVES'));
       await tester.pumpAndSettle();
       expect(rpc.lastArgs('catalogue_tree')['p_path'], ['ANTI INFECTIVES']);
@@ -359,7 +364,7 @@ void main() {
         'catalogue_home': [_home()],
         'catalogue_tree': [_treeRoot(childOpens: 'products')],
         'catalogue_list': [_list(items: [_card('1', 'Augmentin 625 Duo Tablet')])],
-      });
+      }, route: _tree);
       await tester.tap(find.text('ANTI INFECTIVES'));
       await tester.pumpAndSettle();
       expect(rpc.count('catalogue_list'), 1,

@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
 import 'restart_safety.dart';
@@ -414,6 +416,151 @@ class BreakerBanner extends StatelessWidget {
             ],
           ]),
         ),
+      ]),
+    );
+  }
+}
+
+// ── CMD #1960 — the three long sections become dropdowns ─────────────────────
+// LESSONS, QA and JOURNEYS ran for screens on a phone, and the conversation —
+// the one part of a command Om actually replies to — sat below all of them.
+// Each is now a collapsed header that opens on demand, and the conversation
+// moved above them.
+//
+// THE APP RENDERS. IT NEVER DECIDES. The heading, the count chip format and
+// the expand/collapse labels are backend strings; the only thing this widget
+// owns is whether THIS device has the section open, which is a per-device
+// preference and belongs nowhere near the server.
+
+/// A collapsible section card. Collapsed by default; the open/closed choice is
+/// remembered per section per device in shared_preferences, so a section Om
+/// keeps open stays open on his phone without changing it for anyone else.
+///
+/// The body is built lazily — a closed section costs nothing to lay out.
+class DqCollapsible extends StatefulWidget {
+  /// Stable key for this section's remembered state (never shown).
+  final String sectionKey;
+
+  /// Backend heading, rendered verbatim (upper-cased like every other section
+  /// header on this screen).
+  final String title;
+
+  /// How many rows the section holds — the number in the count chip.
+  final int count;
+
+  /// Extra backend-owned chips for the collapsed header (e.g. the QA verdict),
+  /// so the headline state is readable without opening the section.
+  final List<Widget> headerChips;
+
+  /// The section's contents, built only while it is open.
+  final WidgetBuilder builder;
+
+  const DqCollapsible({
+    super.key,
+    required this.sectionKey,
+    required this.title,
+    required this.count,
+    required this.builder,
+    this.headerChips = const [],
+  });
+
+  /// Prefs key prefix — exposed so a test can seed a remembered state.
+  static const String prefsPrefix = 'dq_section_open_';
+
+  @override
+  State<DqCollapsible> createState() => _DqCollapsibleState();
+}
+
+class _DqCollapsibleState extends State<DqCollapsible> {
+  bool _open = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _restore();
+  }
+
+  Future<void> _restore() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final v = p.getBool('${DqCollapsible.prefsPrefix}${widget.sectionKey}');
+      if (v == true && mounted) setState(() => _open = true);
+    } catch (_) {
+      // No prefs on this device → the collapsed default, which is the point.
+    }
+  }
+
+  Future<void> _toggle() async {
+    final next = !_open;
+    setState(() => _open = next);
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setBool('${DqCollapsible.prefsPrefix}${widget.sectionKey}', next);
+    } catch (_) {
+      // The section still opened; only the memory of it is lost.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: EdgeInsets.only(top: Ds.space.x12),
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        border: Border.all(color: kBorder),
+        boxShadow: Ds.elevation.e1,
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Semantics(
+          identifier: 'dq_section_${widget.sectionKey}',
+          button: true,
+          expanded: _open,
+          label: c(_open
+              ? 'dev_queue.section_collapse'
+              : 'dev_queue.section_expand'),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: _toggle,
+              child: Container(
+                constraints:
+                    BoxConstraints(minHeight: Ds.touch.minTarget),
+                padding: EdgeInsets.symmetric(
+                    horizontal: Ds.space.x16, vertical: Ds.space.x12),
+                child: Row(children: [
+                  Expanded(
+                    child: Wrap(
+                      spacing: Ds.space.x8,
+                      runSpacing: Ds.space.x4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Text(widget.title.toUpperCase(),
+                            style: Ds.t.caption.copyWith(
+                                fontWeight: FontWeight.w700, color: kTextLo)),
+                        ToneChip(
+                            label: cf('dev_queue.section_count_chip',
+                                {'n': '${widget.count}'}),
+                            tone: statusTone('paused')),
+                        ...widget.headerChips,
+                      ],
+                    ),
+                  ),
+                  SizedBox(width: Ds.space.x8),
+                  Icon(_open ? Icons.expand_less : Icons.expand_more,
+                      size: Ds.space.x24, color: kTextLo),
+                ]),
+              ),
+            ),
+          ),
+        ),
+        if (_open)
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+                Ds.space.x16, Ds.space.x4, Ds.space.x16, Ds.space.x16),
+            child: widget.builder(context),
+          ),
       ]),
     );
   }

@@ -199,11 +199,14 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
                 if (_status == 'building') _filesLocked(),
                 const SizedBox(height: 12),
                 _actions(),
+                // CMD #1960 — the conversation is what Om came here to read and
+                // reply to, so it sits directly under the actions. The three
+                // long sections below it are collapsed dropdowns.
+                const SizedBox(height: 12),
+                _chat(),
                 _specChecklist(),
                 _lessonsCard(),
                 QaJourneySection(id: widget.id, svc: _svc),
-                const SizedBox(height: 12),
-                _chat(),
                 if ((_row['decisions'] as List?)?.isNotEmpty ?? false)
                   _decisions(),
                 if ((_row['screenshots'] as List?)?.isNotEmpty ?? false)
@@ -1684,11 +1687,17 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
   /// computes nothing: the heading, the empty line, each title, each lesson
   /// body and the area chip are all backend strings, and the order is the
   /// backend's. An area this build has never heard of still draws.
+  /// CMD #1960 — collapsed by default (per device): the standing lessons for a
+  /// busy area run to dozens of rows and were pushing the conversation off the
+  /// bottom of a phone.
   Widget _lessonsCard() {
     if (_lessons.isEmpty) return const SizedBox.shrink();
-    return _section(
-      c('dev_queue.gcp_lessons'),
-      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    return DqCollapsible(
+      sectionKey: 'lessons',
+      title: c('dev_queue.gcp_lessons'),
+      count: _lessons.length,
+      builder: (_) =>
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         for (final l in _lessons)
           Padding(
             padding: EdgeInsets.only(bottom: Ds.space.x12),

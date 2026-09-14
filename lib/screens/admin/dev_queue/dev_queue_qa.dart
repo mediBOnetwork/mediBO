@@ -66,98 +66,98 @@ class _QaJourneySectionState extends State<QaJourneySection> {
     final scopeWhy = (_d['scope_why'] ?? '').toString();
     final roundsLabel = (_d['rounds_label'] ?? '').toString();
 
-    return Container(
-      margin: EdgeInsets.only(top: Ds.space.x12),
-      padding: EdgeInsets.all(Ds.space.x16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: Ds.r.rCard,
-        border: Border.all(color: kBorder),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Icon(Icons.verified_outlined, size: Ds.space.x16 + 2, color: kTextLo),
-          SizedBox(width: Ds.space.x8),
-          Expanded(
-            child: Text(c('dev_queue.qa_section_title').toUpperCase(),
-                style: Ds.t.caption
-                    .copyWith(fontWeight: FontWeight.w700, color: kTextLo)),
-          ),
+    // CMD #1960 — two dropdowns, not one wall. QA and Journeys each collapse
+    // to a header (title, count chip, chevron) so the conversation below sits
+    // within a thumb's reach on a phone. The QA verdict chip stays in the
+    // collapsed header: the headline state must be readable without a tap.
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      DqCollapsible(
+        sectionKey: 'qa',
+        title: c('dev_queue.section_qa'),
+        count: findings.length,
+        headerChips: [
           ToneChip(
             label: (_d['qa_status_label'] ?? '').toString(),
             tone: toneByName((_d['qa_status_tone'] ?? 'neutral').toString()),
           ),
-        ]),
-        if (scopeLabel.isNotEmpty) ...[
-          SizedBox(height: Ds.space.x8),
-          Row(children: [
-            ToneChip(
-              label: scopeLabel,
-              tone: toneByName((_d['scope_tone'] ?? 'neutral').toString()),
-              icon: Icons.straighten_outlined,
-            ),
-            SizedBox(width: Ds.space.x8),
-            Expanded(
-              child: Text(roundsLabel,
-                  style: Ds.t.caption.copyWith(color: kTextLo)),
-            ),
-          ]),
-          SizedBox(height: Ds.space.x4),
-          Text(scopeWhy, style: Ds.t.caption.copyWith(color: kTextLo)),
         ],
-        if (previewLabel.isNotEmpty) ...[
-          SizedBox(height: Ds.space.x8),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: ToneChip(
-                label: previewLabel,
-                tone: toneByName(
-                    (_d['preview_status'] == 'promoted') ? 'success' : 'info'),
-                icon: Icons.rocket_launch_outlined),
-          ),
-        ],
-
-        // Findings
-        SizedBox(height: Ds.space.x12),
-        Text(c('dev_queue.qa_findings_title'),
-            style: Ds.t.caption.copyWith(fontWeight: FontWeight.w700)),
-        SizedBox(height: Ds.space.x8),
-        if (findings.isEmpty)
-          Text((_d['findings_empty'] ?? '').toString(),
-              style: Ds.t.caption.copyWith(color: kTextLo))
-        else
-          Column(children: [for (final f in findings) _finding(f)]),
-
-        // Journey runs
-        SizedBox(height: Ds.space.x12),
-        Text(c('dev_queue.qa_runs_title'),
-            style: Ds.t.caption.copyWith(fontWeight: FontWeight.w700)),
-        SizedBox(height: Ds.space.x8),
-        if (runs.isEmpty)
-          Text((_d['runs_empty'] ?? '').toString(),
-              style: Ds.t.caption.copyWith(color: kTextLo))
-        else
-          Column(children: [for (final r in runs) _run(r)]),
-
-        if (canWaive) ...[
-          SizedBox(height: Ds.space.x12),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: OutlinedButton.icon(
-              onPressed: () => _waive(context),
-              icon: Icon(Icons.gpp_maybe_outlined,
-                  size: Ds.space.x16, color: Ds.c.danger),
-              label: Text(c('dev_queue.qa_waive_btn'),
-                  style: Ds.t.body.copyWith(
-                      fontWeight: FontWeight.w600, color: Ds.c.danger)),
-              style: OutlinedButton.styleFrom(
-                  minimumSize: Size(0, Ds.touch.minTarget),
-                  side: BorderSide(color: Ds.c.danger)),
-            ),
-          ),
-        ],
-      ]),
-    );
+        builder: (_) => Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (scopeLabel.isNotEmpty) ...[
+                Wrap(
+                  spacing: Ds.space.x8,
+                  runSpacing: Ds.space.x4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    ToneChip(
+                      label: scopeLabel,
+                      tone: toneByName(
+                          (_d['scope_tone'] ?? 'neutral').toString()),
+                      icon: Icons.straighten_outlined,
+                    ),
+                    Text(roundsLabel,
+                        style: Ds.t.caption.copyWith(color: kTextLo)),
+                  ],
+                ),
+                SizedBox(height: Ds.space.x4),
+                Text(scopeWhy, style: Ds.t.caption.copyWith(color: kTextLo)),
+              ],
+              if (previewLabel.isNotEmpty) ...[
+                SizedBox(height: Ds.space.x8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: ToneChip(
+                      label: previewLabel,
+                      tone: toneByName((_d['preview_status'] == 'promoted')
+                          ? 'success'
+                          : 'info'),
+                      icon: Icons.rocket_launch_outlined),
+                ),
+              ],
+              SizedBox(height: Ds.space.x12),
+              Text(c('dev_queue.qa_findings_title'),
+                  style: Ds.t.caption.copyWith(fontWeight: FontWeight.w700)),
+              SizedBox(height: Ds.space.x8),
+              if (findings.isEmpty)
+                Text((_d['findings_empty'] ?? '').toString(),
+                    style: Ds.t.caption.copyWith(color: kTextLo))
+              else
+                Column(children: [for (final f in findings) _finding(f)]),
+              if (canWaive) ...[
+                SizedBox(height: Ds.space.x12),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton.icon(
+                    onPressed: () => _waive(context),
+                    icon: Icon(Icons.gpp_maybe_outlined,
+                        size: Ds.space.x16, color: Ds.c.danger),
+                    label: Text(c('dev_queue.qa_waive_btn'),
+                        style: Ds.t.body.copyWith(
+                            fontWeight: FontWeight.w600, color: Ds.c.danger)),
+                    style: OutlinedButton.styleFrom(
+                        minimumSize: Size(0, Ds.touch.minTarget),
+                        side: BorderSide(color: Ds.c.danger)),
+                  ),
+                ),
+              ],
+            ]),
+      ),
+      DqCollapsible(
+        sectionKey: 'journeys',
+        title: c('dev_queue.section_journeys'),
+        count: runs.length,
+        builder: (_) => Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (runs.isEmpty)
+                Text((_d['runs_empty'] ?? '').toString(),
+                    style: Ds.t.caption.copyWith(color: kTextLo))
+              else
+                Column(children: [for (final r in runs) _run(r)]),
+            ]),
+      ),
+    ]);
   }
 
   Widget _finding(Map<String, dynamic> f) {

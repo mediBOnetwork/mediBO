@@ -7,9 +7,10 @@ import '../data/medicine_repository.dart';
 import '../design_tokens.dart';
 import '../models/search_page.dart';
 import '../utils/render_log.dart';
+import 'compact_product_card.dart';
+import '../models/product.dart';
 import 'product_row_card.dart';
 import 'scan_mic_search_controls.dart';
-import 'search_typeahead.dart';
 
 /// CMD #1906 — the ONE search surface, drawn the same way on Home and on the
 /// Catalogue.
@@ -18,8 +19,12 @@ import 'search_typeahead.dart';
 /// category chips; the Catalogue used a white header with a grey field. Same
 /// app, two headers, and the chips on one of them were white-on-green while
 /// the chips on the other were grey outlines. Everything in this file is what
-/// BOTH screens now draw: one header, one chip row, one filter set, one
-/// recent-search strip, one result row and one empty state.
+/// BOTH screens now draw: one header, one chip row, one filter set, one idle
+/// rail, one result row and one empty state.
+///
+/// CMD #2010 — and ONE behaviour: from the second character the results grid
+/// under the box IS the answer, debounced and backend-ranked. There is no
+/// suggestion list to tap through and nothing about what was typed is kept.
 ///
 /// Every string here arrives in the `search_page()` payload. There is no
 /// label, count, plural or default written in this file.
@@ -39,8 +44,6 @@ class SearchHeaderBar extends StatefulWidget {
     this.isLoading = false,
     this.onClear,
     this.trailing,
-    this.chip = SearchChip.none,
-    this.onChipClear,
   });
 
   final TextEditingController controller;
@@ -50,10 +53,11 @@ class SearchHeaderBar extends StatefulWidget {
   /// here.
   final String placeholder;
 
-  /// Fires on every keystroke — the owner debounces and asks for suggestions.
+  /// Fires on every keystroke — the owner debounces it into the search.
   final ValueChanged<String> onChanged;
 
-  /// Fires on submit, on a voice result and on a scan result.
+  /// Fires on submit, on a voice result and on a scan result. With CMD #2010
+  /// the grid has usually answered already; this only settles the last word.
   final ValueChanged<String> onSubmit;
 
   final bool isLoading;
@@ -61,13 +65,6 @@ class SearchHeaderBar extends StatefulWidget {
 
   /// An extra control on the right of the field (the desktop Search button).
   final Widget? trailing;
-
-  /// CMD #1905, shared by CMD #1906 — the scope a tapped suggestion opened.
-  /// With a chip up the box IS the chip: the field had "SUN PHARMACEUTICAL
-  /// INDUSTRIES LTD" in it while the screen below was a company page. Both
-  /// strings are the backend's (`chip_label`, `clear_label`).
-  final SearchChip chip;
-  final VoidCallback? onChipClear;
 
   /// One height for both screens, so the two headers cannot drift apart.
   static const double fieldHeight = 46;
@@ -125,14 +122,6 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
                     child: Icon(Icons.search,
                         color: Ds.c.textSecondary, size: Ds.space.x16 + 4),
                   ),
-                  if (widget.chip.has)
-                    Expanded(
-                      child: SearchBoxChip(
-                        chip: widget.chip,
-                        onClear: widget.onChipClear ?? () {},
-                      ),
-                    )
-                  else
                   Expanded(
                     child: TextField(
                       controller: widget.controller,
@@ -388,80 +377,63 @@ class SearchFilterChips extends StatelessWidget {
   }
 }
 
-// ───────────────────────── the recent strip ────────────────────────────────
+// ───────────────────────── the idle rail ───────────────────────────────────
 
-/// The recent-search strip, under the box, on both screens.
+/// CMD #2010 — what the search surface offers with the box focused and
+/// nothing typed.
 ///
-/// It draws only when the BACKEND says `has` — an anonymous viewer and an
-/// empty history both arrive as `has:false`, and neither is decided here.
-class SearchRecentStrip extends StatelessWidget {
-  const SearchRecentStrip({
-    super.key,
-    required this.recent,
-    required this.onPick,
-    this.onClear,
-  });
+/// The backend picked the rail and wrote its title: this customer's previously
+/// ordered products when there are any, the zone's top sellers when there are
+/// none. This widget renders whichever arrived and draws NOTHING when the
+/// backend says `has` is false — an anonymous viewer with an empty catalogue
+/// and a customer whose past products all went off-sale are both its answer,
+/// not a length check made here.
+class SearchIdleRail extends StatelessWidget {
+  const SearchIdleRail({super.key, required this.rail, this.surface = 'unknown'});
 
-  final SearchRecent recent;
-  final ValueChanged<String> onPick;
-  final VoidCallback? onClear;
+  final SearchRail rail;
+
+  /// Which screen mounted it — the render-log's proof that the rail painted.
+  final String surface;
 
   @override
   Widget build(BuildContext context) {
-    if (!recent.has || recent.items.isEmpty) return const SizedBox.shrink();
+    if (!rail.has || rail.items.isEmpty) return const SizedBox.shrink();
+    RenderLog.write('c2010_rail_$surface', '${rail.kind}:${rail.items.length}');
     return Container(
       color: Ds.c.surface,
-      padding: EdgeInsets.fromLTRB(
-          Ds.space.x16, Ds.space.x4, Ds.space.x16, Ds.space.x12),
+      padding: EdgeInsets.only(bottom: Ds.space.x16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Expanded(child: Text(recent.title, style: Ds.t.caption)),
-              if (onClear != null && recent.clearLabel.isNotEmpty)
-                GestureDetector(
-                  onTap: onClear,
-                  child: Container(
-                    constraints:
-                        BoxConstraints(minHeight: Ds.touch.minTarget),
-                    alignment: Alignment.centerRight,
-                    padding: EdgeInsets.only(left: Ds.space.x12),
-                    child: Text(recent.clearLabel,
-                        style: Ds.t.caption.copyWith(color: Ds.c.brand)),
-                  ),
-                ),
-            ],
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+                Ds.space.x16, Ds.space.x8, Ds.space.x16, Ds.space.x12),
+            child: Text(rail.title,
+                key: const Key('c2010_rail_title'), style: Ds.t.subtitle),
           ),
-          SizedBox(height: Ds.space.x8),
-          Wrap(
-            spacing: Ds.space.x8,
-            runSpacing: Ds.space.x8,
-            children: [
-              for (final r in recent.items)
-                GestureDetector(
-                  onTap: () => onPick(r.q),
-                  child: Container(
-                    height: Ds.space.x32,
-                    alignment: Alignment.center,
-                    padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
-                    decoration: BoxDecoration(
-                      color: Ds.c.bg,
-                      borderRadius: Ds.r.rChip,
-                      border: Border.all(color: Ds.c.divider),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.history,
-                            size: Ds.space.x16, color: Ds.c.textSecondary),
-                        SizedBox(width: Ds.space.x4),
-                        Text(r.label, style: Ds.t.caption),
-                      ],
+          SizedBox(
+            height: CompactProductCard.extent,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              physics: const ClampingScrollPhysics(),
+              padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+              itemCount: rail.items.length,
+              itemBuilder: (context, i) {
+                final card = rail.items[i];
+                return Padding(
+                  padding: EdgeInsets.only(right: Ds.space.x12),
+                  child: SizedBox(
+                    width: CompactProductCard.railWidth,
+                    child: CompactProductCard(
+                      product: Product.fromHomeCard(card),
+                      onTap: () => Navigator.of(context)
+                          .pushNamed('/product/${card['id']}'),
                     ),
                   ),
-                ),
-            ],
+                );
+              },
+            ),
           ),
         ],
       ),
@@ -675,10 +647,11 @@ class SearchResultsSkeleton extends StatelessWidget {
       );
 }
 
-/// Debounces keystrokes for the suggestion popup. The only client-side
-/// behaviour in the search box, and it decides nothing about the result.
+/// Debounces keystrokes into the search. The only client-side behaviour in
+/// the box, and it decides nothing about the result — it only decides WHEN to
+/// ask the backend, so a four-letter word is one query and not four.
 class SearchDebouncer {
-  SearchDebouncer({this.delay = const Duration(milliseconds: 180)});
+  SearchDebouncer({this.delay = const Duration(milliseconds: 250)});
 
   final Duration delay;
   Timer? _timer;
@@ -717,15 +690,14 @@ class SearchChrome extends StatefulWidget {
     this.payload,
     this.isLoading = false,
     this.trailing,
-    this.onRecentCleared,
     this.repo,
-    this.onPickSuggestion,
     this.surface = 'unknown',
+    this.minChars = 2,
   });
 
   /// The live `search_page()` answer, when the screen has one. Its filter
-  /// groups and recent strip are what the header draws, so the chips above the
-  /// list and the list itself can never be two different answers.
+  /// groups are what the header draws, so the chips above the list and the
+  /// list itself can never be two different answers.
   final SearchPagePayload? payload;
   final TextEditingController controller;
   final FocusNode focusNode;
@@ -735,17 +707,10 @@ class SearchChrome extends StatefulWidget {
   final void Function(String query) onSubmit;
   final void Function(SearchFilterGroup group, SearchOption option) onFilterPick;
   final VoidCallback onClear;
-  final VoidCallback? onRecentCleared;
   final MedicineRepository? repo;
 
-  /// CMD #1905/#1910, moved into the shared header by CMD #1906 — a tapped
-  /// suggestion opens WHAT IT IS. The host is handed the backend's whole item
-  /// (its `nav` block included) and routes it; this component never re-runs a
-  /// tapped row as a text query, which is what pasted "SUN PHARMACEUTICAL
-  /// INDUSTRIES LTD" into a product-name search and found nothing. Both the
-  /// Catalogue and the shell pass their own router here, so there is exactly
-  /// one panel and one chip in the app.
-  final ValueChanged<SearchSuggestion>? onPickSuggestion;
+  /// CMD #2010 — the character the live grid starts at. Spec: the second.
+  final int minChars;
 
   /// CMD #1906 — which screen mounted this ONE header. See [SearchResultsView.surface].
   final String surface;
@@ -755,112 +720,123 @@ class SearchChrome extends StatefulWidget {
 }
 
 class _SearchChromeState extends State<SearchChrome> {
-  final SearchSuggestController _suggest = SearchSuggestController();
   final SearchDebouncer _debounce = SearchDebouncer();
   late final MedicineRepository _repo = widget.repo ?? MedicineRepository();
 
   /// The idle chrome: what the header shows before anything has been searched.
   /// Loaded here rather than by every screen, so a screen that mounts the
-  /// header gets the chips and the recent strip for free.
+  /// header gets the chips and the rail for free.
   SearchPagePayload? _chrome;
 
-  /// The scope the last tapped suggestion opened, or [SearchChip.none]. It
-  /// lives here rather than on each screen: two copies were what let the
-  /// desktop header and the Catalogue header drift apart in the first place.
-  SearchChip _chip = SearchChip.none;
+  /// CMD #2010 — the rail is the FOCUSED-and-empty state, so the box's focus
+  /// is the one thing this widget watches.
+  bool _focused = false;
+
+  /// One idle-chrome fetch in flight at a time, and never a second one once
+  /// an answer has landed.
+  bool _chromeAsked = false;
 
   @override
   void initState() {
     super.initState();
-    _loadChrome();
+    _focused = widget.focusNode.hasFocus;
+    widget.focusNode.addListener(_onFocus);
+    _maybeLoadChrome();
+  }
+
+  @override
+  void didUpdateWidget(covariant SearchChrome old) {
+    super.didUpdateWidget(old);
+    // The shopper cleared the box: the idle chrome is wanted again, and this
+    // is the first moment it can be asked for without racing the live search.
+    if (old.hasQuery && !widget.hasQuery) _maybeLoadChrome();
   }
 
   @override
   void dispose() {
+    widget.focusNode.removeListener(_onFocus);
     _debounce.cancel();
-    _suggest.dispose();
     super.dispose();
   }
 
-  /// Best-effort, cache-first (CHANGE #497's instant chip row, carried over):
-  /// the last chrome this device saw paints immediately, then the live one
-  /// replaces it. A failed refresh never wipes the row back to blank.
+  void _onFocus() {
+    final f = widget.focusNode.hasFocus;
+    if (f != _focused && mounted) setState(() => _focused = f);
+    if (f) _maybeLoadChrome();
+  }
+
+  /// The idle chrome is `search_page()` with NOTHING typed, so it is asked for
+  /// only while the host is not already showing a search. Firing it next to a
+  /// live query put a blank `p_q` on the wire AFTER the real one — the screen
+  /// still rendered its own payload, but the last thing the backend was asked
+  /// was the wrong question. It is asked again the moment the box is focused
+  /// or the query is cleared, which is when the rail is actually wanted.
+  void _maybeLoadChrome() {
+    if (_chromeAsked || widget.hasQuery) return;
+    _chromeAsked = true;
+    _loadChrome();
+  }
+
+  /// CHANGE #497's instant chip row, carried over — with CMD #2010's fix to
+  /// the order it runs in.
+  ///
+  /// The LIVE answer is asked for first and never waits on the device cache:
+  /// the cache read was awaited ahead of it, so a storage layer that answers
+  /// slowly (or, in a widget test, never) held the entire header — chips,
+  /// placeholder and rail — hostage behind it. The cached chrome still paints
+  /// the moment it arrives, but only while nothing live has landed, and a
+  /// failed refresh still leaves whatever was painted alone.
   Future<void> _loadChrome() async {
-    try {
-      final cached = await _repo.cachedSearchChrome();
-      if (cached != null && mounted && _chrome == null) {
-        setState(() => _chrome = cached);
-      }
-    } catch (_) {}
+    unawaited(() async {
+      try {
+        final cached = await _repo.cachedSearchChrome();
+        if (cached != null && mounted && _chrome == null) {
+          setState(() => _chrome = cached);
+        }
+      } catch (_) {}
+    }());
     try {
       final p = await _repo.searchPage(SearchQueryState.blank);
       if (!mounted) return;
       setState(() => _chrome = p);
     } catch (_) {
       // Whatever the cache painted stays; never chips this file invented.
+      // A failed refresh may be asked again on the next focus.
+      _chromeAsked = false;
     }
   }
 
   void _submit(String q) {
-    _suggest.close();
     _debounce.cancel();
-    // A typed query is not the scope the chip names, so the chip goes.
-    if (_chip.has) setState(() => _chip = SearchChip.none);
     widget.onSubmit(q);
   }
 
-  /// A suggestion tap: put the backend's chip in the box, then let the host
-  /// open the destination the backend named.
-  void _pick(SearchSuggestion s) {
-    _suggest.close();
-    widget.focusNode.unfocus();
-    setState(() {
-      _chip = s.chipLabel.isEmpty
-          ? SearchChip.none
-          : SearchChip(label: s.chipLabel, clearLabel: _suggest.clearLabel);
-      if (_chip.has) widget.controller.text = '';
-    });
-    final onPick = widget.onPickSuggestion;
-    if (onPick != null) {
-      onPick(s);
+  /// CMD #2010 — every keystroke IS the search.
+  ///
+  /// From [SearchChrome.minChars] the debounce fires the host's own submit,
+  /// which is the same path Enter takes: one surface, one ranking, no
+  /// intermediate screen. Below that threshold — including an emptied box —
+  /// the search is cleared, which puts the browse feed (and the rail) back.
+  void _changed(String v) {
+    final q = v.trim();
+    if (q.length < widget.minChars) {
+      _debounce.cancel();
+      if (widget.hasQuery) widget.onClear();
       return;
     }
-    // No router supplied: the old string contract, which is all a payload
-    // without a `nav` block can support anyway.
-    final q = s.navId.isNotEmpty ? s.navId : s.query;
-    widget.controller.text = q;
-    _submit(q);
+    _debounce.run(() {
+      if (!mounted) return;
+      RenderLog.write('c2010_live_${widget.surface}', q.length);
+      widget.onSubmit(v);
+    });
   }
 
-  /// The × on the chip is the same × as the field's: it puts the shopper back
-  /// on the catalogue they came from.
-  void _clearChip() {
-    setState(() => _chip = SearchChip.none);
-    widget.controller.clear();
-    widget.onClear();
-  }
-
-  /// Every keystroke: the suggestion panel asks the backend, and nothing else
-  /// happens until the shopper submits or taps a suggestion.
-  void _changed(String v) {
-    if (_suggestOn) {
-      _suggest.onQueryChanged(v);
-    } else {
-      _suggest.close();
-    }
-    if (v.trim().isEmpty && widget.hasQuery) widget.onClear();
-  }
-
-  /// CMD #1906, Om's call on 2026-09-13 — the typeahead panel is the
-  /// BACKEND's to offer. `search_page()` carries `suggest_enabled` from
-  /// app_settings.search_suggest_enabled, which is off: on Home the panel was
-  /// the only thing a keystroke produced, so typing a brand drew one card
-  /// offering to search for the word already in the box while the page behind
-  /// it sat unchanged. Nothing here is deleted — the panel, the chip and
-  /// #1905's navigation all still work — so turning it back on anywhere is an
-  /// UPDATE, never a deploy.
-  bool get _suggestOn =>
-      (widget.payload ?? _chrome)?.suggestEnabled ?? false;
+  /// The rail draws only while the box is focused with nothing typed in it,
+  /// and only while the screen is not already showing a search.
+  bool get _railOpen =>
+      _focused &&
+      !widget.hasQuery &&
+      widget.controller.text.trim().isEmpty;
 
   @override
   Widget build(BuildContext context) {
@@ -877,25 +853,8 @@ class _SearchChromeState extends State<SearchChrome> {
           isLoading: widget.isLoading,
           onChanged: _changed,
           onSubmit: _submit,
-          onClear: _chip.has ? _clearChip : widget.onClear,
+          onClear: widget.onClear,
           trailing: widget.trailing,
-          chip: _chip,
-          onChipClear: _clearChip,
-        ),
-        // The suggestion popup, from the SAME `search_suggest()` both screens
-        // call. Tapping a row searches the BACKEND's query for it, which for a
-        // Hindi word is the salt and not the word.
-        AnimatedBuilder(
-          animation: _suggest,
-          builder: (_, _) => _suggest.isOpen && _suggestOn
-              ? Padding(
-                  padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-                  child: SearchSuggestions(
-                    payload: _suggest.payload,
-                    onPick: _pick,
-                  ),
-                )
-              : const SizedBox.shrink(),
         ),
         SearchFilterChips(
           filters: p?.filters ?? SearchFilters.empty,
@@ -906,19 +865,11 @@ class _SearchChromeState extends State<SearchChrome> {
           showChipRow: p?.drawsChipRow(widget.surface) ?? true,
           onPick: widget.onFilterPick,
         ),
-        SearchRecentStrip(
-          recent: p?.recent ?? SearchRecent.empty,
-          onPick: (q) {
-            widget.controller.text = q;
-            _submit(q);
-          },
-          onClear: () async {
-            await _repo.clearRecentSearches();
-            if (!mounted) return;
-            setState(() => _chrome = _chrome?.withoutRecent());
-            widget.onRecentCleared?.call();
-          },
-        ),
+        if (_railOpen)
+          SearchIdleRail(
+            rail: (_chrome ?? p)?.rail ?? SearchRail.empty,
+            surface: widget.surface,
+          ),
       ],
     );
   }

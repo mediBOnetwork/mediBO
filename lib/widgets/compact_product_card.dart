@@ -137,6 +137,11 @@ class CompactProductCard extends StatelessWidget {
       _gapS +
       _availH; // 328
 
+  /// CMD #2010 — the width one card takes in a horizontal rail. It lives here,
+  /// beside [extent], so a rail cannot pick its own number: the recently-viewed
+  /// rail carried 162 as a literal and nothing tied it to the card.
+  static const double railWidth = 162;
+
   /// Hero tag shared with the product page's first carousel image.
   static String heroTag(String id) => 'pd-img-$id';
 

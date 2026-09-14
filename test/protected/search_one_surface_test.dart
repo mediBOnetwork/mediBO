@@ -37,9 +37,11 @@
 //      sent. A tap hands back the button's own `kind`, so what the button
 //      DOES stays a backend decision too.
 //
-//   6. **THE RECENT STRIP IS `has`.** An anonymous viewer, an empty history
-//      and a disabled strip all arrive as has:false and draw nothing. The app
-//      never keeps a search history of its own.
+//   6. **THE IDLE RAIL IS `has`.** CMD #2010 deleted the recent strip with
+//      the history behind it; the empty state is now the backend's own rail
+//      ("Your last ordered", or that customer's zone top sellers). Which rail
+//      it is, and what it is CALLED, are backend decisions: has:false draws
+//      nothing and the title is never composed here.
 //
 //   7. **PAGING IS THE BACKEND'S.** Load more appears only while the payload
 //      says has_more; when it stops, the backend's end_label prints instead.
@@ -107,7 +109,7 @@ Map<String, dynamic> _card({
 Map<String, dynamic> _payload({
   int items = 2,
   bool hasMore = false,
-  bool recent = false,
+  bool rail = false,
   bool filtersActive = false,
   String headerLabel = '4 products for “monticope”',
 }) =>
@@ -174,16 +176,11 @@ Map<String, dynamic> _payload({
           {'kind': 'request', 'tone': 'secondary', 'label': 'Request this product'},
         ],
       },
-      'recent': {
-        'has': recent,
-        'title': 'Recent searches',
-        'clear_label': 'Clear',
-        'items': recent
-            ? [
-                {'q': 'dolo', 'label': 'dolo'},
-                {'q': 'azithral', 'label': 'azithral'},
-              ]
-            : const [],
+      'rail': {
+        'has': rail,
+        'kind': 'last_ordered',
+        'title': 'Your last ordered',
+        'items': rail ? [_card(id: 900301, name: 'Dolo 650 Tablet')] : const [],
       },
       'paging': {
         'page': 0,
@@ -459,32 +456,20 @@ void main() {
     });
   });
 
-  group('6 — the recent strip is the backend\'s `has`', () {
+  group('6 — the idle rail is the backend\'s `has`', () {
     testWidgets('has:false draws nothing, whatever else the payload carries',
         (tester) async {
       final p = SearchPagePayload.fromMap(_payload());
-      await _pump(tester, SearchRecentStrip(recent: p.recent, onPick: (_) {}));
+      await _pump(tester, SearchIdleRail(rail: p.rail, surface: 'test'));
+      expect(find.byType(Text), findsNothing);
+    });
+
+    testWidgets('has:true prints the backend\'s own title, never one of ours',
+        (tester) async {
+      final p = SearchPagePayload.fromMap(_payload(rail: true));
+      await _pump(tester, SearchIdleRail(rail: p.rail, surface: 'test'));
+      expect(find.text('Your last ordered'), findsOneWidget);
       expect(find.text('Recent searches'), findsNothing);
-    });
-
-    testWidgets('has:true draws the title and every entry the backend sent',
-        (tester) async {
-      final p = SearchPagePayload.fromMap(_payload(recent: true));
-      await _pump(tester, SearchRecentStrip(recent: p.recent, onPick: (_) {}));
-      expect(find.text('Recent searches'), findsOneWidget);
-      expect(find.text('dolo'), findsOneWidget);
-      expect(find.text('azithral'), findsOneWidget);
-    });
-
-    testWidgets('a tap searches the backend\'s own q for that entry',
-        (tester) async {
-      String? picked;
-      final p = SearchPagePayload.fromMap(_payload(recent: true));
-      await _pump(
-          tester, SearchRecentStrip(recent: p.recent, onPick: (q) => picked = q));
-      await tester.tap(find.text('azithral'));
-      await tester.pump();
-      expect(picked, 'azithral');
     });
   });
 }

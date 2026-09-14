@@ -55,7 +55,6 @@ class StorefrontScreen extends StatefulWidget {
   final ValueChanged<SearchQueryState>? onSearchChanged;
 
   final ValueChanged<String> onCategorySelected;
-  final ValueChanged<String> onSuggestionTap;
   final MedicineRepository repo;
   // Incremented by the parent on explicit search submit (button / Enter).
   // StorefrontScreen scrolls to the results section whenever this changes.
@@ -93,7 +92,6 @@ class StorefrontScreen extends StatefulWidget {
     this.onSearchPayload,
     this.onSearchChanged,
     required this.onCategorySelected,
-    required this.onSuggestionTap,
     required this.repo,
     this.scrollTrigger = 0,
     this.scrollToTopTrigger = 0,
@@ -142,7 +140,6 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   bool _loadingMore = false;
   Object? _pageError;
   bool _pageNetworkError = false;
-  List<String> _suggestions = [];
 
   // Buyable-only category total from get_storefront_count (real total, not capped at 200).
   int? _buyableCategoryTotal;
@@ -440,7 +437,6 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       _moreLimit = null;
       _pageError = null;
       _pageNetworkError = false;
-      _suggestions = [];
       _buyableCategoryTotal = null;
       _showingLabel = null;
       _emptyLabel = null;
@@ -587,9 +583,6 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         WidgetsBinding.instance
             .addPostFrameCallback((_) { if (mounted) _scrollToProducts(); });
       }
-      if (page.isEmpty && widget.query.trim().isNotEmpty) {
-        _loadSuggestions();
-      }
     } catch (e) {
       // CMD #434 — WRITE THE REASON FIRST. This catch used to swallow the
       // exception straight into _pageError, so a category page that failed on
@@ -632,7 +625,12 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       _loadingFirst = true;
       _searchError = null;
       _searchLoadingMore = false;
-      if (widget.search.page == 0) _searchPayload = null;
+      // CMD #2010 — only an ENDED search clears the rows. While the shopper
+      // is still typing the previous answer stays under the box until the
+      // next one lands: one grid that filters, not a skeleton that flashes.
+      if (widget.search.page == 0 && !widget.search.hasQuery) {
+        _searchPayload = null;
+      }
     });
     try {
       final p = await widget.repo.searchPage(widget.search);
@@ -646,7 +644,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         'c1906_search_page',
         'q=${widget.search.query};rows=${p.items.length};total=${p.total};'
         'filters=${p.filtersActive};groups=${p.filters.groups.length};'
-        'recent=${p.recent.has ? p.recent.items.length : 0};'
+        'rail=${p.rail.has ? p.rail.kind : 'none'};'
         'more=${p.paging.hasMore};surface=home',
       );
       widget.onLoadingChanged?.call(false);
@@ -687,12 +685,6 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       if (token != _loadToken || !mounted) return;
       setState(() => _searchLoadingMore = false);
     }
-  }
-
-  Future<void> _loadSuggestions() async {
-    final suggestions = await widget.repo.fetchSuggestions(widget.query);
-    if (!mounted) return;
-    setState(() => _suggestions = suggestions);
   }
 
   Future<void> _loadMore() async {
@@ -946,10 +938,8 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
                 totalN: _countFor(widget.category),
                 error: _pageError,
                 isNetworkError: _pageNetworkError,
-                suggestions: _suggestions,
                 onClear: () => widget.onCategorySelected('All'),
                 onRetry: _resetAndLoad,
-                onSuggestionTap: widget.onSuggestionTap,
                 onLoadMore: _handleLoadMore,
               ),
             ),
@@ -1356,10 +1346,8 @@ class _ProductsSection extends StatelessWidget {
   final int totalN;
   final Object? error;
   final bool isNetworkError;
-  final List<String> suggestions;
   final VoidCallback onClear;
   final VoidCallback onRetry;
-  final ValueChanged<String> onSuggestionTap;
   final VoidCallback onLoadMore;
 
   const _ProductsSection({
@@ -1379,10 +1367,8 @@ class _ProductsSection extends StatelessWidget {
     required this.totalN,
     required this.error,
     this.isNetworkError = false,
-    required this.suggestions,
     required this.onClear,
     required this.onRetry,
-    required this.onSuggestionTap,
     required this.onLoadMore,
   });
 
@@ -1574,8 +1560,6 @@ class _ProductsSection extends StatelessWidget {
     if (error != null) {
       return _EmptyResults(
         query: query,
-        suggestions: const [],
-        onSuggestionTap: onSuggestionTap,
         overrideLabel: c('storefront_screen.search_failed'),
         onRetry: null,
         autoRetry: onRetry,
@@ -1592,8 +1576,6 @@ class _ProductsSection extends StatelessWidget {
         children: [
           _EmptyResults(
             query: query,
-            suggestions: suggestions,
-            onSuggestionTap: onSuggestionTap,
             backendLabel: emptyLabel,
           ),
           const RecentlyViewedRail(),
@@ -1660,8 +1642,6 @@ class _ProductsSection extends StatelessWidget {
 
 class _EmptyResults extends StatelessWidget {
   final String query;
-  final List<String> suggestions;
-  final ValueChanged<String> onSuggestionTap;
   final String? overrideLabel;
 
   /// CHANGE #553 — `empty_label`, rendered by storefront_search_page.
@@ -1674,8 +1654,6 @@ class _EmptyResults extends StatelessWidget {
   final VoidCallback? autoRetry;
   const _EmptyResults({
     this.query = '',
-    this.suggestions = const [],
-    required this.onSuggestionTap,
     this.overrideLabel,
     this.backendLabel,
     this.onRetry,
@@ -1716,31 +1694,6 @@ class _EmptyResults extends StatelessWidget {
               style: FilledButton.styleFrom(backgroundColor: Brand.green),
               icon: const Icon(Icons.refresh, size: 16),
               label: Text(c('storefront_screen.retry')),
-            ),
-          ],
-          if (suggestions.isNotEmpty) ...[
-            const SizedBox(height: 20),
-            Text(c('storefront_screen.did_you_mean'),
-                style: const TextStyle(
-                    color: Brand.inkMuted,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600)),
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              alignment: WrapAlignment.center,
-              children: suggestions
-                  .map((s) => ActionChip(
-                        label: Text(s,
-                            style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w500)),
-                        onPressed: () => onSuggestionTap(s),
-                        backgroundColor: Brand.mint,
-                        side: BorderSide(color: Brand.green.withValues(alpha: 0.3)),
-                      ))
-                  .toList(),
             ),
           ],
         ],

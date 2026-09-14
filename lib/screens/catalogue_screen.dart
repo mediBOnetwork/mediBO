@@ -22,6 +22,7 @@
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -325,7 +326,10 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
     // the scope it names.
     final scope = widget.shellScope;
     if (scope != null && !identical(scope, old.shellScope)) {
-      _go(scope, push: false);
+      // CMD #2021 — the shell hands a scope over on a Catalogue TAB tap too,
+      // and a tab is a root: land at the top of it every time, even when the
+      // route it names is the one already showing.
+      _go(scope, push: false, resetScroll: true);
     }
   }
 
@@ -501,7 +505,24 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
   /// CMD #2010 — [replace] is what live typing uses: the URL still follows the
   /// search, but a five-letter word leaves ONE history entry rather than four
   /// the Back button has to be pressed through.
-  void _go(CatalogueRoute next, {bool push = true, bool replace = false}) {
+  void _go(CatalogueRoute next,
+      {bool push = true, bool replace = false, bool? resetScroll}) {
+    // CMD #2021 — a new PLACE starts at the top.
+    //
+    // Every _go clears `_rows` and refetches, so the offset the shopper left
+    // belonged to a list that no longer exists; keeping it is how tapping the
+    // Catalogue tab from deep inside a salt list "returned to the landing" at
+    // row 60 of a list that had been replaced. Only a change of PLACE counts —
+    // tab, trail, open list, A–Z letter — so a keystroke in the search box
+    // does not yank the grid out from under a thumb that is still scrolling
+    // (CMD #2010 keeps those rows on screen on purpose). The caller may say so
+    // outright, which is what the Catalogue tab does: re-tapping the tab you
+    // are already on scrolls to the top, exactly as re-tapping Home does.
+    final movedPlace = next.tab != _route.tab ||
+        next.listKind != _route.listKind ||
+        next.listKey != _route.listKey ||
+        next.letter != _route.letter ||
+        !listEquals(next.path, _route.path);
     setState(() {
       _route = next;
       // CMD #1906 — the controller is shared with the header now, so only
@@ -524,6 +545,13 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
       pushUrl(next.url);
     } else if (replace) {
       replaceUrl(next.url);
+    }
+    if (resetScroll ?? movedPlace) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _scroll.hasClients && _scroll.offset != 0) {
+          _scroll.jumpTo(0);
+        }
+      });
     }
     _fetch();
   }

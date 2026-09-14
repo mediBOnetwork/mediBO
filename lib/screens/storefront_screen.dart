@@ -869,6 +869,11 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
           focusNode: _focusNode,
           onKeyEvent: _onKeyEvent,
           child: HomeSectionsView(
+            // CMD #2021 — home is the ONE scrollable here, so the shell's
+            // scroll-to-top has to reach the feed's own controller. _scroll
+            // below is not attached while this branch renders, which is why
+            // _scrollToTop() was a no-op on the home feed.
+            scrollToTopTrigger: widget.scrollToTopTrigger,
             onCategoryTap: (c) => widget.onCategorySelected(c),
             onBrowseAll: widget.onBrowseAll,
             // CHANGE #638 — company tiles now push /company/<key> themselves;

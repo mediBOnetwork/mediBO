@@ -3179,30 +3179,52 @@ class C2013SummaryRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
+          // Both halves are Flexible and neither is a Spacer: a Spacer here
+          // claimed the free width first and then squeezed "Advance to pay"
+          // into an ellipsis at 360px while 65px sat unused beside it. The
+          // amounts never shrink — only the two labels do, and the left one
+          // goes first because it is the shorter sentence.
           Flexible(
-            child: Text(
-              itemsLabel,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Ds.t.bodySecondary,
+            flex: 3,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: Text(
+                    itemsLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Ds.t.bodySecondary,
+                  ),
+                ),
+                SizedBox(width: Ds.space.x4),
+                Text(itemsValue, style: Ds.t.bodyStrong),
+              ],
             ),
           ),
-          SizedBox(width: Ds.space.x4),
-          Text(itemsValue, style: Ds.t.bodyStrong),
-          const Spacer(),
           if (hasAdvance) ...[
+            SizedBox(width: Ds.space.x12),
             Flexible(
-              child: Text(
-                advanceLabel,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.right,
-                style: Ds.t.bodySecondary,
+              flex: 4,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  Flexible(
+                    child: Text(
+                      advanceLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.right,
+                      style: Ds.t.bodySecondary,
+                    ),
+                  ),
+                  SizedBox(width: Ds.space.x4),
+                  Text(advance,
+                      style: Ds.t.bodyStrong.copyWith(color: Ds.c.brand)),
+                ],
               ),
             ),
-            SizedBox(width: Ds.space.x4),
-            Text(advance,
-                style: Ds.t.bodyStrong.copyWith(color: Ds.c.brand)),
           ],
         ],
       ),

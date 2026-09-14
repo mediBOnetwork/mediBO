@@ -201,6 +201,64 @@ class OrderAlertService extends ChangeNotifier {
     }
   }
 
+  /// CMD #1989 — the notification's monogram.
+  ///
+  /// Om's icon is the shipped default; this is how it is replaced without a
+  /// deploy. The URL the lock-screen card uses is a config value, so uploading
+  /// a file and pointing the config at it IS the change.
+  Future<Map<String, dynamic>?> iconGet() async {
+    try {
+      final raw = await _db.rpc('order_alert_icon_get');
+      final m = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
+      if (m is Map) return Map<String, dynamic>.from(m);
+    } catch (e) {
+      debugPrint('[order_alert] icon_get failed: $e');
+    }
+    return null;
+  }
+
+  Future<Map<String, dynamic>> iconSet(String iconUrl, String badgeUrl) async {
+    try {
+      final raw = await _db.rpc('order_alert_icon_set', params: {
+        'p_icon_url': iconUrl,
+        'p_badge_url': badgeUrl,
+      });
+      final m = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
+      return m is Map ? Map<String, dynamic>.from(m) : <String, dynamic>{};
+    } catch (e) {
+      debugPrint('[order_alert] icon_set failed: $e');
+      return {'ok': false, 'error': 'network'};
+    }
+  }
+
+  /// Uploads the chosen file to the bucket the backend named, then hands the
+  /// public URL back to it. The app picks no bucket and builds no path rule:
+  /// both come from order_alert_icon_get().
+  Future<Map<String, dynamic>> iconUpload({
+    required String bucket,
+    required String name,
+    required Uint8List bytes,
+  }) async {
+    try {
+      final ext = name.contains('.') ? name.split('.').last.toLowerCase() : 'png';
+      final path = 'order-alert/icon-${DateTime.now().millisecondsSinceEpoch}.$ext';
+      await _db.storage.from(bucket).uploadBinary(
+            path,
+            bytes,
+            fileOptions: FileOptions(
+                upsert: true,
+                contentType: ext == 'jpg' || ext == 'jpeg'
+                    ? 'image/jpeg'
+                    : 'image/$ext'),
+          );
+      final url = _db.storage.from(bucket).getPublicUrl(path);
+      return await iconSet(url, url);
+    } catch (e) {
+      debugPrint('[order_alert] icon upload failed: $e');
+      return {'ok': false, 'error': 'upload'};
+    }
+  }
+
   /// CMD #1989 — the bottom sheet's whole payload, rendered by
   /// order_alert_sheet(). Null when the backend says there is nothing to show.
   Future<Map<String, dynamic>?> sheet([String? orderId]) async {

@@ -546,3 +546,192 @@ begin
     end if;
   end loop;
 end $$;
+
+-- ── 9. THE ALERT ICON IS DATA, NOT AN ASSET PATH (Om, 14 Sep) ───────────────
+-- "use this icon don't use anyother icon — or make it the icon uploadable from
+-- frontend". Both: the monogram Om sent ships as the default, and the URL the
+-- notification actually uses is a config value an admin can replace from the
+-- app. Changing the lock-screen icon is now an UPLOAD, never a deploy.
+
+-- A public bucket for app-owned artwork. Idempotent: the insert is a no-op on
+-- a project that already has it, and the policies are created only if absent.
+insert into storage.buckets (id, name, public)
+values ('app-icons', 'app-icons', true)
+on conflict (id) do update set public = true;
+
+do $$
+begin
+  if not exists (select 1 from pg_policies
+                  where schemaname='storage' and tablename='objects'
+                    and policyname='app_icons_public_read') then
+    create policy app_icons_public_read on storage.objects
+      for select to public using (bucket_id = 'app-icons');
+  end if;
+  if not exists (select 1 from pg_policies
+                  where schemaname='storage' and tablename='objects'
+                    and policyname='app_icons_admin_write') then
+    create policy app_icons_admin_write on storage.objects
+      for all to authenticated
+      using (bucket_id = 'app-icons'
+             and public.get_my_role() in ('admin','super_admin'))
+      with check (bucket_id = 'app-icons'
+             and public.get_my_role() in ('admin','super_admin'));
+  end if;
+end $$;
+
+-- The shipped default. `||` merges, so an icon an admin has already uploaded
+-- survives every replay of this file.
+update public.order_alert_config
+   set labels = coalesce(labels, '{}'::jsonb) || jsonb_build_object(
+     'notif_icon_url',   coalesce(nullif(labels->>'notif_icon_url',''),
+                                  '/icons/medibo-monogram-192.png'),
+     'notif_badge_url',  coalesce(nullif(labels->>'notif_badge_url',''),
+                                  '/icons/medibo-monogram-72.png'),
+     'icon_title',       'Alert icon',
+     'icon_subtitle',    'The monogram on every new-order notification. Square PNG, 192px or larger.',
+     'icon_button',      'Upload icon',
+     'icon_reset',       'Use the mediBO monogram',
+     'icon_saved',       'Alert icon updated',
+     'icon_failed',      'That file could not be saved — try a square PNG',
+     'icon_current',     'In use now')
+ where id = 'singleton';
+
+-- The notification reads the config, not a literal.
+create or replace function public.order_alert_notif(p_alert_id bigint,
+                                                    p_kind text default 'new')
+returns jsonb language plpgsql stable security definer set search_path to 'public'
+as $function$
+declare
+  a public.order_alert%rowtype; v_paid boolean; v_count int;
+  v_vars jsonb; v_aud text; v_items text;
+begin
+  select * into a from public.order_alert where id = p_alert_id;
+  if a.id is null then return '{}'::jsonb; end if;
+
+  v_paid  := public.order_is_paid(a.order_id);
+  v_items := public._oa_items_label(a.order_id);
+  v_aud   := coalesce(a.audience, 'admin');
+  v_count := (select count(*)::int from public.order_alert al
+               where al.state = 'ringing'
+                 and (v_aud <> 'partner' or al.partner_id = a.partner_id));
+
+  v_vars := jsonb_build_object(
+    'customer',   coalesce(nullif(btrim(a.customer_name),''), coalesce(a.order_code,'')),
+    'order_code', coalesce(a.order_code,''),
+    'amount',     public.inr_money(a.amount),
+    'age',        public._oa_age_label(a.created_at),
+    'items',      v_items,
+    'risk',       public.oa_label(case when v_paid then 'sheet_status_paid'
+                                       else 'sheet_status_unpaid' end),
+    'count',      v_count::text);
+
+  return jsonb_build_object(
+    'title',        public.oa_label(case when p_kind='critical'
+                                         then 'push_title_critical'
+                                         else 'push_title' end, v_vars),
+    'body',         public.oa_label(case when p_kind='critical'
+                                         then 'push_body_critical'
+                                         else 'push_body' end, v_vars),
+    'summary',      case when v_count > 1
+                         then public.oa_label('notif_summary_many', v_vars)
+                         else '' end,
+    'count',        v_count,
+    'open_label',   public.oa_label('notif_open'),
+    'actions',      jsonb_build_array(jsonb_build_object(
+                      'action', 'open',
+                      'title',  public.oa_label('notif_open'))),
+    'channel_id',   'medibo_order_alert',
+    'channel_name', public.oa_label('channel_name'),
+    'channel_description', public.oa_label('channel_description'),
+    'group',        'medibo_orders',
+    'tag',          'medibo_orders',
+    'renotify',     true,
+    'ongoing',      (a.actioned_at is null),
+    'require_interaction', (a.actioned_at is null),
+    'status_label', public.oa_label(case when v_paid then 'sheet_status_paid'
+                                         else 'sheet_status_unpaid' end),
+    'status_tone',  case when v_paid then 'success' else 'warning' end,
+    'paid',         v_paid,
+    -- Om's monogram by default; whatever an admin uploaded once they have.
+    'icon',         coalesce(nullif(public.oa_label('notif_icon_url'),''),
+                             '/icons/medibo-monogram-192.png'),
+    'badge',        coalesce(nullif(public.oa_label('notif_badge_url'),''),
+                             '/icons/medibo-monogram-72.png'),
+    'accent',       coalesce(nullif(public.ui_design_get()->'colors'->>'brand',''),
+                             '#1B873F'),
+    'deep_link',    case when v_aud = 'partner' then '/partner'
+                         else '/admin/order-alerts' end,
+    'order_id',     a.order_id,
+    'order_code',   coalesce(a.order_code,''));
+end $function$;
+
+-- What the settings screen draws, and what it writes back.
+create or replace function public.order_alert_icon_get()
+returns jsonb language plpgsql stable security definer set search_path to 'public'
+as $function$
+begin
+  if public.get_my_role() not in ('admin','super_admin') then
+    return jsonb_build_object('ok', false);
+  end if;
+  return jsonb_build_object(
+    'ok',            true,
+    'title',         public.oa_label('icon_title'),
+    'subtitle',      public.oa_label('icon_subtitle'),
+    'button_label',  public.oa_label('icon_button'),
+    'reset_label',   public.oa_label('icon_reset'),
+    'current_label', public.oa_label('icon_current'),
+    'bucket',        'app-icons',
+    'icon_url',      coalesce(nullif(public.oa_label('notif_icon_url'),''),
+                              '/icons/medibo-monogram-192.png'),
+    'badge_url',     coalesce(nullif(public.oa_label('notif_badge_url'),''),
+                              '/icons/medibo-monogram-72.png'),
+    'default_icon',  '/icons/medibo-monogram-192.png',
+    'default_badge', '/icons/medibo-monogram-72.png');
+end $function$;
+
+create or replace function public.order_alert_icon_set(p_icon_url text,
+                                                       p_badge_url text default null)
+returns jsonb language plpgsql security definer set search_path to 'public'
+as $function$
+declare v_icon text; v_badge text;
+begin
+  if public.get_my_role() not in ('admin','super_admin') then
+    return jsonb_build_object('ok', false,
+                              'message', public.oa_label('icon_failed'));
+  end if;
+  -- Empty means "back to the shipped monogram", which is why the default is a
+  -- value here and not a null the renderer would have to interpret.
+  v_icon  := coalesce(nullif(btrim(coalesce(p_icon_url,'')),''),
+                      '/icons/medibo-monogram-192.png');
+  v_badge := coalesce(nullif(btrim(coalesce(p_badge_url,'')),''), v_icon);
+
+  update public.order_alert_config
+     set labels = coalesce(labels,'{}'::jsonb) || jsonb_build_object(
+           'notif_icon_url',  v_icon,
+           'notif_badge_url', v_badge)
+   where id = 'singleton';
+
+  return jsonb_build_object('ok', true,
+                            'message', public.oa_label('icon_saved'),
+                            'icon',    public.order_alert_icon_get());
+end $function$;
+
+do $$
+declare r record;
+begin
+  for r in
+    select p.oid::regprocedure as sig, p.proname
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public'
+       and p.proname in ('order_alert_icon_get','order_alert_icon_set',
+                         'order_alert_notif')
+  loop
+    execute format('revoke all on function %s from public, anon', r.sig);
+    if r.proname like 'order_alert_icon%' then
+      execute format('grant execute on function %s to authenticated', r.sig);
+    else
+      execute format('revoke all on function %s from authenticated', r.sig);
+      execute format('grant execute on function %s to service_role', r.sig);
+    end if;
+  end loop;
+end $$;

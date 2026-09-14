@@ -9,6 +9,7 @@
 // stage chips, the block sentences, the Save caption — arrives from
 // order_alert_settings() / customer_credit_list(). This file words nothing and
 // computes nothing.
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -34,6 +35,12 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
   final _fields = <String, TextEditingController>{};
   // CMD #1988 — this user's quiet hours and THIS device's snooze.
   Map<String, dynamic>? _prefs;
+
+  // CMD #1989 — the notification's monogram. Om's icon ships as the default and
+  // this card replaces it without a deploy: the URL the lock-screen card uses is
+  // a config value, so an upload IS the change. Every word here is
+  // order_alert_icon_get()'s.
+  Map<String, dynamic>? _icon;
   final _quietFrom = TextEditingController();
   final _quietTo = TextEditingController();
 
@@ -104,6 +111,7 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
       // after rering_after_s, so nothing is lost by looking.
       await _markSeen(s);
       await _loadPrefs();
+      await _loadIcon();
       await _readFsi();
     } catch (e) {
       if (!mounted) return;
@@ -262,6 +270,7 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
                       ..._creditRows(),
                       SizedBox(height: Ds.space.x32),
                       _section(_sectionLabel('device')),
+                      ..._iconRows(),
                       ..._prefRows(),
                       ..._fsiRows(),
                       SizedBox(height: Ds.space.x32),
@@ -272,6 +281,122 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
                   ),
                 ),
     );
+  }
+
+  // ── CMD #1989 — the alert icon, uploadable ────────────────────────────────
+  // "use this icon don't use anyother icon — or make it the icon uploadable
+  // from frontend" (Om, 14 Sep). Both: the monogram is the shipped default and
+  // this is where it is replaced. No wording here is Dart's.
+  List<Widget> _iconRows() {
+    final ic = _icon;
+    if (ic == null || ic['ok'] != true) return const [];
+    final url = (ic['icon_url'] as String?) ?? '';
+    return [
+      Container(
+        width: double.infinity,
+        padding: EdgeInsets.all(Ds.space.x16),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          boxShadow: Ds.elevation.e1,
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('${ic['title'] ?? ''}', style: Ds.t.subtitle),
+          SizedBox(height: Ds.space.x4),
+          Text('${ic['subtitle'] ?? ''}', style: Ds.t.caption),
+          SizedBox(height: Ds.space.x16),
+          Row(children: [
+            // The icon exactly as the notification will show it.
+            ClipRRect(
+              borderRadius: Ds.r.rChip,
+              child: SizedBox(
+                width: Ds.space.x48,
+                height: Ds.space.x48,
+                child: url.isEmpty
+                    ? const SizedBox.shrink()
+                    : Image.network(url,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => const SizedBox.shrink()),
+              ),
+            ),
+            SizedBox(width: Ds.space.x12),
+            Expanded(
+              child: Text('${ic['current_label'] ?? ''}',
+                  style: Ds.t.caption, maxLines: 2,
+                  overflow: TextOverflow.ellipsis),
+            ),
+          ]),
+          SizedBox(height: Ds.space.x16),
+          SizedBox(
+            width: double.infinity,
+            height: Ds.touch.minTarget,
+            child: FilledButton(
+              onPressed: _busy ? null : _pickIcon,
+              child: Text('${ic['button_label'] ?? ''}',
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+            ),
+          ),
+          SizedBox(height: Ds.space.x8),
+          SizedBox(
+            width: double.infinity,
+            height: Ds.touch.minTarget,
+            child: OutlinedButton(
+              onPressed: _busy ? null : _resetIcon,
+              child: Text('${ic['reset_label'] ?? ''}',
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+            ),
+          ),
+        ]),
+      ),
+      SizedBox(height: Ds.space.x24),
+    ];
+  }
+
+  Future<void> _loadIcon() async {
+    final ic = await OrderAlertService.instance.iconGet();
+    if (!mounted || ic == null) return;
+    setState(() => _icon = ic);
+  }
+
+  Future<void> _pickIcon() async {
+    final ic = _icon;
+    if (ic == null) return;
+    FilePickerResult? picked;
+    try {
+      picked = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['png', 'jpg', 'jpeg', 'webp'],
+        allowMultiple: false,
+        withData: true,
+      );
+    } catch (_) {}
+    final file = picked?.files.isNotEmpty == true ? picked!.files.first : null;
+    final bytes = file?.bytes;
+    if (bytes == null || bytes.isEmpty) return;
+    if (!mounted) return;
+    setState(() => _busy = true);
+    final res = await OrderAlertService.instance.iconUpload(
+      bucket: (ic['bucket'] as String?) ?? 'app-icons',
+      name: file!.name,
+      bytes: bytes,
+    );
+    if (!mounted) return;
+    setState(() => _busy = false);
+    final msg = (res['message'] as String?) ?? '';
+    if (msg.isNotEmpty) showToast(context, msg, isError: res['ok'] != true);
+    final next = res['icon'];
+    if (next is Map) setState(() => _icon = Map<String, dynamic>.from(next));
+  }
+
+  Future<void> _resetIcon() async {
+    setState(() => _busy = true);
+    final res = await OrderAlertService.instance.iconSet('', '');
+    if (!mounted) return;
+    setState(() => _busy = false);
+    final msg = (res['message'] as String?) ?? '';
+    if (msg.isNotEmpty) showToast(context, msg, isError: res['ok'] != true);
+    final next = res['icon'];
+    if (next is Map) setState(() => _icon = Map<String, dynamic>.from(next));
   }
 
   // ── CMD #1988 item 6 — quiet hours (per user) + snooze (per DEVICE) ──────

@@ -358,6 +358,7 @@ class _TestModeScreenState extends State<TestModeScreen> {
     final counts = (_s['counts'] as Map?) ?? const {};
     final runs = (_s['runs'] as Map?) ?? const {};
     final sessions = (_s['sessions'] as Map?) ?? const {};
+    final wall = (_s['wall'] as Map?) ?? const {};
     final proof = (_s['proof'] as Map?) ?? const {};
     final actions = (_s['actions'] as List?) ?? const [];
 
@@ -397,6 +398,10 @@ class _TestModeScreenState extends State<TestModeScreen> {
                   _switchCard(Map<String, dynamic>.from(sw),
                       Map<String, dynamic>.from(rzp)),
                   SizedBox(height: Ds.space.x24),
+                  if (wall.isNotEmpty) ...[
+                    _wallCard(Map<String, dynamic>.from(wall)),
+                    SizedBox(height: Ds.space.x24),
+                  ],
                   _sessionsCard(Map<String, dynamic>.from(sessions)),
                   SizedBox(height: Ds.space.x24),
                   _proofCard(Map<String, dynamic>.from(proof)),
@@ -679,6 +684,54 @@ class _TestModeScreenState extends State<TestModeScreen> {
 
   /// The verdict the whole feature exists to earn: nothing sent, nothing
   /// booked. Both numbers and the sentence come from the backend.
+  /// CMD #2017 — the hard wall, stated by the backend and printed as it comes.
+  /// Every label, value and tone is `test_wall_status()`; this widget decides
+  /// nothing, not even which rows exist.
+  Widget _wallCard(Map<String, dynamic> w) {
+    final rows = (w['rows'] as List?) ?? const [];
+    final footer = (w['footer'] ?? '').toString();
+    return _card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text((w['title'] ?? '').toString(), style: Ds.t.subtitle),
+          if ((w['subtitle'] ?? '').toString().isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text((w['subtitle'] ?? '').toString(), style: Ds.t.caption),
+          ],
+          SizedBox(height: Ds.space.x12),
+          ...rows.map((e) {
+            final r = Map<String, dynamic>.from(e as Map);
+            return Padding(
+              padding: EdgeInsets.symmetric(vertical: Ds.space.x4),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Text((r['label'] ?? '').toString(),
+                        style: Ds.t.body),
+                  ),
+                  SizedBox(width: Ds.space.x12),
+                  Flexible(
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: _chip((r['value'] ?? '').toString(),
+                          (r['tone'] ?? 'neutral').toString()),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
+          if (footer.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x12),
+            Text(footer, style: Ds.t.caption),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _proofCard(Map<String, dynamic> p) {
     final outbound = (p['outbound'] as Map?) ?? const {};
     final books = (p['books'] as Map?) ?? const {};

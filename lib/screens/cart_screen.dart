@@ -909,7 +909,7 @@ class _CartScreenState extends State<CartScreen> {
                               children: [
                                 // CMD #1952 — items × n and the advance due,
                                 // and nothing else.
-                                _C1952TopStrip(strip: cart.render['top_strip']),
+                                C1952TopStrip(strip: cart.render['top_strip']),
                                 Expanded(
                                   child: _ItemList(
                               key: _itemListKey,
@@ -963,7 +963,7 @@ class _CartScreenState extends State<CartScreen> {
             ?unavailableChip,
             // CMD #1952 — the top strip is OUTSIDE the scroll view, so the
             // item count and the advance stay on screen while the list moves.
-            _C1952TopStrip(strip: cart.render['top_strip']),
+            C1952TopStrip(strip: cart.render['top_strip']),
             Expanded(
               child: _ItemList(
                 key: _itemListKey,
@@ -1712,7 +1712,7 @@ class _CartItemCardState extends State<_CartItemCard> {
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
                             Expanded(
-                              child: _C1952SaleLine(sale: sale, mrpQty: mrpQty),
+                              child: C1952SaleLine(sale: sale, mrpQty: mrpQty),
                             ),
                             SizedBox(width: Ds.space.x8),
                             // CHANGE #324: ViewAs → checkbox; normal → the
@@ -1835,10 +1835,10 @@ List<Map<String, dynamic>> _c1952Rows(Object? raw) =>
 /// the same string. A basket whose viewer is not entitled to the trade rate
 /// gets "PTR" from the same field — locked is the backend's word for that,
 /// not a second rule here. `mrp_qty` is the struck indicator beside it.
-class _C1952SaleLine extends StatelessWidget {
+class C1952SaleLine extends StatelessWidget {
   final Map<String, dynamic> sale;
   final String mrpQty;
-  const _C1952SaleLine({required this.sale, this.mrpQty = ''});
+  const C1952SaleLine({required this.sale, this.mrpQty = ''});
 
   @override
   Widget build(BuildContext context) {
@@ -2558,7 +2558,7 @@ class _CheckoutBar extends StatelessWidget {
                 // this footer prints that decision.
                 // CMD #1952 — the sale/PTR line the rows print, printed
                 // once more where the money is committed.
-                if (selectedTotal == null) _C1952BarSale(render: cart.render),
+                if (selectedTotal == null) C1952BarSale(render: cart.render),
                 C572TotalsBlock(
                   render: cart.render,
                   selectedTotal: selectedTotal,
@@ -2708,7 +2708,7 @@ class _OrderSummaryPanel extends StatelessWidget {
           // CHANGE #572 — the sidebar prints the same three backend blocks as
           // the narrow footer: one summary, one notice, one button.
           // CMD #1952 — plus the sale/PTR line, the same one the rows print.
-          if (selectedTotal == null) _C1952BarSale(render: cart.render),
+          if (selectedTotal == null) C1952BarSale(render: cart.render),
           C572TotalsBlock(
             render: cart.render,
             selectedTotal: selectedTotal,
@@ -3448,9 +3448,9 @@ class C1815KycChip extends StatelessWidget {
 /// `items_label` and `advance_display`; it counts nothing and multiplies
 /// nothing. `show` is the backend's answer to "is there a cart at all?" — an
 /// empty basket draws no strip rather than "Items × 0".
-class _C1952TopStrip extends StatelessWidget {
+class C1952TopStrip extends StatelessWidget {
   final Object? strip;
-  const _C1952TopStrip({required this.strip});
+  const C1952TopStrip({required this.strip});
 
   @override
   Widget build(BuildContext context) {
@@ -3507,9 +3507,9 @@ class _C1952TopStrip extends StatelessWidget {
 /// speaks the same language as every row: `summary.sale_line` carries the
 /// label, the value (an amount when the viewer is entitled to it, the locked
 /// "PTR" when not) and its tone. The bar prints all three.
-class _C1952BarSale extends StatelessWidget {
+class C1952BarSale extends StatelessWidget {
   final Map<String, dynamic> render;
-  const _C1952BarSale({required this.render});
+  const C1952BarSale({required this.render});
 
   @override
   Widget build(BuildContext context) {

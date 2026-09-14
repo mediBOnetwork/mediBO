@@ -605,6 +605,12 @@ class _DirectRow extends StatelessWidget {
     final prep = (row['prep_label'] as String?) ?? '';
     final hold = (row['hold_label'] as String?) ?? '';
     final rebuilt = (row['rebuilt_label'] as String?) ?? '';
+    // CMD #1991 — WHERE THIS DEPLOY'S TIME WENT. "test 1m 24s · build 3m 41s ·
+    // upload 29s · cache kept" is one string built by
+    // _deploy_direct_phases_label(); the tone beside it is the backend's own
+    // verdict against the build+upload target, never a threshold compared here.
+    // A deploy from before the phases were measured sends '' and draws nothing.
+    final phases = (row['phases_label'] as String?) ?? '';
     final body = ConstrainedBox(
       constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
       child: Column(
@@ -637,12 +643,19 @@ class _DirectRow extends StatelessWidget {
             SizedBox(height: Ds.space.x4),
             Text(line, style: Ds.t.caption.copyWith(color: kTextLo)),
           ],
-          if (prep.isNotEmpty || rebuilt.isNotEmpty) ...[
+          if (prep.isNotEmpty || rebuilt.isNotEmpty || phases.isNotEmpty) ...[
             SizedBox(height: Ds.space.x8),
             Wrap(
               spacing: Ds.space.x8,
               runSpacing: Ds.space.x8,
               children: [
+                if (phases.isNotEmpty)
+                  ToneChip(
+                    label: phases,
+                    tone: toneByName(
+                      (row['phases_tone'] as String?) ?? 'neutral',
+                    ),
+                  ),
                 if (prep.isNotEmpty)
                   ToneChip(label: prep, tone: toneByName('success')),
                 if (rebuilt.isNotEmpty)

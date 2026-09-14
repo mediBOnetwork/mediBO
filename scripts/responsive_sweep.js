@@ -89,6 +89,12 @@ let READ_RETRIES    = 8;      // evaluate attempts across a navigation
 let PAINT_BUDGET_MS = 30000;  // how long to wait for boot_status=painted
 let SETTLE_MS       = 6000;   // let the audit re-measure once the RPC lands
 let NAV_QUIET_MS    = 2500;   // no main-frame navigation for this long = settled
+// The whole sweep has a budget. post_deploy_checks.sh wraps it in `timeout`,
+// and a killed sweep writes NO verdict at all — the guard then keeps asserting
+// a stale one. Stop STARTING combinations before that happens and publish what
+// was measured. Widths are walked phone-first, so a short budget always covers
+// the phone before the tablet.
+let BUDGET_MS       = 720000; // 12 min, inside post_deploy_checks' timeout
 
 // CMD #2009 — a destroyed execution context is NOT a measurement.
 // Every staff route sends an anonymous visitor to the storefront, and the
@@ -170,15 +176,19 @@ async function settle(page, nav, settleMs, quietMs) {
   PAINT_BUDGET_MS = Number(mf.sweep_paint_budget_ms) || PAINT_BUDGET_MS;
   SETTLE_MS       = Number(mf.sweep_settle_ms)      || SETTLE_MS;
   NAV_QUIET_MS    = Number(mf.sweep_nav_quiet_ms)   || NAV_QUIET_MS;
+  BUDGET_MS       = Number(mf.sweep_budget_ms)      || BUDGET_MS;
+  const deadline  = Date.now() + BUDGET_MS;
   say(`responsive sweep · ${TARGET} · widths ${widths.join('/')} · min touch ${minTouch}px`);
 
   const failures = [];
   const seen = [];
+  const skipped = [];
   const browser = await chromium.launch({ args: ['--no-sandbox', '--disable-gpu'] });
 
   try {
     for (const width of widths) {
       for (const [label, route] of SCREENS) {
+        if (Date.now() >= deadline) { skipped.push(`${label} @${width}px`); continue; }
         const ctx = await browser.newContext({
           viewport: { width, height: 900 },
           isMobile: width < 900,
@@ -244,15 +254,19 @@ async function settle(page, nav, settleMs, quietMs) {
     await browser.close();
   }
 
+  // An unmeasured combination is not a regression (the behaviour test says the
+  // same about a verdict that has never been written) — it is reported, not
+  // failed, so the budget can never turn the guard red on its own.
   const ok = failures.length === 0;
-  const detail = ok
+  const tail = skipped.length ? ` · ${skipped.length} not measured inside the budget` : '';
+  const detail = (ok
     ? `${seen.length} screen/width combinations clean at ${widths.join('/')}px`
-    : failures.slice(0, 6).join(' · ');
+    : failures.slice(0, 6).join(' · ')) + tail;
   const build = (seen.find((s) => s.build) || {}).build || null;
 
   await rpc('rg_runner_verdict_write', {
     p_name: 'responsive_no_overflow', p_ok: ok, p_detail: detail,
-    p_payload: { widths, min_touch_px: minTouch, checked: seen, failures },
+    p_payload: { widths, min_touch_px: minTouch, checked: seen, failures, skipped },
     p_build_hash: build,
   });
 

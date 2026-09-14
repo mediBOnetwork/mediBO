@@ -124,6 +124,11 @@ Map<String, dynamic> _direct({bool has = true, List? rows}) => {
           'hold_label': 'lock 3m 51s',
           'hold_tone': 'success',
           'rebuilt_label': '',
+          // CMD #1991 — the phase sentence, and it deliberately does NOT add up
+          // to duration_label: a card that recomputed it from the parts, or
+          // that toned it by a Dart threshold, fails here.
+          'phases_label': 'test 1m 24s · build 3m 41s · upload 29s · cache kept',
+          'phases_tone': 'success',
           'duration_label': '14m 2s',
         },
         {
@@ -391,6 +396,50 @@ void main() {
       ),
       findsOneWidget,
     );
+  });
+
+  // CMD #1991 — WHERE THE DEPLOY'S TIME WENT IS A BACKEND STRING.
+  // The whole point of the command is that "build 12 min, upload 8 min" stops
+  // being something you ssh in to read. The card prints the sentence
+  // _deploy_direct_phases_label() built and the tone it chose; it never adds
+  // the phases up, never compares them against a target, and a deploy from
+  // before the phases were measured (phases_label '') draws no chip at all.
+  testWidgets('direct deploys print the phase seconds verbatim', (t) async {
+    await _pump(t, _payload());
+    expect(
+      find.text('test 1m 24s · build 3m 41s · upload 29s · cache kept'),
+      findsOneWidget,
+    );
+    // the second fixture row carries no phases_label: nothing stands in for it
+    expect(find.textContaining('upload '), findsOneWidget);
+  });
+
+  testWidgets('a direct row with no phase line draws no phase chip', (t) async {
+    await _pump(
+      t,
+      _payload(
+        direct: _direct(
+          rows: const [
+            {
+              'id': 9,
+              'command_id': 900,
+              'label': 'CHANGE #900 · #900',
+              'status': 'deployed',
+              'tone': 'success',
+              'line': 'CHANGE #900 is live.',
+              'prep_label': '',
+              'hold_label': '',
+              'rebuilt_label': '',
+              'phases_label': '',
+              'duration_label': '2m',
+            },
+          ],
+        ),
+      ),
+    );
+    expect(find.text('CHANGE #900 · #900'), findsOneWidget);
+    expect(find.textContaining('upload '), findsNothing);
+    expect(find.textContaining('cache kept'), findsNothing);
   });
 
   testWidgets('an absent prep or rebuilt chip is omitted, never dashed', (

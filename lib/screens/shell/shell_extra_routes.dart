@@ -39,6 +39,7 @@ import '../admin/returns_refunds_screen.dart';
 import '../admin/surface_map_screen.dart';
 import '../admin/onboarding_notices_screen.dart';
 import '../admin/payment_alerts_screen.dart';
+import '../admin/order_notification_trail_screen.dart';
 import '../admin/dev_queue/triage_inbox_screen.dart';
 import '../admin/damage_report_screen.dart';
 import '../partner/zone_pnl_screen.dart';
@@ -117,6 +118,13 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       // payment_alerts_screen() answers on the caller's own role and renders
       // its own refusal, and the tile comes from feature_registry.
       'payment_alerts' => const PaymentAlertsScreen(),
+      // CMD #1987 — Message trail: every notification attempt on one order,
+      // the path that tried to carry it and why it did or did not go. The door
+      // is HERE and not in the shell's own switch for the reason this shard
+      // exists — home_shell.dart sits against a hard 2,000-line guard.
+      // Authorisation is not here either: order_notification_trail() answers on
+      // the caller's own role and zone and renders its own refusal.
+      'notif_trail' => const OrderNotificationTrailScreen(),
       // CMD #1936 — Onboarding notices: what a new shop hears from us, and
       // when. The door is HERE for the same reason as the two above — the
       // shell's own switch is at 1,998 of a hard 2,000-line guard.

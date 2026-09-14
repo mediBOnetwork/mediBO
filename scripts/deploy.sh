@@ -35,10 +35,29 @@ if [ -f "$HOME/mediBO-runner/cache.env" ]; then
   . "$HOME/mediBO-runner/cache.env"
   echo "[cache] PUB_CACHE=${PUB_CACHE:-unset}"
 fi
+# ── CMD #1991 — THE PHASES ARE MEASURED, AND THE MEASUREMENT LEAVES THE BOX ──
+# "Deploy in 10 minutes, not 25" needs the 25 broken down per deploy, where Om
+# can see it — not in a journal on the VM. Every _phase_mark still echoes the
+# line it always did (nothing that greps the log breaks) and now also appends
+# `<key>=<seconds>` to a small file. direct_deploy.sh reads that file and sends
+# build_s / upload_s / test_s to deploy_direct_report, and the Deploy lane card
+# prints them per deploy. The file lives OUTSIDE the repo on purpose: deploy.sh
+# runs `git add -A`, so anything left in the worktree would be committed.
+PHASES_FILE="${MEDIBO_PHASES_FILE:-$HOME/.medibo/deploy_phases.txt}"
+mkdir -p "$(dirname "$PHASES_FILE")" 2>/dev/null || true
+: > "$PHASES_FILE" 2>/dev/null || true
+_phase_put() { printf '%s=%s\n' "$1" "$2" >> "$PHASES_FILE" 2>/dev/null || true; }
 _phase_t0=$(date +%s)
 _phase_mark() {  # <name> — one line per phase, so the slowest one is visible
-  local now; now=$(date +%s)
+  local now slug; now=$(date +%s)
   echo "[phase-timing] $1 $((now - _phase_t0))s"
+  slug=$(printf '%s' "$1" | tr 'A-Z ' 'a-z_' | tr -cd 'a-z0-9_')
+  case "$slug" in
+    flutter_build)   slug=build_s ;;
+    wrangler_upload) slug=upload_s ;;
+    *)               slug="${slug}_s" ;;
+  esac
+  _phase_put "$slug" "$((now - _phase_t0))"
   _phase_t0=$now
 }
 
@@ -295,8 +314,10 @@ if [ "${MEDIBO_SKIP_CLEAN:-0}" = "1" ] && [ -f build/web/index.html ]; then
   # previous run's fingerprinted copies would otherwise pile up in build/web and
   # be uploaded alongside the new one.
   rm -f build/web/main.*.dart.js build/web/main.*.dart.js.map 2>/dev/null || true
+  _phase_put clean_build 0
 else
   flutter clean
+  _phase_put clean_build 1
 fi
 # ── CHANGE #473: stamp the crash-reporting release ──────────────────────────
 # The Sentry release id is the CHANGE number, baked into the bundle at BUILD
@@ -546,6 +567,65 @@ if [ -n "${MEDIBO_PRE_UPLOAD_HOOK:-}" ]; then
   fi
 fi
 
+# ── CMD #1991 — UPLOAD BY DIFF: hash the bundle, compare it with what is live ─
+# Measured over the last six deploys, the upload phase was 17-31 s on a good
+# day and 227-526 s on a bad one, for a 52 MB bundle of which 37 MB is canvaskit
+# that has not changed in months. Cloudflare Pages is content-addressed: the
+# wrangler client hashes every file, asks the API which hashes are missing, and
+# uploads only those — the diff upload is real, it is just invisible, so nobody
+# could tell a 500 s upload (a cold asset store) from a broken one.
+#
+# So the diff is computed HERE, printed, and kept:
+#   * $MANIFEST_NEW  — sha256 of every file in build/web, this build
+#   * $MANIFEST_LIVE — the same manifest of the last VERIFIED-live deploy
+# changed / new / removed / unchanged are counted against it, and only the
+# changed+new bytes can possibly go over the wire. A removed file needs no
+# delete call: a Pages deployment is a full immutable snapshot, so a file that
+# is not in this manifest is not in production the moment the alias moves.
+#
+# version.json goes LAST — and with an atomic snapshot "last" cannot be an
+# ordering, it has to be an assertion: the snapshot must already contain the
+# fingerprinted bundle and the index.html that version.json names, or nothing
+# is uploaded at all. That is the failure this replaces — a version.json live
+# ahead of the bundle it points at.
+MANIFEST_LIVE="${MEDIBO_LIVE_MANIFEST:-$HOME/.medibo/live_bundle_manifest.txt}"
+MANIFEST_NEW="${MEDIBO_NEW_MANIFEST:-$HOME/.medibo/bundle_manifest.pending.txt}"
+mkdir -p "$(dirname "$MANIFEST_NEW")" 2>/dev/null || true
+( cd "$WEB" && find . -type f -print0 | LC_ALL=C sort -z \
+    | xargs -0 -r sha256sum ) 2>/dev/null | sed 's#\./##' > "$MANIFEST_NEW"
+UPLOAD_FILES=$(wc -l < "$MANIFEST_NEW" | tr -d ' ')
+if [ "${UPLOAD_FILES:-0}" -lt 10 ]; then
+  _die 11 manifest_empty "build/web hashed to only ${UPLOAD_FILES} files — the bundle is not a bundle, nothing uploaded"
+fi
+# The two files version.json is about to vouch for must be in this snapshot.
+grep -q " main\.${SHORT}\.dart\.js$" "$MANIFEST_NEW" \
+  || _die 11 manifest_bundle "the snapshot has no main.${SHORT}.dart.js — version.json would name a bundle that is not being uploaded"
+grep -q " index\.html$" "$MANIFEST_NEW" \
+  || _die 11 manifest_index "the snapshot has no index.html — nothing uploaded"
+grep -q " version\.json$" "$MANIFEST_NEW" \
+  || _die 11 manifest_version "the snapshot has no version.json — the live alias could never be proven"
+if [ -s "$MANIFEST_LIVE" ]; then
+  DIFF_LINE=$(awk '
+    NR==FNR { live[$2]=$1; next }
+            { seen[$2]=1
+              if (!($2 in live))      { new++ }
+              else if (live[$2]!=$1)  { changed++ }
+              else                    { same++ } }
+    END { for (f in live) if (!(f in seen)) gone++
+          printf "changed=%d new=%d removed=%d unchanged=%d", changed+0, new+0, gone+0, same+0 }
+  ' "$MANIFEST_LIVE" "$MANIFEST_NEW")
+  MOVED_BYTES=$(awk '
+    NR==FNR { live[$2]=$1; next }
+            { if (!($2 in live) || live[$2]!=$1) print $2 }
+  ' "$MANIFEST_LIVE" "$MANIFEST_NEW" | ( cd "$WEB" && xargs -r -d '\n' stat -c %s 2>/dev/null ) \
+    | awk '{t+=$1} END {printf "%d", t+0}')
+  echo "[upload-diff] ${DIFF_LINE} · $(( ${MOVED_BYTES:-0} / 1024 )) KB differ from the live bundle (of $(du -sk "$WEB" | cut -f1) KB total)"
+  echo "[upload-diff] removed files need no delete call — a Pages deployment is a full snapshot, so anything absent here is absent live"
+else
+  echo "[upload-diff] no manifest of the live bundle yet — this deploy writes the first one (every file counts as new)"
+fi
+echo "[upload-diff] version.json is last: the snapshot already carries main.${SHORT}.dart.js and index.html ✓"
+
 # ── LIVE DEPLOY: wrangler Direct Upload — bypasses Cloudflare Pages git queue ──
 echo ""
 echo "⬆  Uploading build/web to Cloudflare Pages (project=medibo, branch=main)…"
@@ -741,6 +821,16 @@ for i in $(seq 1 $MAX); do
     mkdir -p ~/.medibo
     echo "commit=${SHORT} size=${BUNDLE_SIZE} change=${CHANGE_LABEL} built=${BUILT}" > ~/.medibo/lastgood.txt
     echo "[lastgood] updated: commit=${SHORT} size=${BUNDLE_SIZE}"
+
+    # ── CMD #1991 — the manifest of what is now PROVEN live ─────────────────
+    # Written only here, past the live-assert, so the next deploy's diff is
+    # against a bundle that really is on the edge. A failed deploy leaves the
+    # previous manifest in place; it never records a snapshot that did not ship.
+    if [ -s "${MANIFEST_NEW:-}" ]; then
+      cp "$MANIFEST_NEW" "${MANIFEST_LIVE:-$HOME/.medibo/live_bundle_manifest.txt}" 2>/dev/null \
+        && echo "[upload-diff] live bundle manifest stored ($(wc -l < "$MANIFEST_NEW" | tr -d ' ') files)" \
+        || echo "[upload-diff] could not store the live manifest (next deploy just uploads everything)"
+    fi
 
     # ── POST-DEPLOY CHECKS — LOCK-FREE (CMD #1973) ─────────────────────────
     # The disk prune, verify_live.sh, the regression guard, the mobile-first

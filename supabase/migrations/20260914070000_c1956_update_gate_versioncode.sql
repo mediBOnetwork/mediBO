@@ -620,6 +620,12 @@ begin
                 and a.version_name = (public.app_release_next_version('android', null)->>'version_name')) then
     raise exception 'release_version_name_unique: app_release_next_version() proposed a version_name that is already recorded';
   end if;
+
+  -- CMD #1984 — every behaviour test ends here: rg_run_behavior() reads
+  -- RG_ROLLBACK as "the body ran and found nothing", and a body that simply
+  -- returns is reported as "test body did not raise RG_ROLLBACK" and counts
+  -- as a CRITICAL failure.
+  raise exception 'RG_ROLLBACK';
 end $vnu$;
 $rgb$
  where name = 'release_version_name_unique';

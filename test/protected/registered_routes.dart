@@ -4,8 +4,9 @@
 // 'admin_conditions' (Admin -> Uses & conditions), CMD #1929
 // 'payment_alerts', CMD #1932 'advance_slabs' (the advance ladder), CMD
 // #1935 'customer_doc_types' (Admin -> Customer documents) and CMD #1936
-// 'onboarding_notices' (Admin -> Onboarding notices) and CMD #1985
-// 'agreement_versions' (Admin -> Partner agreement) — all seven for the same
+// 'onboarding_notices' (Admin -> Onboarding notices), CMD #1987
+// 'notif_trail' (Admin -> Message trail) and CMD #1985
+// 'agreement_versions' (Admin -> Partner agreement) — all for the same
 // reason and by the same rule. The surface_route INSERTs are in
 // supabase/migrations/20260906060000_c639_triage_loop.sql,
 // supabase/migrations/20260912204000_c1910_conditions_nav.sql,
@@ -13,6 +14,7 @@
 // supabase/migrations/20260913093000_c1932_advance_ladder.sql,
 // supabase/migrations/20260913120000_c1935_customer_docs.sql and
 // supabase/migrations/20260914090000_c1936_onboarding_wa_triggers.sql and
+// supabase/migrations/20260914200000_cmd1987_order_notify_trail.sql and
 // supabase/migrations/20260914150000_c1985_agreement_living_doc.sql; the
 // next regeneration after deploy produces this same file.
 //
@@ -65,6 +67,7 @@ const kRegisteredAdminRoutes = <String>[
   'payment_alerts',
   'customer_doc_types',
   'onboarding_notices',
+  'notif_trail',
   'agreement_versions',
   'pharmacy_vault', 'pnl', 'pos', 'pos_upi', 'price_check', 'pricing',
   'pricing_backfill', 'profile', 'purchases', 'recon', 'reorder',

@@ -9,6 +9,7 @@ import '../../../utils/toast.dart';
 import 'dev_queue_branch.dart';
 import 'dev_queue_claude_login.dart';
 import 'dev_queue_common.dart';
+import 'dev_queue_lock_card.dart';
 import 'dev_queue_context.dart';
 import 'dev_queue_deploy_wait.dart';
 import 'dev_queue_health.dart';
@@ -579,6 +580,14 @@ class _DevQueueControlState extends State<DevQueueControl> {
             service: widget.service,
             onChanged: _load,
           ),
+          // CMD #1990 — the deploy lock, its reservation and everyone asleep in
+          // the register. dev_ctl_get().deploy_wait, rendered verbatim.
+          if (((_snap['deploy_wait'] as Map?)?['has'] ?? false) == true) ...[
+            _divider(),
+            DeployLockCard(
+                card: (_snap['deploy_wait'] as Map?)?.cast<String, dynamic>() ??
+                    const {}),
+          ],
           // CHANGE #1470 — the build branch rides the payload this card already
           // fetches. has:false draws nothing at all.
           if (((_snap['build_branch'] as Map?)?['has'] ?? false) == true) ...[

@@ -45,6 +45,7 @@ import '../admin/damage_report_screen.dart';
 import '../partner/zone_pnl_screen.dart';
 import '../admin/wa_assistant_screen.dart';
 import '../admin/admin_conditions_screen.dart';
+import '../admin/agreement_versions_screen.dart';
 import '../admin/customer_doc_types_screen.dart';
 import '../admin/search_synonyms_screen.dart';
 import '../admin/support_threads_screen.dart';
@@ -232,6 +233,18 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       // is_admin() and the screen prints that refusal, so this line is only
       // the door.
       'customer_doc_types' => const CustomerDocTypesScreen(),
+      // CMD #1985 — Admin › Partner agreement: the clause editor, the version
+      // lifecycle and the clause changes partners have asked for.
+      //
+      // Declared HERE and nowhere else. Lesson 203: a route wired only in
+      // partnerDestination() draws a tile whose tap falls through this switch,
+      // and every backend proof still passes. surface_route.handled_by reads
+      // 'home_shell' for exactly this reason.
+      //
+      // agreement_admin_versions() refuses anyone who is not a super admin and
+      // hands this screen the refusal to print, so opening the door decides
+      // nothing about who may edit an agreement.
+      'agreement_versions' => const AgreementVersionsScreen(),
       // CHANGE #695 — the GST tax invoice raised on every settled period, its
       // credit notes and the monthly GSTR-1 register.
       //

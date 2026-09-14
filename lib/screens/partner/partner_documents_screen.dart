@@ -160,6 +160,8 @@ class _PartnerDocumentsScreenState extends State<PartnerDocumentsScreen> {
             onSign: () => _signSheet(agreement),
             onOpen: () => _open(
                 _s(agreement, 'doc_bucket'), _s(agreement, 'doc_path')),
+            onPropose: (clause) => _proposeSheet(agreement, clause),
+            onDiff: () => _diffSheet(agreement),
           ),
           SizedBox(height: Ds.space.x24),
           _KycSection(
@@ -186,6 +188,134 @@ class _PartnerDocumentsScreenState extends State<PartnerDocumentsScreen> {
     } catch (e) {
       if (mounted) showToast(context, e.toString(), isError: true);
     }
+  }
+
+  // ── a clause change the partner is ASKING for ─────────────────────────────
+  //
+  // CMD #1985. Nothing here is live: agreement_proposal_raise() files it as a
+  // proposal and mediBO approves or rejects it with a reason. The partner types
+  // their wording; the clause they signed does not move until someone says so.
+  Future<void> _proposeSheet(
+      Map<String, dynamic> a, Map<String, dynamic> clause) async {
+    final body = TextEditingController(text: _s(clause, 'body'));
+    final note = TextEditingController();
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+          left: Ds.space.x16,
+          right: Ds.space.x16,
+          top: Ds.space.x24,
+          bottom: MediaQuery.of(ctx).viewInsets.bottom + Ds.space.x24,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('${_s(clause, 'n')}. ${_s(clause, 'heading')}',
+                  style: Ds.t.subtitle),
+              SizedBox(height: Ds.space.x16),
+              TextField(
+                controller: body,
+                maxLines: 6,
+                decoration:
+                    InputDecoration(labelText: _s(a, 'propose_hint')),
+              ),
+              SizedBox(height: Ds.space.x12),
+              TextField(
+                controller: note,
+                maxLines: 2,
+                decoration:
+                    InputDecoration(labelText: _s(a, 'propose_note_hint')),
+              ),
+              SizedBox(height: Ds.space.x24),
+              SizedBox(
+                height: Ds.touch.minTarget,
+                child: FilledButton(
+                  onPressed: _busy
+                      ? null
+                      : () async {
+                          final ok = await _write('agreement_proposal_raise', {
+                            'p': _body({
+                              'clause_id': clause['clause_id'],
+                              'proposed_body': body.text,
+                              'note': note.text.trim(),
+                            })
+                          });
+                          if (ok && ctx.mounted) Navigator.of(ctx).pop();
+                        },
+                  child: Text(_s(a, 'propose_label')),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ── what changed since this partner last signed ───────────────────────────
+  //
+  // The re-sign ask is only fair if the partner can see what moved. The rows,
+  // their words and their tones are agreement_diff()'s; this draws them.
+  Future<void> _diffSheet(Map<String, dynamic> a) async {
+    final diff = _map(a['diff']);
+    final rows = (diff['rows'] as List? ?? const [])
+        .map((e) => e is Map ? Map<String, dynamic>.from(e) : null)
+        .whereType<Map<String, dynamic>>()
+        .toList();
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (ctx) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.7,
+        maxChildSize: 0.95,
+        builder: (ctx, scroll) => Padding(
+          padding: EdgeInsets.all(Ds.space.x16),
+          child: ListView(
+            controller: scroll,
+            children: [
+              Text(_s(diff, 'heading'), style: Ds.t.subtitle),
+              SizedBox(height: Ds.space.x4),
+              Text(_s(diff, 'summary_label'), style: Ds.t.caption),
+              SizedBox(height: Ds.space.x16),
+              if (rows.isEmpty)
+                Text(_s(diff, 'empty_label'), style: Ds.t.bodySecondary)
+              else
+                for (final r in rows) ...[
+                  Wrap(
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: Ds.space.x8,
+                    runSpacing: Ds.space.x4,
+                    children: [
+                      Text('${_s(r, 'n')}. ${_s(r, 'heading')}',
+                          style: Ds.t.bodyStrong),
+                      PartnerChip(
+                          text: _s(r, 'kind_label'), tone: r['tone'] as String?),
+                    ],
+                  ),
+                  if (_s(r, 'old').isNotEmpty) ...[
+                    SizedBox(height: Ds.space.x8),
+                    Text(_s(r, 'old'), style: Ds.t.caption),
+                  ],
+                  if (_s(r, 'new').isNotEmpty) ...[
+                    SizedBox(height: Ds.space.x4),
+                    Text(_s(r, 'new'), style: Ds.t.bodySecondary),
+                  ],
+                  SizedBox(height: Ds.space.x24),
+                ],
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   // ── the e-sign ────────────────────────────────────────────────────────────
@@ -546,53 +676,188 @@ class _GoLiveCard extends StatelessWidget {
   }
 }
 
-/// The agreement: its version line, its text, and the one action the backend
-/// says is open — `can_sign` is a flag, never a status word read in Dart.
+/// The agreement, as a LIVING document (CMD #1985).
+///
+/// The card used to draw one blob of prose and a Sign button. It now draws the
+/// four things that make the agreement true on the day it is read: the health
+/// line (which version is signed, what it is valid to, what is pending), the
+/// commercial terms that also drive settlement, the clauses with their tokens
+/// already filled in for THIS partner, and — when a fresh signature is being
+/// asked for — the reason and a diff of what moved.
+///
+/// It still decides nothing. `can_sign`, `health_tone`, every label and the
+/// void sentence are fields of partner_agreement_card().
 class _AgreementCard extends StatelessWidget {
   const _AgreementCard({
     required this.data,
     required this.busy,
     required this.onSign,
     required this.onOpen,
+    required this.onPropose,
+    required this.onDiff,
   });
 
   final Map<String, dynamic> data;
   final bool busy;
   final VoidCallback onSign;
   final VoidCallback onOpen;
+  final void Function(Map<String, dynamic> clause) onPropose;
+  final VoidCallback onDiff;
 
-  String _s(String k) => (data[k] is String) ? data[k] as String : '';
+  String _s(String k) => (data[k] == null) ? '' : data[k].toString();
+
+  List<Map<String, dynamic>> _list(String k) {
+    final raw = data[k];
+    if (raw is! List) return const [];
+    return raw
+        .map((e) => e is Map ? Map<String, dynamic>.from(e) : null)
+        .whereType<Map<String, dynamic>>()
+        .toList();
+  }
 
   @override
   Widget build(BuildContext context) {
     if (data['ok'] != true) {
       return PartnerCard(child: Text(_s('message'), style: Ds.t.bodySecondary));
     }
+    final clauses = _list('clauses');
+    final terms = _list('terms_rows');
+    final props = _list('proposals');
+    final hasDiff = (data['diff'] is Map) &&
+        ((data['diff'] as Map)['ok'] == true);
+
     return PartnerCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          // A Wrap, not a Row: at 360px the heading and a status word as long
+          // as "Needs a fresh signature" do not fit on one line, and a phone is
+          // where 99% of this is read. The chip drops below instead of
+          // overflowing (CMD #1950).
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: Ds.space.x8,
+            runSpacing: Ds.space.x4,
             children: [
-              Expanded(child: Text(_s('heading'), style: Ds.t.subtitle)),
+              Text(_s('heading'), style: Ds.t.subtitle),
               PartnerChip(
                   text: _s('status_label'), tone: data['status_tone'] as String?),
             ],
           ),
           SizedBox(height: Ds.space.x4),
           Text(_s('sub'), style: Ds.t.caption),
-          if (data['has_version'] == true) ...[
+
+          // The one line that answers "where does this partner stand".
+          if (_s('health_line').isNotEmpty) ...[
             SizedBox(height: Ds.space.x12),
-            Text(_s('version_label'), style: Ds.t.caption),
-            SizedBox(height: Ds.space.x12),
-            _AgreementBody(title: _s('title'), body: _s('body')),
+            Text(_s('health_line'), style: Ds.t.bodyStrong),
           ],
+          if (data['has_version'] == true) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(_s('version_label'), style: Ds.t.caption),
+            Text(_s('validity_label'), style: Ds.t.caption),
+          ],
+
+          // Why the earlier signature stopped counting, in the backend's words.
+          if (_s('void_reason').isNotEmpty) ...[
+            SizedBox(height: Ds.space.x12),
+            Container(
+              width: double.infinity,
+              padding: EdgeInsets.all(Ds.space.x12),
+              decoration: BoxDecoration(
+                color: Ds.c.warningSoft,
+                borderRadius: Ds.r.rCard,
+              ),
+              child: Text(_s('void_reason'), style: Ds.t.bodySecondary),
+            ),
+          ],
+
+          if (terms.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x24),
+            Text(_s('terms_heading'), style: Ds.t.bodyStrong),
+            SizedBox(height: Ds.space.x8),
+            for (final t in terms)
+              Padding(
+                padding: EdgeInsets.only(bottom: Ds.space.x4),
+                child: Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: Ds.space.x8,
+                  runSpacing: Ds.space.x4,
+                  children: [
+                    Text((t['label'] ?? '').toString(), style: Ds.t.caption),
+                    Text((t['value'] ?? '').toString(), style: Ds.t.bodyStrong),
+                  ],
+                ),
+              ),
+          ],
+
+          if (hasDiff) ...[
+            SizedBox(height: Ds.space.x16),
+            SizedBox(
+              width: double.infinity,
+              height: Ds.touch.minTarget,
+              child: OutlinedButton.icon(
+                onPressed: onDiff,
+                icon: const Icon(Icons.compare_arrows),
+                label: Text(
+                    ((data['diff'] as Map)['heading'] ?? '').toString()),
+              ),
+            ),
+          ],
+
+          if (clauses.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x24),
+            _AgreementClauses(
+              title: _s('title'),
+              clauses: clauses,
+              proposeLabel: _s('propose_label'),
+              busy: busy,
+              onPropose: onPropose,
+            ),
+          ],
+
+          if (props.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x24),
+            Text(_s('proposals_heading'), style: Ds.t.bodyStrong),
+            SizedBox(height: Ds.space.x8),
+            for (final pr in props)
+              Padding(
+                padding: EdgeInsets.only(bottom: Ds.space.x12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Wrap(
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: Ds.space.x8,
+                      runSpacing: Ds.space.x4,
+                      children: [
+                        Text(
+                            '${(pr['clause_n'] ?? '')}. '
+                            '${(pr['heading'] ?? '')}',
+                            style: Ds.t.body),
+                        PartnerChip(
+                            text: (pr['status_label'] ?? '').toString(),
+                            tone: pr['status_tone'] as String?),
+                      ],
+                    ),
+                    if ((pr['decision_reason'] ?? '').toString().isNotEmpty) ...[
+                      SizedBox(height: Ds.space.x4),
+                      Text((pr['decision_reason']).toString(),
+                          style: Ds.t.caption),
+                    ],
+                  ],
+                ),
+              ),
+          ],
+
           if (_s('signed_line').isNotEmpty) ...[
             SizedBox(height: Ds.space.x12),
             Text(_s('signed_line'), style: Ds.t.bodySecondary),
           ],
           if (_s('signed_ip_line').isNotEmpty)
             Text(_s('signed_ip_line'), style: Ds.t.caption),
+          if (_s('hash_line').isNotEmpty)
+            Text(_s('hash_line'), style: Ds.t.caption),
           if (data['doc_building'] == true) ...[
             SizedBox(height: Ds.space.x8),
             Text(_s('doc_building_label'), style: Ds.t.caption),
@@ -625,17 +890,27 @@ class _AgreementCard extends StatelessWidget {
   }
 }
 
-/// The agreement text, collapsed by default so the card stays a card. The
-/// heading is the backend's document title; nothing here is written in Dart.
-class _AgreementBody extends StatelessWidget {
-  const _AgreementBody({required this.title, required this.body});
+/// The clauses, collapsed by default so the card stays a card. Each one is
+/// already resolved for this partner — `{{partner}}` became their own name in
+/// the backend, never here. A clause the version marks editable_by_partner
+/// carries the one action a partner has on the text: ask for a change.
+class _AgreementClauses extends StatelessWidget {
+  const _AgreementClauses({
+    required this.title,
+    required this.clauses,
+    required this.proposeLabel,
+    required this.busy,
+    required this.onPropose,
+  });
 
   final String title;
-  final String body;
+  final List<Map<String, dynamic>> clauses;
+  final String proposeLabel;
+  final bool busy;
+  final void Function(Map<String, dynamic> clause) onPropose;
 
   @override
   Widget build(BuildContext context) {
-    if (body.isEmpty) return const SizedBox.shrink();
     return Theme(
       data: Theme.of(context).copyWith(dividerColor: Ds.c.divider),
       child: ExpansionTile(
@@ -643,10 +918,34 @@ class _AgreementBody extends StatelessWidget {
         childrenPadding: EdgeInsets.only(bottom: Ds.space.x8),
         title: Text(title, style: Ds.t.bodyStrong),
         children: [
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Text(body, style: Ds.t.bodySecondary),
-          ),
+          for (final c in clauses)
+            Padding(
+              padding: EdgeInsets.only(bottom: Ds.space.x24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('${(c['n'] ?? '')}. ${(c['heading'] ?? '')}',
+                      style: Ds.t.bodyStrong),
+                  SizedBox(height: Ds.space.x4),
+                  Text((c['body'] ?? '').toString(),
+                      style: Ds.t.bodySecondary),
+                  if (c['editable_by_partner'] == true) ...[
+                    SizedBox(height: Ds.space.x8),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: SizedBox(
+                        height: Ds.touch.minTarget,
+                        child: TextButton.icon(
+                          onPressed: busy ? null : () => onPropose(c),
+                          icon: const Icon(Icons.edit_outlined),
+                          label: Text(proposeLabel),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
         ],
       ),
     );

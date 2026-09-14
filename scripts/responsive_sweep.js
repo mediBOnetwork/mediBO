@@ -30,6 +30,15 @@ const argVal = (flag, dflt) => {
 };
 const TARGET = (argVal('--target', process.env.MEDIBO_TARGET || 'https://medibo.in')).replace(/\/$/, '');
 const QUIET = process.argv.includes('--quiet');
+// A harness that has been wrong needs to be re-runnable on the combinations it
+// was wrong about. --only takes `label@width`, `label` or `@width`, comma
+// separated; --no-write measures without publishing a verdict.
+const ONLY = argVal('--only', '').split(',').map((x) => x.trim()).filter(Boolean);
+const NO_WRITE = process.argv.includes('--no-write');
+const wanted = (label, width) => !ONLY.length || ONLY.some((f) => {
+  const [l, w] = f.split('@');
+  return (!l || l === label) && (!w || Number(w) === width);
+});
 const say = (...a) => { if (!QUIET) console.log(...a); };
 
 // deploy.sh runs this with a bare environment, so the runner's env file is the
@@ -86,7 +95,7 @@ const SCREENS = [
 // these are only the fallback for a config that has not named them yet, so a
 // flaky edge is retuned with one pool_set and no deploy.
 let READ_RETRIES    = 8;      // evaluate attempts across a navigation
-let PAINT_BUDGET_MS = 30000;  // how long to wait for boot_status=painted
+let COMBO_BUDGET_MS = 60000;  // one screen at one width, paint + settle + retry
 let SETTLE_MS       = 6000;   // let the audit re-measure once the RPC lands
 let NAV_QUIET_MS    = 2500;   // no main-frame navigation for this long = settled
 // The whole sweep has a budget. post_deploy_checks.sh wraps it in `timeout`,
@@ -130,34 +139,51 @@ async function readRenderLog(page, tries) {
       return parseRenderLog(await evalRenderLog(page));
     } catch (e) {
       if (!NAV_RACE.test(String(e && e.message))) throw e;
-      try { await page.waitForLoadState('domcontentloaded', { timeout: 15000 }); } catch (_) {}
-      try { await page.waitForTimeout(500); } catch (_) { return null; }
+      // The burst that tears the context down is ~40ms wide (measured on live:
+      // six main-frame navigations inside 40ms, ending on the storefront), so
+      // the retry has to be cheap. A 15s load-state wait per attempt could eat
+      // a whole combination's budget and hand back null — which is exactly how
+      // the first fix still booked "wrote no render log".
+      try { await page.waitForLoadState('domcontentloaded', { timeout: 3000 }); } catch (_) {}
+      try { await page.waitForTimeout(400); } catch (_) { return null; }
     }
   }
   return null;
 }
 
-// Wait for the app to say it painted rather than sleeping a fixed amount: a
-// 320px cold load on a slow edge takes longer than a 480px warm one, and a
-// blank page read too early is indistinguishable from a broken one.
-async function waitForPaint(page, budgetMs) {
+// ONE measurement, taken on a document that is painted AND has stopped moving.
+//
+// CMD #2009, second pass: tolerating the destroyed context was not enough.
+// /dashboard, /customers and /fulfill bounce an anonymous visitor to the
+// storefront, and when the bounce lands mid-settle the read happens against a
+// document that has only just started — the render log is empty and the sweep
+// booked "wrote no render log" for a screen that was fine at the width either
+// side of it. So: wait for painted, wait for the navigations to go quiet, give
+// the audit its measuring window, and if anything navigated during that window
+// throw the read away and go round again. Only the budget ends the loop.
+async function measure(page, nav, budgetMs) {
   const deadline = Date.now() + budgetMs;
   while (Date.now() < deadline) {
     const log = await readRenderLog(page);
-    if (log && String(log.boot_status || '') === 'painted') return log;
+    if (!(log && String(log.boot_status || '') === 'painted')) {
+      try { await page.waitForTimeout(1000); } catch (_) { break; }
+      continue;
+    }
+    if (Date.now() - nav.at < NAV_QUIET_MS) {           // still flapping
+      try { await page.waitForTimeout(500); } catch (_) { break; }
+      continue;
+    }
+    const mark = nav.count;
+    try { await page.waitForTimeout(SETTLE_MS); } catch (_) { break; }
+    const fresh = await readRenderLog(page);
+    if (nav.count === mark && fresh && String(fresh.boot_status || '') === 'painted') return fresh;
+  }
+  for (let i = 0; i < 3; i++) {      // whatever is there when the budget runs out
+    const log = await readRenderLog(page);
+    if (log) return log;
     try { await page.waitForTimeout(1000); } catch (_) { break; }
   }
-  return readRenderLog(page);
-}
-
-// Let the redirect flap finish AND the audit re-measure while the screen's RPC
-// lands, then read. `nav` is the last main-frame navigation timestamp.
-async function settle(page, nav, settleMs, quietMs) {
-  const deadline = Date.now() + settleMs + quietMs;
-  try { await page.waitForTimeout(settleMs); } catch (_) { return; }
-  while (Date.now() < deadline && Date.now() - nav.at < quietMs) {
-    try { await page.waitForTimeout(500); } catch (_) { return; }
-  }
+  return null;
 }
 
 (async () => {
@@ -173,7 +199,7 @@ async function settle(page, nav, settleMs, quietMs) {
     .concat([mf.tablet_width || 768]);
   const minTouch = mf.min_touch_px || 44;
   READ_RETRIES    = Number(mf.sweep_read_retries)   || READ_RETRIES;
-  PAINT_BUDGET_MS = Number(mf.sweep_paint_budget_ms) || PAINT_BUDGET_MS;
+  COMBO_BUDGET_MS = Number(mf.sweep_combo_budget_ms) || COMBO_BUDGET_MS;
   SETTLE_MS       = Number(mf.sweep_settle_ms)      || SETTLE_MS;
   NAV_QUIET_MS    = Number(mf.sweep_nav_quiet_ms)   || NAV_QUIET_MS;
   BUDGET_MS       = Number(mf.sweep_budget_ms)      || BUDGET_MS;
@@ -188,6 +214,7 @@ async function settle(page, nav, settleMs, quietMs) {
   try {
     for (const width of widths) {
       for (const [label, route] of SCREENS) {
+        if (!wanted(label, width)) continue;
         if (Date.now() >= deadline) { skipped.push(`${label} @${width}px`); continue; }
         const ctx = await browser.newContext({
           viewport: { width, height: 900 },
@@ -210,11 +237,7 @@ async function settle(page, nav, settleMs, quietMs) {
           const sep = route.includes('?') ? '&' : '?';
           await page.goto(`${TARGET}${route}${sep}responsive_audit=1&min_touch=${minTouch}`,
             { waitUntil: 'domcontentloaded', timeout: 45000 });
-          // Wait for the app's own "painted", let the redirect flap finish and
-          // the audit re-measure while the screen's RPC lands, then read.
-          await waitForPaint(page, PAINT_BUDGET_MS);
-          await settle(page, nav, SETTLE_MS, NAV_QUIET_MS);
-          log = await readRenderLog(page);
+          log = await measure(page, nav, COMBO_BUDGET_MS);
         } catch (e) {
           err = String(e && e.message).slice(0, 80);
           // A navigation race is not a verdict — one last look once the page
@@ -222,8 +245,7 @@ async function settle(page, nav, settleMs, quietMs) {
           if (NAV_RACE.test(String(e && e.message))) {
             try { await page.waitForLoadState('domcontentloaded', { timeout: 15000 }); } catch (_) {}
             try {
-              await settle(page, nav, 2000, NAV_QUIET_MS);
-              log = await readRenderLog(page);
+              log = await measure(page, nav, Math.min(COMBO_BUDGET_MS, 20000));
             } catch (_) { /* the page is gone; the missing log is the failure */ }
           }
         }
@@ -264,7 +286,7 @@ async function settle(page, nav, settleMs, quietMs) {
     : failures.slice(0, 6).join(' · ')) + tail;
   const build = (seen.find((s) => s.build) || {}).build || null;
 
-  await rpc('rg_runner_verdict_write', {
+  if (!NO_WRITE && !ONLY.length) await rpc('rg_runner_verdict_write', {
     p_name: 'responsive_no_overflow', p_ok: ok, p_detail: detail,
     p_payload: { widths, min_touch_px: minTouch, checked: seen, failures, skipped },
     p_build_hash: build,

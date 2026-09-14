@@ -890,7 +890,6 @@ class _CartScreenState extends State<CartScreen> {
             children: [
               if (banner != null) banner,
               ?availBanner,
-            ?srvBanner,
               ?srvBanner,
               ?unresolvedNote,
               ?unavailableChip,
@@ -905,13 +904,23 @@ class _CartScreenState extends State<CartScreen> {
                         children: [
                           Expanded(
                             flex: 3,
-                            child: _ItemList(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                // CMD #1952 — items × n and the advance due,
+                                // and nothing else.
+                                _C1952TopStrip(strip: cart.render['top_strip']),
+                                Expanded(
+                                  child: _ItemList(
                               key: _itemListKey,
                               cart: cart,
                               externalSearchQuery: widget.externalSearchQuery,
                               viewAsChecked: cart.isViewAs ? _viewAsChecked : null,
                               onViewAsToggle: cart.isViewAs ? _toggleViewAsChecked : null,
                               lineAvailability: _lineAvailability,
+                            ),
+                                ),
+                              ],
                             ),
                           ),
                           const SizedBox(width: 16),
@@ -952,6 +961,9 @@ class _CartScreenState extends State<CartScreen> {
             ?availBanner,
             ?unresolvedNote,
             ?unavailableChip,
+            // CMD #1952 — the top strip is OUTSIDE the scroll view, so the
+            // item count and the advance stay on screen while the list moves.
+            _C1952TopStrip(strip: cart.render['top_strip']),
             Expanded(
               child: _ItemList(
                 key: _itemListKey,
@@ -1467,6 +1479,18 @@ class _ItemListState extends State<_ItemList> {
         ';payload=${filtered.where((l) => l.row.isNotEmpty).length}'
         ';pending=${filtered.where((l) => l.rowMap('price_badge')['priced'] == false).length}');
 
+    // CMD #1952 — the same proof for the corrected row: how many rows painted
+    // a sale line at all, how many of those are the locked "PTR" wording, and
+    // how many carry the pack · MRP caption that replaced the clipped chip.
+    // All three are read off the payload; a zero here means the widget did
+    // not render, which is the only thing a curl can tell us.
+    RenderLog.write(
+        'c1952_cart_sale',
+        'rows=${filtered.length}'
+        ';sale=${filtered.where((l) => l.rowMap('sale')['has'] == true).length}'
+        ';locked=${filtered.where((l) => l.rowMap('sale')['locked'] == true).length}'
+        ';packmrp=${filtered.where((l) => (l.rowMap('pack_mrp')['prefix'] ?? '').toString().isNotEmpty).length}');
+
     return ListView.builder(
       physics: platformScrollPhysics(),
       controller: _scrollController,
@@ -1586,18 +1610,28 @@ class _CartItemCardState extends State<_CartItemCard> {
     // said about this product_id. Nothing here re-derives it.
     final av = widget.availability;
     final rx = line.rowMap('rx_chip');
-    final badge = line.rowMap('price_badge');
-    final details = line.rowDetails;
-    final mrpLine = line.rows('mrp_line');
+    // CMD #1952 — the three blocks that carry the row's money and its
+    // quantity. `sale` is the SAME `price_display` the product cards print,
+    // `pack_mrp` is the caption that replaced the clipped "1 S…" chip, and
+    // `stepper` splits the number from the unit word so neither is squeezed.
+    final sale = line.rowMap('sale');
+    final packMrp = line.rowMap('pack_mrp');
+    final stepper = line.rowMap('stepper');
+    final mrpQty = line.rows('mrp_qty');
+    // The expanded body, in payload order: sale price, MRP × qty, company,
+    // pack. An older payload has only `detail_rows`; absence is absence, so
+    // the row falls back to that list rather than assembling one here.
+    final expanded = _c1952Rows(line.row['expanded_rows']);
+    final details = expanded.isNotEmpty ? expanded : line.rowDetails;
 
     // The name and the pack caption are the payload's, with the product
     // record standing in only while the first cart_render() is in flight.
     final name = line.rows('name').isNotEmpty ? line.rows('name') : p.name;
     final pack = line.rows('pack_label');
-    final qtyLabel = line.rows('qty_label');
 
-    final hasBody =
-        details.isNotEmpty || mrpLine.isNotEmpty || badge['has'] == true;
+    final hasBody = details.isNotEmpty || (av != null && !av.canAdd) ||
+        line.isSample || line.addedByAdmin || widget.viewAsChecked != null ||
+        p.scheme.isNotEmpty;
 
     return Container(
       margin: EdgeInsets.only(bottom: Ds.space.x8),
@@ -1612,13 +1646,16 @@ class _CartItemCardState extends State<_CartItemCard> {
         children: [
           // ── THE ROW ─────────────────────────────────────────────────────
           // A tap anywhere that is not the stepper or the ✕ opens the body.
+          // CMD #1952 — the name owns the full width of the column now, on
+          // two lines, and the price line sits under the pack caption on
+          // EVERY row: collapsed rows used to show no money at all.
           InkWell(
             borderRadius: BorderRadius.circular(Ds.r.card),
             onTap: hasBody ? () => setState(() => _open = !_open) : null,
             child: Padding(
-              padding: EdgeInsets.symmetric(
-                  horizontal: Ds.space.x12, vertical: Ds.space.x8),
+              padding: EdgeInsets.all(Ds.space.x12),
               child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _ProductImage(product: p, size: 56),
                   SizedBox(width: Ds.space.x12),
@@ -1627,14 +1664,36 @@ class _CartItemCardState extends State<_CartItemCard> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(
-                          name,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: Ds.t.bodyStrong,
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                name,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: Ds.t.caption.copyWith(
+                                    color: Ds.c.text,
+                                    fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                            SizedBox(width: Ds.space.x8),
+                            _C1912Remove(
+                              onTap: () => cart.remove(p),
+                              // CHANGE #639 — a line cart_render() flagged
+                              // gets the prominent remove control: same RPC,
+                              // more emphasis, because this is the one action
+                              // that clears the block.
+                              danger: line.unavailable,
+                            ),
+                          ],
                         ),
                         SizedBox(height: Ds.space.x4),
+                        // The pack caption: "1 Strip · MRP ₹231.80", with the
+                        // MRP amount struck because it is an indicator and
+                        // not the price. Both halves are the payload's.
                         Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
                             if (rx['has'] == true) ...[
                               _C1912Chip(
@@ -1643,54 +1702,56 @@ class _CartItemCardState extends State<_CartItemCard> {
                               ),
                               SizedBox(width: Ds.space.x4),
                             ],
-                            Flexible(
-                              child: Text(
-                                pack,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: Ds.t.caption,
-                              ),
+                            Expanded(
+                              child: _C1952PackMrp(block: packMrp, fallback: pack),
                             ),
+                          ],
+                        ),
+                        SizedBox(height: Ds.space.x8),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Expanded(
+                              child: _C1952SaleLine(sale: sale, mrpQty: mrpQty),
+                            ),
+                            SizedBox(width: Ds.space.x8),
+                            // CHANGE #324: ViewAs → checkbox; normal → the
+                            // stepper.
+                            if (widget.viewAsChecked != null)
+                              SizedBox(
+                                width: Ds.touch.minTarget,
+                                height: Ds.touch.minTarget,
+                                child: Checkbox(
+                                  value: widget.viewAsChecked,
+                                  onChanged: (_) => widget.onViewAsToggle?.call(),
+                                  activeColor: Ds.c.brand,
+                                  materialTapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                  visualDensity: VisualDensity.compact,
+                                ),
+                              )
+                            else
+                              // CHANGE #615 — the stepper shows
+                              // cart.quantityOf(), the user's own unsent tap
+                              // when there is one and the server's number
+                              // otherwise, so a tap lands in this frame.
+                              // CHANGE #639 — qty_locked comes from
+                              // cart_render(); the stepper is dead and tinted
+                              // danger on the strength of the backend's flag,
+                              // never on a local stock check.
+                              _CartStepper(
+                                product: p,
+                                quantity: cart.quantityOf(p.id),
+                                cart: cart,
+                                locked: line.qtyLocked,
+                                qtyText: (stepper['qty_text'] ?? '').toString(),
+                                unitLabel:
+                                    (stepper['unit_label'] ?? '').toString(),
+                              ),
                           ],
                         ),
                       ],
                     ),
-                  ),
-                  SizedBox(width: Ds.space.x8),
-                  // CHANGE #324: ViewAs → checkbox; normal → the stepper.
-                  if (widget.viewAsChecked != null)
-                    SizedBox(
-                      width: Ds.touch.minTarget,
-                      height: Ds.touch.minTarget,
-                      child: Checkbox(
-                        value: widget.viewAsChecked,
-                        onChanged: (_) => widget.onViewAsToggle?.call(),
-                        activeColor: Ds.c.brand,
-                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        visualDensity: VisualDensity.compact,
-                      ),
-                    )
-                  else
-                    // CHANGE #615 — the stepper shows cart.quantityOf(), the
-                    // user's own unsent tap when there is one and the server's
-                    // number otherwise, so a tap lands in this frame.
-                    // CHANGE #639 — qty_locked comes from cart_render(); the
-                    // stepper is dead and tinted danger on the strength of the
-                    // backend's flag, never on a local stock check.
-                    _CartStepper(
-                      product: p,
-                      quantity: cart.quantityOf(p.id),
-                      cart: cart,
-                      locked: line.qtyLocked,
-                      qtyLabel: qtyLabel,
-                    ),
-                  SizedBox(width: Ds.space.x4),
-                  _C1912Remove(
-                    onTap: () => cart.remove(p),
-                    // CHANGE #639 — a line cart_render() flagged gets the
-                    // prominent remove control: same RPC, more emphasis,
-                    // because this is the one action that clears the block.
-                    danger: line.unavailable,
                   ),
                 ],
               ),
@@ -1698,48 +1759,20 @@ class _CartItemCardState extends State<_CartItemCard> {
           ),
 
           // ── THE BODY, ON TAP ────────────────────────────────────────────
-          // Company and the pack detail live here, and so does the ONE price
-          // line: the MRP × quantity on the left, the sale-price badge on the
-          // right. They sit on opposite ends of one row, so nothing overlaps.
+          // CMD #1952 — the same padding as the row above it, so opening a
+          // row adds lines without moving anything that was already on
+          // screen. The list itself is the payload's: sale price first, then
+          // MRP × qty, then company and pack.
           if (_open && hasBody) ...[
             Divider(height: Ds.space.hairline, color: Ds.c.divider),
             Padding(
-              padding: EdgeInsets.fromLTRB(
-                  Ds.space.x12, Ds.space.x12, Ds.space.x12, Ds.space.x12),
+              padding: EdgeInsets.all(Ds.space.x12),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (mrpLine.isNotEmpty || badge['has'] == true)
-                    Row(
-                      children: [
-                        Expanded(child: Text(mrpLine, style: Ds.t.caption)),
-                        if (badge['has'] == true) ...[
-                          SizedBox(width: Ds.space.x8),
-                          _C1912Chip(
-                            label: (badge['label'] ?? '').toString(),
-                            tone:
-                                (badge['tone'] as Map?)?.cast<String, dynamic>(),
-                          ),
-                        ],
-                      ],
-                    ),
-                  for (final d in details) ...[
-                    SizedBox(height: Ds.space.x8),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        SizedBox(
-                          width: 84,
-                          child: Text((d['label'] ?? '').toString(),
-                              style: Ds.t.caption),
-                        ),
-                        SizedBox(width: Ds.space.x8),
-                        Expanded(
-                          child: Text((d['value'] ?? '').toString(),
-                              style: Ds.t.body),
-                        ),
-                      ],
-                    ),
+                  for (var i = 0; i < details.length; i++) ...[
+                    if (i > 0) SizedBox(height: Ds.space.x8),
+                    _C1952DetailRow(row: details[i]),
                   ],
                   // CHANGE #553 — the backend's verdict for this line, in the
                   // backend's own label and colours, shown only when it says
@@ -1784,6 +1817,145 @@ class _CartItemCardState extends State<_CartItemCard> {
           ],
         ],
       ),
+    );
+  }
+}
+
+/// CMD #1952 — a payload list of label/value maps, in payload order.
+List<Map<String, dynamic>> _c1952Rows(Object? raw) =>
+    ((raw as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => e.cast<String, dynamic>())
+        .toList(growable: false);
+
+/// CMD #1952 — THE price line, on every row.
+///
+/// `sale.value` is the product card's own `price_display`: the cart and the
+/// card can no longer disagree about what a pack costs, because they print
+/// the same string. A basket whose viewer is not entitled to the trade rate
+/// gets "PTR" from the same field — locked is the backend's word for that,
+/// not a second rule here. `mrp_qty` is the struck indicator beside it.
+class _C1952SaleLine extends StatelessWidget {
+  final Map<String, dynamic> sale;
+  final String mrpQty;
+  const _C1952SaleLine({required this.sale, this.mrpQty = ''});
+
+  @override
+  Widget build(BuildContext context) {
+    final has = sale['has'] == true &&
+        (sale['value'] ?? '').toString().isNotEmpty;
+    if (!has && mrpQty.isEmpty) return const SizedBox.shrink();
+
+    final tone = (sale['tone'] as Map?)?.cast<String, dynamic>();
+    final fg = _C1912Chip._colour(tone?['fg'], Ds.c.brand);
+    final bg = _C1912Chip._colour(tone?['bg'], Ds.c.brandSoft);
+
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: Ds.space.x8,
+      runSpacing: Ds.space.x4,
+      children: [
+        if (has)
+          Container(
+            padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x8, vertical: Ds.space.x4),
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(Ds.r.chip),
+            ),
+            child: Text(
+              '${(sale['label'] ?? '').toString()} ${(sale['value'] ?? '').toString()}'
+                  .trim(),
+              style: Ds.t.caption.copyWith(color: fg, fontWeight: FontWeight.w600),
+            ),
+          ),
+        if (mrpQty.isNotEmpty)
+          Text(
+            mrpQty,
+            style: Ds.t.caption.copyWith(
+                decoration: TextDecoration.lineThrough,
+                decorationColor: Ds.c.textSecondary),
+          ),
+      ],
+    );
+  }
+}
+
+/// CMD #1952 — "1 Strip · MRP ₹231.80": the caption that replaced a chip
+/// clipped to "1 S…". The prefix and the amount arrive as two strings so the
+/// AMOUNT alone can be struck through — it is the printed ceiling, not what
+/// this line costs.
+class _C1952PackMrp extends StatelessWidget {
+  final Map<String, dynamic> block;
+  final String fallback;
+  const _C1952PackMrp({required this.block, this.fallback = ''});
+
+  @override
+  Widget build(BuildContext context) {
+    final prefix = (block['prefix'] ?? '').toString();
+    if (prefix.isEmpty) {
+      if (fallback.isEmpty) return const SizedBox.shrink();
+      return Text(fallback,
+          maxLines: 1, overflow: TextOverflow.ellipsis, style: Ds.t.caption);
+    }
+    final amount = (block['amount'] ?? '').toString();
+    return Text.rich(
+      TextSpan(children: [
+        TextSpan(text: prefix),
+        if (amount.isNotEmpty) const TextSpan(text: ' '),
+        if (amount.isNotEmpty)
+          TextSpan(
+            text: amount,
+            style: block['strike'] == true
+                ? Ds.t.caption.copyWith(
+                    decoration: TextDecoration.lineThrough,
+                    decorationColor: Ds.c.textSecondary)
+                : null,
+          ),
+      ]),
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+      style: Ds.t.caption,
+    );
+  }
+}
+
+/// CMD #1952 — one line of the expanded body: the backend's label on the
+/// left, its value on the right, with the tone and the strike it asked for.
+class _C1952DetailRow extends StatelessWidget {
+  final Map<String, dynamic> row;
+  const _C1952DetailRow({required this.row});
+
+  @override
+  Widget build(BuildContext context) {
+    final tone = (row['tone'] as Map?)?.cast<String, dynamic>();
+    final strong = row['strong'] == true;
+    final value = (row['value'] ?? '').toString();
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: Ds.space.x48 + Ds.space.x32,
+          child: Text((row['label'] ?? '').toString(), style: Ds.t.caption),
+        ),
+        SizedBox(width: Ds.space.x8),
+        Expanded(
+          child: Text(
+            value,
+            textAlign: TextAlign.right,
+            style: strong
+                ? Ds.t.body.copyWith(
+                    color: _C1912Chip._colour(tone?['fg'], Ds.c.brand),
+                    fontWeight: FontWeight.w700)
+                : (row['strike'] == true
+                    ? Ds.t.body.copyWith(
+                        color: Ds.c.textSecondary,
+                        decoration: TextDecoration.lineThrough,
+                        decorationColor: Ds.c.textSecondary)
+                    : Ds.t.body),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1924,15 +2096,21 @@ class _CartStepper extends StatefulWidget {
   /// carried through; the stepper never decides it.
   final bool locked;
 
-  /// CMD #1912 — "4 Strip", straight from `items[].row.qty_label`.
-  final String qtyLabel;
+  /// CMD #1952 — the NUMBER, from `items[].row.stepper.qty_text`. The unit
+  /// word used to share this 44px slot with it and lost: "1 Strip" rendered
+  /// as "1 S…". It is a label under the pill now.
+  final String qtyText;
+
+  /// CMD #1952 — "Strip", from `items[].row.stepper.unit_label`.
+  final String unitLabel;
 
   const _CartStepper({
     required this.product,
     required this.quantity,
     required this.cart,
     this.locked = false,
-    this.qtyLabel = '',
+    this.qtyText = '',
+    this.unitLabel = '',
   });
 
   @override
@@ -1958,8 +2136,14 @@ class _CartStepperState extends State<_CartStepper> {
     final zone = Ds.touch.minTarget;
     final ink = locked ? Ds.c.danger : Ds.c.text;
 
-    return SizedBox(
-      width: zone * 3,
+    // CMD #1952 — the pill is two 44px tap zones with the number between
+    // them, and the unit word sits UNDER it as a caption. The row's name now
+    // gets the width the unit word was stealing.
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+      width: zone * 2 + Ds.space.x32,
       height: zone,
       child: Stack(
         children: [
@@ -1990,7 +2174,7 @@ class _CartStepperState extends State<_CartStepper> {
                           transitionBuilder: (child, anim) {
                             final isNew =
                                 (child.key as ValueKey<String>).value ==
-                                    '$qty|${widget.qtyLabel}';
+                                    '$qty|${widget.qtyText}';
                             final begin = isNew
                                 ? (increasing
                                     ? const Offset(0, -1)
@@ -2006,10 +2190,10 @@ class _CartStepperState extends State<_CartStepper> {
                             );
                           },
                           child: Text(
-                            widget.qtyLabel.isNotEmpty
-                                ? widget.qtyLabel
+                            widget.qtyText.isNotEmpty
+                                ? widget.qtyText
                                 : '$qty',
-                            key: ValueKey<String>('$qty|${widget.qtyLabel}'),
+                            key: ValueKey<String>('$qty|${widget.qtyText}'),
                             maxLines: 1,
                             overflow: TextOverflow.clip,
                             softWrap: false,
@@ -2080,6 +2264,17 @@ class _CartStepperState extends State<_CartStepper> {
           ),
         ],
       ),
+        ),
+        if (widget.unitLabel.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x4),
+          Text(
+            widget.unitLabel,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Ds.t.caption,
+          ),
+        ],
+      ],
     );
   }
 }
@@ -2361,6 +2556,9 @@ class _CheckoutBar extends StatelessWidget {
                 // and the second amber box are gone: cart_render() now decides
                 // which line, which rows and which single notice exist, and
                 // this footer prints that decision.
+                // CMD #1952 — the sale/PTR line the rows print, printed
+                // once more where the money is committed.
+                if (selectedTotal == null) _C1952BarSale(render: cart.render),
                 C572TotalsBlock(
                   render: cart.render,
                   selectedTotal: selectedTotal,
@@ -2509,6 +2707,8 @@ class _OrderSummaryPanel extends StatelessWidget {
           // plural itself.
           // CHANGE #572 — the sidebar prints the same three backend blocks as
           // the narrow footer: one summary, one notice, one button.
+          // CMD #1952 — plus the sale/PTR line, the same one the rows print.
+          if (selectedTotal == null) _C1952BarSale(render: cart.render),
           C572TotalsBlock(
             render: cart.render,
             selectedTotal: selectedTotal,
@@ -3234,6 +3434,119 @@ class C1815KycChip extends StatelessWidget {
           ),
         ],
       ],
+    );
+  }
+}
+
+/// CMD #1952 — the strip above the cart list: how many items are in it, and
+/// what has to be paid in advance to place it. Nothing else lives up here —
+/// the MRP total, the delivery line and the rate note all moved below the
+/// list, where a total belongs.
+///
+/// Both halves are `cart_render().render.top_strip`, which resolves the
+/// advance from the ladder (`advance_pct_for`) server-side. The screen prints
+/// `items_label` and `advance_display`; it counts nothing and multiplies
+/// nothing. `show` is the backend's answer to "is there a cart at all?" — an
+/// empty basket draws no strip rather than "Items × 0".
+class _C1952TopStrip extends StatelessWidget {
+  final Object? strip;
+  const _C1952TopStrip({required this.strip});
+
+  @override
+  Widget build(BuildContext context) {
+    final s = (strip as Map?)?.cast<String, dynamic>() ?? const {};
+    if (s['show'] != true) return const SizedBox.shrink();
+    final items = (s['items_label'] ?? '').toString();
+    final advanceLabel = (s['advance_label'] ?? '').toString();
+    final advance = (s['advance_display'] ?? '').toString();
+    final hasAdvance = s['has_advance'] == true && advance.isNotEmpty;
+    if (items.isEmpty && !hasAdvance) return const SizedBox.shrink();
+
+    RenderLog.write(
+        'c1952_cart_top',
+        'items=$items;advance=${hasAdvance ? advance : ''}'
+        ';pct=${(s['advance_pct_label'] ?? '').toString()}');
+
+    return Container(
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x16, vertical: Ds.space.x12),
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        border: Border(bottom: BorderSide(color: Ds.c.divider)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(items,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Ds.t.bodyStrong),
+          ),
+          if (hasAdvance) ...[
+            SizedBox(width: Ds.space.x12),
+            Flexible(
+              child: Text(
+                advanceLabel,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.right,
+                style: Ds.t.caption,
+              ),
+            ),
+            SizedBox(width: Ds.space.x4),
+            Text(advance,
+                style: Ds.t.bodyStrong.copyWith(color: Ds.c.brand)),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// CMD #1952 — the sticky bar's own sale line, so the bottom of the screen
+/// speaks the same language as every row: `summary.sale_line` carries the
+/// label, the value (an amount when the viewer is entitled to it, the locked
+/// "PTR" when not) and its tone. The bar prints all three.
+class _C1952BarSale extends StatelessWidget {
+  final Map<String, dynamic> render;
+  const _C1952BarSale({required this.render});
+
+  @override
+  Widget build(BuildContext context) {
+    final s = (render['summary'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final sale = (s['sale_line'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final value = (sale['value'] ?? '').toString();
+    if (sale['has'] != true || value.isEmpty) return const SizedBox.shrink();
+    final tone = (sale['tone'] as Map?)?.cast<String, dynamic>();
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              (sale['label'] ?? '').toString(),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Ds.t.bodySecondary,
+            ),
+          ),
+          SizedBox(width: Ds.space.x8),
+          Container(
+            padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x8, vertical: Ds.space.x4),
+            decoration: BoxDecoration(
+              color: _C1912Chip._colour(tone?['bg'], Ds.c.brandSoft),
+              borderRadius: BorderRadius.circular(Ds.r.chip),
+            ),
+            child: Text(
+              value,
+              style: Ds.t.bodyStrong
+                  .copyWith(color: _C1912Chip._colour(tone?['fg'], Ds.c.brand)),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

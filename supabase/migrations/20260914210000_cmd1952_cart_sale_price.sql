@@ -33,6 +33,11 @@ insert into public.ui_copy (key, value) values
   ('cart.rate_note',          to_jsonb('Rate confirmed after supplier quote.'::text))
 on conflict (key) do update set value = excluded.value, updated_at = now();
 
+insert into public.storefront_ui_label (key, value) values
+  ('cart_row_sale_bg', '#D1FAE5'),
+  ('cart_row_sale_fg', '#065F46')
+on conflict (key) do nothing;
+
 -- 2. Arity changed on two blocks; a stale overload would make the call
 --    ambiguous, so drop every signature that is not the one created below.
 do $mig$
@@ -182,11 +187,15 @@ begin
   -- The sale badge's colours are the card's own, so one green means one thing
   -- across the app. A locked value ("PTR") keeps the same plate — it is the
   -- same line, with the amount withheld, not a different kind of line.
+  -- CMD #1952 decision — the VALUE is the card's, the PLATE is the cart's.
+  -- The card paints its sale badge solid brand green; forty of those stacked
+  -- down a list would each compete with Place order, which is the one solid
+  -- green this screen is allowed. The row therefore uses the muted success
+  -- pair, and it is a LABEL ROW, not a Dart literal: change
+  -- cart_row_sale_bg/fg and the whole list re-tints with no deploy.
   v_sale_tone := jsonb_build_object(
-    'bg', coalesce(nullif(v_card->>'sale_bg',''),
-                   coalesce((select value from storefront_ui_label where key='sale_badge_bg'), '#1B7A43')),
-    'fg', coalesce(nullif(v_card->>'sale_fg',''),
-                   coalesce((select value from storefront_ui_label where key='sale_badge_fg'), '#FFFFFF')));
+    'bg', coalesce((select value from storefront_ui_label where key='cart_row_sale_bg'), '#D1FAE5'),
+    'fg', coalesce((select value from storefront_ui_label where key='cart_row_sale_fg'), '#065F46'));
 
   -- The expanded body, IN ORDER: sale price, MRP × qty, company, pack. The
   -- screen renders this list top to bottom and decides none of it.

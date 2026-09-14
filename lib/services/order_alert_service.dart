@@ -13,6 +13,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/order_alert_fsi.dart';
@@ -26,6 +27,17 @@ class OrderAlertService extends ChangeNotifier {
 
   /// The last order_alert_feed() payload, verbatim. Null until the first read.
   Map<String, dynamic>? feed;
+
+  /// CMD #1988 — the last order_alert_strip() payload, verbatim. This is the
+  /// ONE in-app surface an unactioned order gets: a slim tappable strip. The
+  /// centre dialog that used to fight the lock-screen alert is gone, so this
+  /// object decides everything the strip shows — its two sentences, its tone,
+  /// its action word, and whether the web sound rings at all.
+  Map<String, dynamic>? strip;
+
+  bool get stripShow => strip?['show'] == true;
+  bool get stripRing => strip?['ring'] == true;
+  String get stripOrderId => (strip?['order_id'] as String?) ?? '';
 
   Timer? _poll;
   bool _started = false;
@@ -65,7 +77,111 @@ class OrderAlertService extends ChangeNotifier {
   // backend's own poll_s interval (see _startPolling above), which is what has
   // actually been driving this surface all along.
 
+  /// The strip, on its own. Cheap enough to ride every refresh, and the only
+  /// thing a screen that does not want the whole feed has to ask for.
+  Future<void> refreshStrip() async {
+    try {
+      final raw = await _db.rpc('order_alert_strip');
+      final m = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
+      if (m is Map) {
+        strip = Map<String, dynamic>.from(m);
+        RenderLog.write('c1988_alert_strip', stripShow ? '1' : '0');
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('[order_alert] strip failed: $e');
+    }
+  }
+
+  /// CMD #1988 item 4 — the order is open. One stamp on one row stops the ring
+  /// on every device and clears the alert everywhere; the backend re-rings only
+  /// if it is still unactioned after rering_after_s.
+  Future<Map<String, dynamic>> seen(String orderId, {String source = 'app'}) async {
+    try {
+      final raw = await _db.rpc('order_alert_seen',
+          params: {'p_order_id': orderId, 'p_source': source});
+      final m = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
+      final out = m is Map ? Map<String, dynamic>.from(m) : <String, dynamic>{};
+      final st = out['strip'];
+      if (st is Map) {
+        strip = Map<String, dynamic>.from(st);
+        notifyListeners();
+      }
+      await stopRinging();
+      return out;
+    } catch (e) {
+      debugPrint('[order_alert] seen failed: $e');
+      return {'ok': false, 'error': 'network'};
+    }
+  }
+
+  /// A stable id for THIS browser / THIS phone, so a snooze is per device and
+  /// not a global mute. shared_preferences, never dart:html (defensive import
+  /// rule): this file is reachable from the widget tree.
+  String? _deviceId;
+  Future<String> deviceId() async {
+    if (_deviceId != null) return _deviceId!;
+    try {
+      final sp = await SharedPreferences.getInstance();
+      var id = sp.getString('medibo_alert_device_id') ?? '';
+      if (id.isEmpty) {
+        id = 'd${DateTime.now().microsecondsSinceEpoch}'
+            '${identityHashCode(this)}';
+        await sp.setString('medibo_alert_device_id', id);
+      }
+      _deviceId = id;
+      return id;
+    } catch (_) {
+      _deviceId = 'unknown-device';
+      return _deviceId!;
+    }
+  }
+
+  /// This user's quiet hours and THIS device's snooze — never a global mute.
+  Future<Map<String, dynamic>?> prefs(String? deviceId) async {
+    try {
+      final raw = await _db
+          .rpc('order_alert_my_prefs', params: {'p_device_id': deviceId});
+      final m = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
+      if (m is Map) return Map<String, dynamic>.from(m);
+    } catch (e) {
+      debugPrint('[order_alert] prefs failed: $e');
+    }
+    return null;
+  }
+
+  Future<Map<String, dynamic>> snoozeSet(
+      String deviceId, int minutes, {String? deviceLabel}) async {
+    try {
+      final raw = await _db.rpc('order_alert_snooze_set', params: {
+        'p_device_id': deviceId,
+        'p_minutes': minutes,
+        'p_device_label': deviceLabel,
+      });
+      final m = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
+      await refreshStrip();
+      return m is Map ? Map<String, dynamic>.from(m) : <String, dynamic>{};
+    } catch (e) {
+      debugPrint('[order_alert] snooze failed: $e');
+      return {'ok': false, 'error': 'network'};
+    }
+  }
+
+  Future<Map<String, dynamic>> quietSet(String from, String to) async {
+    try {
+      final raw = await _db
+          .rpc('order_alert_quiet_set', params: {'p_from': from, 'p_to': to});
+      final m = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
+      await refreshStrip();
+      return m is Map ? Map<String, dynamic>.from(m) : <String, dynamic>{};
+    } catch (e) {
+      debugPrint('[order_alert] quiet failed: $e');
+      return {'ok': false, 'error': 'network'};
+    }
+  }
+
   Future<void> refresh() async {
+    await refreshStrip();
     try {
       final raw = await _db.rpc('order_alert_feed');
       final m = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);

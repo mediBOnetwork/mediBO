@@ -116,15 +116,27 @@ object OrderAlert {
         nm.createNotificationChannel(ongoing)
     }
 
-    /** The whole alert: full-screen intent, Accept / Reject, and the ringing. */
+    /**
+     * CMD #1988 — the whole alert: full-screen intent, ONE action that opens
+     * the order, and the ringing.
+     *
+     * Accept and Reject are gone from here. A decision about an order is taken
+     * on the order screen, where the items and the amount are on screen; a
+     * notification only ever knew a customer name and a total. The backend
+     * stopped sending `action_token` / `action_url` in the same change, so an
+     * app that has not been updated also stops drawing the buttons — the guard
+     * below was already written that way.
+     */
     fun show(ctx: Context, a: JSONObject) {
         val alertId = a.optLong("alert_id", 0L)
         val id = notificationId(alertId)
         ensureChannels(ctx, a.optString("channel_name"), a.optString("channel_description"))
 
         val nm = ctx.getSystemService(NotificationManager::class.java) ?: return
-        val token = a.optString("action_token")
-        val url = a.optString("action_url")
+        // Quiet hours, or this device is snoozed: the alert still LANDS, it
+        // just never makes a sound. Silence is the backend's decision, per
+        // user and per device — never a global mute read from this phone.
+        val silent = a.optBoolean("silent", false)
 
         val open = Intent(ctx, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -134,20 +146,6 @@ object OrderAlert {
             ctx, id, open,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-
-        fun actionPi(action: String, rq: Int): PendingIntent {
-            val i = Intent(ctx, OrderAlertActionReceiver::class.java).apply {
-                this.action = "in.medibo.app.ORDER_ALERT_$action"
-                putExtra(EXTRA_TOKEN, token)
-                putExtra(EXTRA_ACTION, action.lowercase())
-                putExtra(EXTRA_URL, url)
-                putExtra(EXTRA_NOTIF_ID, id)
-            }
-            return PendingIntent.getBroadcast(
-                ctx, rq, i,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-            )
-        }
 
         val title = a.optString("push_title", "")
         val body = a.optString("push_body", "")
@@ -167,24 +165,15 @@ object OrderAlert {
             b.setStyle(Notification.BigTextStyle().bigText("$body\n$credit"))
         }
 
-        // Accept is offered only when the backend says it may be: an
-        // over-limit customer's order cannot be accepted from the lock screen
-        // any more than it can from the app.
-        if (token.isNotBlank() && url.isNotBlank()) {
-            if (!a.optBoolean("credit_blocked", false)) {
-                b.addAction(
-                    Notification.Action.Builder(
-                        null as android.graphics.drawable.Icon?,
-                        a.optString("accept_label", "Accept"),
-                        actionPi("ACCEPT", id * 2),
-                    ).build(),
-                )
-            }
+        // The one action, and it only opens the order. Its word is the
+        // backend's (open_label), never a string typed here.
+        val openLabel = a.optString("open_label")
+        if (openLabel.isNotBlank()) {
             b.addAction(
                 Notification.Action.Builder(
                     null as android.graphics.drawable.Icon?,
-                    a.optString("reject_label", "Reject"),
-                    actionPi("REJECT", id * 2 + 1),
+                    openLabel,
+                    openPi,
                 ).build(),
             )
         }
@@ -201,16 +190,16 @@ object OrderAlert {
         } else {
             // CHANGE #307 — the permission is not granted (or the backend did
             // not ask for a takeover). The alert MUST NOT get quieter for it:
-            // the channel is IMPORTANCE_HIGH with an alarm sound, the Accept /
-            // Reject actions are already attached above, and the ringing below
-            // is unconditional — so what the admin loses is the lock-screen
-            // takeover, never the alert. Asking Android for a full-screen
-            // intent we may not raise would only get it dropped silently.
+            // the channel is IMPORTANCE_HIGH with an alarm sound, the open
+            // action is already attached above, and the ringing below is
+            // unconditional outside quiet hours — so what the admin loses is
+            // the lock-screen takeover, never the alert. Asking Android for a
+            // full-screen intent we may not raise would only get it dropped.
             b.setPriority(Notification.PRIORITY_HIGH)
         }
 
         nm.notify(id, b.build())
-        startRinging(ctx, a.optInt("ring_seconds", 120))
+        if (!silent) startRinging(ctx, a.optInt("ring_seconds", 120))
         showOngoing(ctx, a)
     }
 

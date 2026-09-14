@@ -1,33 +1,37 @@
-// PROTECTED — CMD #1952.
+// PROTECTED — CMD #2013 (supersedes CMD #1952's row contract).
 //
 // See CLAUDE.md: runs before EVERY deploy; editable only by a CHANGE that
 // deliberately changes what a cart row says about money.
 //
+// CMD #1952 gave every row a "Sale price: PTR" chip, a "MRP × qty" caption and
+// a tap-to-open detail body. CMD #2013 replaced all three with ONE money block
+// under the quantity pill, and replaced the strip above the list and the
+// four-line ladder above Place order with a single summary row. What survives
+// unchanged from #1952 is the rule underneath: THE PRICE IS THE BACKEND'S.
+//
 // What this holds down:
 //
-//   1. THE PRICE IS THE CARD'S. A row's sale value is `row.sale.value`, which
-//      cart_render() fills from the SAME `price_display` the product cards
-//      print. The cart never re-prices a line, so the two surfaces cannot
-//      disagree — the defect this command fixed was a cart that showed no
-//      price at all until a row was expanded.
+//   1. The row's value is `row.price.value`, which cart_render() fills from
+//      the SAME `price_display` the product cards print. The cart never
+//      re-prices a line, so the two surfaces cannot disagree.
 //
-//   2. Absence is absence. A payload with no `sale` draws no price line; the
-//      row never falls back to an amount it computed from MRP.
+//   2. The struck MRP is `price.has_strike`, not a comparison done in Dart.
+//      A withheld price ("PTR", `locked: true`) draws ONE plain line: no
+//      strike, no percent — the backend already said there is nothing to
+//      compare.
 //
-//   3. The locked wording is the backend's. "PTR" arrives as the value with
-//      `locked: true`; nothing in Dart decides when a price is withheld.
+//   3. The discount percent is `price.discount_label`, a backend sentence.
+//      Nothing here divides one number by another, and `has_discount:false`
+//      means no percent is printed even when a label was sent.
 //
-//   4. The quantity pill prints `stepper.qty_text` ALONE, with
-//      `stepper.unit_label` as a caption under it. The unit word sharing a
-//      44px slot with the number is what rendered as "1 S…".
+//   4. Absence is absence. A payload with no `price` draws no money at all;
+//      the row never falls back to an amount it derived from MRP.
 //
-//   5. The top strip is `render.top_strip` and holds two things: the item
-//      count and the advance due. `show:false` (an empty basket) draws
-//      nothing — never "Items × 0" — and an advance the backend did not send
-//      is not invented.
+//   5. The quantity pill prints `stepper.qty_text` alone.
 //
-//   6. The sticky bar's line is `summary.sale_line`, printed verbatim with
-//      the payload's own tone.
+//   6. The summary above Place order is `summary.bottom` — items on the left,
+//      the advance on the right — and an advance the backend did not send is
+//      not invented.
 //
 // No network, no Supabase, no goldens.
 
@@ -41,55 +45,39 @@ import 'package:pharma_b2b/utils/render_log.dart';
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
 Map<String, dynamic> _row({
-  bool sale = true,
-  String saleValue = 'PTR',
+  bool price = true,
+  String value = 'PTR',
   bool locked = true,
+  bool strike = false,
+  String mrpDisplay = '',
+  bool discount = false,
+  String discountLabel = '',
   String qtyText = '9',
-  String unitLabel = 'Strip',
-  String packPrefix = '1 Strip · MRP',
-  String packAmount = '₹231.80',
-  String mrpQty = '₹231.80 × 9',
-  List<Map<String, dynamic>> expanded = const [
-    {
-      'key': 'sale',
-      'label': 'Sale price',
-      'value': 'PTR',
-      'strong': true,
-      'tone': {'bg': '#D1FAE5', 'fg': '#065F46'},
-    },
-    {'key': 'mrp', 'label': 'MRP', 'value': '₹231.80 × 9', 'strike': true},
-    {'key': 'company', 'label': 'Company', 'value': 'Micro Labs Ltd'},
-    {'key': 'pack', 'label': 'Pack', 'value': '1 Strip of 15 Tablets'},
-  ],
+  bool rx = false,
 }) =>
     {
       'name': 'Dolo 650',
       'pack_label': '1 Strip of 15 Tablets',
-      'mrp_qty': mrpQty,
-      'stepper': {
-        'qty': 9,
-        'qty_text': qtyText,
-        'unit_label': unitLabel,
-      },
-      'pack_mrp': {
-        'has': true,
-        'prefix': packPrefix,
-        'amount': packAmount,
-        'strike': true,
-      },
-      if (sale)
-        'sale': {
+      'has_pack': true,
+      'mrp_display': '₹231.80',
+      'has_mrp': true,
+      'stepper': {'qty': 9, 'qty_text': qtyText, 'unit_label': 'Strip'},
+      if (price)
+        'price': {
           'has': true,
-          'label': 'Sale price:',
-          'value': saleValue,
+          'value': value,
           'locked': locked,
-          'tone': {'bg': '#D1FAE5', 'fg': '#065F46'},
+          'has_strike': strike,
+          'mrp_display': mrpDisplay,
+          'has_discount': discount,
+          'discount_label': discountLabel,
+          'discount_fg': '#065F46',
         },
-      'rx_chip': {'has': false, 'label': 'Rx'},
-      'expanded_rows': expanded,
-      'detail_rows': const [
-        {'key': 'company', 'label': 'Company', 'value': 'Micro Labs Ltd'},
-      ],
+      'rx_chip': {
+        'has': rx,
+        'label': 'Rx',
+        'tone': {'bg': '#1E40AF', 'fg': '#FFFFFF'},
+      },
     };
 
 /// One cart line, adopted the way the app adopts one: through the payload.
@@ -124,149 +112,150 @@ Future<void> _pump(WidgetTester tester, Widget child) => tester.pumpWidget(
 void main() {
   setUpAll(() => RenderLog.flushEnabled = false);
 
-  group('CMD #1952 — the row carries the card\'s own price', () {
+  group('CMD #2013 — the row carries the card\'s own price', () {
     tearDown(() => CartModel.rpcTransport = null);
 
-    test('the sale value is the payload\'s price_display, verbatim', () async {
-      final line = await _line(_row(saleValue: '₹82.50', locked: false));
-      final sale = line.rowMap('sale');
-      expect(sale['has'], isTrue);
-      expect(sale['value'], '₹82.50');
-      expect(sale['label'], 'Sale price:');
-      expect(sale['locked'], isFalse);
+    test('the value is the payload\'s price_display, verbatim', () async {
+      final line = await _line(_row(
+          value: '₹189.00',
+          locked: false,
+          strike: true,
+          mrpDisplay: '₹231.80',
+          discount: true,
+          discountLabel: '18% OFF'));
+      final p = line.rowMap('price');
+      expect(p['has'], isTrue);
+      expect(p['value'], '₹189.00');
+      expect(p['locked'], isFalse);
+      expect(p['discount_label'], '18% OFF');
     });
 
-    test('a withheld price is the backend\'s word, not a local rule', () async {
-      final sale = (await _line(_row())).rowMap('sale');
-      expect(sale['value'], 'PTR');
-      expect(sale['locked'], isTrue);
+    test('a withheld price is the backend\'s word, and carries no ceiling',
+        () async {
+      final p = (await _line(_row())).rowMap('price');
+      expect(p['value'], 'PTR');
+      expect(p['locked'], isTrue);
+      expect(p['has_strike'], isFalse);
+      expect(p['has_discount'], isFalse);
     });
 
-    test('no sale block means no price line invented', () async {
-      final line = await _line(_row(sale: false));
-      expect(line.rowMap('sale'), isEmpty);
-      // The MRP indicator is still the payload's own string.
-      expect(line.rows('mrp_qty'), '₹231.80 × 9');
+    test('no price block means no money invented', () async {
+      final line = await _line(_row(price: false));
+      expect(line.rowMap('price'), isEmpty);
+      // The MRP is still on the row as a payload string; it is never promoted
+      // into a price by this side.
+      expect(line.rows('mrp_display'), '₹231.80');
     });
 
-    test('the pill gets the number and the unit separately', () async {
+    test('the pill gets the number alone', () async {
       final st = (await _line(_row())).rowMap('stepper');
       expect(st['qty_text'], '9');
+      // #1952's unit caption under the pill is gone — the money lives there
+      // now — but the backend still names the unit for anyone who wants it.
       expect(st['unit_label'], 'Strip');
-      // The clipped "1 S…" chip was one string doing both jobs.
-      expect(st.containsKey('qty_label'), isFalse);
     });
 
-    test('the pack caption keeps prefix and amount apart so MRP can be struck',
+    test('the Rx badge is a per-line flag with the payload\'s own colours',
         () async {
-      final pm = (await _line(_row())).rowMap('pack_mrp');
-      expect(pm['prefix'], '1 Strip · MRP');
-      expect(pm['amount'], '₹231.80');
-      expect(pm['strike'], isTrue);
-    });
-
-    test('the expanded body keeps payload order: sale, MRP, company, pack',
-        () async {
-      final line = await _line(_row());
-      final keys = ((line.row['expanded_rows'] as List?) ?? const [])
-          .whereType<Map>()
-          .map((e) => e['key'])
-          .toList();
-      expect(keys, ['sale', 'mrp', 'company', 'pack']);
+      expect((await _line(_row())).rowMap('rx_chip')['has'], isFalse);
+      final on = (await _line(_row(rx: true))).rowMap('rx_chip');
+      expect(on['has'], isTrue);
+      expect(on['label'], 'Rx');
+      expect((on['tone'] as Map)['bg'], '#1E40AF');
     });
   });
 
-  group('CMD #1952 — the sale line widget prints what it is handed', () {
-    testWidgets('label and value, with the MRP struck beside them',
+  group('CMD #2013 — the price widget prints what it is handed', () {
+    testWidgets('a discounted line: struck MRP, percent, then the price',
         (tester) async {
       await _pump(
           tester,
-          const C1952SaleLine(
-            sale: {
-              'has': true,
-              'label': 'Sale price:',
-              'value': 'PTR',
-              'locked': true,
-              'tone': {'bg': '#D1FAE5', 'fg': '#065F46'},
-            },
-            mrpQty: '₹231.80 × 9',
-          ));
-      expect(find.text('Sale price: PTR'), findsOneWidget);
-      expect(find.text('₹231.80 × 9'), findsOneWidget);
+          const C2013RowPrice(price: {
+            'has': true,
+            'value': '₹189.00',
+            'locked': false,
+            'has_strike': true,
+            'mrp_display': '₹231.80',
+            'has_discount': true,
+            'discount_label': '18% OFF',
+            'discount_fg': '#065F46',
+          }));
+      expect(find.text('₹231.80'), findsOneWidget);
+      expect(find.text('18% OFF'), findsOneWidget);
+      expect(find.text('₹189.00'), findsOneWidget);
+      final mrp = tester.widget<Text>(find.text('₹231.80'));
+      expect(mrp.style?.decoration, TextDecoration.lineThrough);
     });
 
-    testWidgets('an absent sale draws nothing at all', (tester) async {
-      await _pump(tester, const C1952SaleLine(sale: {}, mrpQty: ''));
+    testWidgets('no discount means one line: no strike, no percent',
+        (tester) async {
+      await _pump(
+          tester,
+          const C2013RowPrice(price: {
+            'has': true,
+            'value': 'PTR',
+            'locked': true,
+            'has_strike': false,
+            'mrp_display': '₹231.80',
+            'has_discount': false,
+            'discount_label': '',
+          }));
+      expect(find.text('PTR'), findsOneWidget);
+      // The ceiling is NOT drawn just because the payload carried the string.
+      expect(find.text('₹231.80'), findsNothing);
+    });
+
+    testWidgets('an absent price draws nothing at all', (tester) async {
+      await _pump(tester, const C2013RowPrice(price: {}));
       expect(find.byType(Text), findsNothing);
     });
   });
 
-  group('CMD #1952 — the top strip is items and the advance, nothing else', () {
+  group('CMD #2013 — ONE summary row above Place order', () {
     testWidgets('both halves print verbatim', (tester) async {
       await _pump(
           tester,
-          const C1952TopStrip(strip: {
-            'show': true,
-            'items_label': 'Items × 3',
-            'advance_label': 'Advance to pay:',
-            'has_advance': true,
-            'advance_display': '₹1,240.00',
-            'advance_pct_label': '10%',
+          const C2013SummaryRow(render: {
+            'summary': {
+              'bottom': {
+                'has': true,
+                'items_label': 'Total items',
+                'items_value': '4',
+                'advance_label': 'Advance to pay',
+                'has_advance': true,
+                'advance_display': '₹229.31',
+              }
+            }
           }));
-      expect(find.text('Items × 3'), findsOneWidget);
-      expect(find.text('Advance to pay:'), findsOneWidget);
-      expect(find.text('₹1,240.00'), findsOneWidget);
-    });
-
-    testWidgets('an empty basket draws no strip', (tester) async {
-      await _pump(
-          tester,
-          const C1952TopStrip(strip: {
-            'show': false,
-            'items_label': 'Items × 0',
-            'has_advance': false,
-          }));
-      expect(find.byType(Text), findsNothing);
+      expect(find.text('Total items'), findsOneWidget);
+      expect(find.text('4'), findsOneWidget);
+      expect(find.text('Advance to pay'), findsOneWidget);
+      expect(find.text('₹229.31'), findsOneWidget);
     });
 
     testWidgets('an advance the backend did not send is not invented',
         (tester) async {
       await _pump(
           tester,
-          const C1952TopStrip(strip: {
-            'show': true,
-            'items_label': 'Items × 2',
-            'advance_label': 'Advance to pay:',
-            'has_advance': false,
-            'advance_display': '₹0.00',
-          }));
-      expect(find.text('Items × 2'), findsOneWidget);
-      expect(find.text('Advance to pay:'), findsNothing);
-      expect(find.text('₹0.00'), findsNothing);
-    });
-  });
-
-  group('CMD #1952 — the sticky bar speaks the same line', () {
-    testWidgets('sale_line prints label and value', (tester) async {
-      await _pump(
-          tester,
-          const C1952BarSale(render: {
+          const C2013SummaryRow(render: {
             'summary': {
-              'sale_line': {
+              'bottom': {
                 'has': true,
-                'label': 'Sale price (PTR)',
-                'value': 'PTR',
-                'locked': true,
-                'tone': {'bg': '#D1FAE5', 'fg': '#065F46'},
+                'items_label': 'Total items',
+                'items_value': '2',
+                'advance_label': 'Advance to pay',
+                'has_advance': false,
+                'advance_display': '₹0.00',
               }
             }
           }));
-      expect(find.text('Sale price (PTR)'), findsOneWidget);
-      expect(find.text('PTR'), findsOneWidget);
+      expect(find.text('Total items'), findsOneWidget);
+      expect(find.text('Advance to pay'), findsNothing);
+      expect(find.text('₹0.00'), findsNothing);
     });
 
-    testWidgets('no sale_line means no bar line', (tester) async {
-      await _pump(tester, const C1952BarSale(render: {'summary': {}}));
+    testWidgets('no bottom block means no summary row', (tester) async {
+      await _pump(tester, const C2013SummaryRow(render: {'summary': {}}));
       expect(find.byType(Text), findsNothing);
     });
   });

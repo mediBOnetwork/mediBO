@@ -32,6 +32,10 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
   bool _busy = false;
   String? _error;
   final _fields = <String, TextEditingController>{};
+  // CMD #1988 — this user's quiet hours and THIS device's snooze.
+  Map<String, dynamic>? _prefs;
+  final _quietFrom = TextEditingController();
+  final _quietTo = TextEditingController();
 
   @override
   void initState() {
@@ -44,6 +48,8 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
     for (final c in _fields.values) {
       c.dispose();
     }
+    _quietFrom.dispose();
+    _quietTo.dispose();
     super.dispose();
   }
 
@@ -91,6 +97,13 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
         _loading = false;
       });
       RenderLog.write('c306_alert_screen', '${(s?['open'] as List?)?.length ?? 0}');
+      // CMD #1988 item 4 — STOP ON OPEN. This screen IS the order being
+      // opened, so every alert it is about to draw is stamped seen: the ring
+      // stops on this device and on every other one, and the lock-screen
+      // alert clears. The backend re-rings only if it is still unactioned
+      // after rering_after_s, so nothing is lost by looking.
+      await _markSeen(s);
+      await _loadPrefs();
       await _readFsi();
     } catch (e) {
       if (!mounted) return;
@@ -99,6 +112,21 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
         _loading = false;
       });
     }
+  }
+
+  /// Tells the backend the admin is looking at these orders. One call per
+  /// alert, fire-and-forget: a failure here must never stop the screen from
+  /// drawing, and the alert simply keeps ringing if it does.
+  Future<void> _markSeen(Map<String, dynamic>? s) async {
+    final open = s?['open'];
+    if (open is! List) return;
+    for (final it in open) {
+      if (it is! Map) continue;
+      final id = it['order_id'] as String?;
+      if (id == null || id.isEmpty) continue;
+      await OrderAlertService.instance.seen(id, source: 'order_screen');
+    }
+    RenderLog.write('c1988_alert_seen', '${open.length}');
   }
 
   Future<void> _save(Map<String, dynamic> patch) async {
@@ -234,6 +262,7 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
                       ..._creditRows(),
                       SizedBox(height: Ds.space.x32),
                       _section(_sectionLabel('device')),
+                      ..._prefRows(),
                       ..._fsiRows(),
                       SizedBox(height: Ds.space.x32),
                       _section(_sectionLabel('log')),
@@ -243,6 +272,120 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
                   ),
                 ),
     );
+  }
+
+  // ── CMD #1988 item 6 — quiet hours (per user) + snooze (per DEVICE) ──────
+  // The old mute was one global switch: silencing one phone silenced the
+  // business. These are stored per user, keyed by device, and every word on
+  // screen is order_alert_my_prefs()'s.
+  List<Widget> _prefRows() {
+    final p = _prefs;
+    if (p == null || p['ok'] != true) return const [];
+    final quiet = (p['quiet'] as Map?) ?? const {};
+    final snooze = (p['snooze'] as Map?) ?? const {};
+    final options = (snooze['options'] as List?) ?? const [];
+    return [
+      Container(
+        width: double.infinity,
+        padding: EdgeInsets.all(Ds.space.x16),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          boxShadow: Ds.elevation.e1,
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('${snooze['title'] ?? ''}', style: Ds.t.subtitle),
+          SizedBox(height: Ds.space.x4),
+          Text('${snooze['subtitle'] ?? ''}', style: Ds.t.caption),
+          SizedBox(height: Ds.space.x8),
+          Text('${snooze['status'] ?? ''}', style: Ds.t.bodySecondary),
+          SizedBox(height: Ds.space.x12),
+          Wrap(
+            spacing: Ds.space.x8,
+            runSpacing: Ds.space.x8,
+            children: [
+              for (final o in options)
+                if (o is Map)
+                  ConstrainedBox(
+                    constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+                    child: OutlinedButton(
+                      onPressed: _busy
+                          ? null
+                          : () => _snooze((o['minutes'] as num?)?.toInt() ?? 0),
+                      child: Text('${o['label'] ?? ''}'),
+                    ),
+                  ),
+            ],
+          ),
+          SizedBox(height: Ds.space.x24),
+          Text('${quiet['title'] ?? ''}', style: Ds.t.subtitle),
+          SizedBox(height: Ds.space.x4),
+          Text('${quiet['subtitle'] ?? ''}', style: Ds.t.caption),
+          SizedBox(height: Ds.space.x12),
+          Row(children: [
+            Expanded(
+              child: TextField(
+                controller: _quietFrom,
+                decoration: InputDecoration(
+                    labelText: '${quiet['from_label'] ?? ''}'),
+              ),
+            ),
+            SizedBox(width: Ds.space.x12),
+            Expanded(
+              child: TextField(
+                controller: _quietTo,
+                decoration:
+                    InputDecoration(labelText: '${quiet['to_label'] ?? ''}'),
+              ),
+            ),
+          ]),
+          SizedBox(height: Ds.space.x12),
+          SizedBox(
+            width: double.infinity,
+            height: Ds.touch.minTarget,
+            child: FilledButton(
+              onPressed: _busy ? null : _saveQuiet,
+              child: Text('${quiet['title'] ?? ''}'),
+            ),
+          ),
+        ]),
+      ),
+      SizedBox(height: Ds.space.x24),
+    ];
+  }
+
+  Future<void> _loadPrefs() async {
+    final id = await OrderAlertService.instance.deviceId();
+    final p = await OrderAlertService.instance.prefs(id);
+    if (!mounted || p == null) return;
+    final quiet = (p['quiet'] as Map?) ?? const {};
+    _quietFrom.text = '${quiet['from'] ?? ''}';
+    _quietTo.text = '${quiet['to'] ?? ''}';
+    setState(() => _prefs = p);
+  }
+
+  Future<void> _snooze(int minutes) async {
+    setState(() => _busy = true);
+    final id = await OrderAlertService.instance.deviceId();
+    final res = await OrderAlertService.instance.snoozeSet(id, minutes);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    final msg = (res['message'] as String?) ?? '';
+    if (msg.isNotEmpty) showToast(context, msg, isError: res['ok'] != true);
+    final p = res['prefs'];
+    if (p is Map) setState(() => _prefs = Map<String, dynamic>.from(p));
+  }
+
+  Future<void> _saveQuiet() async {
+    setState(() => _busy = true);
+    final res = await OrderAlertService.instance
+        .quietSet(_quietFrom.text.trim(), _quietTo.text.trim());
+    if (!mounted) return;
+    setState(() => _busy = false);
+    final msg = (res['message'] as String?) ?? '';
+    if (msg.isNotEmpty) showToast(context, msg, isError: res['ok'] != true);
+    final p = res['prefs'];
+    if (p is Map) setState(() => _prefs = Map<String, dynamic>.from(p));
   }
 
   String _sectionLabel(String key) =>
@@ -731,6 +874,12 @@ class OrderAlertCard extends StatelessWidget {
             SizedBox(height: Ds.space.x8),
             Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x4, children: [
               _Chip(text: '${item['risk_label'] ?? ''}'),
+              // CMD #1988 — the decision moved here from the notification, so
+              // what the notification could never show has to be here: how
+              // many lines this order actually has. The sentence is the
+              // backend's (items_one / items_many), never pluralised in Dart.
+              if ('${item['items_label'] ?? ''}'.isNotEmpty)
+                _Chip(text: '${item['items_label'] ?? ''}'),
               _Chip(text: '${item['stage_label'] ?? ''}'),
               _Chip(text: '${item['age_label'] ?? ''}'),
             ]),

@@ -1,7 +1,5 @@
 import 'dart:async';
-import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -13,7 +11,6 @@ import 'package:pharma_b2b/utils/toast.dart';
 import '../../design_tokens.dart';
 import '../../services/order_alert_service.dart';
 import 'alert_audio.dart';
-import 'order_alerts_screen.dart';
 
 // ── Column skip / label helpers (matches admin_customer_screen) ──────────────
 
@@ -42,23 +39,6 @@ String _fmtVal(String col, dynamic v) {
   return s;
 }
 
-// Rounds to nearest rupee with Indian-style thousands separators.
-String _fmtRupee(dynamic v) {
-  if (v == null) return '₹0';
-  double amount;
-  try {
-    amount = (v is num) ? v.toDouble() : double.parse(v.toString().trim());
-  } catch (_) { return '₹0'; }
-  final rounded = amount.round();
-  if (rounded == 0) return '₹0';
-  final abs = rounded.abs().toString();
-  final buf = StringBuffer();
-  for (int i = 0; i < abs.length; i++) {
-    if (i > 0 && (abs.length - i) % 3 == 0) buf.write(',');
-    buf.write(abs[i]);
-  }
-  return rounded < 0 ? '₹-$buf' : '₹$buf';
-}
 
 // ── Overlay widget ────────────────────────────────────────────────────────────
 
@@ -258,98 +238,66 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
     }
   }
 
-  // CHANGE #306 — the order popup is no longer a dump of the orders row.
-  // order_alert_card() decides whether this order is a risk at all, what the
-  // banner says, whether Accept is even offered, and what the buttons are
-  // called. Keyed by order id so a queued alert keeps its own card.
-  final Map<String, Map<String, dynamic>> _orderCards = {};
-
-  Future<void> _loadOrderCard(String orderId) async {
-    if (orderId.isEmpty) return;
-    final card = await OrderAlertService.instance.card(orderId);
-    if (card == null || !mounted) return;
-    setState(() => _orderCards[orderId] = card);
-    // A paid order never rings: the backend says so, not a client guess.
-    final item = card['item'];
-    final ring = item is Map && item['ring'] == true && card['show'] == true;
-    if (!ring) {
-      orderAudioStop();
-      OrderAlertService.instance.stopRinging();
-    }
-  }
-
-  Future<void> _orderAction(String orderId, String action) async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    final res = await OrderAlertService.instance.act(orderId, action);
-    final card = _orderCards[orderId];
-    final item = card?['item'];
-    if (item is Map) {
-      final alertId = (item['alert_id'] as num?)?.toInt();
-      if (alertId != null) {
-        await OrderAlertService.instance.clearNotification(alertId);
-      }
-    }
-    if (!mounted) return;
-    final msg = (res['message'] as String?) ?? '';
-    if (msg.isNotEmpty) {
-      showToast(context, msg, isError: res['ok'] != true);
-    }
-    if (res['ok'] == true) {
-      _advance();
-    } else {
-      // A refusal is the credit block speaking — keep the card up, refreshed,
-      // so the reason stays on screen.
-      await _loadOrderCard(orderId);
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
+  // CMD #1988 — THE ORDER POPUP IS GONE.
+  //
+  // Om got a lock-screen alert AND a centre dialog for the same order, and the
+  // dialog would not go silent. Two interrupts for one event is one too many,
+  // so the full-screen alert is now the only interrupt and the app shows a
+  // slim tappable strip instead. Nothing about that strip is decided here:
+  // order_alert_strip() sends both sentences, the tone, the action word and
+  // whether the sound rings at all.
+  //
+  // Accept and Reject are not on this surface either. They live on the order
+  // screen, next to the items and the amount — a decision is never taken from
+  // a notification or from a banner that only knows a total.
   void _enqueueOrder(Map<String, dynamic> rec, String id) {
     if (id.isNotEmpty && _orderSeenIds.contains(id)) return;
     if (id.isNotEmpty) _orderSeenIds.add(id);
-    final tagged = {...rec, '_alertType': 'order'};
-    if (mounted) {
-      setState(() {
-        _queue.add(tagged);
-        _detailsOpen = false;
-      });
-      if (_queue.length == 1) _onFirstAlert();
-      _loadOrderCard(id);
+    // The realtime insert is only a nudge to re-read; the strip is the answer.
+    OrderAlertService.instance.refreshStrip();
+  }
+
+  /// The strip was tapped: the order is being opened, so the ring stops on
+  /// EVERY device (the backend stamps the row), then the host opens it.
+  Future<void> _openOrder(String orderId) async {
+    if (orderId.isEmpty) return;
+    orderAudioStop();
+    await OrderAlertService.instance.seen(orderId, source: 'strip');
+    if (!mounted) return;
+    if (widget.onOrderStageTap != null) {
+      widget.onOrderStageTap!(orderId);
+    } else {
+      widget.onOrderTap?.call();
+    }
+  }
+
+  /// The web sound follows the backend's `ring` flag and nothing else — which
+  /// is how quiet hours, a snoozed device and "somebody already opened it"
+  /// all reach the speaker without a single client-side rule.
+  void _syncStripAudio() {
+    if (OrderAlertService.instance.stripRing) {
+      orderAudioStart();
+    } else {
+      orderAudioStop();
     }
   }
 
   void _onFirstAlert() {
-    final type = _queue.first['_alertType'] as String? ?? 'registration';
-    if (type == 'order') {
-      orderAudioStart();
-    } else {
-      audioStart(); // registration and supplier_registration share the same alert sound
-    }
+    // Orders never enter this queue any more (CMD #1988) — registrations and
+    // supplier registrations share the same alert sound.
+    audioStart();
     _slideCtrl.forward(from: 0);
   }
 
   void _advance() {
-    final currentType = _queue.isNotEmpty
-        ? (_queue.first['_alertType'] as String? ?? 'registration')
-        : 'registration';
-    if (currentType == 'order') {
-      orderAudioStop();
-    } else {
-      audioStop();
-    }
+    audioStop();
     setState(() {
       _queue.removeAt(0);
       _detailsOpen = false;
       _busy = false;
     });
     if (_queue.isNotEmpty) {
-      final nextType = _queue.first['_alertType'] as String? ?? 'registration';
-      if (nextType == 'order') {
-        orderAudioStart();
-      } else {
-        audioStart();
-      }
+      audioStart();
       _slideCtrl.forward(from: 0);
     }
   }
@@ -451,7 +399,26 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
   @override
   Widget build(BuildContext context) {
     return Stack(children: [
-      widget.child,
+      // CMD #1988 — the strip sits ABOVE the shell, never over it: it pushes
+      // nothing off screen, steals no tap, and is the only in-app trace of an
+      // unactioned order.
+      Column(children: [
+        AnimatedBuilder(
+          animation: OrderAlertService.instance,
+          builder: (context, _) {
+            _syncStripAudio();
+            final strip = OrderAlertService.instance.strip;
+            if (strip == null || strip['show'] != true) {
+              return const SizedBox.shrink();
+            }
+            return OrderAlertStrip(
+              strip: strip,
+              onOpen: () => _openOrder((strip['order_id'] as String?) ?? ''),
+            );
+          },
+        ),
+        Expanded(child: widget.child),
+      ]),
       if (_queue.isNotEmpty) _buildOverlay(_queue.first),
     ]);
   }
@@ -475,7 +442,6 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
 
   Widget _buildCard(Map<String, dynamic> rec) {
     final type = rec['_alertType'] as String? ?? 'registration';
-    if (type == 'order') return _buildOrderCard(rec);
     if (type == 'supplier_registration') return _buildSupplierRegCard(rec);
     if (type == 'mr_registration') return _buildSimpleRegCard(rec, title: c('admin_alert.banner_new_mr'), color: const Color(0xFF7C3AED), nameKey: 'full_name', subtitleKey: 'company_represented');
     if (type == 'company_registration') return _buildSimpleRegCard(rec, title: c('admin_alert.banner_new_company'), color: const Color(0xFF0369A1), nameKey: 'company_name', subtitleKey: 'contact_person');
@@ -762,346 +728,6 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
     );
   }
 
-  Widget _buildOrderCard(Map<String, dynamic> rec) {
-    // CHANGE #306 — when the backend has an alert for this order, THAT is the
-    // card: the banner, the risk chips, the credit-block sentence and both
-    // button captions are its words, and Accept is offered only when it says
-    // the order may be accepted. The legacy row-dump below is the fallback for
-    // an order the alert engine has no row for (alerts switched off).
-    final orderRowId = rec['id'] as String? ?? '';
-    final card = _orderCards[orderRowId];
-    final item = card?['item'];
-    if (card != null && card['show'] == true && item is Map) {
-      final queueLabel = (card['queue_label'] as String?) ?? '';
-      return Container(
-        margin: EdgeInsets.symmetric(
-            horizontal: Ds.space.x16, vertical: Ds.space.x24),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          if (queueLabel.isNotEmpty)
-            Padding(
-              padding: EdgeInsets.only(bottom: Ds.space.x8),
-              child: FadeTransition(
-                opacity: _flashAnim,
-                child: Text(queueLabel, style: Ds.t.caption),
-              ),
-            ),
-          OrderAlertCard(
-            item: Map<String, dynamic>.from(item),
-            busy: _busy,
-            onAccept: () => _orderAction(orderRowId, 'accept'),
-            onReject: () => _orderAction(orderRowId, 'reject'),
-            onDismiss: _dismiss,
-          ),
-        ]),
-      );
-    }
-
-    // payment_id is the human-readable order number (e.g. PO-260605-0861)
-    final orderId      = rec['payment_id']    as String?
-                      ?? rec['order_id']      as String?
-                      ?? rec['order_number']  as String?
-                      ?? '';
-    final rawTotal     = rec['total_amount'] ?? rec['grand_total'] ?? rec['total'];
-    final customerName = rec['pharmacy_name'] as String?
-                      ?? rec['customer_name'] as String?
-                      ?? '';
-    final createdAt    = rec['created_at']   as String? ?? '';
-
-    final queueLen  = _queue.length;
-    // Round to nearest rupee with ₹ symbol
-    final totalStr  = rawTotal != null ? _fmtRupee(rawTotal) : '';
-    // CHANGE #548: backend-formatted (ist_fmt 'dmy'), never built here.
-    final dateStr = createdAt.length >= 10
-        ? (DateLabels.instance.label(createdAt, DateStyle.dmy) ?? '')
-        : '';
-
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(
-          color: Colors.black.withValues(alpha: 0.25), blurRadius: 24, offset: const Offset(0, 8))],
-      ),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        // ── Flashing banner ──────────────────────────────────────────────
-        FadeTransition(
-          opacity: _flashAnim,
-          child: Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            decoration: const BoxDecoration(
-              color: Color(0xFF15803D),
-              borderRadius: BorderRadius.only(
-                topLeft: Radius.circular(16), topRight: Radius.circular(16)),
-            ),
-            child: Row(children: [
-              const Icon(Icons.shopping_bag_outlined, color: Colors.white, size: 18),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  queueLen > 1
-                      ? cf('admin_alert.banner_new_order_queued',
-                          {'count': '$queueLen'})
-                      : c('admin_alert.banner_new_order'),
-                  style: const TextStyle(
-                      fontSize: 13, fontWeight: FontWeight.w800,
-                      color: Colors.white, letterSpacing: 0.5),
-                ),
-              ),
-              InkWell(
-                onTap: _toggleMute,
-                borderRadius: BorderRadius.circular(20),
-                child: Padding(
-                  padding: const EdgeInsets.all(4),
-                  child: Icon(
-                    _muted ? Icons.volume_off : Icons.volume_up,
-                    color: Colors.white.withValues(alpha: _muted ? 0.5 : 1.0),
-                    size: 18,
-                  ),
-                ),
-              ),
-            ]),
-          ),
-        ),
-
-        // ── Key fields ───────────────────────────────────────────────────
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            if (customerName.isNotEmpty)
-              Text(customerName,
-                  style: const TextStyle(
-                      fontSize: 18, fontWeight: FontWeight.w800,
-                      color: Color(0xFF111827))),
-            if (orderId.isNotEmpty) ...[
-              const SizedBox(height: 3),
-              Text(orderId,
-                  style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
-            ],
-            const SizedBox(height: 12),
-            Wrap(spacing: 16, runSpacing: 8, children: [
-              if (totalStr.isNotEmpty)  _chip(Icons.currency_rupee,          totalStr),
-              if (dateStr.isNotEmpty)   _chip(Icons.calendar_today_outlined, dateStr),
-            ]),
-          ]),
-        ),
-
-        // ── Details expander ─────────────────────────────────────────────
-        const SizedBox(height: 8),
-        InkWell(
-          onTap: () => setState(() => _detailsOpen = !_detailsOpen),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-            child: Row(children: [
-              Text(c('admin_alert.view_full_details'),
-                  style: const TextStyle(fontSize: 12, color: Color(0xFF15803D),
-                      fontWeight: FontWeight.w600)),
-              const SizedBox(width: 4),
-              AnimatedRotation(
-                turns: _detailsOpen ? 0.5 : 0.0,
-                duration: const Duration(milliseconds: 180),
-                child: const Icon(Icons.expand_more,
-                    size: 16, color: Color(0xFF15803D)),
-              ),
-            ]),
-          ),
-        ),
-        // Order-specific details: items table + meta fields (not generic _buildDetails)
-        if (_detailsOpen) _buildOrderDetails(rec),
-
-        const Divider(height: 1, color: Color(0xFFE5E7EB)),
-
-        // ── Action buttons ───────────────────────────────────────────────
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-          child: Row(children: [
-            if (queueLen > 1) ...[
-              OutlinedButton(
-                onPressed: _dismiss,
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFF6B7280),
-                  side: const BorderSide(color: Color(0xFFD1D5DB)),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 10),
-                ),
-                child: Text(c('admin_alert.btn_skip'),
-                    style: const TextStyle(fontSize: 12)),
-              ),
-              const SizedBox(width: 8),
-            ],
-            Expanded(
-              child: OutlinedButton(
-                onPressed: _dismiss,
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFF6B7280),
-                  side: const BorderSide(color: Color(0xFFD1D5DB)),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                ),
-                child: Text(c('admin_alert.btn_dismiss'),
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: FilledButton(
-                onPressed: () {
-                  _dismiss();
-                  // CHANGE #537 — order_id is the uuid; `orderId` above is the
-                  // human-readable code (payment_id) and is not a key.
-                  final uuid = (rec['order_id'] as String?) ?? '';
-                  if (uuid.isNotEmpty && widget.onOrderStageTap != null) {
-                    widget.onOrderStageTap!(uuid);
-                  } else {
-                    widget.onOrderTap?.call();
-                  }
-                },
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFF15803D),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                ),
-                child: Text(c('admin_alert.btn_view_orders'),
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
-              ),
-            ),
-          ]),
-        ),
-      ]),
-    );
-  }
-
-  // ── Order-specific details panel ──────────────────────────────────────────
-
-  Widget _buildOrderDetails(Map<String, dynamic> rec) {
-    const skip = {'id', 'user_id', '_alertType', 'items'};
-
-    // Parse items — Supabase returns JSONB as List already; handle string fallback.
-    List<Map<String, dynamic>> items = [];
-    final rawItems = rec['items'];
-    if (rawItems is List) {
-      for (final e in rawItems) {
-        if (e is Map) items.add(Map<String, dynamic>.from(e));
-      }
-    } else if (rawItems is String && rawItems.isNotEmpty) {
-      try {
-        final decoded = jsonDecode(rawItems);
-        if (decoded is List) {
-          for (final e in decoded) {
-            if (e is Map) items.add(Map<String, dynamic>.from(e));
-          }
-        }
-      } catch (_) {}
-    }
-
-    final entries = rec.entries.where((e) => !skip.contains(e.key)).toList();
-
-    const labelStyle = TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
-        color: Color(0xFF9CA3AF), letterSpacing: 0.4);
-    const valueStyle = TextStyle(fontSize: 12, color: Color(0xFF374151));
-    const dimStyle   = TextStyle(fontSize: 12, color: Color(0xFFD1D5DB));
-
-    const colHeader = TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
-        color: Color(0xFF6B7280), letterSpacing: 0.3);
-    const cellStyle = TextStyle(fontSize: 11, color: Color(0xFF374151));
-
-    return Container(
-      constraints: const BoxConstraints(maxHeight: 320),
-      color: const Color(0xFFF9FAFB),
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // ── Meta fields (payment_id, status, address, phone, total_amount…) ──
-          if (entries.isNotEmpty)
-            LayoutBuilder(builder: (_, constraints) {
-              final cols = constraints.maxWidth > 400 ? 2 : 1;
-              final itemW = (constraints.maxWidth - (cols - 1) * 16.0) / cols;
-              return Wrap(spacing: 16, runSpacing: 8,
-                children: entries.map((e) {
-                  final display = e.key == 'total_amount'
-                      ? _fmtRupee(e.value)
-                      : _fmtVal(e.key, e.value);
-                  return SizedBox(
-                    width: itemW,
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(_fmtLabel(e.key), style: labelStyle),
-                      const SizedBox(height: 2),
-                      Text(display,
-                          style: display == '—' ? dimStyle : valueStyle),
-                    ]),
-                  );
-                }).toList(),
-              );
-            }),
-
-          // ── Items table ──────────────────────────────────────────────────
-          if (items.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            const Divider(height: 1, color: Color(0xFFE5E7EB)),
-            const SizedBox(height: 8),
-            // Header
-            Row(children: [
-              Expanded(flex: 5, child: Text(c('admin_alert.col_product'), style: colHeader)),
-              SizedBox(width: 30, child: Text(c('admin_alert.col_qty'),   style: colHeader, textAlign: TextAlign.center)),
-              SizedBox(width: 54, child: Text(c('admin_alert.col_mrp'),   style: colHeader, textAlign: TextAlign.right)),
-              SizedBox(width: 58, child: Text(c('admin_alert.col_total'), style: colHeader, textAlign: TextAlign.right)),
-            ]),
-            const SizedBox(height: 4),
-            // Item rows
-            ...items.map((item) {
-              final name  = item['product_name'] as String? ?? '—';
-              final qty   = item['quantity'];
-              final mrp   = item['mrp'];
-              final rawLt = item['line_total'];
-              // Fallback: price × qty if line_total absent/zero and price present
-              final lineTotal = (rawLt != null &&
-                      (rawLt is num) && rawLt.toDouble() != 0.0)
-                  ? rawLt
-                  : (item['price'] is num && qty is num
-                      ? (item['price'] as num).toDouble() *
-                        (qty as num).toDouble()
-                      : rawLt);
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 2.5),
-                child: Row(children: [
-                  Expanded(
-                    flex: 5,
-                    child: Text(name,
-                        overflow: TextOverflow.ellipsis,
-                        maxLines: 1,
-                        style: cellStyle),
-                  ),
-                  SizedBox(
-                    width: 30,
-                    child: Text('${qty ?? '—'}',
-                        textAlign: TextAlign.center, style: cellStyle),
-                  ),
-                  SizedBox(
-                    width: 54,
-                    child: Text(_fmtRupee(mrp),
-                        textAlign: TextAlign.right, style: cellStyle),
-                  ),
-                  SizedBox(
-                    width: 58,
-                    child: Text(_fmtRupee(lineTotal),
-                        textAlign: TextAlign.right, style: cellStyle),
-                  ),
-                ]),
-              );
-            }),
-          ],
-        ]),
-      ),
-    );
-  }
-
-  // ── Registration generic details panel ───────────────────────────────────
-
   Widget _buildDetails(Map<String, dynamic> rec) {
     final entries = rec.entries.where((e) => !_kSkip.contains(e.key)).toList();
     return Container(
@@ -1229,4 +855,146 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
       Text(label, style: const TextStyle(fontSize: 12, color: Color(0xFF374151))),
     ],
   );
+}
+
+/// CMD #1988 — the ONE in-app surface an unactioned order gets.
+///
+/// A slim strip, not a dialog: it interrupts nothing, it can be ignored, and
+/// the lock-screen alert stays the only thing that takes over the phone. It
+/// computes nothing — the title, the subtitle, the badge, the action word and
+/// the tone all arrive from order_alert_strip(). Tapping it opens the order,
+/// which is where Accept and Reject live.
+class OrderAlertStrip extends StatelessWidget {
+  final Map<String, dynamic> strip;
+  final VoidCallback onOpen;
+
+  const OrderAlertStrip({super.key, required this.strip, required this.onOpen});
+
+  Color _tone(String tone) {
+    switch (tone) {
+      case 'danger':
+        return Ds.c.danger;
+      case 'info':
+        return Ds.c.info;
+      default:
+        return Ds.c.warning;
+    }
+  }
+
+  Color _toneSoft(String tone) {
+    switch (tone) {
+      case 'danger':
+        return Ds.c.dangerSoft;
+      case 'info':
+        return Ds.c.infoSoft;
+      default:
+        return Ds.c.warningSoft;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tone = (strip['tone'] as String?) ?? 'warning';
+    final title = (strip['title'] as String?) ?? '';
+    final subtitle = (strip['subtitle'] as String?) ?? '';
+    final action = (strip['action_label'] as String?) ?? '';
+    final risk = (strip['risk_label'] as String?) ?? '';
+    final more = (strip['more_label'] as String?) ?? '';
+    final accent = _tone(tone);
+
+    return Material(
+      color: _toneSoft(tone),
+      child: SafeArea(
+        bottom: false,
+        child: InkWell(
+          onTap: onOpen,
+          child: Container(
+            constraints: BoxConstraints(minHeight: Ds.space.x48),
+            padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x16, vertical: Ds.space.x8),
+            decoration: BoxDecoration(
+              border: Border(
+                  bottom: BorderSide(color: accent, width: Ds.space.x4 / 2)),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Container(
+                  width: Ds.space.x8,
+                  height: Ds.space.x8,
+                  decoration:
+                      BoxDecoration(color: accent, shape: BoxShape.circle),
+                ),
+                SizedBox(width: Ds.space.x12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(children: [
+                        Flexible(
+                          child: Text(title,
+                              style: Ds.t.bodyStrong,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis),
+                        ),
+                        if (risk.isNotEmpty) ...[
+                          SizedBox(width: Ds.space.x8),
+                          Flexible(
+                              child: Container(
+                            padding: EdgeInsets.symmetric(
+                                horizontal: Ds.space.x8,
+                                vertical: Ds.space.x4 / 2),
+                            decoration: BoxDecoration(
+                                color: Ds.c.surface,
+                                borderRadius: Ds.r.rChip),
+                            child: Text(risk,
+                                style: Ds.t.caption,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis),
+                          )),
+                        ],
+                      ]),
+                      SizedBox(height: Ds.space.x4),
+                      Text(subtitle,
+                          style: Ds.t.caption,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis),
+                      if (more.isNotEmpty) ...[
+                        SizedBox(height: Ds.space.x4),
+                        Text(more, style: Ds.t.caption, maxLines: 1),
+                      ],
+                    ],
+                  ),
+                ),
+                SizedBox(width: Ds.space.x8),
+                // The action word is the backend's and can be any length, so
+                // it shrinks rather than pushing the strip off a 320px phone.
+                Flexible(
+                  child: ConstrainedBox(
+                    constraints:
+                        BoxConstraints(minHeight: Ds.space.x48 - Ds.space.x4),
+                    child: TextButton(
+                      onPressed: onOpen,
+                      style: TextButton.styleFrom(
+                        foregroundColor: accent,
+                        padding:
+                            EdgeInsets.symmetric(horizontal: Ds.space.x8),
+                        shape:
+                            RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+                      ),
+                      child: Text(action,
+                          style: Ds.t.bodyStrong.copyWith(color: accent),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

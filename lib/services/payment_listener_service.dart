@@ -21,6 +21,7 @@ import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../utils/render_log.dart';
+import 'live_feed.dart';
 
 class PaymentListenerState {
   const PaymentListenerState({
@@ -68,7 +69,7 @@ class PaymentListenerService {
   int _speakVolume = 100;
   bool _speakOn = true;
   Timer? _drainTimer;
-  RealtimeChannel? _channel;
+  LiveFeedHandle? _feed;
 
   /// Anything the card should redraw for: a grant changed, a queue emptied.
   final ValueNotifier<int> revision = ValueNotifier<int>(0);
@@ -123,7 +124,7 @@ class PaymentListenerService {
       await _refreshAllowList();
       await reportState();
       await drain();
-      _subscribeSpeak();
+      await _subscribeSpeak();
       _drainTimer?.cancel();
       // A phone that was offline when the payment landed catches up here; the
       // realtime channel handles everything that arrives while it is online.
@@ -137,9 +138,8 @@ class PaymentListenerService {
   void dispose() {
     _drainTimer?.cancel();
     _drainTimer = null;
-    final ch = _channel;
-    _channel = null;
-    if (ch != null) Supabase.instance.client.removeChannel(ch);
+    _feed?.dispose();
+    _feed = null;
     _booted = false;
   }
 
@@ -220,18 +220,16 @@ class PaymentListenerService {
   /// A matched payment writes one row into payment_alert_speak. That is the
   /// signal; the sentence itself is pulled, so a phone that was asleep still
   /// gets it and a muted phone is told to stay quiet.
-  void _subscribeSpeak() {
-    if (_channel != null) return;
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    _channel = Supabase.instance.client
-        .channel('pay_speak_$ts')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.insert,
-          schema: 'public',
-          table: 'payment_alert_speak',
-          callback: (_) => speakPending(),
-        )
-        .subscribe();
+  Future<void> _subscribeSpeak() async {
+    if (_feed != null) return;
+    // Through LiveFeed, never a channel of our own: realtime_table_registry
+    // decides whether payment_alert_speak gets a live binding or a poll, and
+    // flipping that is one UPDATE (CHANGE #643 / the #646 gate).
+    _feed = await LiveFeed.instance.watch(
+      channelPrefix: 'pay_speak',
+      tables: const ['payment_alert_speak'],
+      onChange: (_) => speakPending(),
+    );
   }
 
   /// Pull whatever is unspoken for this zone and read it out.

@@ -451,4 +451,18 @@ begin
   execute 'revoke all on function public._pay_listen_card(text) from public, anon, authenticated';
 end $$;
 
+
+-- ── 11. the speak feed is a REGISTERED live table ───────────────────────────
+-- #1929 put payment_alert_speak into supabase_realtime but never told
+-- realtime_table_registry, which is what LiveFeed asks and what the rg
+-- behaviour c646_registry_matches_publication compares the publication
+-- against. Without this row the phone would have silently POLLED for a
+-- payment it is supposed to hear the instant it lands.
+insert into public.realtime_table_registry
+  (table_name, live, filter_required, poll_seconds, surface, reason)
+values ('payment_alert_speak', true, false, 30, 'money',
+        'CMD #1931 — the phone speaks a matched payment the moment it is written.')
+on conflict (table_name) do update set
+  live = true, filter_required = false, updated_at = now();
+
 commit;

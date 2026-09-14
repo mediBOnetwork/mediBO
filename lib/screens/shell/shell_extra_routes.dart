@@ -37,6 +37,7 @@ import '../admin/admin_delivery_waves_screen.dart';
 import '../admin/admin_feedback_screen.dart';
 import '../admin/returns_refunds_screen.dart';
 import '../admin/surface_map_screen.dart';
+import '../admin/onboarding_notices_screen.dart';
 import '../admin/payment_alerts_screen.dart';
 import '../admin/dev_queue/triage_inbox_screen.dart';
 import '../admin/damage_report_screen.dart';
@@ -115,6 +116,13 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       // payment_alerts_screen() answers on the caller's own role and renders
       // its own refusal, and the tile comes from feature_registry.
       'payment_alerts' => const PaymentAlertsScreen(),
+      // CMD #1936 — Onboarding notices: what a new shop hears from us, and
+      // when. The door is HERE for the same reason as the two above — the
+      // shell's own switch is at 1,998 of a hard 2,000-line guard.
+      // Authorisation is not here either: onboarding_notices_screen() answers
+      // on the caller's own role and renders its own refusal, and the tile
+      // comes from feature_registry (admin.onboarding_notices).
+      'onboarding_notices' => const OnboardingNoticesScreen(),
       // CHANGE #639 — Triage. Its real entry point is Dev Queue → tools →
       // Proof & QA → Triage, but a findings inbox is what an alert wants to
       // link straight at, and a screen with no URL cannot be screenshotted for

@@ -759,6 +759,7 @@ class _HomeShellState extends State<HomeShell> {
       // was what it kept showing. Bumping the signal here makes opening the
       // tab an actual fetch, so the list is never older than the tap.
       if (i == 1) _ordersRefreshSignal++;
+      shellHeaderBandShow(); // CMD #2019 — a new tab starts full-chrome.
     });
     pushUrl(_urlForState());
   }
@@ -1814,12 +1815,15 @@ class _HomeShellState extends State<HomeShell> {
         isTablet: isTablet,
         entries: isAdmin ? visibleNavEntries(shellStaffBarEntries(kAdminBottomNav), Access.instance.routeCanView) : const [],
         index: _index, alertCount: _alertCount, onRoute: _handleAdminNav,
-        body: Stack(
+        body: NotificationListener<ScrollNotification>(
+        // CMD #2019 — the storefront's own scrolling drives the header band.
+        onNotification: (n) => shellHeaderScroll(n, !isAdmin && _index == 0),
+        child: Stack(
         children: [
           SizedBox.expand(
-            child: Column(
+            child: SafeArea(bottom: false, child: Column(
               children: [
-                _LocationHeader(
+                shellCollapsibleBand(!isAdmin, _LocationHeader(
                   isAdmin: isAdmin,
                   onCart: () => _openCart(),
                   onHome: _goHome,
@@ -1830,7 +1834,7 @@ class _HomeShellState extends State<HomeShell> {
                   deletionCount: isAdmin ? _deletionCount : 0,
                   alertCount: isAdmin ? _alertCount : 0,
                   bellKey: _bellKey, // CHANGE #298
-                ),
+                )),
                 // CHANGE #455 B1 — the persistent order-hours banner that
                 // used to sit here (and in the desktop header below) is
                 // deleted, not hidden. c455_banners proves zero render.
@@ -1852,7 +1856,7 @@ class _HomeShellState extends State<HomeShell> {
                   ),
                 ),
               ],
-            ),
+            )),
           ),
           // CHANGE #636 — the floating cart pill replaces the sticky cart bar.
           //
@@ -1883,6 +1887,7 @@ class _HomeShellState extends State<HomeShell> {
               ),
             ),
         ],
+        ),
         ),
       ),
     );

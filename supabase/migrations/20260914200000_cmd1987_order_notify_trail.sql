@@ -959,3 +959,18 @@ on conflict (feature_key) do update
       deep_link    = excluded.deep_link,
       search_terms = excluded.search_terms,
       description  = excluded.description;
+
+-- ── 10. surface_route — the nav truth the protected suite mirrors ──────────
+-- CHANGE #821: a shell door with no row here is a screen the reachability
+-- gate cannot prove is reachable, and the next run of
+-- scripts/gen_registered_routes.sh would drop it back out of
+-- test/protected/registered_routes.dart. surface_route carries no unique key
+-- on route_key, so the upsert is a guarded pair rather than ON CONFLICT.
+update public.surface_route
+   set feature_key = 'admin.notif_trail', handled_by = 'home_shell', is_active = true
+ where route_key = 'notif_trail';
+insert into public.surface_route(route_key, feature_key, kind, handled_by, note, is_active)
+select 'notif_trail', 'admin.notif_trail', 'feature', 'home_shell',
+       'CMD #1987 — Admin › Message trail, opened from shell/shell_extra_routes.dart',
+       true
+ where not exists (select 1 from public.surface_route where route_key = 'notif_trail');

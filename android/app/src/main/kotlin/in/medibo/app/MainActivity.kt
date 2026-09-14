@@ -77,6 +77,52 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
+        // CMD #1931 — the payment-notification listener bridge. Every word
+        // and every package name arrives from the backend through this seam;
+        // Kotlin only reports what Android says and queues what it is allowed
+        // to see. The spoken sentence is payment_alert_speak's, spoken as-is.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "medibo/pay_listen")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "state" -> result.success(
+                        mapOf(
+                            "granted" to PaymentListener.isEnabled(applicationContext),
+                            "queued" to PaymentListener.queueCount(applicationContext),
+                            "device_id" to deviceId(),
+                            "sdk" to android.os.Build.VERSION.SDK_INT,
+                        ),
+                    )
+                    "openSettings" -> result.success(PaymentListener.openSettings(applicationContext))
+                    "setPackages" -> {
+                        PaymentListener.setPackages(
+                            applicationContext,
+                            call.argument<List<String>>("packages") ?: emptyList(),
+                            call.argument<List<String>>("ignore") ?: emptyList(),
+                            call.argument<Int>("queue_max") ?: 500,
+                        )
+                        result.success(true)
+                    }
+                    "drain" -> result.success(
+                        PaymentListener.drain(applicationContext, call.argument<Int>("limit") ?: 25),
+                    )
+                    "ack" -> {
+                        val ids = (call.argument<List<Number>>("qids") ?: emptyList())
+                            .map { it.toLong() }.toSet()
+                        PaymentListener.ack(applicationContext, ids)
+                        result.success(PaymentListener.queueCount(applicationContext))
+                    }
+                    "speak" -> {
+                        PaymentListener.speak(
+                            applicationContext,
+                            call.argument<String>("text") ?: "",
+                            call.argument<Int>("volume") ?: 100,
+                        )
+                        result.success(true)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
         // CHANGE #700 / #985 — the run-location bridge. The foreground
         // location service was removed for the 1.3.21 (35) Play release (Play
         // requires a Console-only foreground-service declaration for it), so
@@ -111,6 +157,22 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    /**
+     * CMD #1931 — a stable id for THIS phone, so the backend can hold one row
+     * of listener settings per device. ANDROID_ID is per app-signing-key and
+     * per user, survives updates, and is reset by a factory reset — exactly
+     * the lifetime a "does this phone speak?" switch should have.
+     */
+    @android.annotation.SuppressLint("HardwareIds")
+    private fun deviceId(): String = try {
+        android.provider.Settings.Secure.getString(
+            applicationContext.contentResolver,
+            android.provider.Settings.Secure.ANDROID_ID,
+        ) ?: ""
+    } catch (_: Throwable) {
+        ""
     }
 
     private fun hasFineLocation(): Boolean =

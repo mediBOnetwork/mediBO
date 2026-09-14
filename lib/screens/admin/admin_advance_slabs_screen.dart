@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../design_tokens.dart';
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
+import 'feature_gaps_screen.dart' show toneColor, toneSoft;
 
 /// CMD #1932 — the Advance ladder.
 ///
@@ -26,12 +27,23 @@ class AdminAdvanceSlabsScreen extends StatefulWidget {
   final Future<Map<String, dynamic>> Function(int id, bool active)? toggleRpc;
   final Future<Map<String, dynamic>> Function(int id)? deleteRpc;
 
+  /// CMD #1933 — "Who can edit": `advance_slabs_access_list()` and
+  /// `advance_slabs_access_set(kind, id, can_view, can_write)`. Injected for
+  /// the same reason as the four above, and only ever CALLED when the list
+  /// payload says `show_access` — the screen never decides who is a super
+  /// admin, the backend does.
+  final Future<Map<String, dynamic>> Function()? accessListRpc;
+  final Future<Map<String, dynamic>> Function(
+      String kind, String id, bool canView, bool canWrite)? accessSetRpc;
+
   const AdminAdvanceSlabsScreen({
     super.key,
     this.listRpc,
     this.saveRpc,
     this.toggleRpc,
     this.deleteRpc,
+    this.accessListRpc,
+    this.accessSetRpc,
   });
 
   @override
@@ -41,8 +53,10 @@ class AdminAdvanceSlabsScreen extends StatefulWidget {
 
 class _AdminAdvanceSlabsScreenState extends State<AdminAdvanceSlabsScreen> {
   Map<String, dynamic> _p = const <String, dynamic>{};
+  Map<String, dynamic> _access = const <String, dynamic>{};
   bool _loading = true;
   bool _busy = false;
+  bool _accessOpen = false;
 
   @override
   void initState() {
@@ -75,6 +89,47 @@ class _AdminAdvanceSlabsScreenState extends State<AdminAdvanceSlabsScreen> {
     });
     RenderLog.write('advance_slab_rows', _rows.length);
     RenderLog.write('advance_slab_screen', _ok ? 'ok' : 'denied');
+    if (_ok && _p['show_access'] == true) await _loadAccess();
+  }
+
+  /// The permission matrix, narrowed to this feature. `show_access` is the
+  /// backend's verdict that this caller may see it at all.
+  Future<void> _loadAccess() async {
+    Map<String, dynamic> a;
+    try {
+      a = widget.accessListRpc != null
+          ? await widget.accessListRpc!()
+          : await _call('advance_slabs_access_list', const <String, dynamic>{});
+    } catch (_) {
+      a = <String, dynamic>{'ok': false};
+    }
+    if (!mounted) return;
+    setState(() => _access = a);
+    RenderLog.write('advance_slab_access_rows', _accessRows.length);
+  }
+
+  Future<void> _setAccess(
+      Map<String, dynamic> row, bool canView, bool canWrite) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    Map<String, dynamic> res;
+    try {
+      res = widget.accessSetRpc != null
+          ? await widget.accessSetRpc!((row['kind'] ?? '').toString(),
+              (row['id'] ?? '').toString(), canView, canWrite)
+          : await _call('advance_slabs_access_set', {
+              'p_kind': row['kind'],
+              'p_id': row['id'],
+              'p_can_view': canView,
+              'p_can_write': canWrite,
+            });
+    } catch (e) {
+      res = <String, dynamic>{'ok': false, 'message': e.toString()};
+    }
+    if (!mounted) return;
+    setState(() => _busy = false);
+    _report(res);
+    await _loadAccess();
   }
 
   bool get _ok => _p['ok'] == true;
@@ -89,6 +144,12 @@ class _AdminAdvanceSlabsScreenState extends State<AdminAdvanceSlabsScreen> {
           .map((e) => Map<String, dynamic>.from(e))
           .toList();
   String _s(String k) => (_p[k] ?? '').toString();
+  String _a(String k) => (_access[k] ?? '').toString();
+  List<Map<String, dynamic>> get _accessRows =>
+      ((_access['rows'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
 
   /// Every backend answer carries its own wording; this only routes it.
   void _report(Map<String, dynamic> res) {
@@ -118,6 +179,23 @@ class _AdminAdvanceSlabsScreenState extends State<AdminAdvanceSlabsScreen> {
 
   Future<void> _delete(Map<String, dynamic> row) async {
     if (_busy) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        content: Text(_s('delete_confirm'), style: Ds.t.body),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(_s('cancel_label'))),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Ds.c.danger),
+            child: Text(_s('delete_label')),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
     setState(() => _busy = true);
     Map<String, dynamic> res;
     try {
@@ -190,7 +268,15 @@ class _AdminAdvanceSlabsScreenState extends State<AdminAdvanceSlabsScreen> {
                           Ds.space.x16, Ds.space.x48),
                       children: [
                         _header(),
-                        SizedBox(height: Ds.space.x16),
+                        if (_s('read_only_hint').isNotEmpty) ...[
+                          SizedBox(height: Ds.space.x12),
+                          _readOnlyHint(),
+                        ],
+                        if (_p['show_access'] == true) ...[
+                          SizedBox(height: Ds.space.x12),
+                          _accessCard(),
+                        ],
+                        SizedBox(height: Ds.space.x24),
                         if (_rows.isEmpty)
                           _empty()
                         else
@@ -241,9 +327,10 @@ class _AdminAdvanceSlabsScreenState extends State<AdminAdvanceSlabsScreen> {
     String v(String k) => (row[k] ?? '').toString();
     final canEdit = row['can_edit'] == true;
     final canDelete = row['can_delete'] == true;
-    final tone = v('status_tone');
-    final toneBg = tone == 'good' ? Ds.c.successSoft : Ds.c.warningSoft;
-    final toneFg = tone == 'good' ? Ds.c.success : Ds.c.warning;
+    // The tone is a design-token NAME from the payload, resolved by the same
+    // helper every other backend-toned chip in the app uses — never a hex here.
+    final toneBg = toneSoft(row['status_tone']);
+    final toneFg = toneColor(row['status_tone']);
 
     // Column headers come from the payload; the card prints each row under the
     // header the backend named, so a renamed column never needs a deploy.
@@ -266,6 +353,8 @@ class _AdminAdvanceSlabsScreenState extends State<AdminAdvanceSlabsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // The focal pair: which order this rung starts at, and the
+            // advance on it. Everything under them is metadata.
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -273,67 +362,219 @@ class _AdminAdvanceSlabsScreenState extends State<AdminAdvanceSlabsScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(headerFor('order_label'), style: Ds.t.caption),
-                      SizedBox(height: Ds.space.x4),
-                      Text(v('order_label'), style: Ds.t.subtitle),
+                      if (headerFor('order_label').isNotEmpty) ...[
+                        Text(headerFor('order_label'), style: Ds.t.caption),
+                        SizedBox(height: Ds.space.x4),
+                      ],
+                      Text(v('order_label'), style: Ds.t.bodyStrong),
                     ],
                   ),
                 ),
-                SizedBox(width: Ds.space.x12),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(headerFor('pct_label'), style: Ds.t.caption),
-                    SizedBox(height: Ds.space.x4),
-                    Text(v('pct_label'), style: Ds.t.title),
-                  ],
-                ),
+                SizedBox(width: Ds.space.x8),
+                Text(v('pct_label'), style: Ds.t.subtitle),
               ],
             ),
-            SizedBox(height: Ds.space.x12),
+            SizedBox(height: Ds.space.x8),
             Wrap(
               spacing: Ds.space.x8,
               runSpacing: Ds.space.x8,
               children: [
-                _chip(v('zone_label'), Ds.c.brandSoft, Ds.c.brand),
                 _chip(v('status_label'), toneBg, toneFg),
+                _chip(v('zone_label'), Ds.c.brandSoft, Ds.c.brand),
                 _chip(v('used_label'), Ds.c.bg, Ds.c.textSecondary),
               ],
             ),
-            if (v('note').isNotEmpty) ...[
+            if (v('effective_label').isNotEmpty) ...[
               SizedBox(height: Ds.space.x8),
+              Text(v('effective_label'), style: Ds.t.caption),
+            ],
+            if (v('note').isNotEmpty) ...[
+              SizedBox(height: Ds.space.x4),
               Text(v('note'), style: Ds.t.caption),
             ],
+            // Worded actions, the same row the Discount-slabs card carries:
+            // Edit · the backend's own toggle caption ("Deactivate"/
+            // "Activate") · Delete. A Switch would have made the app decide
+            // what flipping it means; `toggle_to` is the backend saying it.
             if (canEdit) ...[
-              SizedBox(height: Ds.space.x12),
-              Divider(height: Ds.space.x16, color: Ds.c.divider),
-              Row(
-                children: [
-                  Switch(
-                    value: row['active'] == true,
-                    activeThumbColor: Ds.c.brand,
-                    onChanged: _busy
-                        ? null
-                        : (next) => _toggle(row, next),
+              SizedBox(height: Ds.space.x8),
+              // Bounded and wrapping: on a 360px phone with a long backend
+              // caption the two left actions drop to a second line rather
+              // than pushing Delete off the card.
+              Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                Expanded(
+                  child: Wrap(
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      _CardAction(
+                          label: _s('edit_label'),
+                          onTap: _busy ? null : () => _openEditor(row)),
+                      _CardAction(
+                          label: v('toggle_label'),
+                          onTap: _busy
+                              ? null
+                              : () => _toggle(row, row['toggle_to'] == true)),
+                    ],
                   ),
-                  const Spacer(),
-                  TextButton.icon(
-                    onPressed: _busy ? null : () => _openEditor(row),
-                    icon: Icon(Icons.edit_outlined, color: Ds.c.brand),
-                    label: Text(_s('edit_label'),
-                        style: Ds.t.body.copyWith(color: Ds.c.brand)),
-                  ),
-                  if (canDelete)
-                    IconButton(
-                      tooltip: _s('delete_label'),
-                      onPressed: _busy ? null : () => _delete(row),
-                      icon: Icon(Icons.delete_outline, color: Ds.c.danger),
-                    ),
-                ],
-              ),
+                ),
+                if (canDelete)
+                  _CardAction(
+                      label: _s('delete_label'),
+                      colour: Ds.c.danger,
+                      onTap: _busy ? null : () => _delete(row)),
+              ]),
             ],
           ],
         ),
+      ),
+    );
+  }
+
+  /// A read-only admin is TOLD it is read-only. The sentence is the
+  /// backend's; the screen never infers "you cannot edit" from a missing
+  /// button, and never words the reason itself.
+  Widget _readOnlyHint() {
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(Ds.space.x12),
+      decoration: BoxDecoration(
+        color: Ds.c.infoSoft,
+        borderRadius: BorderRadius.circular(Ds.r.card),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.lock_outline, size: Ds.space.x16, color: Ds.c.info),
+          SizedBox(width: Ds.space.x8),
+          Expanded(
+            child: Text(_s('read_only_hint'),
+                style: Ds.t.caption.copyWith(color: Ds.c.info)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// "Who can edit" — the #307 matrix narrowed to this one feature, so a super
+  /// admin grants Bilaspur's partner write access from the ladder itself
+  /// instead of leaving for the users screen. Both toggles are the backend's
+  /// answer; `locked` rows (a super admin) show its note instead of switches.
+  Widget _accessCard() {
+    final rows = _accessRows;
+    final denied = _access.isNotEmpty && _access['ok'] != true;
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        borderRadius: BorderRadius.circular(Ds.r.card),
+        boxShadow: Ds.elevation.e1,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // A plain header + disclosure, not an ExpansionTile: a ListTile
+          // inside a decorated Container paints its ink on the wrong Material
+          // and Flutter asserts on it.
+          InkWell(
+            onTap: () => setState(() => _accessOpen = !_accessOpen),
+            child: Padding(
+              padding: EdgeInsets.all(Ds.space.x16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                            _a('title').isEmpty
+                                ? _s('access_title')
+                                : _a('title'),
+                            style: Ds.t.bodyStrong),
+                        if (_a('subtitle').isNotEmpty) ...[
+                          SizedBox(height: Ds.space.x4),
+                          Text(_a('subtitle'), style: Ds.t.caption),
+                        ],
+                      ],
+                    ),
+                  ),
+                  SizedBox(width: Ds.space.x8),
+                  Icon(
+                      _accessOpen
+                          ? Icons.expand_less
+                          : Icons.expand_more,
+                      color: Ds.c.textSecondary),
+                ],
+              ),
+            ),
+          ),
+          if (_accessOpen)
+            Padding(
+              padding: EdgeInsets.fromLTRB(
+                  Ds.space.x16, 0, Ds.space.x16, Ds.space.x12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (denied)
+                    Text(_a('message'), style: Ds.t.caption)
+                  else if (rows.isEmpty)
+                    Text(_a('empty_text'), style: Ds.t.caption)
+                  else
+                    for (final r in rows) _accessRow(r),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _accessRow(Map<String, dynamic> row) {
+    String v(String k) => (row[k] ?? '').toString();
+    final locked = row['locked'] == true;
+    final canView = row['can_view'] == true;
+    final canWrite = row['can_write'] == true;
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: Ds.space.x8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(v('name'), style: Ds.t.body),
+          SizedBox(height: Ds.space.x4),
+          Text('${v('role_label')} · ${v('zone_label')}', style: Ds.t.caption),
+          SizedBox(height: Ds.space.x4),
+          if (locked)
+            Text(v('locked_note'), style: Ds.t.caption)
+          else
+            Wrap(
+              spacing: Ds.space.x8,
+              runSpacing: Ds.space.x4,
+              children: [
+                _accessToggle(_a('read_label'), canView,
+                    (next) => _setAccess(row, next, next ? canWrite : false)),
+                _accessToggle(_a('write_label'), canWrite,
+                    (next) => _setAccess(row, next ? true : canView, next)),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _accessToggle(
+      String label, bool value, ValueChanged<bool> onChanged) {
+    return ConstrainedBox(
+      constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Switch(
+            value: value,
+            activeThumbColor: Ds.c.brand,
+            onChanged: _busy ? null : onChanged,
+          ),
+          Text(label, style: Ds.t.caption),
+          SizedBox(width: Ds.space.x8),
+        ],
       ),
     );
   }
@@ -426,6 +667,7 @@ class _RungSheetState extends State<_RungSheet> {
   late final TextEditingController _pct;
   late final TextEditingController _note;
   int? _zoneId;
+  DateTime? _validFrom;
   bool _active = true;
   bool _saving = false;
 
@@ -437,6 +679,7 @@ class _RungSheetState extends State<_RungSheet> {
     _pct = TextEditingController(text: (r?['pct'] ?? '').toString());
     _note = TextEditingController(text: (r?['note'] ?? '').toString());
     _active = r == null ? true : r['active'] == true;
+    _validFrom = DateTime.tryParse((r?['valid_from'] ?? '').toString());
     _zoneId = r == null
         ? _defaultZone()
         : (r['zone_id'] is num ? (r['zone_id'] as num).toInt() : null);
@@ -478,6 +721,10 @@ class _RungSheetState extends State<_RungSheet> {
       'pct': num.tryParse(_pct.text.trim()),
       'active': _active,
       'note': _note.text.trim(),
+      // Sent whenever we have one, so an edit never rewinds the date the rung
+      // takes effect from. The backend still owns the fallback.
+      if (_validFrom != null)
+        'valid_from': _validFrom!.toIso8601String().split('T').first,
     };
     final ok = await widget.onSave(patch);
     if (!mounted) return;
@@ -530,6 +777,40 @@ class _RungSheetState extends State<_RungSheet> {
               onChanged: (v) => setState(() => _zoneId = v),
             ),
             SizedBox(height: Ds.space.x12),
+            // Valid from. The picker writes a date; the LABEL and the display
+            // string both come from the payload / the row the backend sent.
+            InkWell(
+              onTap: () async {
+                final now = DateTime.now();
+                final picked = await showDatePicker(
+                  context: context,
+                  initialDate: _validFrom ?? now,
+                  firstDate: DateTime(now.year - 5),
+                  lastDate: DateTime(now.year + 5),
+                );
+                if (picked != null) setState(() => _validFrom = picked);
+              },
+              child: InputDecorator(
+                decoration: InputDecoration(labelText: _f('from_label')),
+                child: SizedBox(
+                  height: Ds.touch.minTarget - Ds.space.x16,
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                        (widget.row?['effective_label'] ?? '').toString().isEmpty
+                            ? (_validFrom == null
+                                ? ''
+                                : _validFrom!
+                                    .toIso8601String()
+                                    .split('T')
+                                    .first)
+                            : (widget.row!['effective_label']).toString(),
+                        style: Ds.t.body),
+                  ),
+                ),
+              ),
+            ),
+            SizedBox(height: Ds.space.x12),
             TextField(
               controller: _note,
               decoration: InputDecoration(labelText: _f('note_label')),
@@ -555,6 +836,32 @@ class _RungSheetState extends State<_RungSheet> {
           ],
         ),
       ),
+    );
+  }
+}
+
+
+/// One worded action in a card's action row — the same shape the Discount
+/// slabs card uses, so the two screens read as one family. 44px tall because
+/// a phone is where this is tapped.
+class _CardAction extends StatelessWidget {
+  final String label;
+  final Color? colour;
+  final VoidCallback? onTap;
+
+  const _CardAction({required this.label, this.colour, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    if (label.isEmpty) return const SizedBox.shrink();
+    return TextButton(
+      onPressed: onTap,
+      style: TextButton.styleFrom(
+        foregroundColor: colour ?? Ds.c.brand,
+        minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget),
+        padding: EdgeInsets.symmetric(horizontal: Ds.space.x8),
+      ),
+      child: Text(label, style: Ds.t.body.copyWith(color: colour ?? Ds.c.brand)),
     );
   }
 }

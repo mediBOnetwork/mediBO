@@ -27,6 +27,20 @@
 //   4. Access denied is a state, not a crash: ok:false renders the payload's
 //      own title/message plus its retry label.
 //
+//   5. CMD #1933 — the card's ACTIONS are words, not a Switch. "Deactivate"
+//      and what the tap means (`toggle_to`) are both the backend's; a Switch
+//      made the app decide that flipping it means `!active`, which is the
+//      app having an opinion about money.
+//
+//   6. CMD #1933 — a read-only admin is TOLD it is read-only. The absence of
+//      buttons is not the message; `read_only_hint` is, and it is printed
+//      verbatim.
+//
+//   7. CMD #1933 — "Who can edit" appears only when the payload says
+//      `show_access`, renders the matrix verbatim, and WRITE IMPLIES READ
+//      when it is turned on (one permission truth, decided backend-side and
+//      mirrored here so the two toggles can never be sent contradicting).
+//
 // No network, no Supabase: every RPC is injected.
 
 import 'package:flutter/material.dart';
@@ -56,7 +70,11 @@ Map<String, dynamic> _rung({
       'zone_label': zoneLabel,
       'active': active,
       'status_label': active ? 'Active' : 'Off',
-      'status_tone': active ? 'good' : 'warn',
+      'status_tone': active ? 'success' : 'warning',
+      'toggle_to': !active,
+      'toggle_label': active ? 'Deactivate' : 'Activate',
+      'valid_from': '2026-09-01',
+      'effective_label': 'From 01 Sep 2026',
       'used_count': 0,
       'used_label': usedLabel,
       'note': '',
@@ -80,6 +98,13 @@ Map<String, dynamic> _payload({bool canWrite = true}) => {
       'retry_label': 'Try again',
       'edit_label': 'Edit',
       'delete_label': 'Delete',
+      'delete_confirm': 'Delete this rung?',
+      'cancel_label': 'Cancel',
+      'access_title': 'Who can edit',
+      'show_access': false,
+      'read_only_hint': canWrite
+          ? ''
+          : 'View only — ask super admin for edit access',
       'columns': const [
         {'key': 'order_label', 'label': 'Order', 'align': 'left'},
         {'key': 'pct_label', 'label': 'Advance', 'align': 'right'},
@@ -93,6 +118,7 @@ Map<String, dynamic> _payload({bool canWrite = true}) => {
         'order_label': "Applies from the customer's nth order",
         'pct_label': 'Advance % of MRP',
         'zone_label': 'Zone',
+        'from_label': 'Valid from',
         'note_label': 'Note (optional)',
         'active_label': 'Rung is on',
       },
@@ -196,7 +222,11 @@ void main() {
 
     expect(find.byType(FloatingActionButton), findsNothing);
     expect(find.text('Edit'), findsNothing);
-    expect(find.byIcon(Icons.delete_outline), findsNothing);
+    expect(find.text('Delete'), findsNothing);
+    expect(find.text('Deactivate'), findsNothing);
+    // …and the screen SAYS why, in the backend's words.
+    expect(find.text('View only — ask super admin for edit access'),
+        findsOneWidget);
     // The rungs themselves are still readable.
     expect(find.text('20%'), findsOneWidget);
   });
@@ -220,8 +250,12 @@ void main() {
     await t.pumpAndSettle();
 
     // Rung 3 is the one the backend marked can_delete:false — the delete
-    // action it DOES offer belongs to a deletable rung.
-    await t.tap(find.byIcon(Icons.delete_outline).first);
+    // action it DOES offer belongs to a deletable rung. Deleting is confirmed
+    // first, in the backend's words.
+    await t.tap(find.text('Delete').first);
+    await t.pumpAndSettle();
+    expect(find.text('Delete this rung?'), findsOneWidget);
+    await t.tap(find.text('Delete').last);
     await t.pump();
     await t.pumpAndSettle();
 
@@ -287,6 +321,159 @@ void main() {
     // invented (0 / -1); the backend owns what null means.
     expect(sent!.containsKey('zone_id'), isTrue);
     expect(sent!['zone_id'], isNull);
+    await t.pump(const Duration(seconds: 6));
+  });
+
+  testWidgets('the toggle is the backend word and sends the backend intent',
+      (t) async {
+    await _phone(t);
+    final sent = <List<Object>>[];
+    await t.pumpWidget(_host(AdminAdvanceSlabsScreen(
+      listRpc: () async => _payload(),
+      toggleRpc: (id, active) async {
+        sent.add([id, active]);
+        return {'ok': true, 'message': 'Rung turned off'};
+      },
+    )));
+    await t.pumpAndSettle();
+
+    // Two active rungs say "Deactivate"; the off one says "Activate". Neither
+    // word is in this file's control — the payload carries both.
+    expect(find.text('Deactivate'), findsNWidgets(2));
+    expect(find.text('Activate'), findsOneWidget);
+
+    await t.tap(find.text('Activate'));
+    await t.pump();
+    await t.pumpAndSettle();
+
+    // Rung 7 is the inactive one, and the call carries the payload's
+    // `toggle_to` (true) — not a `!active` the screen worked out itself.
+    expect(sent, [
+      [7, true]
+    ]);
+    await t.pump(const Duration(seconds: 6));
+  });
+
+  testWidgets('effective date is printed, never formatted here', (t) async {
+    await _phone(t);
+    await t.pumpWidget(_host(AdminAdvanceSlabsScreen(
+      listRpc: () async => _payload(),
+    )));
+    await t.pumpAndSettle();
+    // '2026-09-01' is in the payload too; what is PRINTED is the backend's
+    // worded label, so a change of date format is an UPDATE, not a deploy.
+    expect(find.text('From 01 Sep 2026'), findsNWidgets(3));
+    expect(find.text('2026-09-01'), findsNothing);
+  });
+
+  testWidgets('Who can edit appears only when the payload says so', (t) async {
+    await _phone(t);
+    var accessCalls = 0;
+    await t.pumpWidget(_host(AdminAdvanceSlabsScreen(
+      listRpc: () async => _payload(),
+      accessListRpc: () async {
+        accessCalls++;
+        return {'ok': true, 'rows': const []};
+      },
+    )));
+    await t.pumpAndSettle();
+
+    // show_access is false in the base payload: not asked for, not drawn.
+    expect(accessCalls, 0);
+    expect(find.text('Who can edit'), findsNothing);
+  });
+
+  testWidgets('Who can edit renders the matrix verbatim; write implies read',
+      (t) async {
+    await _phone(t);
+    final sent = <List<Object?>>[];
+    await t.pumpWidget(_host(AdminAdvanceSlabsScreen(
+      listRpc: () async => {..._payload(), 'show_access': true},
+      accessListRpc: () async => {
+        'ok': true,
+        'title': 'Who can edit',
+        'subtitle': 'Admins and partners, by zone.',
+        'read_label': 'Read',
+        'write_label': 'Write',
+        'empty_text': 'No admins or partners to grant yet.',
+        'rows': const [
+          {
+            'kind': 'admin',
+            'id': 'a1',
+            'name': 'ops@medibo.in',
+            'role_label': 'Admin',
+            'zone_label': 'Bilaspur',
+            'locked': false,
+            'locked_note': '',
+            'can_view': true,
+            'can_write': false,
+          },
+          {
+            'kind': 'admin',
+            'id': 'a0',
+            'name': 'om@medibo.in',
+            'role_label': 'Super admin',
+            'zone_label': 'All zones',
+            'locked': true,
+            'locked_note': 'Always on for a super admin.',
+            'can_view': true,
+            'can_write': true,
+          },
+        ],
+      },
+      accessSetRpc: (kind, id, view, write) async {
+        sent.add([kind, id, view, write]);
+        return {'ok': true, 'message': 'Access updated'};
+      },
+    )));
+    await t.pumpAndSettle();
+
+    await t.tap(find.text('Who can edit'));
+    await t.pumpAndSettle();
+
+    expect(find.text('ops@medibo.in'), findsOneWidget);
+    expect(find.text('Admin · Bilaspur'), findsOneWidget);
+    // A locked subject shows the backend's note instead of switches.
+    expect(find.text('Always on for a super admin.'), findsOneWidget);
+
+    // The editable admin has exactly two switches (Read, Write); turning
+    // Write ON must also carry Read — the two can never be sent disagreeing.
+    final switches = find.byType(Switch);
+    expect(switches, findsNWidgets(2));
+    await t.tap(switches.last);
+    await t.pump();
+    await t.pumpAndSettle();
+
+    expect(sent, [
+      ['admin', 'a1', true, true]
+    ]);
+    await t.pump(const Duration(seconds: 6));
+  });
+
+  testWidgets('editing sends the rung its own valid_from, never a rewind',
+      (t) async {
+    await _phone(t);
+    Map<String, dynamic>? sent;
+    await t.pumpWidget(_host(AdminAdvanceSlabsScreen(
+      listRpc: () async => _payload(),
+      saveRpc: (patch) async {
+        sent = patch;
+        return {'ok': true, 'id': 1, 'message': 'Rung saved'};
+      },
+    )));
+    await t.pumpAndSettle();
+
+    await t.tap(find.text('Edit').first);
+    await t.pumpAndSettle();
+    expect(find.text('Edit rung'), findsOneWidget);
+    expect(find.text('Valid from'), findsOneWidget);
+    await t.tap(find.text('Save rung'));
+    await t.pumpAndSettle();
+
+    expect(sent, isNotNull);
+    // #1932 shipped a sheet with no date field, so every edit sent no
+    // valid_from and the backend's fallback rewound the rung to 2000-01-01.
+    expect(sent!['valid_from'], '2026-09-01');
     await t.pump(const Duration(seconds: 6));
   });
 }

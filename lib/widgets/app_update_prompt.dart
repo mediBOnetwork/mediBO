@@ -21,12 +21,17 @@
 // coins no sentence and picks no destination. Rewording the prompt is an
 // UPDATE on ui_copy / app_releases.public_notes, not a deploy.
 //
-// Dismissal: the backend names the prompt (`dismiss_key`, e.g.
-// "app_update:android:24"). "Not now" stores that key, and the prompt stays
-// quiet while the backend keeps sending the same one — so it does not reappear
-// on every launch. A new release sends a new key and the prompt returns by
-// itself. When the update is actually installed the backend answers
-// update_available:false and the stored key is dropped, so nothing lingers.
+// Dismissal (CMD #1956): the backend names the prompt (`dismiss_key`, e.g.
+// "app_update:android:47" — the version CODE, never the name, because four
+// builds shipped as 1.3.25) and it also names the window (`dismiss_seconds`,
+// 24 h). "Not now" stores the key with the moment it was tapped; the prompt
+// stays quiet for that build until the window runs out, then asks again. A
+// newer code is a different key, so it asks at once. When the update is
+// actually installed the backend answers update_available:false and the stored
+// dismissal is dropped, so nothing lingers.
+//
+// It used to store the key alone, which silenced that build FOREVER — a user
+// who tapped Not now once never saw the update again.
 
 import 'package:flutter/foundation.dart'
     show kIsWeb, defaultTargetPlatform, TargetPlatform;
@@ -46,10 +51,39 @@ typedef UpdateRpc =
     Future<Map<String, dynamic>?> Function(String? installSource);
 typedef UpdateUrlOpener = Future<void> Function(String url);
 
-/// The one shared-preferences key. It holds the backend's `dismiss_key`, so
-/// "what did the user dismiss" is the backend's own identity string, never a
-/// version number this file worked out.
+/// The one shared-preferences key. It holds the backend's `dismiss_key` and the
+/// moment it was tapped, as `<key>|<millisSinceEpoch>`, so "what did the user
+/// dismiss, and when" is the backend's own identity string plus a timestamp —
+/// never a version number or a duration this file worked out.
+///
+/// A value with no "|" is a pre-#1956 dismissal (key only, meaning forever).
+/// It is read as "dismissed at time zero", so it has already expired and the
+/// user is asked once more — which is the behaviour this change is for.
 const String kUpdateDismissedPref = 'app_update_dismissed_key';
+
+/// Splits the stored value into (key, whenTapped). Never throws: unreadable
+/// storage must not decide whether a user sees an update.
+({String key, DateTime at})? _readDismissal(String? stored) {
+  if (stored == null || stored.isEmpty) return null;
+  final cut = stored.lastIndexOf('|');
+  if (cut < 0) {
+    return (key: stored, at: DateTime.fromMillisecondsSinceEpoch(0));
+  }
+  final ms = int.tryParse(stored.substring(cut + 1));
+  return (
+    key: stored.substring(0, cut),
+    at: DateTime.fromMillisecondsSinceEpoch(ms ?? 0),
+  );
+}
+
+/// True while the backend's own window is still running for THIS key.
+/// `dismissSeconds <= 0` means the backend is not offering a window at all.
+bool _stillDismissed(String? stored, String dismissKey, int dismissSeconds) {
+  if (dismissSeconds <= 0) return false;
+  final d = _readDismissal(stored);
+  if (d == null || d.key != dismissKey) return false;
+  return DateTime.now().difference(d.at) < Duration(seconds: dismissSeconds);
+}
 
 bool _runningOnAndroid() =>
     !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
@@ -90,10 +124,17 @@ Future<Map<String, dynamic>?> showAppUpdatePromptIfAny(
   }
 
   final dismissKey = res['dismiss_key'] as String?;
+  // The window is the backend's number, in seconds. The phone owns neither the
+  // duration nor the identity — only the clock.
+  final dismissSeconds = (res['dismiss_seconds'] as num?)?.toInt() ?? 0;
   if (dismissKey != null &&
       dismissKey.isNotEmpty &&
-      prefs?.getString(kUpdateDismissedPref) == dismissKey) {
-    return res; // already dismissed THIS prompt — stay quiet
+      _stillDismissed(
+        prefs?.getString(kUpdateDismissedPref),
+        dismissKey,
+        dismissSeconds,
+      )) {
+    return res; // dismissed within the backend's window — stay quiet
   }
 
   if (!context.mounted) return res;
@@ -134,7 +175,10 @@ Future<Map<String, dynamic>?> showAppUpdatePromptIfAny(
   );
 
   if (dismissed && dismissKey != null && dismissKey.isNotEmpty) {
-    await prefs?.setString(kUpdateDismissedPref, dismissKey);
+    await prefs?.setString(
+      kUpdateDismissedPref,
+      '$dismissKey|${DateTime.now().millisecondsSinceEpoch}',
+    );
   }
   return res;
 }

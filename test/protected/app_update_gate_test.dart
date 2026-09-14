@@ -27,6 +27,13 @@
 //      on a fresh branch) renders no card at all — never a half-panel with
 //      blank strings, and never an exception on a screen that is otherwise
 //      working.
+//
+//   6. THE GATE CHECKLIST IS THE BACKEND'S (CMD #1956). Four builds shipped as
+//      1.3.25 and the panel could only say "submitted" — it could not say WHICH
+//      clause was holding the prompt shut. The four conditions, their Met /
+//      Not yet words and their tones now arrive in payload['gate'], and the
+//      panel prints them. A payload with no gate block draws no list, so an
+//      older backend degrades to exactly the #1922 panel.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -38,6 +45,7 @@ Map<String, dynamic> _payload({
   bool promptOn = true,
   bool publishedHas = true,
   bool submittedHas = true,
+  bool gate = true,
   List<Map<String, dynamic>> log = const [],
 }) => <String, dynamic>{
       'ok': true,
@@ -70,6 +78,21 @@ Map<String, dynamic> _payload({
         'rollout_label': '',
         'track_label': 'production track',
         'meta_label': 'Submitted 4d ago',
+      },
+      if (gate) 'gate': const {
+        'heading': 'Why the prompt is on or off',
+        'rows': [
+          {'label': 'Play reports it published', 'met': true,
+           'value': 'Met', 'tone': 'success'},
+          {'label': 'Rolled out to 100% of users', 'met': false,
+           'value': 'Not yet', 'tone': 'warning'},
+          {'label': 'On the production track', 'met': true,
+           'value': 'Met', 'tone': 'success'},
+          {'label': 'Play review completed', 'met': false,
+           'value': 'Not yet', 'tone': 'warning'},
+        ],
+        'note': 'Not now hides the prompt for 24 h for that build code. '
+            'A newer code asks again.',
       },
       'checked_label': 'Play read 2m ago',
       'log_heading': 'Play status changes',
@@ -199,5 +222,49 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(AppUpdateGateView), findsOneWidget);
     expect(find.text('Users are being offered'), findsOneWidget);
+  });
+
+  testWidgets('6: the gate checklist prints the backend\'s four conditions',
+      (tester) async {
+    await _pump(tester, AppUpdateGateView(state: _payload()));
+
+    expect(find.text('Why the prompt is on or off'), findsOneWidget);
+    expect(find.text('Play reports it published'), findsOneWidget);
+    expect(find.text('Rolled out to 100% of users'), findsOneWidget);
+    expect(find.text('On the production track'), findsOneWidget);
+    expect(find.text('Play review completed'), findsOneWidget);
+
+    // The verdict words are the backend's, and both appear twice — the panel
+    // never coins "yes"/"no" and never derives one from `met`.
+    expect(find.text('Met'), findsNWidgets(2));
+    expect(find.text('Not yet'), findsNWidgets(2));
+
+    // The dismissal window is a backend sentence too, hours included.
+    expect(
+      find.text('Not now hides the prompt for 24 h for that build code. '
+          'A newer code asks again.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('6: no gate block in the payload draws no checklist',
+      (tester) async {
+    await _pump(tester, AppUpdateGateView(state: _payload(gate: false)));
+    expect(find.text('Why the prompt is on or off'), findsNothing);
+    expect(find.text('Met'), findsNothing);
+    // …and the rest of the panel is untouched.
+    expect(find.text('Version 1.3.24 (38)'), findsOneWidget);
+  });
+
+  testWidgets('6: the panel fits a 360 px phone without overflowing',
+      (tester) async {
+    tester.view.physicalSize = const Size(360, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await _pump(tester, AppUpdateGateView(state: _payload()));
+    expect(tester.takeException(), isNull);
+    expect(find.text('Play review completed'), findsOneWidget);
   });
 }

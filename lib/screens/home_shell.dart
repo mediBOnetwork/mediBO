@@ -1821,7 +1821,14 @@ class _HomeShellState extends State<HomeShell> {
         index: _index, alertCount: _alertCount, onRoute: _handleAdminNav,
         body: NotificationListener<ScrollNotification>(
         // CMD #2019 — the storefront's own scrolling drives the header band.
-        onNotification: (n) => shellHeaderScroll(n, !isAdmin && _index == 0),
+        // CMD #2052(8) — and so does the CATALOGUE's. It is a page of this same
+        // shell, so its lists bubble into this same listener and collapse this
+        // same band: one shell, one driver, one notifier, never a second
+        // controller to keep in step. Its own chrome — the search field, the
+        // breadcrumb, the A–Z rail and the list toolbar — sits outside its
+        // scroll view exactly as Home's does, so only the header travels.
+        onNotification: (n) =>
+            shellHeaderScroll(n, !isAdmin && shellHeaderBandTab(_index)),
         child: Stack(
         children: [
           SizedBox.expand(

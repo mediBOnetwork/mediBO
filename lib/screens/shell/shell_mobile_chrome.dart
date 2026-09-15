@@ -469,56 +469,63 @@ class _MobileCartIconState extends State<_MobileCartIcon>
 
 // ─── CMD #2030 — the header band follows the finger, 1:1 ─────────────────────
 // ─── CMD #2038 — …but only when the finger actually asked for it ─────────────
+// ─── CMD #2052 — so stop asking the LIST, and ask the finger ─────────────────
 //
-// CMD #2019 gave the band back to the products on scroll, but it did it with a
-// verdict: 12 px of travel in one direction flipped a bool and a 180 ms curve
-// played the rest. So a 20 px drag bumped the whole band away and a tiny flick
-// popped it back — the header moved further than the finger and at its own
-// speed. #2030 deleted the verdict. The band is a DISTANCE that IS the scroll
-// delta: down 20 px hides 20 px of it, up 20 px hands 20 px back, in the same
-// frame, with no threshold, no auto-complete and no snap.
+// CMD #2019 gave the band back to the products on scroll, but on a verdict:
+// 12 px of travel flipped a bool and a 180 ms curve played the rest. #2030
+// deleted the verdict and made the band a DISTANCE that IS the scroll delta.
+// #2038 then filtered the deltas no finger produced — overscroll, bounce, the
+// snap-back, a tremor mid-drag.
 //
-// #2038 keeps every pixel of that and fixes what 1:1 could not see. A scroll
-// view reports more deltas than a finger produces: a tremor mid-drag, the
-// bounce at either end of the list, the snap-back that follows it, and the
-// correction that arrives when a collapsing band hands its own height to the
-// viewport. Every one of those is a delta pointing the WRONG way, and "obey
-// every delta" obeyed them — which is the header popping in and straight back
-// out mid-scroll with no reversal of Om's own. Three filters, in order:
+// All of it read the SCROLL OFFSET, and the offset is the problem. It does not
+// only move when a finger moves it: a page of products arriving shortens
+// nothing but re-measures everything, a grid re-lays-out, a keyboard opens, a
+// `jumpTo` fires, a collapsing band hands its own height to the viewport. Each
+// of those reports pixels running BACKWARDS, every backward pixel read as "the
+// finger came up", and the header flashed back mid-scroll with no reversal of
+// Om's own. Filtering harder could never fix it: a re-measure is
+// indistinguishable from a drag once you are looking at an offset.
 //
-//   1. OVERSCROLL IS NOT SCROLL. Only the part of a delta that happened inside
-//      [minScrollExtent, maxScrollExtent] drives the band. A bouncing list
-//      reports pixels past its own end and then reports them back; both halves
-//      are outside the range, so a bounce and its snap-back move the band by
-//      exactly nothing. An OverscrollNotification is discarded outright.
-//   2. A REVERSAL EARNS ITS TURN. Once the band has a direction it keeps it
-//      until the finger has travelled `Ds.touch.headerHysteresis` (8 px) the
-//      other way. Under that the band does not move at all — but the travel is
-//      KEPT, so the moment the turn is earned the band gives back every pixel
-//      the finger asked for and 1:1 survives the threshold instead of losing
-//      the first 8 px of every reversal.
-//   3. A FLING IS ONE DIRECTION. A ballistic phase (the list coasting after the
-//      finger lifted, or the physics settling) locks the direction of its first
-//      delta and re-evaluates nothing until the list stops or a finger lands.
-//      A fling therefore stays 1:1 with the list, and the snap-back at the end
-//      of one cannot turn the header around on the way.
+// So the input is not the offset any more. It is the POINTER, and only while it
+// is down:
+//
+//   1. ONLY A FINGER MOVES THE BAND. The driver reads `dragDetails.delta`, the
+//      pointer's own travel, and ignores every ScrollUpdate that carries no
+//      drag. Inserted content, a re-measure, a keyboard, a programmatic jump
+//      and the band's own effect on the viewport all arrive without a finger,
+//      so all of them move the header by exactly zero.
+//   2. MOMENTUM FOLLOWS THE DRAG THAT STARTED IT. A ballistic phase drives
+//      nothing at all. When the finger leaves the glass the band finishes in
+//      the direction the DRAG was going, so a downward fling can only ever end
+//      with the header away — it can never reveal it on the way.
+//   3. A REVERSAL EARNS ITS TURN, on the finger: `Ds.touch.headerHysteresis`
+//      (40 px) of deliberate travel the other way. Under that the band does not
+//      move — but the travel is KEPT, so the moment the turn is earned every
+//      pixel the finger asked for is paid at once, rather than the first 40 px
+//      of every reversal being eaten.
+//   4. OVERSCROLL AND BOUNCE ARE NOT SCROLL. An OverscrollNotification is
+//      discarded outright, and so is any drag reported while the list is
+//      outside its own [min, max] — the whole of a bounce and the whole of the
+//      spring back.
+//   5. IT IS NEVER LEFT HALF OPEN. The gesture decides which end;
+//      `Ds.touch.headerSettleMs` decides how fast it gets there. The settle is
+//      an ANIMATION VALUE written into the same notifier the render object
+//      already listens to, so a settle rebuilds exactly as much as a drag
+//      does: nothing.
 //
 // It is still not a real SliverAppBar, for #2019's reason: the chrome BELOW the
 // band is what must stay pinned, and that chrome changes height with focus (the
-// search bar, the category chip row, and the idle rail that opens under them).
-// A pinned sliver must be told its extent in advance; a widget that sits
-// outside the scroll view need not be, and outside the scroll view is the
-// strongest form of pinned there is. The band shrinks its own height, so the
-// search bar stays exactly under wherever the band currently ends, and the
-// category row stays under that. Nothing reflows: the width never changes.
+// search bar, the breadcrumb, the A–Z rail, the category chip row, and the idle
+// rail that opens under them). A pinned sliver must be told its extent in
+// advance; a widget that sits outside the scroll view need not be, and outside
+// the scroll view is the strongest form of pinned there is. The band shrinks
+// its own height, so every one of those rows stays exactly under wherever the
+// band currently ends. Nothing reflows: the width never changes.
 //
-// The page's own scrolling is the input: [shellHeaderScroll] reads the deltas
-// bubbling out of whichever scroll view the storefront is showing (home feed,
-// category list or search results) and moves ONE notifier. A `setState` on the
-// shell would rebuild every page in the IndexedStack on every frame of every
-// flick, so the band is a RENDER OBJECT that listens to the notifier itself
-// (#2038(4)): moving it marks layout and paint, and builds nothing at all —
-// not the header, and not the wrapper around it either.
+// ONE band, ONE driver, ONE notifier — for Home and for the Catalogue both
+// (#2052(8)). They are two pages of the same shell, so the Catalogue's lists
+// bubble their notifications into the same listener and collapse the same
+// header; there is no second controller to keep in step with this one.
 
 /// How many logical pixels of the header band are currently gone: 0 = the whole
 /// band is showing, `Ds.touch.headerBand` = it is entirely off the top. Every
@@ -531,8 +538,8 @@ bool get shellHeaderBandShowing =>
     shellHeaderCollapse.value < Ds.touch.headerBand;
 
 /// The deepest collapse this session has reached, for the render log: a live
-/// page that reports it has moved the band by N pixels is proof the 1:1 driver
-/// ran, which a screenshot of a header at rest can never be.
+/// page that reports it has moved the band by N pixels is proof the driver ran,
+/// which a screenshot of a header at rest can never be.
 double _bandDeepest = 0;
 
 void _bandSet(double v) {
@@ -544,25 +551,35 @@ void _bandSet(double v) {
   }
 }
 
-// ── CMD #2038 — the driver's memory. Three numbers, no widget state. ─────────
+// ── The driver's memory. Three numbers and a flag, no widget state. ──────────
 
-/// The direction the band is currently travelling in: 1 = hiding (the list is
-/// going down), -1 = showing, 0 = it has not moved yet.
+/// The direction the band is currently travelling in: 1 = hiding (the finger is
+/// going up the glass), -1 = showing, 0 = it has not moved yet.
 double _bandDir = 0;
 
-/// Travel AGAINST [_bandDir] that has been asked for but not yet believed,
-/// signed. It is spent in full the moment it crosses the hysteresis, so a
-/// reversal is delayed by 8 px — never shortened by 8 px.
+/// Finger travel AGAINST [_bandDir] that has been asked for but not yet
+/// believed, signed. It is spent in full the moment it crosses the hysteresis,
+/// so a reversal is DELAYED by 40 px — never shortened by 40 px.
 double _bandPending = 0;
 
-/// The direction a ballistic phase is locked into, 0 when the finger is down or
-/// the list is at rest.
-double _bandFling = 0;
+/// Is a finger currently on the glass? Set by the first drag delta of a
+/// gesture, cleared when the gesture is finished off. It is what tells a
+/// ballistic delta apart from a re-measure: both arrive without a finger, but
+/// only one of them follows one.
+bool _bandDragging = false;
 
 /// Deltas the filters threw away, for the render log: a live page that reports
 /// it refused N deltas is the only proof a flicker guard can give, because the
 /// flicker it prevents is by definition not in a screenshot.
 int _bandHeld = 0;
+
+/// Gestures finished off by the settle, for the render log.
+int _bandSettled = 0;
+
+/// The mounted band's settle animation, or null when no band is on screen (a
+/// unit test, a disabled tab). Without one the band still finishes — it simply
+/// arrives instantly instead of travelling.
+_ShellHeaderSettle? _bandSettle;
 
 void _bandHold() {
   _bandHeld++;
@@ -574,115 +591,122 @@ void _bandHold() {
 void shellHeaderBandShow() {
   _bandDir = 0;
   _bandPending = 0;
-  _bandFling = 0;
+  _bandDragging = false;
+  _bandSettle?.stop();
   _bandSet(0);
 }
 
-/// Feeds [shellHeaderCollapse] from the page's own scrolling, 1:1 — but only
-/// from the deltas that are the user's doing. Always returns false: this
-/// listens, it never swallows a notification.
+/// Feeds [shellHeaderCollapse] from the FINGER, 1:1 — and from nothing else.
+/// Always returns false: this listens, it never swallows a notification.
 bool shellHeaderScroll(ScrollNotification n, bool enabled) {
   if (!enabled) {
     shellHeaderBandShow();
     return false;
   }
-  // Horizontal rails (the home feed's carousels, the chip row, the idle rail)
-  // scroll constantly and must never move the band.
+  // Horizontal rails (the home feed's carousels, the chip row, the A–Z strip,
+  // the idle rail) scroll constantly and must never move the band.
   if (n.metrics.axis != Axis.vertical) return false;
   if (!n.metrics.hasContentDimensions) return false;
 
-  // A finger landing, and the list finally coming to rest, both end a fling's
-  // direction lock and throw away a reversal that was still being built: the
-  // next gesture starts its own argument.
-  if (n is ScrollStartNotification || n is ScrollEndNotification) {
+  final double h = Ds.touch.headerBand;
+
+  // A finger landing cancels a settle that is still playing and throws away a
+  // reversal that was still being built: the next gesture starts its own
+  // argument. The direction SURVIVES, because the 40 px a turn costs is about
+  // the finger changing its mind, not about where a gesture happens to end.
+  if (n is ScrollStartNotification) {
+    _bandSettle?.stop();
     _bandPending = 0;
-    _bandFling = 0;
+    _bandDragging = n.dragDetails != null;
     return false;
   }
-  // #2038(1) — an OverscrollNotification IS the bounce. It never drives.
+  // #2052(5) — the list has come to rest. Whatever is left half open is
+  // finished off now.
+  if (n is ScrollEndNotification) {
+    _bandFinishGesture();
+    return false;
+  }
+  // #2052(2) — `idle` IS the finger leaving the glass, and it is reported
+  // BEFORE the ballistic phase starts. The band settles from here, so the
+  // momentum that follows has nothing left to do and nothing to reveal.
+  if (n is UserScrollNotification) {
+    if (n.direction == ScrollDirection.idle) _bandFinishGesture();
+    return false;
+  }
+  // #2052(4) — an OverscrollNotification IS the bounce. It never drives.
   if (n is OverscrollNotification) {
     _bandHold();
     return false;
   }
   if (n is! ScrollUpdateNotification) return false;
 
-  final double h = Ds.touch.headerBand;
-  final double max = n.metrics.maxScrollExtent;
+  // #2052(1) — no finger, no movement. A fling coasting, the physics settling,
+  // a page of products inserted, a grid re-measuring, the keyboard opening, a
+  // programmatic jump: every one of them arrives here without `dragDetails`,
+  // and not one of them is allowed a pixel of the header. The first of them
+  // after a drag is also the moment the finger left, so the gesture is
+  // finished off rather than abandoned half open.
+  if (n.dragDetails == null) {
+    if (_bandDragging) {
+      _bandFinishGesture();
+    } else {
+      _bandHold();
+    }
+    return false;
+  }
+
   // A page with less to scroll than the band is tall can never lose its header:
   // hiding it would be the only scrolling the page had.
-  if (max <= h) {
+  if (n.metrics.maxScrollExtent - n.metrics.minScrollExtent <= h) {
     shellHeaderBandShow();
     return false;
   }
 
-  final double raw = n.scrollDelta ?? 0;
-  if (raw == 0) return false;
-
-  // #2038(1) — only the stretch of this delta that happened INSIDE the list is
-  // scrolling. Both ends of a bounce fall outside it and contribute nothing.
-  final double lo = n.metrics.minScrollExtent;
-  final double from = (n.metrics.pixels - raw).clamp(lo, max);
-  final double px = n.metrics.pixels.clamp(lo, max);
-
-  // Never more of the band hidden than the list has travelled from its own top:
-  // the first band-height of the page scrolls the header off exactly as if it
-  // were the first row of content, and arriving back at the top always arrives
-  // wearing the whole header. This is an INVARIANT on the position, not a rule
-  // about a delta, so it is enforced on every notification — including the ones
-  // the filters below are about to throw away. A bounce at the top is the one
-  // place where "ignore this delta" and "show the whole header" are both right.
-  double cap = px - lo < h ? px - lo : h;
-  if (cap < 0) cap = 0;
-  if (shellHeaderCollapse.value > cap) _bandSet(cap);
-
-  final double d = px - from;
-  if (d == 0) {
+  // #2052(4) — the list is past one of its own ends: this drag is stretching a
+  // bounce, not scrolling. Ignored entirely, in both directions.
+  if (n.metrics.outOfRange) {
     _bandHold();
     return false;
   }
 
-  // The last band-height of the list is left alone in the hiding direction.
-  // Collapsing hands the band's height to the viewport, which shortens
-  // maxScrollExtent; at the very end of the list that shortening corrects
-  // `pixels` back, and the correction arrives here as another delta. Freezing
-  // the band over that last stretch is what keeps the two from chasing each
-  // other into a strobe.
-  if (d > 0 && px >= max - h) return false;
+  _bandDragging = true;
+  _bandSettle?.stop();
 
-  final double s = d > 0 ? 1.0 : -1.0;
+  // The pointer's own travel. A finger moving UP the glass (a negative dy)
+  // takes the list DOWN and the header with it, so the band's sign is the
+  // pointer's, flipped. `scrollDelta` is deliberately not read: it is the
+  // number that lies when the list re-measures.
+  final double d = -n.dragDetails!.delta.dy;
+  if (d == 0) return false;
+
+  // Sitting at the very top of the list wearing half a header is a state no
+  // drag can leave, because there is no more list to drag back. The floor is
+  // read only while a finger is down, so an offset that arrives at 0 on its own
+  // — a reset, a jumpTo, a re-measure — can still never flash the header back.
+  if (n.metrics.pixels <= n.metrics.minScrollExtent && d <= 0) {
+    _bandDir = -1;
+    _bandPending = 0;
+    _bandSet(0);
+    return false;
+  }
+
   double spend = d;
-
-  if (n.dragDetails != null) {
-    // The finger is DOWN: this is intent, and intent outranks a fling lock.
-    _bandFling = 0;
-    if (_bandDir == 0) {
-      // Nothing to reverse yet — the first push sets the direction and is paid
-      // in full, exactly as #2030 promised.
-      _bandPending = 0;
-    } else {
-      // #2038(2) — the reservoir. Every drag delta goes in; the band moves only
-      // when what is in it points the way the band is already going, or when a
-      // reversal has travelled far enough to be believed. So a wobble that nets
-      // nothing moves nothing in EITHER direction, and a reversal that is
-      // finally believed is paid in full rather than docked the threshold.
-      _bandPending += d;
-      if (_bandPending * _bandDir > 0) {
-        spend = _bandPending;          // with the grain: net travel, 1:1
-      } else if (_bandPending.abs() >= Ds.touch.headerHysteresis) {
-        spend = _bandPending;          // the turn is earned, and paid in full
-      } else {
-        _bandHold();
-        return false;
-      }
-      _bandPending = 0;
-    }
+  if (_bandDir == 0) {
+    // Nothing to reverse yet — the first push sets the direction and is paid in
+    // full, exactly as #2030 promised.
+    _bandPending = 0;
   } else {
-    // #2038(3) — ballistic: a fling coasting, or the physics settling. The
-    // first delta locks the direction; nothing re-evaluates it until the list
-    // stops (ScrollEnd) or a finger arrives (dragDetails).
-    if (_bandFling == 0) {
-      _bandFling = s;
-    } else if (s != _bandFling) {
+    // #2052(3) — the reservoir. Every drag delta goes in; the band moves only
+    // when what is in it points the way the band is already going, or when a
+    // reversal has travelled far enough to be believed. So a wobble that nets
+    // nothing moves nothing in EITHER direction, and a reversal that is finally
+    // believed is paid in full rather than docked the threshold.
+    _bandPending += d;
+    if (_bandPending * _bandDir > 0) {
+      spend = _bandPending; // with the grain: net travel, 1:1
+    } else if (_bandPending.abs() >= Ds.touch.headerHysteresis) {
+      spend = _bandPending; // the turn is earned, and paid in full
+    } else {
       _bandHold();
       return false;
     }
@@ -690,18 +714,129 @@ bool shellHeaderScroll(ScrollNotification n, bool enabled) {
   }
   _bandDir = spend > 0 ? 1.0 : -1.0;
 
-  // 1:1, both directions, inside the cap taken above.
+  // 1:1, both directions, inside the band's own height.
   double v = shellHeaderCollapse.value + spend;
   if (v < 0) v = 0;
-  if (v > cap) v = cap;
+  if (v > h) v = h;
   _bandSet(v);
   return false;
 }
 
+/// #2052(5) — the finger has left. The band is finished off at the end the DRAG
+/// was heading for, never at the end an offset happens to be nearest: that is
+/// what makes a downward fling unable to reveal it. With no gesture behind it
+/// (a stray end notification) the nearer end wins, so the band is never left
+/// standing half open by anything at all.
+void _bandFinishGesture() {
+  if (!_bandDragging) return;
+  _bandDragging = false;
+  _bandPending = 0;
+  final double h = Ds.touch.headerBand;
+  final double from = shellHeaderCollapse.value;
+  final double to = _bandDir > 0
+      ? h
+      : _bandDir < 0
+          ? 0
+          : (from * 2 >= h ? h : 0);
+  if (from == to) return;
+  _bandSettled++;
+  RenderLog.write('c2052_settle', _bandSettled);
+  final _ShellHeaderSettle? s = _bandSettle;
+  if (s == null) {
+    _bandSet(to);
+    return;
+  }
+  s.run(from, to);
+}
+
+/// The settle: an [AnimationController] whose value is written straight into
+/// [shellHeaderCollapse]. Nothing rebuilds — the render object is already
+/// listening to that notifier, so an animated frame costs exactly what a
+/// dragged frame costs.
+class _ShellHeaderSettle {
+  _ShellHeaderSettle(TickerProvider vsync)
+      : _c = AnimationController(vsync: vsync, duration: _settleDuration) {
+    _c.addListener(_tick);
+  }
+
+  static Duration get _settleDuration =>
+      Duration(milliseconds: Ds.touch.headerSettleMs.round());
+
+  final AnimationController _c;
+  double _from = 0;
+  double _to = 0;
+
+  void _tick() {
+    final double t = Curves.easeOutCubic.transform(_c.value);
+    _bandSet(_from + (_to - _from) * t);
+  }
+
+  void run(double from, double to) {
+    _from = from;
+    _to = to;
+    _c.duration = _settleDuration;
+    _c.forward(from: 0);
+  }
+
+  void stop() {
+    if (_c.isAnimating) _c.stop();
+  }
+
+  void dispose() {
+    _c.removeListener(_tick);
+    _c.dispose();
+  }
+}
+
+/// CMD #2052(8) — the shell tabs the band belongs to: the storefront Home (0)
+/// and the Catalogue (12). Both are pages of the SAME shell, drawn under the
+/// SAME header, so both are driven by the one controller above rather than by a
+/// second one that would have to be kept in step with it. Every other tab —
+/// Orders, Bulk upload, My Shop, and every staff page — keeps its header at all
+/// times, which is what `shellHeaderScroll(n, false)` restores.
+bool shellHeaderBandTab(int index) => index == 0 || index == 12;
+
 /// The header band, wrapped so it can ride the scroll. [enabled] is the shell's
-/// own verdict — only the customer phone storefront collapses.
+/// own verdict — only the customer phone chrome collapses.
 Widget shellCollapsibleBand(bool enabled, Widget child) =>
     enabled ? _CollapsingBand(child: child) : child;
+
+/// CMD #2052 — the band owns the settle's ticker, and nothing else.
+///
+/// It is a StatefulWidget purely so there is a [TickerProvider] with the band's
+/// own lifetime to hang the settle on. It never calls `setState`, so the child
+/// is built exactly once: the movement — dragged or settling — is a number on a
+/// notifier the render object below reads for itself.
+class _CollapsingBand extends StatefulWidget {
+  const _CollapsingBand({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_CollapsingBand> createState() => _CollapsingBandState();
+}
+
+class _CollapsingBandState extends State<_CollapsingBand>
+    with SingleTickerProviderStateMixin {
+  late final _ShellHeaderSettle _settle;
+
+  @override
+  void initState() {
+    super.initState();
+    _settle = _ShellHeaderSettle(this);
+    _bandSettle = _settle;
+  }
+
+  @override
+  void dispose() {
+    if (identical(_bandSettle, _settle)) _bandSettle = null;
+    _settle.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => _BandBox(child: widget.child);
+}
 
 /// CMD #2038 — a render object, not a builder.
 ///
@@ -713,13 +848,14 @@ Widget shellCollapsibleBand(bool enabled, Widget child) =>
 /// layout and paint and nothing else, and the child is laid out with the very
 /// same constraints every frame, so it never relayouts either — it is simply
 /// painted [_gone] pixels higher, under a clip.
-class _CollapsingBand extends SingleChildRenderObjectWidget {
-  const _CollapsingBand({required Widget child}) : super(child: child);
+class _BandBox extends SingleChildRenderObjectWidget {
+  const _BandBox({required Widget child}) : super(child: child);
 
   @override
   _RenderCollapsingBand createRenderObject(BuildContext context) {
     RenderLog.write('c2030_band', 1);
     RenderLog.write('c2038_band', 1);
+    RenderLog.write('c2052_band', 1);
     return _RenderCollapsingBand(shellHeaderCollapse);
   }
 }

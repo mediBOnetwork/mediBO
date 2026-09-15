@@ -336,14 +336,37 @@ void main() {
           reason: 'repositioning the card is an UPDATE, never a deploy');
     });
 
-    testWidgets('full width minus one margin each side', (t) async {
+    // CMD #2051 — EDGE TO EDGE, and only the top corners are rounded. #2037's
+    // card kept a margin each side because it was still a floating card; the
+    // bar is now the top surface of the bottom chrome (nav, bar, cart pill in
+    // one column), and a floating card with air down both sides does not read
+    // as the same object as the nav it is sitting on. The margin moved INSIDE:
+    // the sentence and the gear still start one step in.
+    testWidgets('full width, and the content keeps its margin', (t) async {
       await _pumpUpdateBar(t);
       final decorated = find.ancestor(
           of: find.text('ZZ-UPDATE-AVAILABLE'),
           matching: find.byType(DecoratedBox));
       final box = t.getRect(decorated.first);
-      expect(box.left, closeTo(Ds.space.x16, 0.5));
-      expect(_phone360.width - box.right, closeTo(Ds.space.x16, 0.5));
+      expect(box.left, closeTo(0, 0.5));
+      expect(box.width, closeTo(_phone360.width, 0.5));
+      expect(t.getRect(find.byIcon(Icons.settings_outlined)).left - box.left,
+          greaterThanOrEqualTo(Ds.space.x16));
+    });
+
+    testWidgets('only the TOP corners are rounded — it meets the nav flat',
+        (t) async {
+      await _pumpUpdateBar(t);
+      final decorated = find.ancestor(
+          of: find.text('ZZ-UPDATE-AVAILABLE'),
+          matching: find.byType(DecoratedBox));
+      final d = t.widget<DecoratedBox>(decorated.first).decoration
+          as BoxDecoration;
+      final r = d.borderRadius! as BorderRadius;
+      expect(r.topLeft.x, Ds.r.card);
+      expect(r.topRight.x, Ds.r.card);
+      expect(r.bottomLeft, Radius.zero);
+      expect(r.bottomRight, Radius.zero);
     });
 
     testWidgets('the gear is an OUTLINE glyph in its own circle', (t) async {
@@ -370,29 +393,39 @@ void main() {
       appUpdateBarHeight.value = 0;
       await _pumpUpdateBar(t);
       await t.pump();
-      expect(appUpdateBarHeight.value, greaterThan(Ds.touch.listRowMinHeight),
+      expect(appUpdateBarHeight.value,
+          greaterThanOrEqualTo(Ds.touch.listRowMinHeight),
           reason: 'the pill and the feed clear what the card actually is');
       final decorated = find.ancestor(
           of: find.text('ZZ-UPDATE-AVAILABLE'),
           matching: find.byType(DecoratedBox));
+      // CMD #2051 — the card's own height, and nothing added to it. #2037
+      // published height+x8 because the card carried a step of air above
+      // itself; the air belongs to the bottom stack now, which is the one
+      // thing that knows whether there is a pill up there to put air under.
       expect(appUpdateBarHeight.value,
-          closeTo(t.getRect(decorated.first).height + Ds.space.x8, 1));
+          closeTo(t.getRect(decorated.first).height, 1));
       appUpdateBarHeight.value = 0;
     });
 
     test('the cart pill and the home feed both clear the published height', () {
-      // CMD #2043 — the pill's own margin is a named constant now
-      // (`CartPill.bottomGap`), because the LISTS reserve the same number at
-      // their end so no card is left underneath it. What this holds down is
-      // unchanged: whatever that margin is, the published update-bar height is
-      // still added to it.
+      // CMD #2051 — the pill does not clear the bar by being lifted an agreed
+      // number of pixels any more; it clears it by being ABOVE it in one
+      // column. So what this holds down is that the shell mounts that column
+      // (never a free-floating pill of its own), and that the home feed still
+      // pads by a MEASURED height rather than a constant — the stack's now,
+      // because the stack is what covers the bottom of the screen.
       expect(
           _src('lib/screens/shell/shell_bottom_bars.dart')
-              .contains('bottom: CartPill.bottomGap + barH'),
+              .contains('StorefrontBottomStack('),
           isTrue);
       expect(
           _src('lib/widgets/home_sections_view.dart')
               .contains('padding: EdgeInsets.only(bottom: _updateBarClearance)'),
+          isTrue);
+      expect(
+          _src('lib/widgets/home_sections_view.dart')
+              .contains('bottomStackHeight.value'),
           isTrue);
     });
 

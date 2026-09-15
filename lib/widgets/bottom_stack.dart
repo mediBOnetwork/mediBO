@@ -100,18 +100,31 @@ class _StorefrontBottomStackState extends State<StorefrontBottomStack> {
   @override
   void initState() {
     super.initState();
-    bottomStackMounted.value = bottomStackMounted.value + 1;
+    _countMounted(1);
   }
 
   @override
   void dispose() {
-    bottomStackMounted.value = bottomStackMounted.value - 1;
-    // The chrome went with the screen: nothing is covered any more, and a list
-    // that outlives this stack must not keep padding for it.
-    if (bottomStackMounted.value <= 0 && bottomStackHeight.value != 0) {
-      bottomStackHeight.value = 0;
-    }
+    _countMounted(-1);
     super.dispose();
+  }
+
+  /// Register (or un-register) this stack as the bar's owner — AFTER the
+  /// frame.
+  ///
+  /// The app-level host listens to that count so it can stand down, and a
+  /// stack mounts and unmounts DURING a build: touching the notifier there is
+  /// `markNeedsBuild()` called during build, which is an assertion in debug
+  /// and a frame skipped in release. One frame late is the right kind of late
+  /// — the bar animates in over a sheet duration, so nothing is visible.
+  static void _countMounted(int delta) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final n = bottomStackMounted.value + delta;
+      bottomStackMounted.value = n < 0 ? 0 : n;
+      // The chrome went with the screen: nothing is covered any more, and a
+      // list that outlives this stack must not keep padding for it.
+      if (n <= 0 && bottomStackHeight.value != 0) bottomStackHeight.value = 0;
+    });
   }
 
   void _publishHeight() {
@@ -137,15 +150,31 @@ class _StorefrontBottomStackState extends State<StorefrontBottomStack> {
 
     return Padding(
       padding: EdgeInsets.only(bottom: safeBottom),
-      child: Column(
-        key: _boxKey,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // TOP of the column = TOP of the stack = the pill, one step of air
-          // above whatever is under it.
-          if (widget.showPill) _PillSlot(onTap: widget.onCartTap),
-          const _BarSlot(),
-        ],
+      // The height is re-published whenever the stack's own LAYOUT changes,
+      // not whenever this State happens to rebuild. The two are not the same
+      // thing: the bar arriving rebuilds only the bar's slot (it listens to
+      // the controller itself), and a cart emptying rebuilds only the pill's,
+      // so a State-level post-frame callback alone would have published the
+      // first height and then never moved again. Asking layout means every
+      // cause is covered — including the update sentence taking a second line
+      // at 360 px, which no flag anywhere announces.
+      child: NotificationListener<SizeChangedLayoutNotification>(
+        onNotification: (_) {
+          WidgetsBinding.instance.addPostFrameCallback((_) => _publishHeight());
+          return true;
+        },
+        child: SizeChangedLayoutNotifier(
+          child: Column(
+            key: _boxKey,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // TOP of the column = TOP of the stack = the pill, one step of
+              // air above whatever is under it.
+              if (widget.showPill) _PillSlot(onTap: widget.onCartTap),
+              const _BarSlot(),
+            ],
+          ),
+        ),
       ),
     );
   }

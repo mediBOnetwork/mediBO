@@ -122,16 +122,14 @@ class RouteViewStore {
 class RouteViewActions {
   final Future<void> Function(String routeId, String stopId) onCheckIn;
   final Future<void> Function(
-      String routeId, String stopId, Map<String, dynamic> entry) onSkip;
-  final Future<void> Function(String routeId, List<String> stopIds) onReorder;
+      String routeId, String stopId, Map<String, dynamic> entry) onMenu;
   final Future<void> Function(String routeId, int leadId) onImportCustomer;
   final Future<void> Function(Map<String, dynamic> route)? onAssign;
   final Future<void> Function(Map<String, dynamic> route)? onMessageStops;
 
   const RouteViewActions({
     required this.onCheckIn,
-    required this.onSkip,
-    required this.onReorder,
+    required this.onMenu,
     required this.onImportCustomer,
     this.onAssign,
     this.onMessageStops,
@@ -287,28 +285,38 @@ class _RouteViewPanelState extends State<RouteViewPanel> {
       );
     }
     RenderLog.write('c1917_panel', widget.screen);
+    // CMD #2057 — the card's own horizontal padding moved OFF the container
+    // and onto each section, so the stop list runs edge to edge inside it.
+    // The panel already sits inside the screen's 16 px page margin, which is
+    // therefore the only margin a stop card has: full width minus 16 a side.
     return Container(
       width: double.infinity,
-      padding: EdgeInsets.all(Ds.space.x16),
+      padding: EdgeInsets.symmetric(vertical: Ds.space.x16),
       decoration: BoxDecoration(
         color: Ds.c.surface,
         borderRadius: Ds.r.rCard,
         boxShadow: Ds.elevation.e1,
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        _buildHeader(),
+        _inset(_buildHeader()),
         if (widget.headerExtras != null) ...[
           SizedBox(height: Ds.space.x12),
-          widget.headerExtras!,
+          _inset(widget.headerExtras!),
         ],
         SizedBox(height: Ds.space.x16),
-        _buildMap(),
+        _inset(_buildMap()),
         SizedBox(height: Ds.space.x16),
-        _buildWindows(),
+        _inset(_buildWindows()),
         _buildStops(),
       ]),
     );
   }
+
+  /// The 16 px gutter every section except the stop list keeps.
+  Widget _inset(Widget child) => Padding(
+        padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+        child: child,
+      );
 
   // ── Header: title, worker, cost, warnings, Assign / Message / Navigate ──
 
@@ -560,15 +568,6 @@ class _RouteViewPanelState extends State<RouteViewPanel> {
 
   // ── Stops ───────────────────────────────────────────────────────────────
 
-  /// The index in the full active list that the current window starts at.
-  int _windowOffset() {
-    final w = _windows;
-    if (w.isEmpty) return 0;
-    final sel = w.firstWhere((e) => (e['index'] as num?)?.toInt() == _window,
-        orElse: () => w.first);
-    return ((sel['from'] as num?)?.toInt() ?? 1) - 1;
-  }
-
   List<Map<String, dynamic>> _inWindow(List<Map<String, dynamic>> rows) {
     final w = _windows;
     if (w.isEmpty) return rows;
@@ -581,61 +580,43 @@ class _RouteViewPanelState extends State<RouteViewPanel> {
     return rows.sublist(from, to > rows.length ? rows.length : to);
   }
 
+  /// CMD #2057 — the stop list. The optimised order IS the order: stop 1 is
+  /// first, stop 2 is second, always. There is no drag handle, no drag target
+  /// and no reorder call left in this widget — the only gesture a stop row
+  /// carries is the long-press that opens its menu.
+  ///
+  /// The rows are the only full-bleed thing in the panel: they reach the
+  /// card's edges, which the screen's own page padding then holds 16 px off
+  /// each side of the phone.
   Widget _buildStops() {
     final all = _stops;
-    final active = all.where((s) => s['skipped'] != true).toList();
+    final active = RouteStopCheckInPlan.active(_data);
     final parked = all.where((s) => s['skipped'] == true).toList();
-    final canReorder = _data?['can_reorder'] == true;
     final visible = _inWindow(active);
-    // A windowed list still drags: the row's index is window-local, so the
-    // window's own offset is added back before the whole order is posted.
-    final offset = _windowOffset();
     final hint = _s('reorder_hint');
     final empty = _s('empty_label');
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
+      _inset(Row(children: [
         Expanded(child: Text(_s('stops_title'), style: Ds.t.subtitle)),
         Text(_s('count_label'), style: Ds.t.caption),
-      ]),
-      if (hint.isNotEmpty && canReorder) ...[
+      ])),
+      if (hint.isNotEmpty) ...[
         SizedBox(height: Ds.space.x4),
-        Text(hint, style: Ds.t.caption),
+        _inset(Text(hint, style: Ds.t.caption)),
       ],
       if (all.isEmpty && empty.isNotEmpty) ...[
         SizedBox(height: Ds.space.x12),
-        Text(empty, style: Ds.t.bodySecondary),
+        _inset(Text(empty, style: Ds.t.bodySecondary)),
       ],
-      if (visible.isNotEmpty)
-        canReorder
-            ? ReorderableListView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                buildDefaultDragHandles: false,
-                padding: EdgeInsets.only(top: Ds.space.x12),
-                itemCount: visible.length,
-                onReorder: (o, n) =>
-                    _reorder(active, o + offset, n + offset),
-                proxyDecorator: (child, _, _) =>
-                    Material(type: MaterialType.transparency, child: child),
-                itemBuilder: (_, i) => Padding(
-                  key: ValueKey(visible[i]['stop_id']?.toString() ?? '$i'),
-                  padding: EdgeInsets.only(bottom: Ds.space.x12),
-                  child: _stopRow(visible[i], index: i, canReorder: true),
-                ),
-              )
-            : Padding(
-                padding: EdgeInsets.only(top: Ds.space.x12),
-                child: Column(
-                  children: [
-                    for (final s in visible)
-                      Padding(
-                        padding: EdgeInsets.only(bottom: Ds.space.x12),
-                        child: _stopRow(s),
-                      ),
-                  ],
-                ),
-              ),
+      if (visible.isNotEmpty) ...[
+        SizedBox(height: Ds.space.x12),
+        for (final s in visible)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x12),
+            child: _stopRow(s),
+          ),
+      ],
       for (final s in parked) ...[
         SizedBox(height: Ds.space.x12),
         _stopRow(s),
@@ -643,22 +624,10 @@ class _RouteViewPanelState extends State<RouteViewPanel> {
     ]);
   }
 
-  Future<void> _reorder(
-      List<Map<String, dynamic>> active, int oldIndex, int newIndex) async {
-    final moved = RouteStopCheckInPlan.move(active, oldIndex, newIndex);
-    final ids = moved
-        .map((e) => e['stop_id']?.toString() ?? '')
-        .where((e) => e.isNotEmpty)
-        .toList();
-    RouteViewStore.orderChanged(widget.routeId);
-    await widget.actions.onReorder(widget.routeId, ids);
-    RouteViewPanel.refresh(widget.routeId);
-  }
-
   /// ONE stop row. Both screens get this exact widget: photo, name, address,
-  /// score chip, status chip and the five actions.
-  Widget _stopRow(Map<String, dynamic> st,
-      {int? index, bool canReorder = false}) {
+  /// score chip, status chip and the five actions — and, on EVERY row now
+  /// (CMD #2057), the long-press that opens the backend's menu.
+  Widget _stopRow(Map<String, dynamic> st) {
     final stopId = st['stop_id']?.toString() ?? '';
     final skipped = st['skipped'] == true;
     final photoUrl = st['photo_url']?.toString() ?? '';
@@ -757,24 +726,10 @@ class _RouteViewPanelState extends State<RouteViewPanel> {
       ]),
     );
 
-    if (index == null) return card;
-    return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-      if (canReorder)
-        ReorderableDragStartListener(
-          index: index,
-          child: Padding(
-            padding: EdgeInsets.only(right: Ds.space.x8),
-            child: Icon(Icons.drag_indicator,
-                size: Ds.space.x24, color: Ds.c.textSecondary),
-          ),
-        ),
-      Expanded(
-        child: GestureDetector(
-          onLongPress: () => _openMenu(stopId, st),
-          child: card,
-        ),
-      ),
-    ]);
+    return GestureDetector(
+      onLongPress: () => _openMenu(stopId, st),
+      child: card,
+    );
   }
 
   static const Map<String, IconData> _actionIcons = {
@@ -844,11 +799,13 @@ class _RouteViewPanelState extends State<RouteViewPanel> {
     );
   }
 
+  /// Skip, Remove from route, Restore — one door. The entry the rep picked
+  /// carries its own RPC and its own stop, so this decides nothing.
   Future<void> _openMenu(String stopId, Map<String, dynamic> st) async {
     final entry = await RouteStopMenuSheet.open(context, st);
     if (entry == null || !mounted) return;
     RouteViewStore.orderChanged(widget.routeId);
-    await widget.actions.onSkip(widget.routeId, stopId, entry);
+    await widget.actions.onMenu(widget.routeId, stopId, entry);
     RouteViewPanel.refresh(widget.routeId);
   }
 }

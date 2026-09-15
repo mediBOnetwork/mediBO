@@ -320,8 +320,14 @@ void main() {
         ],
       });
       final t = _texts(tester);
-      expect(t.where((s) => s.startsWith('Available in your zone')), isEmpty);
-      expect(t.where((s) => s.startsWith('Not available in your zone')), isEmpty);
+      // A DIVIDER is the counted line ("… in your zone (295)"). CMD #2044 —
+      // the card that replaced the row prints `availability.note` itself, and
+      // that note happens to read "Not available in your zone" on the
+      // out-of-zone fixture. It is the CARD's payload, not a divider the
+      // screen inferred, so the assertion pins the counted form.
+      expect(t.where((s) => RegExp(r'in your zone \(\d+\)$').hasMatch(s)),
+          isEmpty,
+          reason: 'no divider_label means no group rule, ever');
       expect(find.byType(CompactProductCard), findsNWidgets(2));
     });
   });

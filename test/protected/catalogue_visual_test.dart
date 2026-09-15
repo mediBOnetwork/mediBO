@@ -494,10 +494,13 @@ void main() {
       expect(find.text('₹117.19'), findsOneWidget,
           reason: '#1895 — the printed ceiling is back, struck, on every card');
       expect(find.text('ABBOTT'), findsOneWidget);
-      // CMD #1903 — the row prints BOTH decided pack strings on one line,
-      // type then quantity, joined by the one separator this app uses. Each
-      // is still its own backend key; nothing here falls back to pack_size.
-      expect(find.text('Strip · 10.0 tablets in 1 strip'), findsOneWidget);
+      // CMD #1903 asked for BOTH decided pack strings; CMD #2044 replaced the
+      // row with the card Om asked for, which carries the same two backend
+      // keys in its own two places — the pack badge on the artwork and the
+      // pack-type chip beside ADD — instead of joining them into one line.
+      // Each is still its own key; nothing here falls back to pack_size.
+      expect(find.text('10.0 tablets in 1 strip'), findsOneWidget);
+      expect(find.text('Strip'), findsOneWidget);
       expect(find.text('ADD'), findsOneWidget,
           reason: 'the add word is the payload\'s cta_short');
     });

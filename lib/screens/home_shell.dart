@@ -554,7 +554,21 @@ class _HomeShellState extends State<HomeShell> {
       _browseAll = false;
       _index = 0;
       _cartOpen = false;
-      if (_searchCtrl.text != next.query) _searchCtrl.text = next.query;
+      // CMD #2026 — THE multi-word bug, and it lived on this line.
+      //
+      // The query is the TRIMMED text ('telmed' for "telmed "), so the moment a
+      // shopper typed the space after the first word this comparison was true
+      // and the box was rewritten WITHOUT that space — and `.text =` collapses
+      // the selection, so the caret landed back at the start of the word. The
+      // next letter went in front of the first word instead of after it, which
+      // is exactly "typing a second word drops the first".
+      //
+      // The box is the shopper's. Sync it only when the search came from
+      // somewhere ELSE (a URL, back/forward, a category, a scan, a voice
+      // result) — i.e. when the text does not already SAY this query — and when
+      // syncing, put the caret after the text instead of at position zero.
+      final sync = searchBoxSync(_searchCtrl.value, next.query);
+      if (sync != null) _searchCtrl.value = sync;
       if (!next.hasQuery) _searchPayload = null;
     });
     if (push) replaceUrl(_urlForState());
@@ -1711,7 +1725,11 @@ class _HomeShellState extends State<HomeShell> {
             onSearchChanged: (s) => setState(() {
               _search = s;
               _query = s.query;
-              if (_searchCtrl.text != s.query) _searchCtrl.text = s.query;
+              // CMD #2026 — same rule as _applySearch: a box whose text
+              // already SAYS this query (a trailing space is not a different
+              // query) is left alone, caret included.
+              final sync = searchBoxSync(_searchCtrl.value, s.query);
+              if (sync != null) _searchCtrl.value = sync;
               if (!s.hasQuery) _searchPayload = null;
             }),
           ),

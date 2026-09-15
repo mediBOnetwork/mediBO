@@ -1,3 +1,4 @@
+import 'package:flutter/widgets.dart';
 import 'product.dart';
 
 /// CMD #1906 — the ONE search payload, for Home and for Catalogue.
@@ -235,6 +236,89 @@ class SearchPaging {
 }
 
 /// One `search_page()` answer.
+/// CMD #2026 — one button on the right-hand side of the search field.
+///
+/// The backend decides WHICH buttons exist, in what ORDER, for which STATE of
+/// the box, and what each one is called. [state] is 'empty' (nothing typed —
+/// scan + mic) or 'typing' (any text at all — one × on the far right). The app
+/// draws the list; it never decides that a microphone belongs in a search bar.
+class SearchBarAction {
+  final String kind;
+  final String state;
+  final String icon;
+  final String label;
+  const SearchBarAction({
+    required this.kind,
+    required this.state,
+    required this.icon,
+    required this.label,
+  });
+
+  factory SearchBarAction.fromMap(Map<String, dynamic> m) => SearchBarAction(
+        kind: (m['kind'] ?? '').toString(),
+        state: (m['state'] ?? '').toString(),
+        icon: (m['icon'] ?? '').toString(),
+        label: (m['label'] ?? '').toString(),
+      );
+}
+
+/// CMD #2026 — the search BOX, described by `search_page().search_bar`.
+///
+/// The four things the app used to hold as Dart constants: how many characters
+/// are worth a query, how long to wait between keystrokes, which buttons sit on
+/// the right in each state, and whether the category chip row may sit above
+/// RESULTS (it may not — results start directly under the search bar).
+class SearchBarSpec {
+  final int minChars;
+  final int debounceMs;
+  final List<SearchBarAction> actions;
+  final bool chipRowOnResults;
+
+  const SearchBarSpec({
+    required this.minChars,
+    required this.debounceMs,
+    required this.actions,
+    required this.chipRowOnResults,
+  });
+
+  /// The shipped answer for a payload that carries no bar block at all (an old
+  /// cache): the behaviour CMD #2010 left behind, and no buttons this file
+  /// invented.
+  static const fallback = SearchBarSpec(
+      minChars: 2,
+      debounceMs: 250,
+      actions: <SearchBarAction>[],
+      chipRowOnResults: true);
+
+  factory SearchBarSpec.fromMap(Map<String, dynamic> m) => SearchBarSpec(
+        minChars: (m['min_chars'] as num?)?.toInt() ?? fallback.minChars,
+        debounceMs: (m['debounce_ms'] as num?)?.toInt() ?? fallback.debounceMs,
+        actions: ((m['actions'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((a) => SearchBarAction.fromMap(Map<String, dynamic>.from(a)))
+            .toList(growable: false),
+        chipRowOnResults: m['chip_row_on_results'] == true,
+      );
+
+  /// CMD #2026 — which half of the icon swap the box is in. ANY text at all, a
+  /// lone space included, is 'typing': the scan and mic buttons go away and the
+  /// single × takes the far-right slot.
+  String stateFor(String text) => text.isEmpty ? 'empty' : 'typing';
+
+  /// The buttons to draw for the text currently in the box, in payload order.
+  List<SearchBarAction> actionsForText(String text) {
+    final want = stateFor(text);
+    return actions.where((a) => a.state == want).toList(growable: false);
+  }
+
+  /// Is this worth asking the backend for? The floor is the BACKEND's, and it
+  /// is measured on the text as typed — spaces are part of the query, never
+  /// stripped out before counting.
+  bool shouldSearch(String text) => text.trim().length >= minChars;
+
+  Duration get debounce => Duration(milliseconds: debounceMs);
+}
+
 class SearchPagePayload {
   final bool ok;
   final String query;
@@ -258,9 +342,19 @@ class SearchPagePayload {
   /// what every surface did before this change.
   final List<String>? chipRowSurfaces;
 
-  /// True when [surface] is one the backend named. Absent list = every surface.
-  bool drawsChipRow(String surface) =>
-      chipRowSurfaces == null || chipRowSurfaces!.contains(surface);
+  /// CMD #2026 — the box itself, described by the backend. Never null: a
+  /// payload without the block falls back to what CMD #2010 shipped.
+  final SearchBarSpec searchBar;
+
+  /// CMD #2026 — the WHOLE chip-row rule, in the backend's words.
+  ///
+  /// Above RESULTS the row is never drawn ([SearchBarSpec.chipRowOnResults] is
+  /// false): the results grid starts directly under the search bar. With the
+  /// box empty it is the surface list — CMD #2011 kept Home on it and left the
+  /// Catalogue off it. An absent list still means every surface.
+  bool drawsChipRow(String surface, {bool hasQuery = false}) => hasQuery
+      ? searchBar.chipRowOnResults
+      : (chipRowSurfaces == null || chipRowSurfaces!.contains(surface));
 
   const SearchPagePayload({
     required this.ok,
@@ -276,6 +370,7 @@ class SearchPagePayload {
     required this.paging,
     required this.items,
     this.chipRowSurfaces,
+    this.searchBar = SearchBarSpec.fallback,
   });
 
   static const failed = SearchPagePayload(
@@ -316,6 +411,10 @@ class SearchPagePayload {
         chipRowSurfaces: (m['chip_row_surfaces'] as List?)
             ?.map((e) => e.toString())
             .toList(growable: false),
+        searchBar: m['search_bar'] is Map
+            ? SearchBarSpec.fromMap(
+                Map<String, dynamic>.from(m['search_bar'] as Map))
+            : SearchBarSpec.fallback,
       );
 
   /// The same payload with another page's rows appended. Used by "Load more":
@@ -335,8 +434,29 @@ class SearchPagePayload {
         paging: next.paging,
         items: [...items, ...next.items],
         chipRowSurfaces: next.chipRowSurfaces,
+        searchBar: next.searchBar,
       );
 
+}
+
+/// CMD #2026 — should the search box be rewritten to match [query]?
+///
+/// The box belongs to the shopper. A screen syncs it only when the search came
+/// from somewhere ELSE — a URL, back/forward, a category tap, a scan, a voice
+/// result — and NEVER because the query is the trimmed form of what is already
+/// in it. That last case was the multi-word bug: typing the space in
+/// "telmed ah" made the box differ from the query ('telmed'), so the box was
+/// rewritten without the space and the caret collapsed to the start, and the
+/// next letter landed in front of the first word.
+///
+/// Returns null when the box already says this query (leave it alone), or the
+/// value to assign — text plus a caret AFTER it, never at position zero.
+TextEditingValue? searchBoxSync(TextEditingValue current, String query) {
+  if (current.text.trim() == query) return null;
+  return TextEditingValue(
+    text: query,
+    selection: TextSelection.collapsed(offset: query.length),
+  );
 }
 
 /// The search STATE — query, filters, page — as one value.

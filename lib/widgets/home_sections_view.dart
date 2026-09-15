@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 
 import '../data/medicine_repository.dart';
+import '../design_tokens.dart';
 import '../models/home_sections.dart';
 import '../services/payload_cache.dart';
 import 'stale_payload.dart';
@@ -39,6 +40,11 @@ class HomeSectionsView extends StatefulWidget {
   /// home feed. Null → the see-all falls back to onCategoryTap.
   final VoidCallback? onBrowseAll;
 
+  /// CMD #2027 — the See-all pill on "Shop by company" was tapped. The shell
+  /// opens the catalogue's companies list. Null means the shell did not wire
+  /// one, and the pill then does nothing rather than guessing a route.
+  final VoidCallback? onOpenCompanies;
+
   /// Test seam: the back-in-stock strip payload.
   final Future<BackInStock> Function()? notificationsLoader;
 
@@ -65,6 +71,7 @@ class HomeSectionsView extends StatefulWidget {
     this.loader,
     required this.onCategoryTap,
     this.onBrowseAll,
+    this.onOpenCompanies,
     this.notificationsLoader,
     this.onSeen,
     this.footer,
@@ -372,6 +379,11 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
     }
   }
 
+  /// CMD #2027 — "See all products" under Shop by company. The app holds no
+  /// fallback: an unwired shell draws the pill and does nothing, which is the
+  /// same rule every other unknown destination follows.
+  void _openCompanies() => widget.onOpenCompanies?.call();
+
   @override
   Widget build(BuildContext context) {
     final d = _data;
@@ -468,6 +480,7 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
             section: section,
             onCategoryTap: widget.onCategoryTap,
             onBrowseAll: _openBrowseAll,
+            onOpenCompanies: _openCompanies,
             onNeedMore: () => unawaited(_pageSection(section.id)),
           );
         },
@@ -633,6 +646,9 @@ class _SectionBlock extends StatelessWidget {
   /// Opens the full product grid (a see-all that targets category 'All').
   final VoidCallback onBrowseAll;
 
+  /// Opens the catalogue's companies list (a see-all of type 'companies').
+  final VoidCallback onOpenCompanies;
+
   /// CHANGE #678 — the rail has been scrolled near its end and wants the next
   /// page. Whether one is fetched is decided upstairs, from the payload.
   final VoidCallback onNeedMore;
@@ -642,6 +658,7 @@ class _SectionBlock extends StatelessWidget {
     required this.section,
     required this.onCategoryTap,
     required this.onBrowseAll,
+    required this.onOpenCompanies,
     required this.onNeedMore,
   });
 
@@ -659,6 +676,10 @@ class _SectionBlock extends StatelessWidget {
         }
       case 'search':
         onCategoryTap(s.key);
+      // CMD #2027 — Shop by company's own pill. The backend names the
+      // destination; the shell owns the catalogue tab it lands on.
+      case 'companies':
+        onOpenCompanies();
     }
   }
 
@@ -669,7 +690,6 @@ class _SectionBlock extends StatelessWidget {
     // rather than a continuous wash. Which section gets which colour is a
     // Postgres row, so re-colouring the feed is an UPDATE.
     final band = Brand.hex(section.band, Colors.transparent);
-    final accent = Brand.hex(section.accent, Brand.green);
 
     // CHANGE #678 — one Show-all control for both product layouts, a
     // full-width button under the section. It used to be a card tacked onto
@@ -740,17 +760,13 @@ class _SectionBlock extends StatelessWidget {
             const SizedBox(height: 16),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: _SeeAllBar(
+              child: _SeeAllPill(
                 label: section.seeAllLabel,
-                accent: accent,
-                // CHANGE #274 — three product photos from THIS section, the
-                // way the reference storefront previews what is behind the
-                // button. They are the same cards already on screen, so the
-                // bar can never advertise something the section does not hold.
-                thumbs: [
-                  for (final p in section.cards.take(3))
-                    if (p.imageUrl.isNotEmpty) p.imageUrl,
-                ],
+                // CMD #2027 — the backend's own list, already filtered to the
+                // products that HAVE a photo. Taking the first three cards and
+                // dropping the ones without an image is what used to leave one
+                // lonely disc on a rail full of photographed products.
+                thumbs: section.seeAllThumbs,
                 onTap: () => _navigate(context, seeAll),
               ),
             ),
@@ -1081,46 +1097,48 @@ class _ProductGrid extends StatelessWidget {
   }
 }
 
-/// CHANGE #678 — the Show-all button, under every product section.
+/// CMD #2027 — the See-all pill, under every section that has a destination.
 ///
-/// Solid in the section's own accent and full width, because it is the one
-/// route out of a section and the previous outline-on-white version read as
-/// decoration. The word is the backend's, counts and all ("Show all 3,068
-/// products") — the app holds no wording to fall back on, so no label means no
-/// button.
-class _SeeAllBar extends StatelessWidget {
+/// One calm control on every rail. It used to be a solid bar painted in the
+/// section's OWN accent, which put red, purple, blue and green full-width
+/// buttons down a single scroll and made the feed read as four unrelated apps.
+/// The pill is the search field's grey, the section colour lives in the title
+/// and the rule line where it means something, and the wording is the
+/// backend's — counts and all, so re-wording it is an UPDATE, not a deploy.
+class _SeeAllPill extends StatelessWidget {
   final String label;
-  final Color accent;
 
-  /// Up to three product photos from the section this bar closes. Empty when
-  /// none of the cards carried an image — the bar then reads as a plain CTA
-  /// rather than showing placeholder art.
+  /// Up to three product photos, chosen by the backend from products that
+  /// actually have one. Empty renders no discs rather than blank circles.
   final List<String> thumbs;
   final VoidCallback onTap;
-  const _SeeAllBar({
+  const _SeeAllPill({
     required this.label,
-    required this.accent,
     required this.onTap,
     this.thumbs = const [],
   });
 
-  static const double _thumb = 30;
-  static const double _overlap = 20;
-  static const double _padV = 12;
+  static const double _thumb = 32;
+  static const double _overlap = 22;
 
   @override
   Widget build(BuildContext context) => Material(
-    color: accent,
-    borderRadius: BorderRadius.circular(Rad.pill),
+    key: const Key('c2027_see_all_pill'),
+    color: Ds.c.bg,
+    borderRadius: Ds.r.rCard,
     child: InkWell(
-      borderRadius: BorderRadius.circular(Rad.pill),
+      borderRadius: Ds.r.rCard,
       onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: _padV),
+      child: Container(
+        height: Ds.touch.listRowMinHeight,
+        decoration: BoxDecoration(
+          borderRadius: Ds.r.rCard,
+          border: Border.all(color: Ds.c.divider),
+        ),
+        padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            if (thumbs.isNotEmpty) ...[
+            if (thumbs.isNotEmpty)
               SizedBox(
                 height: _thumb,
                 width: _thumb + _overlap * (thumbs.length - 1),
@@ -1129,29 +1147,30 @@ class _SeeAllBar extends StatelessWidget {
                     for (var i = 0; i < thumbs.length; i++)
                       Positioned(
                         left: i * _overlap,
-                        child: _ThumbDisc(url: thumbs[i]),
+                        child: _ThumbDisc(
+                          key: ValueKey('c2027_pill_thumb_$i'),
+                          url: thumbs[i],
+                        ),
                       ),
                   ],
                 ),
               ),
-              const SizedBox(width: 12),
-            ],
-            Flexible(
+            // The label is CENTRED in the pill, not pushed along by however
+            // many discs the backend sent — a rail with one photo and a rail
+            // with three must read as the same control.
+            Expanded(
               child: Text(
                 label,
+                textAlign: TextAlign.center,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: AppType.l4.copyWith(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                ),
+                style: Ds.t.body.copyWith(fontWeight: FontWeight.w600),
               ),
             ),
-            const SizedBox(width: 8),
-            const Icon(
-              Icons.arrow_forward_rounded,
-              size: 16,
-              color: Colors.white,
+            Icon(
+              Icons.chevron_right,
+              size: Ds.space.x16 + Ds.space.x4,
+              color: Ds.c.textSecondary,
             ),
           ],
         ),
@@ -1160,27 +1179,27 @@ class _SeeAllBar extends StatelessWidget {
   );
 }
 
-/// One circular product photo on the Show-all bar. White ring so overlapping
-/// discs stay separable against the accent fill.
+/// One circular product photo on the See-all pill. The ring is the pill's own
+/// surface, so overlapping discs stay separable against the grey.
 class _ThumbDisc extends StatelessWidget {
   final String url;
-  const _ThumbDisc({required this.url});
+  const _ThumbDisc({super.key, required this.url});
 
   @override
   Widget build(BuildContext context) => Container(
-        width: _SeeAllBar._thumb,
-        height: _SeeAllBar._thumb,
+        width: _SeeAllPill._thumb,
+        height: _SeeAllPill._thumb,
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: Ds.c.surface,
           shape: BoxShape.circle,
-          border: Border.all(color: Colors.white, width: 2),
+          border: Border.all(color: Ds.c.surface, width: 2),
         ),
         clipBehavior: Clip.antiAlias,
         child: ProductImage(
           url: url,
-          width: _SeeAllBar._thumb,
-          height: _SeeAllBar._thumb,
-          radius: BorderRadius.circular(Rad.pill),
+          width: _SeeAllPill._thumb,
+          height: _SeeAllPill._thumb,
+          radius: BorderRadius.circular(_SeeAllPill._thumb),
         ),
       );
 }

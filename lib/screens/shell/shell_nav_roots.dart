@@ -142,4 +142,20 @@ extension _ShellNavRoots on _HomeShellState {
     });
     pushUrl(_urlForState());
   }
+
+  /// CMD #2027 — "See all products" under Shop by company.
+  ///
+  /// The rail shows the top makers; the pill behind it opens the catalogue's
+  /// full companies list — the same door the Catalogue tab's Company tile
+  /// opens, so there is one companies list and not two. The URL is the
+  /// route's own, so a reload or a back press lands on the same list.
+  void _openCompaniesList() {
+    const route = CatalogueRoute(tab: 'companies');
+    _navSetState(() {
+      _catScope = route;
+      _index = 12;
+      _cartOpen = false;
+    });
+    pushUrl(route.url);
+  }
 }

@@ -1649,6 +1649,7 @@ class _HomeShellState extends State<HomeShell> {
             repo: _repo,
             browseAll: _browseAll,
             onBrowseAll: _browseAllProducts,
+            onOpenCompanies: _openCompaniesList,
             scrollTrigger: _scrollTrigger,
             scrollToTopTrigger: _scrollToTopTrigger,
             onLoadingChanged: (loading) {

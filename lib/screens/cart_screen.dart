@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -9,6 +10,7 @@ import '../order_hours_state.dart';
 import '../inquiry_lock_state.dart';
 import '../utils/order_code.dart';
 import 'bulk_upload_screen.dart';
+import 'product_detail_screen.dart';
 import '../utils/render_log.dart';
 import '../models/cart_model.dart';
 import '../models/product.dart';
@@ -69,9 +71,16 @@ class _CartScreenState extends State<CartScreen> {
   String _totalSavingsDisplay = '';
   List<Map<String, dynamic>> _schemeNudges = [];
 
-  /// Product-id signature of the cart the last availability fetch covered —
-  /// a change means the cart moved and the verdicts need re-reading.
+  /// Product-id signature of the cart the last availability fetch covered.
   String? _availSignature;
+
+  /// CMD #2025 — cart_availability() is an OPEN-time read (and a Place-order
+  /// read). This flips on the first build so it fires exactly once per visit.
+  bool _availOpened = false;
+
+  /// CMD #2025 — one bill read per burst of taps, not one per tap.
+  Timer? _billDebounce;
+  static const Duration _kBillDebounce = Duration(milliseconds: 600);
 
   static String _signatureOf(List<CartLine> lines) {
     final ids = lines.map((l) => l.product.id).toList()..sort();
@@ -210,6 +219,12 @@ class _CartScreenState extends State<CartScreen> {
         .toList()
       ..sort();
     return parts.join(',');
+  }
+
+  @override
+  void dispose() {
+    _billDebounce?.cancel();
+    super.dispose();
   }
 
   Future<void> _refreshBill(List<CartLine> lines) async {
@@ -413,6 +428,18 @@ class _CartScreenState extends State<CartScreen> {
 
   Future<void> _placeOrder() async {
     if (_orderInProgress) return;
+
+    // CMD #2025 — the OTHER place cart_availability() runs. The taps no longer
+    // pay for it, so the verdicts are re-read once, here, immediately before
+    // the order is committed — which is the moment they actually decide
+    // something. A block found now stops the order and shows the backend's own
+    // blocking_label instead of placing an order that would be refused.
+    await _refreshAvailability(AppState.of(context).lines);
+    if (!mounted) return;
+    if (_blockingLabel != null) {
+      RenderLog.write('c2025_place_blocked', _blockingLabel!);
+      return;
+    }
 
     // CHANGE #309 (5) — the backend already said this address is outside the
     // delivery area. Refused here with the backend's own words, before the
@@ -844,22 +871,27 @@ class _CartScreenState extends State<CartScreen> {
   Widget build(BuildContext context) {
     final cart = AppState.of(context);
 
-    // CHANGE #553 — re-read cart_availability() whenever the set of products
-    // in the cart changes (first load, add, remove, strip). _refreshAvailability
-    // claims the signature immediately, so this fires once per real change.
-    if (_signatureOf(cart.lines) != _availSignature) {
+    // CMD #2025 — cart_availability() runs ON OPEN and before Place order, and
+    // nowhere else. It used to re-run on every change to the set of products,
+    // which put a second 0.9 s round trip behind a tap that had already paid
+    // for a full cart_render(). The verdicts it produces gate ORDERING, and
+    // ordering is exactly where they are re-read.
+    if (!_availOpened) {
+      _availOpened = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        final lines = cart.lines;
-        if (_signatureOf(lines) != _availSignature) _refreshAvailability(lines);
+        _refreshAvailability(cart.lines);
       });
     }
 
     // CMD #2014 — the bill moves with quantities, so it has its own signature.
+    // CMD #2025 — and it is debounced: a burst of ten taps costs ONE bill read
+    // after the taps stop, not ten reads racing each other.
     if (_billSignatureOf(cart.lines) != _billSignature) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+      _billDebounce?.cancel();
+      _billDebounce = Timer(_kBillDebounce, () {
         if (!mounted) return;
-        final lines = cart.lines;
+        final lines = AppState.of(context).lines;
         if (_billSignatureOf(lines) != _billSignature) _refreshBill(lines);
       });
     }
@@ -1695,7 +1727,29 @@ class _CartItemCard extends StatelessWidget {
     // The name and the pack caption are the payload's, with the product record
     // standing in only while the first cart_render() is in flight.
     final name = line.rows('name').isNotEmpty ? line.rows('name') : p.name;
+    // CMD #2025 — the pack caption is the SAME sf_pack_badge() string the
+    // storefront card and the product page print, carried on the line by
+    // cart_state(). It used to fall back to the cart's own unit word, which is
+    // how a row that is "Strip of 10 tablets" everywhere else read "1 Strip".
     final pack = line.rows('pack_label');
+
+    // CMD #2025 — the row's own tap target. `open.has` is the BACKEND's answer
+    // to "does this line have a product page?"; the screen only navigates.
+    final open = line.rowMap('open');
+    final canOpen = open['has'] == true;
+    void openProduct() {
+      if (!canOpen) return;
+      RenderLog.write(kC2025RowOpen, open['product_id']?.toString() ?? p.id);
+      // A PUSH, so the cart stays mounted underneath: Android back and the
+      // page's own arrow both pop straight back to it, at the same scroll
+      // offset, with no re-read.
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ProductDetailScreen(
+              productId: open['product_id']?.toString() ?? p.id),
+        ),
+      );
+    }
 
     return Padding(
       padding: EdgeInsets.symmetric(vertical: Ds.space.x12),
@@ -1703,7 +1757,11 @@ class _CartItemCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // ── Left: the square tile, with the Rx badge on its corner ───────
-          C2013Thumb(product: p, rx: rx),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: canOpen ? openProduct : null,
+            child: C2013Thumb(product: p, rx: rx),
+          ),
           SizedBox(width: Ds.space.x12),
           // ── Middle: name, then pack ─────────────────────────────────────
           Expanded(
@@ -1711,20 +1769,39 @@ class _CartItemCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  name,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: Ds.t.body.copyWith(
-                      color: Ds.c.text, fontWeight: FontWeight.w700),
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: canOpen ? openProduct : null,
+                  child: Padding(
+                    // Keeps the name's tap target at the 44 px minimum without
+                    // moving it off the grid the rest of the row sits on.
+                    padding: EdgeInsets.symmetric(vertical: Ds.space.x4),
+                    child: Text(
+                      name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Ds.t.body.copyWith(
+                          color: Ds.c.text, fontWeight: FontWeight.w700),
+                    ),
+                  ),
                 ),
-                SizedBox(height: Ds.space.x4),
                 Text(
                   pack.isNotEmpty ? pack : p.packSize,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Ds.t.caption,
                 ),
+                // CMD #2025 — a save that did not land is THIS row's problem.
+                // The sentence and the retry word are the backend's; the rest
+                // of the cart stays usable and nothing blocks the screen.
+                if (cart.hasRowError(p.id)) ...[
+                  SizedBox(height: Ds.space.x4),
+                  C2025RowRetry(
+                    message: cart.rowErrorMessage(p.id),
+                    label: cart.rowRetryLabel(p.id),
+                    onRetry: () => cart.retryRow(p.id),
+                  ),
+                ],
                 // CHANGE #553 — the backend's verdict for this line, in the
                 // backend's own label and colours, shown only when it says the
                 // line cannot be ordered. It is the one thing that may still
@@ -1789,6 +1866,64 @@ class _CartItemCard extends StatelessWidget {
           _C1912Remove(onTap: () => cart.remove(p), danger: line.unavailable),
         ],
       ),
+    );
+  }
+}
+
+/// CMD #2025 — the one thing a failed save is allowed to do: say so on its own
+/// row, and offer to send it again.
+///
+/// Both strings are the payload's — `message` is the backend's refusal (or its
+/// stored "Not saved" note when the network never reached it) and `label` is
+/// the backend's word for the control. Nothing here is worded, and nothing
+/// here blocks: the rest of the cart keeps working while this row is red.
+const String kC2025RowOpen = 'c2025_cart_row_open';
+const String kC2025RowRetry = 'c2025_cart_row_retry';
+
+class C2025RowRetry extends StatelessWidget {
+  final String message;
+  final String label;
+  final VoidCallback onRetry;
+
+  const C2025RowRetry({
+    super.key,
+    required this.message,
+    required this.label,
+    required this.onRetry,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    RenderLog.write(kC2025RowRetry, message);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Flexible(
+          child: Text(
+            message,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: Ds.t.caption.copyWith(color: Ds.c.danger),
+          ),
+        ),
+        if (label.isNotEmpty) ...[
+          SizedBox(width: Ds.space.x8),
+          SizedBox(
+            height: Ds.touch.minTarget,
+            child: TextButton(
+              onPressed: onRetry,
+              style: TextButton.styleFrom(
+                foregroundColor: Ds.c.brand,
+                padding: EdgeInsets.symmetric(horizontal: Ds.space.x8),
+                minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget),
+                tapTargetSize: MaterialTapTargetSize.padded,
+              ),
+              child: Text(label,
+                  style: Ds.t.caption.copyWith(fontWeight: FontWeight.w700)),
+            ),
+          ),
+        ],
+      ],
     );
   }
 }

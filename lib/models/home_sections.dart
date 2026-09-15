@@ -208,6 +208,12 @@ class HomeSection {
   /// render no label; the app no longer holds a hardcoded 'See all'.
   final String seeAllLabel;
 
+  /// CMD #2027 — the product photos on this section's See-all pill, already
+  /// filtered by the backend to the ones that HAVE a photo. The app must never
+  /// take the first three cards and hope: a card without an image used to
+  /// leave a blank white circle on the pill.
+  final List<String> seeAllThumbs;
+
   /// Populated for the product layouts (rail, grid); empty otherwise.
   final List<Product> cards;
 
@@ -239,6 +245,7 @@ class HomeSection {
     this.band = '',
     this.accent = '',
     this.seeAllLabel = '',
+    this.seeAllThumbs = const [],
     this.infinite = false,
     this.nextOffset = 0,
     this.pageSize = 0,
@@ -268,6 +275,7 @@ class HomeSection {
         band: band,
         accent: accent,
         seeAllLabel: seeAllLabel,
+        seeAllThumbs: seeAllThumbs,
         infinite: infinite,
         nextOffset: next,
         pageSize: pageSize,
@@ -327,6 +335,10 @@ class HomeSection {
       band: m['band']?.toString() ?? '',
       accent: m['accent']?.toString() ?? '',
       seeAllLabel: m['see_all_label']?.toString() ?? '',
+      seeAllThumbs: ((m['see_all_thumbs'] as List?) ?? const [])
+          .map((e) => e?.toString() ?? '')
+          .where((e) => e.isNotEmpty)
+          .toList(growable: false),
       infinite: m['infinite'] == true,
       nextOffset: _asInt(m['next_offset']),
       pageSize: _asInt(m['page_size']),

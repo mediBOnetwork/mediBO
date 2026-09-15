@@ -78,6 +78,10 @@ class StorefrontScreen extends StatefulWidget {
   // products" / "Browse catalogue" target).
   final VoidCallback? onBrowseAll;
 
+  // CMD #2027 — the See-all pill on "Shop by company". The shell opens the
+  // catalogue's companies list; this screen only passes the tap along.
+  final VoidCallback? onOpenCompanies;
+
   // Footer navigation callbacks.
   final VoidCallback? onFooterSearch;
   final VoidCallback? onFooterBulkUpload;
@@ -99,6 +103,7 @@ class StorefrontScreen extends StatefulWidget {
     this.showCategoryTiles = true,
     this.browseAll = false,
     this.onBrowseAll,
+    this.onOpenCompanies,
     this.onMetaLoaded,
     this.onFooterSearch,
     this.onFooterBulkUpload,
@@ -876,6 +881,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
             scrollToTopTrigger: widget.scrollToTopTrigger,
             onCategoryTap: (c) => widget.onCategorySelected(c),
             onBrowseAll: widget.onBrowseAll,
+            onOpenCompanies: widget.onOpenCompanies,
             // CHANGE #638 — company tiles now push /company/<key> themselves;
             // the search-prefill fallback is gone.
             footer: Column(

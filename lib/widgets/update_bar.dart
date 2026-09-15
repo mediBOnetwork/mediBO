@@ -360,7 +360,10 @@ class _UpdateBarState extends State<UpdateBar> with SingleTickerProviderStateMix
           disabledBackgroundColor: Ds.c.brandDark,
           disabledForegroundColor: Ds.c.surface,
           minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget),
-          padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+          // NOT x16: at 360 px the eight extra pixels come straight out of the
+          // sentence's share of the row, and #2028's mobile-first rule is that
+          // the CHROME gives way before the line does.
+          padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
           // CMD #2037 — a rounded RECTANGLE, not a stadium: the same corner
           // every primary button in the app wears.
           shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),

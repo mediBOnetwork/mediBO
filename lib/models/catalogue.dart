@@ -180,8 +180,20 @@ class CatHome {
   final List<Product> recentViewed;
 
   /// CMD #2011 — the landing's own breadcrumb, so the one header under the
-  /// search bar is a payload rather than a word written here.
+  /// search bar is a payload rather than a word written here. CMD #2020 sends
+  /// it EMPTY on the landing: the crumb appears once a tile is tapped and goes
+  /// again on the way back, and that is the backend's decision, not a guard.
   final CatTrail trail;
+
+  /// CMD #2020 — the top-selling rail under the tiles.
+  final CatTopSelling topSelling;
+
+  /// CMD #2020 — the full-width Schemes banner, absent at zero products.
+  final CatPromo promo;
+
+  /// CMD #2020 — the chip row under the banner (Cold chain). Two payload
+  /// strings per chip, exactly as the tab strip carried them.
+  final List<CatTab> chips;
 
   /// CMD #2011 — what the default landing shows, decided by the backend
   /// (app_settings.catalogue_landing). The four Browse-by tiles are the
@@ -208,6 +220,9 @@ class CatHome {
     required this.recentViewedTitle,
     required this.recentViewed,
     this.trail = CatTrail.empty,
+    this.topSelling = CatTopSelling.none,
+    this.promo = CatPromo.none,
+    this.chips = const [],
     this.showRecent = true,
     this.showTabs = true,
     this.showTree = false,
@@ -245,6 +260,12 @@ class CatHome {
           .map((i) => Product.fromHomeCard(Map<String, dynamic>.from(i)))
           .toList(growable: false),
       trail: CatTrail.fromMap(m['trail']),
+      topSelling: CatTopSelling.fromMap(m['top_selling']),
+      promo: CatPromo.fromMap(m['promo']),
+      chips: ((m['chips'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((t) => CatTab.fromMap(Map<String, dynamic>.from(t)))
+          .toList(growable: false),
       showRecent: _landing(m)['show_recent'] != false,
       showTabs: _landing(m)['show_tabs'] != false,
       showTree: _landing(m)['show_tree'] == true,
@@ -456,6 +477,14 @@ class CatList {
   /// CMD #1908 — the breadcrumb for this scope.
   final CatTrail trail;
 
+  /// CMD #2020 — the A–Z strip a PRODUCT list gets, exactly the one companies
+  /// and salts already draw. Empty on a search: what narrowed it was the word
+  /// that was typed.
+  final CatRail rail;
+
+  /// The letter currently applied, or '' for the whole scope.
+  final String letter;
+
   /// CMD #1909 — true when the backend split this list into the two zone
   /// groups. False is not "no zone": it is "this list is one flat run", which
   /// is what an anonymous visitor gets.
@@ -483,6 +512,8 @@ class CatList {
     required this.filters,
     required this.empty,
     required this.trail,
+    this.rail = CatRail.empty,
+    this.letter = '',
     required this.grouped,
     required this.groups,
     required this.rows,
@@ -508,6 +539,8 @@ class CatList {
       empty: CatEmptyState.fromMap(m['empty'],
           fallbackLabel: (m['empty_label'] ?? '').toString()),
       trail: CatTrail.fromMap(m['trail']),
+      rail: CatRail.fromMap(m['rail']),
+      letter: (m['letter'] ?? '').toString(),
       grouped: m['grouped'] == true,
       groups: ((m['groups'] as List?) ?? const [])
           .map(CatGroup.fromMap)
@@ -610,6 +643,17 @@ class CatDoor {
   final String iconLetter;
   final String countLabel;
 
+  /// CMD #2020 — the tile's own two-stop gradient and the colour its words are
+  /// printed in. Absent means the flat surface tile: a payload from before this
+  /// change draws exactly what it drew before.
+  final CatGradient gradient;
+
+  /// CMD #2020 — the four logos / three chips / two names under the title. The
+  /// backend ranked them and worded them; [CatPreview.kind] says which of the
+  /// three shapes to draw, and an unknown kind draws nothing rather than
+  /// guessing.
+  final CatPreview preview;
+
   const CatDoor({
     required this.key,
     required this.kind,
@@ -618,6 +662,8 @@ class CatDoor {
     required this.iconKey,
     required this.iconLetter,
     required this.countLabel,
+    this.gradient = CatGradient.none,
+    this.preview = CatPreview.none,
   });
 
   static CatDoor fromMap(Map<String, dynamic> m) => CatDoor(
@@ -628,6 +674,8 @@ class CatDoor {
         iconKey: (m['icon_key'] ?? '').toString(),
         iconLetter: (m['icon_letter'] ?? '').toString(),
         countLabel: (m['count_label'] ?? '').toString(),
+        gradient: CatGradient.fromMap(m['gradient']),
+        preview: CatPreview.fromMap(m['preview']),
       );
 
   /// The map [NavGlyph] reads. Handing it the payload's own keys keeps the
@@ -867,6 +915,185 @@ class CatTrail {
           .whereType<Map>()
           .map(CatCrumb.fromMap)
           .toList(growable: false),
+    );
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CMD #2020 — the landing's own payloads.
+//
+// A gradient, a preview row, a rail of top sellers and a promo banner. Every
+// one of them is a value the backend sent: the colours come from
+// app_settings.catalogue_landing, the preview rows are the facet table's own
+// top rows, the rail is ranked in SQL and the banner's `has` is the backend's
+// verdict on whether this zone has a single scheme running. Nothing in this
+// file ranks, words, shortens or tints anything.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// A two-stop gradient plus the colour its content is printed in, as the three
+/// hex strings the payload carries. [has] false is "this payload sent none" —
+/// never "draw it grey".
+class CatGradient {
+  final String from;
+  final String to;
+  final String on;
+
+  const CatGradient({required this.from, required this.to, required this.on});
+  static const CatGradient none = CatGradient(from: '', to: '', on: '');
+
+  bool get has => from.isNotEmpty && to.isNotEmpty;
+
+  static CatGradient fromMap(Object? raw) {
+    final m = raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
+    return CatGradient(
+      from: (m['from'] ?? '').toString(),
+      to: (m['to'] ?? '').toString(),
+      on: (m['on'] ?? '').toString(),
+    );
+  }
+}
+
+/// One item of a tile preview: a company, a class, a salt or a use. It carries
+/// its label, the letter the backend derived for a logo disc, a tint and its
+/// own count sentence — four strings, no arithmetic.
+class CatPreviewItem {
+  final String key;
+  final String label;
+  final String letter;
+  final String tone;
+  final String countLabel;
+
+  const CatPreviewItem({
+    required this.key,
+    required this.label,
+    required this.letter,
+    required this.tone,
+    required this.countLabel,
+  });
+
+  static CatPreviewItem fromMap(Object? raw) {
+    final m = raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
+    return CatPreviewItem(
+      key: (m['key'] ?? '').toString(),
+      label: (m['label'] ?? '').toString(),
+      letter: (m['letter'] ?? '').toString(),
+      tone: (m['tone'] ?? '').toString(),
+      countLabel: (m['count_label'] ?? '').toString(),
+    );
+  }
+}
+
+/// The preview block under a tile's title. [kind] is 'logos' | 'chips' |
+/// 'names'; a kind this build cannot draw is skipped in silence, the same
+/// forward-compatibility the home feed gives an unknown layout.
+class CatPreview {
+  final String kind;
+  final bool has;
+  final List<CatPreviewItem> items;
+
+  const CatPreview({required this.kind, required this.has, required this.items});
+  static const CatPreview none = CatPreview(kind: '', has: false, items: []);
+
+  bool get isEmpty => !has || items.isEmpty;
+
+  static CatPreview fromMap(Object? raw) {
+    final m = raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
+    return CatPreview(
+      kind: (m['kind'] ?? '').toString(),
+      has: m['has'] == true,
+      items: ((m['items'] as List?) ?? const [])
+          .map(CatPreviewItem.fromMap)
+          .where((i) => i.label.isNotEmpty)
+          .toList(growable: false),
+    );
+  }
+}
+
+/// `catalogue_home().top_selling` — the horizontal rail under the tiles.
+///
+/// [note] is the backend saying WHICH ranking the shopper is looking at: the
+/// zone's own 30-day order quantity, or — when the zone has no history yet —
+/// simply what is available in it. The app never picks between the two and
+/// never writes that sentence.
+class CatTopSelling {
+  final bool has;
+  final String title;
+  final String note;
+  final List<Product> items;
+
+  const CatTopSelling({
+    required this.has,
+    required this.title,
+    required this.note,
+    required this.items,
+  });
+
+  static const CatTopSelling none =
+      CatTopSelling(has: false, title: '', note: '', items: []);
+
+  bool get isEmpty => !has || items.isEmpty;
+
+  static CatTopSelling fromMap(Object? raw) {
+    final m = raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
+    return CatTopSelling(
+      has: m['has'] == true,
+      title: (m['title'] ?? '').toString(),
+      note: (m['note'] ?? '').toString(),
+      items: ((m['items'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((i) => Product.fromHomeCard(Map<String, dynamic>.from(i)))
+          .toList(growable: false),
+    );
+  }
+}
+
+/// `catalogue_home().promo` — the full-width banner that opens a list.
+///
+/// [has] is the whole visibility rule: a zone running no scheme sends has:false
+/// and the banner is not drawn. It carries the route it opens as data
+/// ([listKind] / [listKey]), so tapping it is "copy this into the route" and
+/// the app never works out where Schemes lives.
+class CatPromo {
+  final bool has;
+  final String key;
+  final String listKind;
+  final String listKey;
+  final String title;
+  final String subtitle;
+  final String countLabel;
+  final String actionLabel;
+  final CatGradient gradient;
+
+  const CatPromo({
+    required this.has,
+    required this.key,
+    required this.listKind,
+    required this.listKey,
+    required this.title,
+    required this.subtitle,
+    required this.countLabel,
+    required this.actionLabel,
+    required this.gradient,
+  });
+
+  static const CatPromo none = CatPromo(
+    has: false, key: '', listKind: '', listKey: '', title: '', subtitle: '',
+    countLabel: '', actionLabel: '', gradient: CatGradient.none,
+  );
+
+  static CatPromo fromMap(Object? raw) {
+    final m = raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
+    return CatPromo(
+      has: m['has'] == true,
+      key: (m['key'] ?? '').toString(),
+      listKind: (m['list_kind'] ?? '').toString(),
+      listKey: (m['list_key'] ?? '').toString(),
+      title: (m['title'] ?? '').toString(),
+      subtitle: (m['subtitle'] ?? '').toString(),
+      countLabel: (m['count_label'] ?? '').toString(),
+      actionLabel: (m['action_label'] ?? '').toString(),
+      gradient: CatGradient.fromMap(m['gradient']),
     );
   }
 }

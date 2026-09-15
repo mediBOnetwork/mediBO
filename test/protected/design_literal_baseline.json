@@ -77,7 +77,7 @@
   "lib/screens/public/wa_link_redirect_page.dart": 12,
   "lib/screens/shell/shell_admin_chrome.dart": 6,
   "lib/screens/shell/shell_bottom_bars.dart": 17,
-  "lib/screens/shell/shell_cart_panel.dart": 28,
+  "lib/screens/shell/shell_cart_panel.dart": 16,
   "lib/screens/shell/shell_header_chrome.dart": 53,
   "lib/screens/shell/shell_login_panel.dart": 50,
   "lib/screens/shell/shell_mobile_chrome.dart": 18,

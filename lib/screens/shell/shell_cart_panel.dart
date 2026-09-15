@@ -116,16 +116,14 @@ class _CartPanelContentState extends State<_CartPanelContent> {
   final TextEditingController _searchCtrl = TextEditingController();
   String _searchQuery = '';
 
-  // CMD #1912 — one anchor for both overlays: the "..." button. The menu
-  // hangs off it, and so does the confirm the menu opens, so the confirmation
-  // appears exactly where the action was tapped.
+  // CMD #1912 — the anchor for the overflow menu: the "..." button, so the
+  // menu opens exactly where it was tapped. CMD #2039 removed the second
+  // overlay that used to hang here (the clear-cart confirm).
   final LayerLink _clearCartLink = LayerLink();
-  OverlayEntry? _clearCartOverlay;
   OverlayEntry? _menuOverlay;
 
   @override
   void dispose() {
-    _closeClearCartPopover();
     _closeMenu();
     _searchCtrl.dispose();
     super.dispose();
@@ -153,7 +151,7 @@ class _CartPanelContentState extends State<_CartPanelContent> {
         onDismissed: () { if (mounted) _closeMenu(); },
         onClearCart: () {
           _closeMenu();
-          _openClearCartPopover();
+          _clearCart();
         },
       ),
     );
@@ -166,23 +164,46 @@ class _CartPanelContentState extends State<_CartPanelContent> {
     _menuOverlay = null;
   }
 
-  void _openClearCartPopover() {
-    _closeClearCartPopover();
-    final appState = AppState.of(context);
-    final entry = OverlayEntry(
-      builder: (_) => _ClearCartPopover(
-        link: _clearCartLink,
-        onDismissed: () { if (mounted) _closeClearCartPopover(); },
-        onClear: () { appState.clear(); },
+  // CMD #2039 — Clear cart no longer asks. The confirm popover that stood here
+  // ("This will clear all items" / Cancel / Clear all) made the customer answer
+  // a question about work the backend can simply take back: `cart_clear()`
+  // photographs the lines before it deletes them, so the cheaper, kinder shape
+  // is to do it and offer Undo. The snackbar's sentence, its action word and
+  // how long it stands are all the payload's — nothing here words the offer,
+  // and no Undo is shown for a clear the server said it cannot reverse.
+  Future<void> _clearCart() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final cart = AppState.of(context);
+    final undo = await cart.clear();
+    if (!mounted || undo.isEmpty) return;
+    final snapshotId = (undo['snapshot_id'] ?? '').toString();
+    final label = (undo['action_label'] ?? '').toString();
+    final seconds = (undo['seconds'] as num?)?.toInt() ?? 0;
+    if (snapshotId.isEmpty || label.isEmpty || seconds <= 0) return;
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(SnackBar(
+      content: Text((undo['message'] ?? '').toString(), style: Ds.t.body),
+      duration: Duration(seconds: seconds),
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rCard),
+      margin: EdgeInsets.all(Ds.space.x16),
+      action: SnackBarAction(
+        label: label,
+        onPressed: () async {
+          final msg = await cart.undoClear(snapshotId);
+          if (msg.isEmpty) return;
+          messenger
+            ..hideCurrentSnackBar()
+            ..showSnackBar(SnackBar(
+              content: Text(msg, style: Ds.t.body),
+              duration: Duration(seconds: seconds),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: Ds.r.rCard),
+              margin: EdgeInsets.all(Ds.space.x16),
+            ));
+        },
       ),
-    );
-    _clearCartOverlay = entry;
-    Overlay.of(context).insert(entry);
-  }
-
-  void _closeClearCartPopover() {
-    _clearCartOverlay?.remove();
-    _clearCartOverlay = null;
+    ));
   }
 
   @override
@@ -279,12 +300,17 @@ class _CartPanelContentState extends State<_CartPanelContent> {
                                       borderSide: const BorderSide(
                                           color: Color(0xFFE5E7EB)),
                                     ),
+                                    // CMD #2039 — the SAME hairline grey as
+                                    // idle. A green 1.5px ring on focus meant
+                                    // the box changed colour and thickness the
+                                    // instant the keyboard opened, and again
+                                    // on every keystroke's rebuild; the field
+                                    // already announces focus with a caret.
                                     focusedBorder: OutlineInputBorder(
                                       borderRadius:
                                           BorderRadius.circular(8),
                                       borderSide: const BorderSide(
-                                          color: Color(0xFF1B5E20),
-                                          width: 1.5),
+                                          color: Color(0xFFE5E7EB)),
                                     ),
                                     // Single X: clear text → close search
                                     suffixIcon: IconButton(
@@ -384,8 +410,9 @@ class _CartPanelContentState extends State<_CartPanelContent> {
 //
 // One entry today: Clear Cart. It is here rather than in the header because a
 // destructive action that is taken almost never should not be the loudest
-// thing on a screen the customer opens to check their basket. Choosing it
-// still opens the confirm; nothing is cleared from this menu.
+// thing on a screen the customer opens to check their basket. CMD #2039 —
+// choosing it clears the cart at once and offers the backend's Undo; there is
+// no confirm, because the backend can put the basket back.
 class _CartOverflowMenu extends StatelessWidget {
   final LayerLink link;
   final VoidCallback onDismissed;
@@ -445,187 +472,6 @@ class _CartOverflowMenu extends StatelessWidget {
               ),
             ),
           ),
-        ),
-      ],
-    );
-  }
-}
-
-// ─── Clear-cart popover ───────────────────────────────────────────────────────
-
-class _ClearCartPopover extends StatefulWidget {
-  final LayerLink link;
-  final VoidCallback onDismissed;
-  final VoidCallback onClear;
-
-  const _ClearCartPopover({
-    required this.link,
-    required this.onDismissed,
-    required this.onClear,
-  });
-
-  @override
-  State<_ClearCartPopover> createState() => _ClearCartPopoverState();
-}
-
-class _ClearCartPopoverState extends State<_ClearCartPopover>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _ctrl;
-  late final Animation<double> _scale;
-  late final Animation<double> _fade;
-  bool _dismissing = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 200),
-    );
-    _scale = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
-    _fade = _ctrl;
-    _ctrl.forward();
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _dismiss() async {
-    if (_dismissing) return;
-    _dismissing = true;
-    await _ctrl.animateTo(0,
-        duration: const Duration(milliseconds: 180), curve: Curves.easeIn);
-    widget.onDismissed();
-  }
-
-  Future<void> _handleClearAll() async {
-    if (_dismissing) return;
-    _dismissing = true;
-    widget.onClear(); // clear immediately, synchronously
-    await _ctrl.animateTo(0,
-        duration: const Duration(milliseconds: 180), curve: Curves.easeIn);
-    widget.onDismissed();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        // Tap-outside barrier
-        Positioned.fill(
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: _dismiss,
-            child: const SizedBox.expand(),
-          ),
-        ),
-        // Floating popover anchored to the Clear Cart button
-        CompositedTransformFollower(
-          link: widget.link,
-          targetAnchor: Alignment.bottomRight,
-          followerAnchor: Alignment.topRight,
-          offset: const Offset(0, 6),
-          showWhenUnlinked: false,
-          child: ScaleTransition(
-            scale: _scale,
-            alignment: Alignment.topRight,
-            child: FadeTransition(
-              opacity: _fade,
-              child: Material(
-                color: Colors.transparent,
-                elevation: 0,
-                child: Container(
-                  width: 272,
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(14),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.12),
-                        blurRadius: 20,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: _ConfirmContent(
-                    onCancel: _dismiss,
-                    onClearAll: _handleClearAll,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _ConfirmContent extends StatelessWidget {
-  final VoidCallback onCancel;
-  final VoidCallback onClearAll;
-  const _ConfirmContent(
-      {super.key, required this.onCancel, required this.onClearAll});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          c('home_shell.this_will_clear_all_items'),
-          maxLines: 1,
-          softWrap: false,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            fontSize: 13,
-            color: Color(0xFF6B7280),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: FilledButton(
-                onPressed: onCancel,
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFFDCFCE7),
-                  foregroundColor: const Color(0xFF15803D),
-                  minimumSize: const Size(0, 44),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10)),
-                  elevation: 0,
-                  shadowColor: Colors.transparent,
-                ),
-                child: Text(c('home_shell.cancel'),
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: FilledButton(
-                onPressed: onClearAll,
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFFDC2626),
-                  foregroundColor: Colors.white,
-                  minimumSize: const Size(0, 44),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10)),
-                ),
-                child: Text(c('home_shell.clear_all'),
-                    style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600)),
-              ),
-            ),
-          ],
         ),
       ],
     );

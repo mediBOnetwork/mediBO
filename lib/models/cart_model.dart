@@ -342,6 +342,15 @@ class CartModel extends ChangeNotifier {
   // (longer) request chain happens to resolve later.
   int _loadGen = 0;
 
+  /// CMD #2039 — has a cart payload ever landed in this session?
+  ///
+  /// Until it has, an empty `lines` means "not read yet", not "your cart is
+  /// empty" — and the screen drew the empty state for both. The summary row
+  /// and the item rows now draw a skeleton while this is false, so the row the
+  /// backend already sends on OPEN has somewhere to appear immediately.
+  bool _loadedOnce = false;
+  bool get hasLoaded => _loadedOnce;
+
   Future<void> enterViewAs(String userId) async {
     _viewAsUserId = userId;
     _adoptCart(const <String, dynamic>{}); // #556 rule 3 — clear before refetch
@@ -447,6 +456,10 @@ class CartModel extends ChangeNotifier {
   Future<void> _adoptSignedInAccount(String? uid) async {
     // CHANGE #556 rule 3 + #559 rule 4 — clear the cart VIEW before refetch,
     // so no line from the previous account can survive an account switch.
+    // CMD #2039 — and it is UNREAD again, not empty: the screen shows the
+    // skeleton until this account's own payload lands, never "your cart is
+    // empty" for a cart nobody has read yet.
+    _loadedOnce = false;
     _adoptCart(const <String, dynamic>{});
     _adminRemovedLines.clear();
     _clearLocalIntent();
@@ -546,6 +559,7 @@ class CartModel extends ChangeNotifier {
   /// cannot disagree with itself.
   Future<void> _hydrateAndAdopt(Map<String, dynamic> cart, int gen) async {
     if (gen != _loadGen) return;
+    _loadedOnce = true;
     RenderLog.write('c401_cart_uses_buyable', 'true');
     RenderLog.write(kC610OnePayload, 'roundtrips:1');
     // CHANGE #615 — proves the flat cart rendered: the subtotal strings the
@@ -1179,6 +1193,15 @@ class CartModel extends ChangeNotifier {
   bool isPending(String productId) =>
       _pending.contains(productId) && !_localQty.containsKey(productId);
 
+  /// CMD #2039 — true while this row is showing the user's OWN unsent tap.
+  ///
+  /// The stepper prints `row.stepper.qty_text`, which is the SERVER's number.
+  /// Between the tap and the reply that string is one tap stale, so printing
+  /// it is what made a 46 ms write feel slow: the digit did not move until the
+  /// round trip came back. While this is true the stepper prints the tap
+  /// instead — the user's own input echoed, never a backend decision reworded.
+  bool hasLocalIntent(String productId) => _localQty.containsKey(productId);
+
   /// The quantity to display for this product.
   ///
   /// The server's number, unless the user has tapped the stepper since and the
@@ -1270,7 +1293,14 @@ class CartModel extends ChangeNotifier {
     _queued.remove(productId);
   }
 
-  Future<void> clear() async {
+  /// CMD #2039 — Clear cart asks nothing and can be taken back.
+  ///
+  /// `cart_clear()` photographs the lines before it deletes them and returns
+  /// the snapshot id together with the words the snackbar prints — the
+  /// sentence, the action word and how many seconds it stays. None of that is
+  /// written here: the returned `undo` block IS the snackbar, and an empty map
+  /// means the backend says there is nothing to offer.
+  Future<Map<String, dynamic>> clear() async {
     _sampleTimer?.cancel();
     _sampleTimer = null;
     _sampleCountdown = 15;
@@ -1279,9 +1309,48 @@ class CartModel extends ChangeNotifier {
     try {
       final res = await _rpc('cart_clear', {'p_guest_uid': _guestParam});
       await _applyWriteResult(res);
+      if (res is Map) {
+        final undo = (res['undo'] as Map?)?.cast<String, dynamic>();
+        if (undo != null && undo['has'] == true) {
+          RenderLog.write(kC2039ClearUndo,
+              'snapshot:${undo['snapshot_id']};seconds:${undo['seconds']}');
+          return undo;
+        }
+      }
     } catch (_) {
       await refresh();
     }
+    return const <String, dynamic>{};
+  }
+
+  static const kC2039ClearUndo = 'c2039_cart_clear_undo';
+  static const kC2039UndoDone = 'c2039_cart_undo_done';
+
+  /// Puts back every line and quantity the snapshot holds. The answer carries
+  /// the whole cart, so the screen is correct again without a re-read, and its
+  /// `message` is the backend's own — including the refusal when the window
+  /// has closed.
+  Future<String> undoClear(String snapshotId) async {
+    try {
+      final res = await _rpc('cart_clear_undo', {
+        'p_snapshot_id': snapshotId,
+        'p_guest_uid': _guestParam,
+      });
+      if (res is Map) {
+        final m = Map<String, dynamic>.from(res);
+        final cart = m['cart'];
+        if (cart is Map) {
+          await _hydrateAndAdopt(Map<String, dynamic>.from(cart), ++_loadGen);
+        } else {
+          await refresh();
+        }
+        RenderLog.write(kC2039UndoDone, 'ok:${m['ok']};restored:${m['restored'] ?? 0}');
+        return (m['message'] ?? '').toString();
+      }
+    } catch (_) {
+      await refresh();
+    }
+    return '';
   }
 
   void addSampleItems(List<MapEntry<Product, int>> items) {

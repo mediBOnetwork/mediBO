@@ -134,6 +134,11 @@ dependencies {
     // both used by MainActivity's run_location channel.
     implementation("com.google.android.gms:play-services-location:21.3.0")
     implementation("androidx.core:core-ktx:1.13.1")
+    // CMD #2028 — Play In-App Updates (the floating update pill's Android
+    // half). Pure JVM/AAR: no native libraries, so it neither needs an NDK on
+    // this host nor changes the 16 KB page alignment the #278 gate checks.
+    implementation("com.google.android.play:app-update:2.1.0")
+    implementation("com.google.android.play:app-update-ktx:2.1.0")
 }
 
 flutter {

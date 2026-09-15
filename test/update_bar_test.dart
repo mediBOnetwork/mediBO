@@ -3,6 +3,8 @@
 // What this pins down, in the order Om's complaint listed it:
 //   • it is ONE line — the "A newer version is loading…" sub-line is gone;
 //   • it is pinned to the BOTTOM, not the top, and it reflows nothing;
+//     (CMD #2028: it now FLOATS above the bottom nav — see
+//      test/protected/update_pill_test.dart for the floating contract);
 //   • every string is backend copy (ui_copy), printed verbatim;
 //   • tapping runs the update action once, then the pill swaps to the updating
 //     label and stops accepting taps;
@@ -65,9 +67,11 @@ void main() {
         of: find.byType(UpdateBar), matching: find.byType(Text));
     expect(texts, findsNWidgets(2));
 
-    // One line, never wrapped into a paragraph.
+    // CMD #2028 — the floating pill is ~72 px tall, so the sentence may take a
+    // second line on a narrow phone rather than being clipped to "App u…".
+    // It is still never a paragraph.
     final line = t.widget<Text>(find.text('New update available'));
-    expect(line.maxLines, 1);
+    expect(line.maxLines, 2);
   });
 
   testWidgets('pinned to the BOTTOM and reflows nothing', (t) async {
@@ -155,8 +159,11 @@ void main() {
       await t.pumpAndSettle();
 
       final bar = t.getSize(find.byType(UpdateBar)).width;
+      // CMD #2028 — the pill floats, so the row the sentence competes for is
+      // the bar minus the two side margins, not the whole phone.
+      final pill = bar - 2 * Ds.space.x16;
       final line = t.getSize(find.text('New update available')).width;
-      expect(line, greaterThan(bar * 0.4),
+      expect(line, greaterThan(pill * 0.4),
           reason: 'the title slot collapsed — chrome is eating the sentence');
 
       // And the bar still fits the phone exactly: no horizontal overflow.

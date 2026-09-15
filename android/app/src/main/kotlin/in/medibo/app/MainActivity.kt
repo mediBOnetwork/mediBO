@@ -20,6 +20,10 @@ class MainActivity : FlutterActivity() {
         // attached to every recorded sign-in failure. Play re-signs the upload,
         // so this is the one fact that tells a Play build from a sideloaded one.
         SignInDiag.register(flutterEngine.dartExecutor.binaryMessenger, applicationContext)
+        // CMD #2028 — Play In-App Updates behind the floating update pill.
+        // Needs the ACTIVITY (Play's flow is launched for a result), which is
+        // why it is registered here and not from applicationContext.
+        PlayUpdate.register(flutterEngine.dartExecutor.binaryMessenger, this)
         // CHANGE #306 — the channels must exist before the first alert lands,
         // and the app must be able to stop the ringing and clear the sticky
         // line the moment an order is actioned inside the app. Every word the

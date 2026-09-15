@@ -18,6 +18,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../design_tokens.dart';
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
+import '../../fulfill/supplier_toggle_chips.dart';
 import 'order_alerts_screen.dart' show CutoffClockCard;
 
 /// CMD #1934 — every decision this screen makes, with no Flutter and no
@@ -72,6 +73,16 @@ class OrderCutoffView {
 
   /// The "rule is off" banner is the backend's sentence or nothing at all.
   String get offNote => str('off_note');
+
+  /// CMD #2053 — the ONE Auto cancel flag, as a pill. It is the SAME shape a
+  /// Dashboard automation chip arrives in and the same writer switches it, so
+  /// the two pills cannot drift apart. No pill in the payload, no pill drawn.
+  List<SupplierToggleChip> get togglePills =>
+      SupplierToggleChip.listFrom([if (block('toggle').isNotEmpty) block('toggle')]);
+
+  /// The sentence under the pill — "Auto cancel is off." or the one that says
+  /// nothing is cancelled while the shop is open. The backend picks which.
+  String get toggleNote => '${block('toggle')['note'] ?? ''}';
 
   /// Marking a pharmacy reuses customer_credit_list(); a pharmacy already
   /// marked is not offered again.
@@ -147,6 +158,9 @@ class _OrderCutoffScreenState extends State<OrderCutoffScreen> {
       final clock = ((d?['clock'] as Map?) ?? const {});
       RenderLog.write('c1934_cutoff_screen', '${(clock['items'] as List?)?.length ?? 0}');
       RenderLog.write('c1934_cutoff_fields', '${(d?['fields'] as List?)?.length ?? 0}');
+      final toggle = ((d?['toggle'] as Map?) ?? const {});
+      RenderLog.write(
+          'c2053_auto_cancel_toggle', toggle['on'] == true ? 'on' : 'off');
       RenderLog.write('c1934_cutoff_audit',
           '${((d?['audit'] as Map?)?['items'] as List?)?.length ?? 0}');
     } catch (e) {
@@ -168,6 +182,31 @@ class _OrderCutoffScreenState extends State<OrderCutoffScreen> {
       if (!mounted) return;
       setState(() => _busy = false);
       showToast(context, _s('saved_label'));
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      showToast(context, '$e', isError: true);
+    }
+  }
+
+  /// CMD #2053 — the ONE writer. The Dashboard pill calls exactly this RPC
+  /// with exactly this key, so switching Auto cancel in either place is the
+  /// same write and the other place reads it back on its next payload.
+  Future<void> _setAuto(SupplierToggleChip chip, bool next) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final res = _asMap(await _db.rpc('dashboard_automation_set',
+          params: {'p_key': chip.key, 'p_on': next}));
+      if (!mounted) return;
+      setState(() => _busy = false);
+      final r = res ?? const <String, dynamic>{};
+      final ok = r['ok'] == true;
+      final Object? said = ok ? r['toast'] : r['message'];
+      final msg = (said ?? '').toString();
+      if (msg.isNotEmpty) showToast(context, msg, isError: !ok);
+      RenderLog.write('c2053_auto_cancel_set', '${chip.key}=$ok');
       await _load();
     } catch (e) {
       if (!mounted) return;
@@ -316,10 +355,7 @@ class _OrderCutoffScreenState extends State<OrderCutoffScreen> {
                         Text(_s('subtitle'), style: Ds.t.bodySecondary),
                         SizedBox(height: Ds.space.x16),
                       ],
-                      if (_s('off_note').isNotEmpty) ...[
-                        _CutoffNote(text: _s('off_note'), tone: Ds.c.warningSoft),
-                        SizedBox(height: Ds.space.x16),
-                      ],
+                      ..._togglerows(),
                       _CutoffHeading(label: _section('settings')),
                       ..._settingRows(),
                       SizedBox(height: Ds.space.x32),
@@ -336,6 +372,37 @@ class _OrderCutoffScreenState extends State<OrderCutoffScreen> {
                   ),
                 ),
     );
+  }
+
+  /// CMD #2053 — Auto cancel, at the top, above everything it governs. The
+  /// pill is the payload's; the sentence under it is the payload's; whether it
+  /// reads ON or OFF is the payload's. This file only prints them.
+  List<Widget> _togglerows() {
+    final pills = _v.togglePills;
+    final note = _v.toggleNote;
+    if (pills.isEmpty && note.isEmpty) return const [];
+    return [
+      if (pills.isNotEmpty)
+        Padding(
+          padding: EdgeInsets.only(bottom: Ds.space.x12),
+          child: SupplierToggleChipRow(
+            key: const Key('c2053_auto_cancel'),
+            chips: pills,
+            busyKeys: _busy ? {for (final c in pills) c.key} : const {},
+            onToggle: _setAuto,
+          ),
+        ),
+      if (note.isNotEmpty) ...[
+        _CutoffNote(
+          text: note,
+          tone: (pills.isNotEmpty && pills.first.on)
+              ? Ds.c.successSoft
+              : Ds.c.warningSoft,
+        ),
+        SizedBox(height: Ds.space.x24),
+      ] else
+        SizedBox(height: Ds.space.x24),
+    ];
   }
 
   /// Rendered in the order the payload lists them — the backend owns which

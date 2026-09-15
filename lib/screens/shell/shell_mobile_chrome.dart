@@ -49,11 +49,12 @@ class _LocationHeader extends StatelessWidget {
         // are the same number. And ONE side margin: Ds.space.x16, the search
         // bar's own, so the avatar's left edge and the cart's right edge sit
         // exactly on the field's edges instead of 4 px inside them.
+        // CMD #2037 — the height is the token again (64, the pre-#2030 one),
+        // and the rule under it is GONE: the search bar below is white now
+        // too, so header + field read as one white block instead of two
+        // stacked white strips with a grey hairline between them.
         height: Ds.touch.headerBand,
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          border: Border(bottom: BorderSide(color: Brand.border)),
-        ),
+        decoration: const BoxDecoration(color: Colors.white),
         padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
         // CMD #1947 — a Stack, not a Row. The logo is centred against the
         // HEADER itself, so it stays exactly centred whatever the avatar on the

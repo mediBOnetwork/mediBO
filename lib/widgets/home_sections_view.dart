@@ -15,6 +15,7 @@ import 'animations.dart';
 import 'compact_product_card.dart';
 import 'customer_surface_widgets.dart'; // CHANGE #745 — the home chip strip
 import 'product_image.dart';
+import 'update_bar.dart'; // CMD #2037 — appUpdateBarHeight
 
 /// CHANGE #637 — the sectioned customer home feed.
 ///
@@ -118,11 +119,30 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
   /// vertical page does not grow at all: a grid holds what it was given and
   /// ends in a Show-all button. #677 paged the page itself, and the result was
   /// a storefront you could never scroll to the bottom of.
-  final ScrollController _scroll = ScrollController();
+  /// CMD #2037 — the feed comes back where it was left. Opening a category
+  /// list (or a PDP) unmounts this widget, so the controller it was scrolling
+  /// with is disposed; the offset is parked in [_homeFeedOffset] on the way
+  /// out and handed to the next controller on the way in. That is what makes
+  /// the Home tab a BACK button rather than a reset — the shell decides
+  /// whether to go back or to the top, this only makes "back" mean something.
+  late final ScrollController _scroll =
+      ScrollController(initialScrollOffset: _homeFeedOffset);
 
   /// One in-flight request per section, keyed by section id — two rails may
   /// page at once without either seeing the other's half-applied result.
   final Set<String> _paging = <String>{};
+
+  /// CMD #2037 — how much of the bottom the floating update card is covering.
+  /// The Scaffold already stops this list at the top of the bottom nav, so the
+  /// card sitting ON that nav is the only thing left to scroll clear of. It is
+  /// the card's OWN measured height (0 while it is down), published by
+  /// [appUpdateBarHeight], so this file assumes nothing about how tall it is.
+  double _updateBarClearance = appUpdateBarHeight.value;
+
+  void _onUpdateBar() {
+    if (!mounted) return;
+    setState(() => _updateBarClearance = appUpdateBarHeight.value);
+  }
 
   @override
   void didUpdateWidget(covariant HomeSectionsView old) {
@@ -132,6 +152,7 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
     // rather than animate when the feed is long: an eased 400 ms glide over
     // several thousand pixels reads as a freeze on a phone.
     if (old.scrollToTopTrigger != widget.scrollToTopTrigger) {
+      _homeFeedOffset = 0;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || !_scroll.hasClients) return;
         if (_scroll.offset <= 0) return;
@@ -153,6 +174,8 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
   void dispose() {
     _payload?.removeListener(_onPayload);
     _payload?.dispose();
+    appUpdateBarHeight.removeListener(_onUpdateBar);
+    _homeFeedOffset = _scroll.hasClients ? _scroll.offset : _homeFeedOffset;
     _scroll.dispose();
     super.dispose();
   }
@@ -185,6 +208,7 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
   @override
   void initState() {
     super.initState();
+    appUpdateBarHeight.addListener(_onUpdateBar);
     // Instant paint from the memo, then ALWAYS refetch in the background so a
     // backend change (counts, delivery time, section order) shows on the next
     // open rather than being pinned to a stale cache. Scroll offset survives
@@ -447,7 +471,13 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
         ),
         // CHANGE — the feed ends at the footer. The old bottom:96 spacer left a
         // blank band scrolling past the real end of the page.
-        padding: EdgeInsets.zero,
+        //
+        // CMD #2037 — except for whatever the floating update card is covering.
+        // The Scaffold already ends this list at the top of the bottom nav, so
+        // the only thing left to clear is the card sitting ON that nav; the
+        // number is the card's own measured height, 0 while it is down, so the
+        // footer stops exactly at the real end of the page in the normal case.
+        padding: EdgeInsets.only(bottom: _updateBarClearance),
         // CHANGE #678a — build two screens ahead of the viewport.
         //
         // The default builds a section only as its top edge arrives, so the
@@ -699,6 +729,12 @@ class _SectionBlock extends StatelessWidget {
     // Best Sellers and the All-products rail): the hero's "Browse catalogue"
     // CTA already opens the full grid. Category- and company-wise see-alls keep
     // their bar.
+    //
+    // CMD #2037 read "same grey pill every rail" as "add one here too" and put
+    // it back within the hour: TWO protected tests hold this exclusion down
+    // (storefront_paging_test, home_sections_test) and #678 chose it on
+    // purpose. What the spec is asking for is that the pill LOOKS the same on
+    // every rail that has one — which is the centred group below.
     final showBar = seeAll != null &&
         section.seeAllLabel.isNotEmpty &&
         seeAll.key != 'All';
@@ -1097,6 +1133,14 @@ class _ProductGrid extends StatelessWidget {
   }
 }
 
+/// CMD #2037 — where the home feed was left, in logical pixels.
+///
+/// Held outside the widget because the widget is what goes away: opening a
+/// category list unmounts the feed and disposes its controller. The shell's
+/// scroll-to-top zeroes it, so "tap Home again at the root" still means the
+/// top.
+double _homeFeedOffset = 0;
+
 /// CMD #2027 — the See-all pill, under every section that has a destination.
 ///
 /// One calm control on every rail. It used to be a solid bar painted in the
@@ -1136,41 +1180,58 @@ class _SeeAllPill extends StatelessWidget {
           border: Border.all(color: Ds.c.divider),
         ),
         padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+        // CMD #2037 — ONE CENTRED GROUP. The discs used to sit on the left
+        // edge, the label was an Expanded centred in whatever was left and the
+        // chevron was pinned to the right edge, so a pill read as three things
+        // with two gaps between them and the "centred" label was not centred
+        // against the group it belonged to. Now thumbs, words and chevron are
+        // a single min-width Row centred in the pill: they travel together at
+        // every width, and the whole group shrinks (the label ellipsises)
+        // rather than the gaps growing.
         child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.max,
           children: [
-            if (thumbs.isNotEmpty)
-              SizedBox(
-                height: _thumb,
-                width: _thumb + _overlap * (thumbs.length - 1),
-                child: Stack(
-                  children: [
-                    for (var i = 0; i < thumbs.length; i++)
-                      Positioned(
-                        left: i * _overlap,
-                        child: _ThumbDisc(
-                          key: ValueKey('c2027_pill_thumb_$i'),
-                          url: thumbs[i],
-                        ),
+            Flexible(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  if (thumbs.isNotEmpty) ...[
+                    SizedBox(
+                      height: _thumb,
+                      width: _thumb + _overlap * (thumbs.length - 1),
+                      child: Stack(
+                        children: [
+                          for (var i = 0; i < thumbs.length; i++)
+                            Positioned(
+                              left: i * _overlap,
+                              child: _ThumbDisc(
+                                key: ValueKey('c2027_pill_thumb_$i'),
+                                url: thumbs[i],
+                              ),
+                            ),
+                        ],
                       ),
+                    ),
+                    SizedBox(width: Ds.space.x8),
                   ],
-                ),
+                  Flexible(
+                    child: Text(
+                      label,
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Ds.t.body.copyWith(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  Icon(
+                    Icons.chevron_right,
+                    size: Ds.space.x16 + Ds.space.x4,
+                    color: Ds.c.textSecondary,
+                  ),
+                ],
               ),
-            // The label is CENTRED in the pill, not pushed along by however
-            // many discs the backend sent — a rail with one photo and a rail
-            // with three must read as the same control.
-            Expanded(
-              child: Text(
-                label,
-                textAlign: TextAlign.center,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Ds.t.body.copyWith(fontWeight: FontWeight.w600),
-              ),
-            ),
-            Icon(
-              Icons.chevron_right,
-              size: Ds.space.x16 + Ds.space.x4,
-              color: Ds.c.textSecondary,
             ),
           ],
         ),

@@ -26,6 +26,9 @@
 //      and an `icon` name this build does not know is SKIPPED, never guessed
 //      into a blank square. The × sits to the right of the field itself.
 //
+//   4. NOTE (CMD #2037): the inline CATEGORY row is deleted outright — it does
+//      not draw on any surface, typed-in or not. What survives below is the
+//      rule that nothing sits between the box and the grid.
 //   4. **NO CHIP ROW ABOVE RESULTS.** `search_bar.chip_row_on_results` is the
 //      rule and it is the backend's: with a query on screen the category row
 //      and the filter chips are both gone and the grid starts directly under
@@ -484,8 +487,10 @@ void main() {
     testWidgets('with a query, neither the category row nor the filter chips draw',
         (t) async {
       await _pumpChrome(t);
-      // Nothing typed: the row is there, because this surface is named.
-      expect(find.text('ZZ-ANTI-INFECTIVES'), findsOneWidget);
+      // CMD #2037 — the category row is gone BEFORE anything is typed too,
+      // named surface or not: it is not drawn on any surface any more.
+      expect(find.text('ZZ-ANTI-INFECTIVES'), findsNothing);
+      expect(t.getSize(find.byType(SearchFilterChips)).height, 0);
 
       await _type(t, 'telmed ah');
       await t.pump(const Duration(milliseconds: 300));

@@ -377,7 +377,16 @@ class DsTouch {
   /// Anything smaller is jitter, a bounce or a snap-back, and the band ignores
   /// it. A token, not a constant, so the flicker guard is retunable with one
   /// `ui_design_set` and no deploy.
+  ///
+  /// CMD #2052 — it is 40 now, and it is measured on the FINGER rather than on
+  /// the list: a deliberate change of mind, not a tremor.
   final double headerHysteresis;
+
+  /// CMD #2052 — how long the band takes to finish itself off once the finger
+  /// has left the glass, in milliseconds. The gesture decides WHICH end (the
+  /// direction the drag was going); this decides how fast it gets there, so the
+  /// band is never left half open. A token, so the feel is an `ui_design_set`.
+  final double headerSettleMs;
 
   /// CHANGE #286 — how far above the bottom of the screen a pinned bar floats,
   /// so it clears the bottom nav (and any floating cart pill) instead of
@@ -390,6 +399,7 @@ class DsTouch {
     required this.bottomBarGap,
     required this.headerBand,
     required this.headerHysteresis,
+    required this.headerSettleMs,
   });
   factory DsTouch._defaults() => const DsTouch(
       minTarget: 44,
@@ -402,9 +412,14 @@ class DsTouch {
       // puts the height back without touching the 1:1 travel, because the
       // travel is still the same token.
       headerBand: 64,
-      // CMD #2038 — 8 px: under a finger's own tremor and under the pixel or
-      // two an edge snap-back reports, well inside a deliberate reversal.
-      headerHysteresis: 8);
+      // CMD #2052 — 40 px of FINGER travel. #2038's 8 was measured on the
+      // list's own deltas, where 8 px was already generous; on the pointer it
+      // is a twitch. Forty is the spec's own number: a deliberate change of
+      // mind, and nothing smaller turns the header around.
+      headerHysteresis: 40,
+      // CMD #2052 — the settle. Long enough to read as a movement, short
+      // enough that a fast scroller never sees a half-open header.
+      headerSettleMs: 180);
   factory DsTouch._from(Map m, DsTouch f) => DsTouch(
         minTarget: Ds._num(m['minTarget'], f.minTarget),
         listRowMinHeight: Ds._num(m['listRowMinHeight'], f.listRowMinHeight),
@@ -412,5 +427,7 @@ class DsTouch {
         headerBand: Ds._num(m['headerBand'], f.headerBand),
         headerHysteresis:
             Ds._num(m['headerHysteresis'], f.headerHysteresis),
+        headerSettleMs:
+            Ds._num(m['headerSettleMs'], f.headerSettleMs),
       );
 }

@@ -183,11 +183,18 @@ void main() {
     test('the band still TRAVELS by the same token it is tall', () {
       // #2030's whole point: "how tall" and "how far" cannot be set apart by an
       // edit. Both read Ds.touch.headerBand and nothing else does the arithmetic.
-      final src = _src('lib/screens/shell/shell_mobile_chrome.dart');
-      expect(src.contains('height: Ds.touch.headerBand'), isTrue);
-      expect(src.contains('final double h = Ds.touch.headerBand;'), isTrue);
-      expect(RegExp(r'headerBand\s*[-+*/]\s*\d').hasMatch(src), isFalse,
-          reason: 'no file may adjust the band token on its way past');
+      // CMD #2052 — the driver is its own shard now (shell_header_band.dart);
+      // the mobile chrome keeps the header it DRAWS. The promise is unchanged:
+      // the height and the travel are still the one token, they just live in
+      // two files, and neither may do arithmetic on it.
+      final drawn = _src('lib/screens/shell/shell_mobile_chrome.dart');
+      final travel = _src('lib/screens/shell/shell_header_band.dart');
+      expect(drawn.contains('height: Ds.touch.headerBand'), isTrue);
+      expect(travel.contains('final double h = Ds.touch.headerBand;'), isTrue);
+      for (final src in [drawn, travel]) {
+        expect(RegExp(r'headerBand\s*[-+*/]\s*\d').hasMatch(src), isFalse,
+            reason: 'no file may adjust the band token on its way past');
+      }
     });
 
     test('a backend token still wins over the default', () {

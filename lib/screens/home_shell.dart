@@ -146,6 +146,7 @@ import '../widgets/customer_surface_widgets.dart';
 // What is left here is the shell itself: boot, routing and the two layouts.
 // Every other concern is a part below, with its own path and its own lease.
 part 'shell/shell_mobile_chrome.dart';
+part 'shell/shell_header_band.dart'; // CMD #2052 — the collapsing band
 part 'shell/shell_cart_panel.dart';
 part 'shell/shell_login_panel.dart';
 part 'shell/shell_bottom_bars.dart';
@@ -1821,7 +1822,14 @@ class _HomeShellState extends State<HomeShell> {
         index: _index, alertCount: _alertCount, onRoute: _handleAdminNav,
         body: NotificationListener<ScrollNotification>(
         // CMD #2019 — the storefront's own scrolling drives the header band.
-        onNotification: (n) => shellHeaderScroll(n, !isAdmin && _index == 0),
+        // CMD #2052(8) — and so does the CATALOGUE's. It is a page of this same
+        // shell, so its lists bubble into this same listener and collapse this
+        // same band: one shell, one driver, one notifier, never a second
+        // controller to keep in step. Its own chrome — the search field, the
+        // breadcrumb, the A–Z rail and the list toolbar — sits outside its
+        // scroll view exactly as Home's does, so only the header travels.
+        onNotification: (n) =>
+            shellHeaderScroll(n, !isAdmin && shellHeaderBandTab(_index)),
         child: Stack(
         children: [
           SizedBox.expand(

@@ -115,10 +115,15 @@ object PlayUpdate {
                             }
                             if (!immediate) attachListener(mgr)
                             try {
+                                // Play Core's only 4-arg overload taking
+                                // AppUpdateOptions is (info, activity, options,
+                                // requestCode) — options and activity were the
+                                // other way round, so :app:compileReleaseKotlin
+                                // had never compiled (CMD #2048).
                                 mgr.startUpdateFlowForResult(
                                     info,
-                                    AppUpdateOptions.newBuilder(type).build(),
                                     activity,
+                                    AppUpdateOptions.newBuilder(type).build(),
                                     REQUEST_CODE
                                 )
                                 result.success(true)

@@ -50,6 +50,16 @@ class HomeSectionsView extends StatefulWidget {
   /// lazy ListView, so sections below the fold are never built.
   final Widget? footer;
 
+  /// CMD #2021 — bumped when the shell wants this feed back at the top.
+  ///
+  /// Home is the ONE scrollable on this screen (see the comment in
+  /// storefront_screen.dart's build): the ListView below owns the offset, and
+  /// `StorefrontScreen._scroll` has no clients while the feed is showing. So
+  /// the shell's existing scroll-to-top signal reached a controller that was
+  /// not attached to anything and did nothing at all — which is why tapping
+  /// the logo from halfway down the feed left you halfway down the feed.
+  final int scrollToTopTrigger;
+
   const HomeSectionsView({
     super.key,
     this.loader,
@@ -58,6 +68,7 @@ class HomeSectionsView extends StatefulWidget {
     this.notificationsLoader,
     this.onSeen,
     this.footer,
+    this.scrollToTopTrigger = 0,
   });
 
   /// Last successful payload, kept for the life of the app session.
@@ -105,6 +116,31 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
   /// One in-flight request per section, keyed by section id — two rails may
   /// page at once without either seeing the other's half-applied result.
   final Set<String> _paging = <String>{};
+
+  @override
+  void didUpdateWidget(covariant HomeSectionsView old) {
+    super.didUpdateWidget(old);
+    // CMD #2021 — the Home tab, the logo and the system back button all land
+    // on the home root, and landing there means the TOP of the feed. Jump
+    // rather than animate when the feed is long: an eased 400 ms glide over
+    // several thousand pixels reads as a freeze on a phone.
+    if (old.scrollToTopTrigger != widget.scrollToTopTrigger) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_scroll.hasClients) return;
+        if (_scroll.offset <= 0) return;
+        if (_scroll.offset > _jumpAbove) {
+          _scroll.jumpTo(0);
+        } else {
+          _scroll.animateTo(0,
+              duration: _scrollHome, curve: Curves.easeOut);
+        }
+      });
+    }
+  }
+
+  /// Above this offset a scroll-to-top jumps instead of animating.
+  static const double _jumpAbove = 2400;
+  static const Duration _scrollHome = Duration(milliseconds: 320);
 
   @override
   void dispose() {

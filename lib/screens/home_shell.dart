@@ -127,6 +127,7 @@ import 'customer/order_help_sheet.dart';
 import 'admin/admin_money_screen.dart'; // CMD #450 — /admin/go/money
 import 'admin/admin_demand_engine_screen.dart'; // CMD #427 — /admin/go/demand_engine
 import 'profile_screen.dart';
+import '../models/shell_nav.dart';
 import 'storefront_screen.dart';
 import 'supplier/supplier_shell.dart';
 // #745 — drawn by this library's `part` files (mobile + desktop chrome).
@@ -146,6 +147,7 @@ part 'shell/shell_mobile_chrome.dart';
 part 'shell/shell_cart_panel.dart';
 part 'shell/shell_login_panel.dart';
 part 'shell/shell_bottom_bars.dart';
+part 'shell/shell_nav_roots.dart'; // CMD #2021 — tab roots + system back
 part 'shell/shell_header_chrome.dart';
 part 'shell/shell_admin_chrome.dart';
 part 'shell/shell_sidebar.dart';
@@ -342,6 +344,7 @@ class _HomeShellState extends State<HomeShell> {
     // CMD #1896 — a page pushed OVER this shell (the PDP) floats the same cart
     // pill; the panel it opens lives here, so it asks and this shell answers.
     kOpenCartRequest.addListener(_onOpenCartRequested);
+    ShellHomeSignal.value.addListener(_onHomeSignal); // CMD #2021
     _initFromUrl();
     listenPopState(_applyPath);
     // CHANGE #298 — FCM. Started after the first frame so a Firebase failure
@@ -748,35 +751,12 @@ class _HomeShellState extends State<HomeShell> {
     });
   }
 
-  // Change tab and push the matching URL to browser history.
-  void _setIndex(int i) {
-    setState(() {
-      _index = i;
-      _cartOpen = false;
-      // CHANGE #614 — the Orders tab lives in an IndexedStack, which keeps its
-      // State alive precisely so tab switches do NOT rebuild it. That also
-      // means it never re-fetched: whatever it loaded once, at shell build,
-      // was what it kept showing. Bumping the signal here makes opening the
-      // tab an actual fetch, so the list is never older than the tap.
-      if (i == 1) _ordersRefreshSignal++;
-      shellHeaderBandShow(); // CMD #2019 — a new tab starts full-chrome.
-    });
-    pushUrl(_urlForState());
-  }
-
-  void _goHome() {
-    setState(() {
-      _index = 0;
-      _category = 'All';
-      _query = '';
-      _browseAll = false;
-      _cartOpen = false;
-      _scrollToTopTrigger++;
-    });
-    _searchCtrl.clear();
-    pushUrl('/');
-  }
-
+  /// Select a tab. CHANGE #630 — the bottom bar hands back the PAGE its
+  /// registry row named, never a slot position; CMD #2021 — and landing on a
+  /// page means landing at that page's ROOT. Both live in one place:
+  /// `shell/shell_nav_roots.dart`, where `_onNavTap` dispatches to `_goHome`,
+  /// `_goCatalogue` or the plain `_showPage`.
+  void _setIndex(int i) => _onNavTap(i);
 
   // Admin section indices in the pages list: 3=Dashboard, 4=AddMedicine,
   // 5=Suppliers, 6=Customers
@@ -1404,10 +1384,15 @@ class _HomeShellState extends State<HomeShell> {
     Access.instance.removeListener(_onAccessChanged); // C653
     StaffNav.value.removeListener(_onAccessChanged); // CHANGE #1016
     kOpenCartRequest.removeListener(_onOpenCartRequested); // CMD #1896
+    ShellHomeSignal.value.removeListener(_onHomeSignal); // CMD #2021
     _searchFocus.dispose();
     _searchCtrl.dispose();
     super.dispose();
   }
+
+  /// CMD #2021 — the one member `shell/shell_nav_roots.dart` cannot reach on
+  /// its own: setState is @protected, and an extension is not a subclass.
+  void _navSetState(VoidCallback fn) => setState(fn);
 
   /// CHANGE #653 — the View/Write matrix arrived (or was cleared by a
   /// sign-out). Rebuild so the nav re-reads it; nothing is decided here.
@@ -1743,9 +1728,19 @@ class _HomeShellState extends State<HomeShell> {
 
         // Wrap admin layouts in AdminAlertOverlay so realtime channels +
         // FCM handler are alive as long as the admin shell is on screen.
-        final shell = isDesktop
-            ? _buildDesktop(pages, onLogoTap, effectiveAdmin)
-            : _buildMobile(pages, onLogoTap, effectiveAdmin);
+        // CMD #2021 — the system back button; ladder in shell_nav_roots.dart.
+        final shell = PopScope(
+          // Admin chrome keeps the system default: its sections are reached
+          // from the staff bar, and sending a staff back-press to the customer
+          // storefront would be a different bug from the one this fixes.
+          canPop: effectiveAdmin || ShellNav.canPop(_navState),
+          onPopInvokedWithResult: (didPop, _) {
+            if (!didPop) _onSystemBack();
+          },
+          child: isDesktop
+              ? _buildDesktop(pages, onLogoTap, effectiveAdmin)
+              : _buildMobile(pages, onLogoTap, effectiveAdmin),
+        );
         if (isCustomerViewAs) {
           return Column(children: [
             _ViewAsBanner(
@@ -1808,6 +1803,7 @@ class _HomeShellState extends State<HomeShell> {
                     slots: slots,
                     // The bar hands back the PAGE its row named, so there is
                     // no ladder here that has to agree with the slot order.
+                    // CMD #2021 — and landing on it means its ROOT.
                     onPageTap: _setIndex,
                   ),
                 )),

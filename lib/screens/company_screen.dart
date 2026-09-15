@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/medicine_repository.dart';
 import '../design_tokens.dart';
 import '../models/product.dart';
+import '../models/shell_nav.dart';
 import '../models/storefront_p3.dart';
 import '../widgets/animations.dart';
 import '../widgets/compact_product_card.dart';
@@ -457,6 +458,15 @@ class _SaltListing extends StatelessWidget {
           ),
           title: Text(title,
               maxLines: 1, overflow: TextOverflow.ellipsis, style: Ds.t.subtitle),
+          actions: [
+            // CMD #2021 — same door as the product page: a company page is a
+            // pushed route (CHANGE #638), so the bottom bar is not on screen
+            // here. Pops back to the shell and asks for the home root.
+            IconButton(
+              icon: Icon(Icons.home_outlined, color: Ds.c.textSecondary),
+              onPressed: () => ShellHomeSignal.goHome(context),
+            ),
+          ],
         ),
         body: CatalogueScreen(active: true, initialRoute: route),
       );

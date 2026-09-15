@@ -9,6 +9,7 @@ import '../models/product.dart';
 import '../models/product_compare.dart';
 import '../models/product_detail.dart';
 import '../models/product_reviews.dart';
+import '../models/shell_nav.dart';
 import '../models/storefront_p3.dart';
 import '../services/storefront_fast_order.dart';
 import '../theme.dart';
@@ -250,6 +251,15 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
           onPressed: () => Navigator.of(context).maybePop(),
         ),
         actions: [
+          // CMD #2021 — the storefront home, from a page the bottom bar cannot
+          // reach. A product page is a real route (CHANGE #636) pushed ABOVE
+          // the shell, so the Home tab is not on screen here; this pops back
+          // to the shell and asks it for the same home root the tab and the
+          // logo land on. Glyph only — it adds no string to translate.
+          IconButton(
+            icon: Icon(Icons.home_outlined, color: Ds.c.textSecondary),
+            onPressed: () => ShellHomeSignal.goHome(context),
+          ),
           if (showWishlistBtn)
             IconButton(
               tooltip: d.label(

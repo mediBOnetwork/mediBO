@@ -104,6 +104,38 @@ class UpdateBarController extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ── CMD #2051 — the copy, resolved ONCE ────────────────────────────────
+  //
+  // The payload is the source and ui_copy is the fallback for an unreachable
+  // backend. That rule used to live inside the host, which meant the bottom
+  // stack would have had to repeat it — two places deciding one sentence is
+  // how a fallback starts showing on one surface only. It lives here, next to
+  // the payload it resolves, and both renderers ask.
+
+  String _s(String key, String copyKey) {
+    final v = _payload[key];
+    if (v is String && v.isNotEmpty) return v;
+    return c(copyKey);
+  }
+
+  /// The one line of copy in the middle of the bar.
+  String get label => _s('label', 'update_bar.title');
+
+  /// The word on the green button.
+  String get actionLabel => _s('button_label', 'update_bar.action');
+
+  /// What the button says once the update is running.
+  String get updatingLabel => _s('updating_label', 'update_bar.updating');
+
+  /// Android flexible flow: what it says while Play restarts the app.
+  String get downloadedLabel => _s('downloaded_label', 'update_bar.updating');
+
+  /// How far off the bottom of the SCREEN the bar floats when it is drawn on
+  /// its own (the app-level host, on a surface with no bottom stack). Null
+  /// falls back to the design token. Inside the stack it is 0 — the stack is
+  /// already sitting on the nav.
+  double? get bottomGap => (_payload['bottom_gap'] as num?)?.toDouble();
+
   /// Test seam — the controller is a long-lived singleton in production.
   @visibleForTesting
   void reset() {
@@ -127,6 +159,17 @@ class UpdateBarController extends ChangeNotifier {
 /// height is not a constant anyone may assume.
 final ValueNotifier<double> appUpdateBarHeight = ValueNotifier<double>(0);
 
+/// CMD #2051 — how many storefront bottom stacks are mounted right now.
+///
+/// The bar has TWO renderers and must never have two at once: the app-level
+/// [UpdateBarHost] (which is what every non-storefront screen gets) and the
+/// storefront's own bottom stack, where the bar is one row of a column instead
+/// of a free-floating overlay. While a stack is up it owns the bar and the
+/// host stands down. It lives here rather than in the stack's own file so the
+/// dependency runs one way: the stack knows about the bar, the bar knows only
+/// that somebody has taken it over.
+final ValueNotifier<int> bottomStackMounted = ValueNotifier<int>(0);
+
 /// The ONE controller the app-level host renders. Both the web watcher and the
 /// Android driver raise this same instance, which is what makes "same bar, same
 /// look" true rather than a coincidence of two widgets.
@@ -144,9 +187,13 @@ class UpdateBarHost extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: controller,
+      animation: Listenable.merge([controller, bottomStackMounted]),
       builder: (context, _) {
-        if (!controller.visible) {
+        // CMD #2051 — a storefront bottom stack is up, so the bar is one row
+        // of THAT column and this host draws nothing. One bar, never two, and
+        // never one covering the other.
+        final takenOver = bottomStackMounted.value > 0;
+        if (!controller.visible || takenOver) {
           // CMD #2037 — nothing is covered while the card is down, and the
           // pill that lifts for it has to hear that too.
           if (appUpdateBarHeight.value != 0) {
@@ -155,15 +202,9 @@ class UpdateBarHost extends StatelessWidget {
           }
           return child;
         }
-        final p = controller.payload;
-        String s(String key, String copyKey) {
-          final v = p[key];
-          if (v is String && v.isNotEmpty) return v;
-          return c(copyKey);
-        }
 
-        // The Stack's only extra child is the pill itself, so nothing outside
-        // the pill's own rectangle can swallow a tap.
+        // The Stack's only extra child is the bar itself, so nothing outside
+        // the bar's own rectangle can swallow a tap.
         return Stack(
           children: [
             child,
@@ -172,13 +213,13 @@ class UpdateBarHost extends StatelessWidget {
               right: 0,
               bottom: 0,
               child: UpdateBar(
-                title: s('label', 'update_bar.title'),
-                actionLabel: s('button_label', 'update_bar.action'),
-                updatingLabel: s('updating_label', 'update_bar.updating'),
-                downloadedLabel: s('downloaded_label', 'update_bar.updating'),
+                title: controller.label,
+                actionLabel: controller.actionLabel,
+                updatingLabel: controller.updatingLabel,
+                downloadedLabel: controller.downloadedLabel,
                 updating: controller.updating,
                 downloaded: controller.downloaded,
-                bottomGap: (p['bottom_gap'] as num?)?.toDouble(),
+                bottomGap: controller.bottomGap,
                 onUpdate: controller.onUpdate ?? () {},
               ),
             ),
@@ -247,7 +288,7 @@ class _UpdateBarState extends State<UpdateBar> with SingleTickerProviderStateMix
     if (!mounted) return;
     final box = _cardKey.currentContext?.findRenderObject();
     if (box is! RenderBox || !box.hasSize) return;
-    final v = box.size.height + Ds.space.x8;
+    final v = box.size.height;
     if ((appUpdateBarHeight.value - v).abs() > 0.5) {
       appUpdateBarHeight.value = v;
     }
@@ -270,32 +311,38 @@ class _UpdateBarState extends State<UpdateBar> with SingleTickerProviderStateMix
     } catch (_) {}
     WidgetsBinding.instance.addPostFrameCallback((_) => _publishHeight());
 
-    // Safe-area aware: the system inset keeps the pill off the gesture bar, and
-    // the backend's gap lifts it clear of the bottom nav AND the cart pill.
-    // CMD #2037 — the card sits DIRECTLY ON the bottom nav: 0 gap. The float
-    // height is the nav's own height and nothing more, so the two read as one
-    // stack of chrome instead of a pill hovering in the middle of the page.
-    // The number is still the backend's (`app_update_bar.bottom_gap`); the
-    // token is only what an app with no payload yet falls back to.
+    // CMD #2051 — FLUSH, and full width.
+    //
+    // `bottomGap` is still the backend's number and still means "how far off
+    // the bottom of the SCREEN does this bar float", which is what the
+    // app-level host (every non-storefront surface) needs to clear a bottom
+    // nav it is painted over. Zero means flush: the bar is a row of the
+    // storefront bottom stack, the stack is already sitting on the nav, and
+    // whatever safe-area there is below has been dealt with by the thing that
+    // owns that edge. Adding a system inset here as well would show as a white
+    // seam between the bar and the nav.
     final gap = widget.bottomGap ?? Ds.touch.bottomBarGap;
-    final bottomInset = MediaQuery.of(context).viewPadding.bottom + gap;
+    final bottomInset =
+        gap <= 0 ? 0.0 : MediaQuery.of(context).viewPadding.bottom + gap;
 
-    // ~72 px tall, expressed in tokens: one data row plus one spacing step.
-    final minHeight = Ds.touch.listRowMinHeight + Ds.space.x16;
+    // One data row tall — the same 56 the pill above it is, so the two read as
+    // one stack rather than two unrelated bits of chrome.
+    final minHeight = Ds.touch.listRowMinHeight;
 
     return SlideTransition(
       position: Tween<Offset>(begin: const Offset(0, 1), end: Offset.zero)
           .animate(CurvedAnimation(parent: _ctrl, curve: Ds.motion.curve)),
       child: Padding(
-        // Full width minus one spacing step each side, so the card floats
-        // rather than sitting on the edges.
-        padding: EdgeInsets.fromLTRB(
-            Ds.space.x16, Ds.space.x8, Ds.space.x16, bottomInset),
+        // CMD #2051 — edge to edge. The bar is not a floating card any more:
+        // it is the top surface of the bottom chrome, so it spans the screen
+        // and only its TOP corners are rounded.
+        padding: EdgeInsets.only(bottom: bottomInset),
         child: DecoratedBox(
           key: _cardKey,
           decoration: BoxDecoration(
             color: Ds.c.surface,
-            borderRadius: Ds.r.rSheet,
+            borderRadius:
+                BorderRadius.vertical(top: Radius.circular(Ds.r.card)),
             // CMD #2037 — a SOFT TOP shadow. Sitting on the nav, the card has
             // only one edge anything can see; e2 falls downwards, behind the
             // nav, which is why the card used to read as a flat white block.
@@ -307,7 +354,7 @@ class _UpdateBarState extends State<UpdateBar> with SingleTickerProviderStateMix
               constraints: BoxConstraints(minHeight: minHeight),
               child: Padding(
                 padding: EdgeInsets.symmetric(
-                    horizontal: Ds.space.x8, vertical: Ds.space.x8),
+                    horizontal: Ds.space.x16, vertical: Ds.space.x8),
                 // MOBILE FIRST: at 360 px the sentence, the circle and the
                 // button cannot all have their ideal width, so the CHROME
                 // gives way and the sentence is allowed a second line — it is

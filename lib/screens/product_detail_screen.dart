@@ -16,6 +16,7 @@ import '../theme.dart';
 import '../utils/render_log.dart';
 import '../utils/toast.dart';
 import '../widgets/animations.dart';
+import '../widgets/bottom_stack.dart';
 import '../widgets/cart_pill.dart';
 import '../widgets/compact_product_card.dart';
 import '../widgets/companion_rail.dart';
@@ -304,16 +305,23 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                   subscribed: _subscribed,
                   notifyRequest: widget.notifyRequest,
                 ),
-          // The pill shows itself: `render.pill.show` is the backend's answer
-          // to "is there a cart", so an empty cart draws nothing here and this
-          // page never counts the cart to decide.
+          // CMD #2051 — the SAME bottom stack the shell draws, so the update
+          // bar and the cart pill cannot overlap here either. This page is a
+          // route pushed over the shell, so there is no bottom nav under it
+          // and the stack clears the system gesture area itself (`overNav:
+          // false`).
+          //
+          // The pill inside it still shows itself: `render.pill.show` is the
+          // backend's answer to "is there a cart", so an empty cart draws
+          // nothing and this page never counts the cart to decide.
           if (!_loading && d != null && d.ok)
             Positioned(
               left: 0,
               right: 0,
-              bottom: Ds.space.x16,
-              child: RepaintBoundary(
-                child: CartPill(onTap: () => requestOpenCart(context)),
+              bottom: 0,
+              child: StorefrontBottomStack(
+                onCartTap: () => requestOpenCart(context),
+                overNav: false,
               ),
             ),
         ],
@@ -359,10 +367,13 @@ class _Body extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListView(
-      // CMD #1896 — the bottom inset clears the floating cart pill, so the last
-      // row of the page is readable instead of sitting under it.
-      padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x8, Ds.space.x16,
-          Ds.touch.bottomBarGap + Ds.space.x24),
+      // CMD #2051 — the bottom inset is the bottom stack's MEASURED height,
+      // not a guess at it. #1896 padded by the nav-gap token plus a step,
+      // which was right for a pill on its own and short by a whole update bar
+      // the moment one appeared. The spacer is the last child, so the number
+      // is re-read the frame the bar arrives or goes.
+      padding: EdgeInsets.fromLTRB(
+          Ds.space.x16, Ds.space.x8, Ds.space.x16, 0),
       children: [
         _Gallery(gallery: data.gallery, heroId: data.id),
         SizedBox(height: Ds.space.x16),
@@ -536,6 +547,9 @@ class _Body extends StatelessWidget {
           onAnswer: onAnswer,
           onFlag: onFlag,
         ),
+        // CMD #2051 — room at the end for the whole bottom stack, plus the
+        // page's own last step of air.
+        BottomStackSpacer(extra: Ds.space.x24),
       ],
     );
   }

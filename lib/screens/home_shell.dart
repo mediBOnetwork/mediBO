@@ -25,8 +25,8 @@ import '../utils/render_log.dart';
 import '../utils/responsive.dart';
 import '../widgets/animations.dart';
 import '../widgets/search_surface.dart';
+import '../widgets/bottom_stack.dart'; // CMD #2051 — the one bottom stack
 import '../widgets/cart_pill.dart'; // C636
-import '../widgets/update_bar.dart'; // CMD #2037 — appUpdateBarHeight
 import '../widgets/notification_bell.dart'; // CHANGE #298
 import '../widgets/scope_chip.dart'; // CMD #1947 — the header date·zone chip
 import '../widgets/test_mode_badge.dart'; // CMD #1964 — the header TEST badge
@@ -1870,7 +1870,10 @@ class _HomeShellState extends State<HomeShell> {
           // (`render.pill.show`) — and because it read AppState at the shell
           // level, every cart write rebuilt the entire HomeShell subtree.
           // CartPill reads the cart itself, so a write now repaints one pill.
-          if (!isAdmin) shellFloatingCartPill(_openCart, _index),
+          // CMD #2051 — ONE bottom stack: the update bar flush on the nav,
+          // the cart pill floating one step above it. Anchored at the bottom
+          // of the body, which IS the top of the bottom nav.
+          if (!isAdmin) shellBottomStack(_openCart, _index),
           if (!isAdmin)
             RepaintBoundary(
               child: CartPanel(
@@ -1953,7 +1956,10 @@ class _HomeShellState extends State<HomeShell> {
             ],
           ),
           // CHANGE #636 — same pill on desktop, same reasoning as mobile above.
-          if (!isAdmin) shellFloatingCartPill(_openCart, _index),
+          // CMD #2051 — ONE bottom stack: the update bar flush on the nav,
+          // the cart pill floating one step above it. Anchored at the bottom
+          // of the body, which IS the top of the bottom nav.
+          if (!isAdmin) shellBottomStack(_openCart, _index),
           if (!isAdmin) ...[
             LoginPanel(
               open: _loginOpen,

@@ -82,12 +82,28 @@ class CompareProduct {
   /// product page can never quote different money.
   final Pricing? pricing;
 
+  /// CMD #2040 — the ADD control at the foot of a column. Both come from the
+  /// backend's own `storefront_cta` verdict, the same one the card's pill
+  /// reads: [canAdd] false is the ONLY out-of-stock signal and [ctaLabel] is
+  /// the word, never one chosen here. A payload that carries neither (the
+  /// tray's `product_compare`) leaves the column with no control at all rather
+  /// than a button this app invented.
+  final bool canAdd;
+  final String ctaLabel;
+
+  /// True for the pack whose page opened the table. The column is drawn the
+  /// same either way — this only says which one the reader is standing on.
+  final bool isCurrent;
+
   const CompareProduct({
     required this.id,
     required this.name,
     required this.company,
     required this.image,
     required this.pricing,
+    this.canAdd = false,
+    this.ctaLabel = '',
+    this.isCurrent = false,
   });
 
   factory CompareProduct.fromMap(Map<String, dynamic> m) => CompareProduct(
@@ -98,6 +114,9 @@ class CompareProduct {
         pricing: m['pricing'] is Map
             ? Pricing.fromMap((m['pricing'] as Map).cast<String, dynamic>())
             : null,
+        canAdd: m['can_add'] == true,
+        ctaLabel: ProductCompare._s(m['cta_label']),
+        isCurrent: m['is_current'] == true,
       );
 }
 

@@ -4,6 +4,8 @@ import '../app_state.dart';
 import '../data/medicine_repository.dart';
 import '../design_tokens.dart';
 import '../models/product.dart';
+import '../models/storefront_p3.dart' show WishlistResult;
+import '../utils/toast.dart';
 import '../theme.dart';
 import 'animations.dart';
 import 'ds_tone.dart';
@@ -58,11 +60,31 @@ class CompactProductCard extends StatelessWidget {
   /// stays free of route literals.
   final VoidCallback onTap;
 
+  /// CMD #2040 — the Compare button, OFF everywhere except the product page's
+  /// salt rail (spec item 5: "storefront cards elsewhere never get it").
+  ///
+  /// It is two injected things and no decision: the caption is the backend's
+  /// `cmp_open`, and the tap is the caller's. An empty caption or a null
+  /// callback means no button and no reserved height — which is why the grid
+  /// keeps reading [extent] and only the rail reads [extentWithCompare].
+  final String compareLabel;
+  final VoidCallback? onCompare;
+
+  /// Test seam for the heart. Production leaves it null and the control calls
+  /// `wishlist_toggle` through [MedicineRepository]; the same shape the
+  /// product page's own wishlist button already uses.
+  final Future<WishlistResult> Function(String productId)? wishlistToggle;
+
   const CompactProductCard({
     super.key,
     required this.product,
     required this.onTap,
+    this.compareLabel = '',
+    this.onCompare,
+    this.wishlistToggle,
   });
+
+  bool get _showsCompare => compareLabel.isNotEmpty && onCompare != null;
 
   // ── Fixed geometry ────────────────────────────────────────────────────────
   // The image plate. Near-square at both widths this card is ever laid out at
@@ -137,6 +159,24 @@ class CompactProductCard extends StatelessWidget {
       _gapS +
       _availH; // 328
 
+  /// CMD #2040 — the heart's tap target. The circle you SEE is
+  /// [wishDotSize]; the square you can hit is [wishTapSize], which is the
+  /// app's 44pt touch minimum and also how far the scheme badge below it has
+  /// to move down.
+  static const double wishTapSize = 44;
+  static const double wishDotSize = 30;
+
+  /// CMD #2040 — the Compare row. What you SEE is [_compareH]; what you can
+  /// hit is the whole [compareRowH], which keeps the control on the 44pt touch
+  /// minimum without making an outlined pill look like a primary action.
+  static const double _compareH = 32;
+  static const double compareRowH = 44;
+
+  /// The extent a container must reserve for a card that is SHOWING the
+  /// Compare button. Summed from the same constants as [extent] rather than
+  /// typed as a second number, so the two can never drift.
+  static const double extentWithCompare = extent + _gapS + compareRowH;
+
   /// CMD #2010 — the width one card takes in a horizontal rail. It lives here,
   /// beside [extent], so a rail cannot pick its own number: the recently-viewed
   /// rail carried 162 as a literal and nothing tied it to the card.
@@ -173,6 +213,7 @@ class CompactProductCard extends StatelessWidget {
               pricing: pricing,
               soldOut: soldOut,
               soldOutLabel: soldOut ? av.ctaLabel : '',
+              wishlistToggle: wishlistToggle,
             ),
             const SizedBox(height: _gapM),
             SizedBox(
@@ -213,7 +254,82 @@ class CompactProductCard extends StatelessWidget {
               height: _availH,
               child: AvailabilityLine(availability: av),
             ),
+            // CMD #2040 — Compare, on the product page's salt rail only. The
+            // row is absent (not empty) everywhere else, so no other grid
+            // pays a pixel for it.
+            if (_showsCompare) ...[
+              const SizedBox(height: _gapS),
+              SizedBox(
+                height: compareRowH,
+                child: CompareButton(
+                  label: compareLabel,
+                  onTap: onCompare!,
+                  height: _compareH,
+                ),
+              ),
+            ],
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// CMD #2040 — the compact outlined Compare control.
+///
+/// Shared by the product page's price block and by every card on its salt
+/// rail, so the two can never drift apart. It prints [label] verbatim — an
+/// empty caption is the backend saying there is no control, and this widget
+/// then draws nothing rather than a word chosen in Dart.
+///
+/// Outlined, never filled: the one filled brand action on both surfaces is
+/// ADD. [height] is what you see; the caller reserves the 44pt row around it.
+class CompareButton extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  final double height;
+
+  const CompareButton({
+    super.key,
+    required this.label,
+    required this.onTap,
+    this.height = 32,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (label.isEmpty) return const SizedBox.shrink();
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(Rad.chip),
+        child: Center(
+          child: Container(
+            height: height,
+            alignment: Alignment.center,
+            padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(Rad.chip),
+              border: Border.all(color: Brand.accent),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.compare_arrows_rounded,
+                    size: Ds.space.x16, color: Brand.accent),
+                SizedBox(width: Ds.space.x4),
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppType.l3.copyWith(color: Brand.accent),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -273,12 +389,14 @@ class _Frame extends StatelessWidget {
   final Pricing? pricing;
   final bool soldOut;
   final String soldOutLabel;
+  final Future<WishlistResult> Function(String productId)? wishlistToggle;
 
   const _Frame({
     required this.product,
     required this.pricing,
     required this.soldOut,
     required this.soldOutLabel,
+    required this.wishlistToggle,
   });
 
   @override
@@ -304,6 +422,7 @@ class _Frame extends StatelessWidget {
               pricing: pricing,
               soldOut: soldOut,
               soldOutLabel: soldOutLabel,
+              wishlistToggle: wishlistToggle,
             ),
           ),
           const SizedBox(height: CompactProductCard._gapM),
@@ -350,16 +469,38 @@ class _Artwork extends StatelessWidget {
   final Pricing? pricing;
   final bool soldOut;
   final String soldOutLabel;
+  final Future<WishlistResult> Function(String productId)? wishlistToggle;
 
   const _Artwork({
     required this.product,
     required this.pricing,
     required this.soldOut,
     required this.soldOutLabel,
+    required this.wishlistToggle,
   });
 
   @override
   Widget build(BuildContext context) {
+    // CMD #2040 — the heart is OUTSIDE the dim. A sold-out pack is exactly the
+    // one a pharmacy wants to save for later, so the control that saves it must
+    // stay at full contrast — the same reason Notify already does.
+    return Stack(
+      children: [
+        Positioned.fill(child: _plate(context, soldOut)),
+        if (product.hasWish)
+          Positioned(
+            right: 0,
+            top: 0,
+            child: _WishHeart(
+              product: product,
+              toggle: wishlistToggle,
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _plate(BuildContext context, bool soldOut) {
     final ribbon = (pricing != null && pricing!.hasRibbon);
 
     // The scheme badge, gated on the BACKEND's boolean in both forms. The
@@ -438,26 +579,22 @@ class _Artwork extends StatelessWidget {
           // top-right stack rather than taking a row of its own: the grid's
           // mainAxisExtent is a sum of this card's constants, and a new row
           // would silently overflow every grid that reserves it.
-          if (hasBadge || offerText.isNotEmpty || product.hasRxBadge)
+          // CMD #2040 — the prescription class LEFT this corner. It is a fact
+          // about the pack, and the pack's own page now prints it beside the
+          // form chip where a buyer reads the pack; the corner belongs to the
+          // one thing a buyer wants to DO from a list, which is save it. The
+          // scheme badge keeps the slot it has had since #274, now alone and
+          // clear of the heart above it.
+          if (hasBadge || offerText.isNotEmpty)
             Positioned(
               right: CompactProductCard._gapM,
-              top: CompactProductCard._gapM,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (hasBadge || offerText.isNotEmpty)
-                    _MiniChip(
-                      text: hasBadge ? badge.label : offerText,
-                      bg: hasBadge ? badge.bg : null,
-                      fg: hasBadge ? badge.fg : null,
-                    ),
-                  if (product.hasRxBadge) ...[
-                    if (hasBadge || offerText.isNotEmpty)
-                      SizedBox(height: Ds.space.x4),
-                    _C461RxChip(label: product.rxLabel, tone: product.rxTone),
-                  ],
-                ],
+              top: product.hasWish
+                  ? CompactProductCard.wishTapSize
+                  : CompactProductCard._gapM,
+              child: _MiniChip(
+                text: hasBadge ? badge.label : offerText,
+                bg: hasBadge ? badge.bg : null,
+                fg: hasBadge ? badge.fg : null,
               ),
             ),
           // CMD #1926 — the pack SENTENCE ("10 capsules in 1 strip") is a
@@ -932,7 +1069,7 @@ class CardPriceLines extends StatelessWidget {
         // price_display. The only thing the lock changes is the tap.
         SizedBox(
           height: priceHeight,
-          child: _SaleLine(price: p, height: priceHeight),
+          child: CardSaleLine(price: p, height: priceHeight),
         ),
       ],
     );
@@ -957,13 +1094,17 @@ class CardPriceLines extends StatelessWidget {
 /// verdict.
 ///
 /// [height] is the extent the caller reserved (22 on the compact card, 20 on
-/// the catalogue one). The badge is EXACTLY that tall rather than padded to
-/// whatever its font needs, which is what keeps one widget safe inside two
-/// grids whose rows are different heights.
-class _SaleLine extends StatelessWidget {
+/// the catalogue one, 28 on the product page). The badge is EXACTLY that tall
+/// rather than padded to whatever its font needs, which is what keeps one
+/// widget safe inside grids whose rows are different heights.
+///
+/// CMD #2040 — it is public, and the product page's price block prints it too:
+/// "the same green PTR badge as cards" in the spec means the same WIDGET, not a
+/// second one that looks like it.
+class CardSaleLine extends StatelessWidget {
   final CardPrice price;
   final double height;
-  const _SaleLine({required this.price, required this.height});
+  const CardSaleLine({super.key, required this.price, required this.height});
 
   /// The badge's side padding. Vertical padding would fight [height].
   static const double _padH = 8;
@@ -1116,43 +1257,104 @@ class CompactCardSkeleton extends StatelessWidget {
   );
 }
 
-/// CHANGE #461/#170 — the Rx / OTC chip. One backend label in the backend's
-/// own tone; no schedule is mapped, inferred or coloured here.
-class _C461RxChip extends StatelessWidget {
-  final String label;
-  final Map<String, dynamic>? tone;
-  const _C461RxChip({required this.label, this.tone});
+/// CMD #2040 — the wishlist heart, in the corner the Rx chip used to hold.
+///
+/// Everything it knows arrives in the card payload's `wish` block
+/// (`card_wish()` in Postgres): whether this viewer is offered a wishlist at
+/// all, whether this pack is already saved, and the word for each state. The
+/// widget decides nothing — it paints a filled heart or an outlined one and
+/// sends the tap to `wishlist_toggle`, whose answer (including the toast) is
+/// the only thing that can change what it shows.
+///
+/// The optimistic flip that would normally go here is deliberately absent: a
+/// save that the server refused must not leave a filled heart behind, so the
+/// state moves when the RPC says it moved and not before.
+class _WishHeart extends StatefulWidget {
+  final Product product;
+  final Future<WishlistResult> Function(String productId)? toggle;
+
+  const _WishHeart({required this.product, required this.toggle});
+
+  @override
+  State<_WishHeart> createState() => _WishHeartState();
+}
+
+class _WishHeartState extends State<_WishHeart> {
+  late bool _saved = widget.product.isWishlisted;
+  bool _busy = false;
+
+  @override
+  void didUpdateWidget(covariant _WishHeart old) {
+    super.didUpdateWidget(old);
+    // A fresh payload is the authority: the grid rebuilt with a newer
+    // card_wish block and the heart follows it.
+    if (old.product.isWishlisted != widget.product.isWishlisted) {
+      _saved = widget.product.isWishlisted;
+    }
+  }
+
+  Future<void> _tap() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    WishlistResult res;
+    try {
+      final call =
+          widget.toggle ?? (id) => MedicineRepository().wishlistToggle(id);
+      res = await call(widget.product.id);
+    } catch (_) {
+      res = WishlistResult.failed;
+    }
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (res.loginRequired) {
+      Navigator.of(context).pushNamed('/login');
+      return;
+    }
+    if (!res.ok) return;
+    setState(() => _saved = res.isWishlisted);
+    if (res.toast.isNotEmpty) showToast(context, res.toast);
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (label.isEmpty) return const SizedBox.shrink();
-    return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: Ds.space.x8,
-        vertical: Ds.space.x4 / 2,
-      ),
-      decoration: BoxDecoration(
-        color: Ds.hex(tone?['bg'], Ds.c.infoSoft),
-        borderRadius: Ds.r.rChip,
-      ),
-      child: Text(
-        label,
-        style: Ds.t.caption.copyWith(color: Ds.hex(tone?['fg'], Ds.c.text)),
+    final label = _saved
+        ? widget.product.wishRemoveLabel
+        : widget.product.wishAddLabel;
+    return Semantics(
+      button: true,
+      label: label,
+      child: Tooltip(
+        message: label,
+        child: InkWell(
+          onTap: _tap,
+          customBorder: const CircleBorder(),
+          child: SizedBox(
+            width: CompactProductCard.wishTapSize,
+            height: CompactProductCard.wishTapSize,
+            child: Center(
+              child: Container(
+                width: CompactProductCard.wishDotSize,
+                height: CompactProductCard.wishDotSize,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  boxShadow: Ds.elevation.e1,
+                ),
+                child: Icon(
+                  _saved ? Icons.favorite : Icons.favorite_border,
+                  key: ValueKey(_saved ? 'wish-on' : 'wish-off'),
+                  size: Ds.space.x16,
+                  color: _saved ? Ds.c.danger : Ds.c.textSecondary,
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
 }
 
-/// CMD #791 — the catalogue card's repeat-purchase badge.
-///
-/// One pill, one word set, one tap. `short_label` ("Ordered 12 Aug") is the
-/// backend's compact form of the same sentence the product page prints in
-/// full — the card does not truncate the long one, because a truncation is a
-/// string decision and those belong upstream.
-///
-/// The tap SETS `usual_qty`. A pharmacy that always buys three strips gets
-/// three in one tap instead of three taps on the plus, and the number comes
-/// from its own order history rather than from anything this widget counts.
 class _PurchaseBadge extends StatelessWidget {
   final Product product;
   final bool enabled;

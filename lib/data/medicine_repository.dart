@@ -556,6 +556,25 @@ class MedicineRepository {
     }
   }
 
+  /// CMD #2040 — the product page's compare table.
+  ///
+  /// One id in, the whole table out: `pdp_salt_compare()` picks the same-salt
+  /// set itself (this pack first), composes every row and every cell, and
+  /// carries the ADD verdict per column. The app contributes the product it is
+  /// standing on and nothing else.
+  Future<ProductCompare> fetchSaltCompare(String productId) async {
+    final id = int.tryParse(productId);
+    if (id == null) return ProductCompare.failed;
+    try {
+      final res =
+          await _rpc('pdp_salt_compare', params: {'p_product_id': id});
+      if (res is! Map) return ProductCompare.failed;
+      return ProductCompare.fromMap(Map<String, dynamic>.from(res));
+    } catch (_) {
+      return ProductCompare.failed;
+    }
+  }
+
   /// CMD #410 — the wishlist's price/stock alert block. The digest that
   /// generated these rows is sent by the dispatcher; this is the in-app
   /// record of the same events.

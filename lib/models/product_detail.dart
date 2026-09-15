@@ -1,4 +1,5 @@
-import 'product.dart' show Availability, Pricing, PurchaseOverlay;
+import 'product.dart'
+    show Availability, Pricing, Product, PurchaseOverlay;
 import 'product_reviews.dart' show RatingSummary;
 
 /// CHANGE #636 — the `product_detail(p_product_id)` payload, parsed and nothing
@@ -97,6 +98,12 @@ class ProductDetail {
   final List<PdSection> sections;
   final List<PdSimilar> similar;
 
+  /// CMD #2040 — THE rail. `pdp_salt_rail()` sends full storefront cards, so
+  /// the page draws the same [CompactProductCard] the grid draws instead of a
+  /// look-alike tile. [similar] above is the pre-#2040 payload's bare rail and
+  /// is only read when this one is absent.
+  final PdSaltRail saltRail;
+
   /// CMD #366 (row 171) — the PRICED substitute block. `similar` above is the
   /// original salt rail and keeps its exact shape (a protected test pins it);
   /// this is the same mechanism extended, as Om asked, rather than a second
@@ -174,6 +181,10 @@ class ProductDetail {
 
   /// CMD #410 — the compare checkbox's caption and the tray's cap, both the
   /// backend's. The app owns only WHICH products are in the tray.
+  /// CMD #2040 — the word on the outlined Compare button, `cmp_open`. Empty
+  /// means the backend sent none, and then there is no button: the app never
+  /// supplies a caption of its own.
+  final String compareOpenLabel;
   final String compareAddLabel;
   final String compareCtaLabel;
   final int compareMax;
@@ -204,6 +215,7 @@ class ProductDetail {
     required this.overview,
     required this.sections,
     required this.similar,
+    this.saltRail = const PdSaltRail.empty(),
     required this.substitutes,
     required this.deliveryPromise,
     this.gallery = const PdGallery.empty(),
@@ -219,6 +231,7 @@ class ProductDetail {
     required this.showWishlist,
     required this.isWishlisted,
     this.rating = RatingSummary.absent,
+    this.compareOpenLabel = '',
     this.compareAddLabel = '',
     this.compareCtaLabel = '',
     this.compareMax = 3,
@@ -296,7 +309,11 @@ class ProductDetail {
           .toList(growable: false),
       sections: ((m['sections'] as List?) ?? const [])
           .whereType<Map>()
-          .map((r) => PdSection(title: _s(r['title']), body: _s(r['body'])))
+          .map((r) => PdSection(
+                title: _s(r['title']),
+                body: _s(r['body']),
+                accordion: r['accordion'] == true,
+              ))
           .toList(growable: false),
       similar: ((m['similar'] as List?) ?? const [])
           .whereType<Map>()
@@ -310,6 +327,7 @@ class ProductDetail {
                 mrpLabel: _s(r['mrp_label']),
               ))
           .toList(growable: false),
+      saltRail: PdSaltRail.fromMap(m['salt_rail']),
       substitutes: PdSubstitutes.fromMap(m['substitutes']),
       deliveryPromise: PdPromise.fromMap(m['delivery_promise']),
       gallery: PdGallery.fromMap(m['gallery'], header['images']),
@@ -325,6 +343,7 @@ class ProductDetail {
       showWishlist: m['show_wishlist'] == true,
       isWishlisted: m['is_wishlisted'] == true,
       rating: RatingSummary.fromMap(m['rating']),
+      compareOpenLabel: _s((m['compare'] as Map?)?['open_label']),
       compareAddLabel: _s((m['compare'] as Map?)?['add_label']),
       compareCtaLabel: _s((m['compare'] as Map?)?['cta_label']),
       compareMax: ((m['compare'] as Map?)?['max'] is int)
@@ -366,6 +385,48 @@ class ProductDetail {
         showWishlist: false,
         isWishlisted: false,
       );
+}
+
+/// CMD #2040 — the ONE rail under the product page.
+///
+/// The page used to carry two rails off the same salt column: `similar` (bare
+/// tiles it drew itself) and `substitutes` (a second design with its own
+/// compare tray). They were one thing wearing two coats. `pdp_salt_rail()`
+/// replaces both, and it sends the SAME card payload the storefront grid gets
+/// — so the rail renders [CompactProductCard] and there is now exactly one
+/// product card in the app.
+///
+/// `has` is the backend's verdict: a pack that is the only one of its salt
+/// draws no rail at all rather than an empty heading.
+class PdSaltRail {
+  final bool has;
+  final String title;
+  final List<Product> items;
+
+  const PdSaltRail({
+    required this.has,
+    required this.title,
+    required this.items,
+  });
+
+  const PdSaltRail.empty()
+      : has = false,
+        title = '',
+        items = const [];
+
+  factory PdSaltRail.fromMap(Object? raw) {
+    if (raw is! Map) return const PdSaltRail.empty();
+    final m = raw.cast<String, dynamic>();
+    final items = ((m['items'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((r) => Product.fromHomeCard(r.cast<String, dynamic>()))
+        .toList(growable: false);
+    return PdSaltRail(
+      has: m['has'] == true && items.isNotEmpty,
+      title: ProductDetail._s(m['title']),
+      items: items,
+    );
+  }
 }
 
 /// CMD #366 row 171. Every string here is `same_composition_options()`'s —
@@ -496,7 +557,17 @@ class PdOverviewRow {
 class PdSection {
   final String title;
   final String body;
-  const PdSection({required this.title, required this.body});
+
+  /// CMD #2040 — whether this section is one of the collapsed accordions. The
+  /// LIST of accordion sections is `pdp_accordion_sections` in Postgres, so
+  /// adding one is an UPDATE: the page never matches on a title it knows.
+  final bool accordion;
+
+  const PdSection({
+    required this.title,
+    required this.body,
+    this.accordion = false,
+  });
 }
 
 class PdSimilar {

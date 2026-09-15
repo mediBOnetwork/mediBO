@@ -58,8 +58,9 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../../features/whatsapp/ui/wa_campaign_chips.dart';
 import '../../design_tokens.dart';
+import '../../features/whatsapp/ui/wa_campaign_chips.dart';
+import '../../features/whatsapp/ui/wa_channel_preview.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 
@@ -197,6 +198,8 @@ class WaOpsScreen extends StatefulWidget {
   final WaSendRetryRpc? sendRetryRpc;
   final ZonesContactScreenRpc? zonesRpc;
   final ZoneContactSaveRpc? zoneSaveRpc;
+  final WaChannelPreviewRpc? channelPreviewRpc;
+  final WaChannelResetRpc? channelResetRpc;
 
   /// How long Refresh waits between queueing the Meta fetch and re-reading it.
   /// Three seconds in production (the edge function has to come back); tests
@@ -215,6 +218,8 @@ class WaOpsScreen extends StatefulWidget {
     this.sendRetryRpc,
     this.zonesRpc,
     this.zoneSaveRpc,
+    this.channelPreviewRpc,
+    this.channelResetRpc,
     this.refreshDelay = const Duration(seconds: 3),
   });
 
@@ -263,6 +268,8 @@ class _WaOpsScreenState extends State<WaOpsScreen> {
           _EventRoutesSection(
             routesRpc: widget.routesRpc,
             saveRpc: widget.routeSaveRpc,
+            channelPreviewRpc: widget.channelPreviewRpc,
+            channelResetRpc: widget.channelResetRpc,
           ),
           SizedBox(height: Ds.space.x24),
           _SectionHeading(
@@ -331,7 +338,14 @@ class _SectionHeading extends StatelessWidget {
 class _EventRoutesSection extends StatefulWidget {
   final WaEventRoutesRpc? routesRpc;
   final WaEventRouteSaveRpc? saveRpc;
-  const _EventRoutesSection({this.routesRpc, this.saveRpc});
+  final WaChannelPreviewRpc? channelPreviewRpc;
+  final WaChannelResetRpc? channelResetRpc;
+  const _EventRoutesSection({
+    this.routesRpc,
+    this.saveRpc,
+    this.channelPreviewRpc,
+    this.channelResetRpc,
+  });
 
   @override
   State<_EventRoutesSection> createState() => _EventRoutesSectionState();
@@ -554,6 +568,13 @@ class _EventRoutesSectionState extends State<_EventRoutesSection> {
                   onBypass: (v) => _save((r['event_key'] ?? '').toString(), {
                     'p_bypass_window': v,
                   }),
+                  onPreview: () => showWaChannelPreview(
+                    context,
+                    eventKey: (r['event_key'] ?? '').toString(),
+                    previewRpc: widget.channelPreviewRpc,
+                    resetRpc: widget.channelResetRpc,
+                    onChanged: _load,
+                  ),
                 ),
               ),
           ],
@@ -599,6 +620,10 @@ class _EventRouteCard extends StatelessWidget {
   final ValueChanged<bool> onEnabled;
   final ValueChanged<bool> onBypass;
 
+  /// Opens the three-channel preview for this event. The chips beside it come
+  /// from the screen payload, so the card itself makes no extra call.
+  final VoidCallback onPreview;
+
   const _EventRouteCard({
     required this.row,
     required this.approved,
@@ -609,6 +634,7 @@ class _EventRouteCard extends StatelessWidget {
     required this.onPickTemplate,
     required this.onEnabled,
     required this.onBypass,
+    required this.onPreview,
   });
 
   String _s(String k) => (row[k] ?? '').toString();
@@ -623,6 +649,10 @@ class _EventRouteCard extends StatelessWidget {
     final pipelineNote = _s('pipeline_note');
     final description = _s('description');
     final sent = (row['sent_30d'] ?? 0).toString();
+    // The three chips and the Preview label are already in the row payload.
+    final channels = row['channels'] is Map
+        ? Map<String, dynamic>.from(row['channels'] as Map)
+        : <String, dynamic>{};
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -738,6 +768,10 @@ class _EventRouteCard extends StatelessWidget {
               ),
             ],
           ),
+          if (channels.isNotEmpty) ...[
+            const Divider(height: 22, color: _kBorder),
+            WaChannelChips(channels: channels, onPreview: onPreview),
+          ],
           if (autoManage && !overridden)
             Padding(
               padding: const EdgeInsets.only(top: 10),

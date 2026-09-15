@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'boot_env.dart' as boot;
-import 'widgets/app_update_prompt.dart';
 import 'widgets/update_bar.dart';
 import 'widgets/test_mode_banner.dart';
 import 'services/test_session.dart';
@@ -21,6 +20,7 @@ import 'order_hours_state.dart';
 import 'inquiry_lock_state.dart';
 import 'url_sync.dart' show captureInitialPath;
 import 'services/crash_reporting.dart'; // CHANGE #473
+import 'services/android_update_bar.dart';
 import 'services/version_watcher.dart';
 import 'utils/render_log.dart';
 import 'utils/responsive_audit.dart';
@@ -1563,9 +1563,12 @@ class _AppRootState extends State<_AppRoot> {
             // try/catch inside). The BACKEND decides the destination from the
             // install source, so a Play install is sent to the Play listing and
             // never offered the APK that its signature check would block.
-            if (context.mounted) {
-              try { showAppUpdatePromptIfAny(context); } catch (_) {}
-            }
+            // CMD #2028 — the Android half of the floating update pill.
+            // It replaces the #282 sheet: same bar as the web, no dismiss, and
+            // Update Now runs Play's own in-app update flow (flexible, or
+            // immediate below the backend's minimum version) instead of
+            // bouncing the customer out to the store listing.
+            try { AndroidUpdateBar.instance.start(); } catch (_) {}
           });
         }
         // Entering the authenticated shell is the third moment a WhatsApp

@@ -34,6 +34,7 @@ import '../models/search_page.dart';
 import '../services/ui_copy.dart';
 import '../url_sync.dart';
 import '../utils/render_log.dart';
+import '../widgets/cart_pill.dart';
 import '../widgets/catalogue_alphabet_rail.dart';
 import '../widgets/catalogue_landing.dart';
 import '../widgets/catalogue_product_card.dart';
@@ -884,13 +885,19 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
     }
     return SingleChildScrollView(
       controller: _scroll,
-      child: SearchResultsView(
-        surface: 'catalogue',
-        payload: p,
-        loadingMore: _searchLoadingMore,
-        onOpenProduct: (id) => Navigator.of(context).pushNamed('/product/$id'),
-        onLoadMore: _moreSearch,
-        onEmptyAction: _onSearchEmptyAction,
+      child: Column(
+        children: [
+          SearchResultsView(
+            surface: 'catalogue',
+            payload: p,
+            loadingMore: _searchLoadingMore,
+            onOpenProduct: (id) => Navigator.of(context).pushNamed('/product/$id'),
+            onLoadMore: _moreSearch,
+            onEmptyAction: _onSearchEmptyAction,
+          ),
+          // CMD #2043 — room at the end for the floating cart pill.
+          SizedBox(height: CartPill.bottomInset),
+        ],
       ),
     );
   }
@@ -991,6 +998,8 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         // Cold chain stays a chip, under the banner.
         if (home.showTabs) SliverToBoxAdapter(child: _chipRow()),
         SliverToBoxAdapter(child: SizedBox(height: Ds.space.x24)),
+        // CMD #2043 — room at the end for the floating cart pill.
+        CartPill.bottomInsetSliver,
       ],
     );
   }
@@ -1073,6 +1082,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
             ),
           ),
         SliverToBoxAdapter(child: _Tail(loading: _loadingMore)),
+        CartPill.bottomInsetSliver,
       ],
     );
 
@@ -1137,6 +1147,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
             onClear: () => _go(_route.copy(filters: const CatFilterState())),
           ),
         ),
+        CartPill.bottomInsetSliver,
       ]);
     }
     // CMD #1903 — a product LIST, one row per product, and the same
@@ -1191,6 +1202,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
               ),
             ),
           ),
+          CartPill.bottomInsetSliver,
         ],
     );
   }

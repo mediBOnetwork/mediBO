@@ -18,6 +18,7 @@ import '../services/payload_cache.dart';
 import '../theme.dart';
 import '../util.dart';
 import '../utils/render_log.dart';
+import '../widgets/cart_pill.dart';
 import '../widgets/animations.dart';
 import '../widgets/compact_product_card.dart';
 import '../widgets/product_row_card.dart';
@@ -826,14 +827,20 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     if (p == null || (!p.ok && _searchError != null)) {
       return _InlineError(onRetry: _resetAndLoad);
     }
-    return SearchResultsView(
-      surface: 'home',
-      payload: p,
-      loadingMore: _searchLoadingMore,
-      onOpenProduct: (id) =>
-          Navigator.of(context).pushNamed('/product/$id'),
-      onLoadMore: _loadMoreSearch,
-      onEmptyAction: _onEmptyAction,
+    return Column(
+      children: [
+        SearchResultsView(
+          surface: 'home',
+          payload: p,
+          loadingMore: _searchLoadingMore,
+          onOpenProduct: (id) =>
+              Navigator.of(context).pushNamed('/product/$id'),
+          onLoadMore: _loadMoreSearch,
+          onEmptyAction: _onEmptyAction,
+        ),
+        // CMD #2043 — room at the end for the floating cart pill.
+        SizedBox(height: CartPill.bottomInset),
+      ],
     );
   }
 

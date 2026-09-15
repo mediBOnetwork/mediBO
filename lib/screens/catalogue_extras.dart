@@ -5,6 +5,7 @@ import '../design_tokens.dart';
 import '../models/product.dart';
 import '../utils/render_log.dart';
 import '../utils/toast.dart';
+import '../widgets/cart_pill.dart';
 import '../widgets/compact_product_card.dart';
 
 /// CHANGE #748 — the three things the Catalogue tab was missing.
@@ -94,7 +95,9 @@ class _CatalogueRecentState extends State<CatalogueRecent> {
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView.builder(
-        padding: EdgeInsets.all(Ds.space.x16),
+        // CMD #2043 — room at the end for the floating cart pill.
+        padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x16, Ds.space.x16,
+            Ds.space.x16 + CartPill.bottomInset),
         itemCount: groups.length + 1,
         itemBuilder: (context, i) {
           if (i == 0) {

@@ -628,14 +628,37 @@ class _CartBadgePulseState extends State<_CartBadgePulse>
 /// Both breakpoints mount this one helper: the mobile Stack and the desktop
 /// Stack drew the same pill with the same reasoning, and a lift that is right
 /// on one of them and missing on the other is the bug this shape prevents.
-Widget shellFloatingCartPill(VoidCallback onTap) =>
-    ValueListenableBuilder<double>(
-      valueListenable: appUpdateBarHeight,
-      child: RepaintBoundary(child: CartPill(onTap: onTap)),
-      builder: (_, barH, pill) => Positioned(
-        left: 0,
-        right: 0,
-        bottom: Ds.space.x16 + barH,
-        child: pill!,
+///
+/// CMD #2043 — and WHICH page floats it is the registry's answer, not a page
+/// number written here. Both call sites used to read `_index == 0`, which was
+/// written when Home was the only storefront surface and was never revisited
+/// when the Catalogue became page 12: a shopper browsing a company or a salt
+/// list had a full cart and no way back to it. `cart_pill` is a column on the
+/// slot row now, so adding a surface is an UPDATE.
+///
+/// Until the registry answers, Home alone floats the pill — the same surface
+/// it floated on before this change, so a slow nav fetch can never take a
+/// control away that was already there.
+/// The decision itself lives on [CartPill.floatsOnPage] — a pure function next
+/// to the widget it governs, so the protected suite can hold it down without
+/// booting the shell.
+Widget shellFloatingCartPill(VoidCallback onTap, int page) =>
+    ValueListenableBuilder<List<Map<String, dynamic>>>(
+      valueListenable: CustomerNav.value,
+      child: ValueListenableBuilder<double>(
+        valueListenable: appUpdateBarHeight,
+        child: RepaintBoundary(child: CartPill(onTap: onTap)),
+        builder: (_, barH, pill) => Positioned(
+          left: 0,
+          right: 0,
+          // CMD #2043 — the pill floats its own gap above the bottom nav, and
+          // the lists reserve the same number at their end, so "12px above the
+          // bar" and "nothing hidden behind it" are one constant.
+          bottom: CartPill.bottomGap + barH,
+          child: pill!,
+        ),
       ),
+      builder: (_, slots, pill) => CartPill.floatsOnPage(slots, page)
+          ? pill!
+          : const SizedBox.shrink(),
     );

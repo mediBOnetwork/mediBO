@@ -349,6 +349,13 @@ class DsMotion {
 class DsTouch {
   final double minTarget, listRowMinHeight;
 
+  /// CMD #2030 — the storefront header band's height, in logical pixels. It is
+  /// a token rather than a constant because the band is now scroll-linked: the
+  /// number is both the row's height AND the exact distance the band travels
+  /// before it is gone, so the two can never be set apart by an edit. Retuning
+  /// the header is one `ui_design_set` away, with no deploy.
+  final double headerBand;
+
   /// CHANGE #286 — how far above the bottom of the screen a pinned bar floats,
   /// so it clears the bottom nav (and any floating cart pill) instead of
   /// covering it. Backend token, so the offset is retunable with zero deploy.
@@ -358,12 +365,17 @@ class DsTouch {
     required this.minTarget,
     required this.listRowMinHeight,
     required this.bottomBarGap,
+    required this.headerBand,
   });
-  factory DsTouch._defaults() =>
-      const DsTouch(minTarget: 44, listRowMinHeight: 56, bottomBarGap: 56);
+  factory DsTouch._defaults() => const DsTouch(
+      minTarget: 44,
+      listRowMinHeight: 56,
+      bottomBarGap: 56,
+      headerBand: 56);
   factory DsTouch._from(Map m, DsTouch f) => DsTouch(
         minTarget: Ds._num(m['minTarget'], f.minTarget),
         listRowMinHeight: Ds._num(m['listRowMinHeight'], f.listRowMinHeight),
         bottomBarGap: Ds._num(m['bottomBarGap'], f.bottomBarGap),
+        headerBand: Ds._num(m['headerBand'], f.headerBand),
       );
 }

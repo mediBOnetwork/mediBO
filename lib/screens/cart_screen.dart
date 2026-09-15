@@ -1753,7 +1753,11 @@ class _CartItemCard extends StatelessWidget {
 
     return Padding(
       padding: EdgeInsets.symmetric(vertical: Ds.space.x12),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+      Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // ── Left: the square tile, with the Rx badge on its corner ───────
@@ -1769,39 +1773,36 @@ class _CartItemCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
+                // CMD #2025 — name AND pack are one tap target, which keeps it
+                // over 44 px tall on a phone without padding the compact row
+                // out of its rhythm.
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: canOpen ? openProduct : null,
                   child: Padding(
-                    // Keeps the name's tap target at the 44 px minimum without
-                    // moving it off the grid the rest of the row sits on.
                     padding: EdgeInsets.symmetric(vertical: Ds.space.x4),
-                    child: Text(
-                      name,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: Ds.t.body.copyWith(
-                          color: Ds.c.text, fontWeight: FontWeight.w700),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          name,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Ds.t.body.copyWith(
+                              color: Ds.c.text, fontWeight: FontWeight.w700),
+                        ),
+                        SizedBox(height: Ds.space.x4),
+                        Text(
+                          pack.isNotEmpty ? pack : p.packSize,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Ds.t.caption,
+                        ),
+                      ],
                     ),
                   ),
                 ),
-                Text(
-                  pack.isNotEmpty ? pack : p.packSize,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Ds.t.caption,
-                ),
-                // CMD #2025 — a save that did not land is THIS row's problem.
-                // The sentence and the retry word are the backend's; the rest
-                // of the cart stays usable and nothing blocks the screen.
-                if (cart.hasRowError(p.id)) ...[
-                  SizedBox(height: Ds.space.x4),
-                  C2025RowRetry(
-                    message: cart.rowErrorMessage(p.id),
-                    label: cart.rowRetryLabel(p.id),
-                    onRetry: () => cart.retryRow(p.id),
-                  ),
-                ],
                 // CHANGE #553 — the backend's verdict for this line, in the
                 // backend's own label and colours, shown only when it says the
                 // line cannot be ordered. It is the one thing that may still
@@ -1866,6 +1867,20 @@ class _CartItemCard extends StatelessWidget {
           _C1912Remove(onTap: () => cart.remove(p), danger: line.unavailable),
         ],
       ),
+      // CMD #2025 — a save that did not land is THIS row's problem. It gets
+      // the full row width (a phone has no room for it beside the pill), the
+      // sentence and the retry word are the backend's, and the rest of the
+      // cart stays usable: nothing blocks the screen.
+      if (cart.hasRowError(p.id)) ...[
+        SizedBox(height: Ds.space.x4),
+        C2025RowRetry(
+          message: cart.rowErrorMessage(p.id),
+          label: cart.rowRetryLabel(p.id),
+          onRetry: () => cart.retryRow(p.id),
+        ),
+      ],
+        ],
+      ),
     );
   }
 }
@@ -1896,7 +1911,6 @@ class C2025RowRetry extends StatelessWidget {
   Widget build(BuildContext context) {
     RenderLog.write(kC2025RowRetry, message);
     return Row(
-      mainAxisSize: MainAxisSize.min,
       children: [
         Flexible(
           child: Text(

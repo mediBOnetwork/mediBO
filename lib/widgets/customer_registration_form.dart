@@ -11,11 +11,14 @@
 // renders what the backend sent, in the order it sent it, and hands the typed
 // values back untouched. Re-wording a label or re-ordering a field is an
 // UPDATE on customer_form_field, never a deploy.
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../design_tokens.dart';
+import '../services/registration_payload.dart';
 import '../utils/render_log.dart';
 import 'store_pin_picker.dart';
 
@@ -125,7 +128,73 @@ class CustomerFormController extends ChangeNotifier {
   }
 
   TextEditingController controllerFor(String key) =>
-      _ctl.putIfAbsent(key, () => TextEditingController());
+      _ctl.putIfAbsent(key, () {
+        final c = TextEditingController();
+        // CMD #2059 — a field created after autosave was switched on is
+        // watched too, so the draft never has a hole in it.
+        if (_autosaveOn) c.addListener(_scheduleSave);
+        return c;
+      });
+
+  // ── CMD #2059 — instant form, and a draft that survives everything ───────
+  //
+  // The schema, the login prefill and the saved draft all arrived with the
+  // home feed. Seeding from them is what makes the form open RENDERED; the
+  // network copy that follows replaces nothing the user has typed, because
+  // the draft is written on every change and read back before it.
+  bool _autosaveOn = false;
+  Timer? _saveTimer;
+  Map<String, String> _saved = {};
+
+  /// The backend's own word for the draft's state ('', 'Saving…', 'Saved').
+  final ValueNotifier<String> draftLabel = ValueNotifier<String>('');
+
+  /// True when the payload the app was already holding filled this form in.
+  bool seedFromSurface() {
+    if (!RegistrationSurface.hasForm) return false;
+    seed(RegistrationSurface.schema);
+    // Identity first, then what was typed: a draft always outranks a prefill.
+    applyMap(RegistrationSurface.prefill);
+    applyMap(RegistrationSurface.draft);
+    return true;
+  }
+
+  /// Start writing every change to the backend draft.
+  void enableAutosave() {
+    if (_autosaveOn) return;
+    _autosaveOn = true;
+    _saved = {for (final e in _ctl.entries) e.key: e.value.text.trim()};
+    for (final e in _ctl.entries) {
+      e.value.addListener(_scheduleSave);
+    }
+  }
+
+  void _scheduleSave() {
+    if (!_autosaveOn) return;
+    final ms =
+        (RegistrationSurface.autosave['debounce_ms'] as num?)?.toInt() ?? 800;
+    _saveTimer?.cancel();
+    _saveTimer = Timer(Duration(milliseconds: ms), flushDraft);
+  }
+
+  /// Send everything that has changed since the last write. Public so a test
+  /// can drive it without waiting on a real debounce.
+  Future<void> flushDraft() async {
+    if (!_autosaveOn) return;
+    final patch = <String, dynamic>{};
+    for (final e in _ctl.entries) {
+      final v = e.value.text.trim();
+      if (v == (_saved[e.key] ?? '')) continue;
+      _saved[e.key] = v;
+      patch[e.key] = v;
+    }
+    if (patch.isEmpty) return;
+    draftLabel.value =
+        (RegistrationSurface.autosave['saving_label'] ?? '').toString();
+    await RegistrationSurface.saveDraft(patch);
+    draftLabel.value =
+        (RegistrationSurface.autosave['saved_label'] ?? '').toString();
+  }
 
   void setValue(String key, dynamic value) {
     if (value == null) return;
@@ -194,6 +263,9 @@ class CustomerFormController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _saveTimer?.cancel();
+    _autosaveOn = false;
+    draftLabel.dispose();
     for (final c in _ctl.values) {
       c.dispose();
     }
@@ -226,6 +298,10 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
   void initState() {
     super.initState();
     widget.controller.addListener(_onChange);
+    // CMD #2059 — paint from what the app is already holding, then let the
+    // network copy land behind it. An empty cache falls through to load(),
+    // which is the only case that ever shows the skeleton.
+    if (!widget.controller.ready) widget.controller.seedFromSurface();
     if (!widget.controller.ready) widget.controller.load();
   }
 
@@ -243,19 +319,9 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
   Widget build(BuildContext context) {
     final ctrl = widget.controller;
     if (!ctrl.ready) {
-      return Padding(
-        padding: EdgeInsets.all(Ds.space.x32),
-        child: Column(children: [
-          SizedBox(
-            width: Ds.space.x24,
-            height: Ds.space.x24,
-            child: CircularProgressIndicator(color: Ds.c.brand),
-          ),
-          SizedBox(height: Ds.space.x12),
-          Text(ctrl.loadError ?? ctrl.text('loading_label'),
-              style: Ds.t.caption, textAlign: TextAlign.center),
-        ]),
-      );
+      // CMD #2059 — a field SKELETON, never a lone spinner: the screen already
+      // shows the shape it is about to fill, so nothing flashes empty.
+      return FormFieldsSkeleton(note: ctrl.loadError ?? '');
     }
 
     final wide = MediaQuery.of(context).size.width >= 600;
@@ -446,6 +512,50 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
               value: o, child: Text(o, style: Ds.t.body, overflow: TextOverflow.ellipsis)),
       ],
       onChanged: (v) => setState(() => ctl.text = v ?? ''),
+    );
+  }
+}
+
+/// CMD #2059 — the form's own outline while the schema is on its way.
+///
+/// Four labelled bars at field height. It is not a loading message and it is
+/// not a spinner: it is what the fields will look like, so the change when
+/// they arrive is a fill, not a redraw.
+class FormFieldsSkeleton extends StatelessWidget {
+  const FormFieldsSkeleton({super.key, this.note = '', this.rows = 4});
+
+  final String note;
+  final int rows;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget bar(double widthFactor, double height) => FractionallySizedBox(
+          alignment: Alignment.centerLeft,
+          widthFactor: widthFactor,
+          child: Container(
+            height: height,
+            decoration: BoxDecoration(
+                color: Ds.c.divider, borderRadius: Ds.r.rButton),
+          ),
+        );
+    final children = <Widget>[];
+    for (var i = 0; i < rows; i++) {
+      children
+        ..add(bar(0.35, Ds.space.x12))
+        ..add(SizedBox(height: Ds.space.x8))
+        ..add(bar(1, Ds.touch.minTarget))
+        ..add(SizedBox(height: Ds.space.x16));
+    }
+    if (note.isNotEmpty) {
+      children.add(Text(note, style: Ds.t.caption));
+    }
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: Ds.space.x8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: children,
+      ),
     );
   }
 }

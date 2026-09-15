@@ -74,6 +74,7 @@ class OrderGate {
     required this.actionLabel,
     required this.actionRoute,
     required this.shortLabel,
+    this.actionKind = '',
   });
 
   static const OrderGate open = OrderGate(
@@ -112,6 +113,12 @@ class OrderGate {
   /// The one-line form, for a checkout bar rather than a dialog.
   final String shortLabel;
 
+  /// CMD #2059 — HOW this blocker is answered, decided by the backend.
+  /// '' is the ordinary dialog; 'registration_sheet' is the unregistered case,
+  /// which opens the registration form over the cart instead of navigating
+  /// away from it.
+  final String actionKind;
+
   factory OrderGate.fromJson(Map<String, dynamic>? json) {
     if (json == null) return OrderGate.unresolved;
     String s(String k) => json[k] == null ? '' : json[k].toString();
@@ -123,6 +130,7 @@ class OrderGate {
       actionLabel: s('action_label'),
       actionRoute: s('action_route'),
       shortLabel: s('short_label'),
+      actionKind: s('action_kind'),
     );
   }
 }

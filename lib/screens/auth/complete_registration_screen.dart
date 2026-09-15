@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../design_tokens.dart';
+import '../../services/registration_payload.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import 'business_details_screen.dart';
@@ -82,7 +83,38 @@ class _CompleteRegistrationScreenState
   @override
   void initState() {
     super.initState();
+    // CMD #2059 — the cached surface first, so the form can paint on this
+    // frame; my_session() then confirms it behind the rendered fields.
+    RegistrationSurface.restore().then((_) {
+      if (mounted) setState(() {});
+    });
     _load();
+  }
+
+  /// CMD #2059 — what the app already knows, without waiting for the network.
+  ///
+  /// The backend said this account still owes the form and handed over the
+  /// schema with the home feed. That is enough to render it; the identity the
+  /// form needs comes from the same payload's prefill.
+  SignupGate? get _cachedGate {
+    if (!RegistrationSurface.needs || !RegistrationSurface.hasForm) return null;
+    if ((RegistrationSurface.payload['stage'] ?? '') != 'details') return null;
+    String uid = '';
+    try {
+      uid = Supabase.instance.client.auth.currentUser?.id ?? '';
+    } catch (_) {
+      return null;
+    }
+    if (uid.isEmpty) return null;
+    final pre = RegistrationSurface.prefill;
+    return SignupGate(
+      signedIn: true,
+      needsProfile: true,
+      userId: uid,
+      phone: (pre['whatsapp_no'] ?? '').toString(),
+      email: (pre['email'] ?? '').toString(),
+      homeRoute: '',
+    );
   }
 
   Future<void> _load() async {
@@ -122,11 +154,14 @@ class _CompleteRegistrationScreenState
 
   @override
   Widget build(BuildContext context) {
-    final gate = _gate;
+    // CMD #2059 — the cached surface answers while my_session() is still in
+    // flight, so Continue opens a rendered form instead of a spinner. The
+    // network answer replaces it the moment it lands.
+    final gate = _gate ?? (_loading ? _cachedGate : null);
 
     // The signed-in user who still owes the form IS the form — no wrapper
     // chrome around it, so the WhatsApp and Google paths land on one screen.
-    if (!_loading && !_failed && gate != null && gate.signedIn && gate.needsProfile) {
+    if (!_failed && gate != null && gate.signedIn && gate.needsProfile) {
       return BusinessDetailsScreen(
         userId: gate.userId,
         phone: gate.phone,
@@ -135,8 +170,12 @@ class _CompleteRegistrationScreenState
         // not close the flow, it advances it; Close (the form's own X) still
         // pops, and after CMD #1935 that pop lands on Home rather than on a
         // blank screen, because this route is pushed ON TOP of home_route.
-        onSaved: () => Navigator.of(context)
-            .pushReplacementNamed(CompleteRegistrationScreen.docsRoute),
+        onSaved: () {
+          // CMD #2059 — the draft is spent and the step has moved on.
+          RegistrationSurface.submitted();
+          Navigator.of(context)
+              .pushReplacementNamed(CompleteRegistrationScreen.docsRoute);
+        },
       );
     }
 

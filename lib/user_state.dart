@@ -14,6 +14,7 @@ import 'services/access.dart';
 import 'services/map_config.dart'; // C634: one backend-owned map config, session-cached
 import 'services/customer_surfaces.dart'; // C745: the customer menu's device cache
 import 'utils/render_log.dart';
+import 'services/registration_payload.dart';
 
 /// CHANGE #571 — ONE question, ONE answer.
 ///
@@ -534,6 +535,12 @@ class AuthNotifier extends ChangeNotifier {
 
       _session = next;
       RenderLog.write('auth_role', next.role);
+
+      // CMD #2059 — the registration surface is cached PER ROLE, and this is
+      // the one place a role is known. Warming it here (never awaited) is what
+      // lets /complete-registration open already rendered.
+      RegistrationSurface.role = next.role.isEmpty ? 'customer' : next.role;
+      RegistrationSurface.warm().ignore();
       RenderLog.write('c571_surface', next.surfaceName);
       RenderLog.write('c571_can_order', next.canPlaceOrder.toString());
       RenderLog.write('c571_gate_reason', next.orderGate.reason);
@@ -595,6 +602,18 @@ class AuthNotifier extends ChangeNotifier {
   /// Debounced to one cheap call per 20 s, the same budget [checkForcedLogout]
   /// runs on, and it never blocks paint: on failure `_loadSession` keeps the
   /// session it already had.
+  /// CMD #2059 — an immediate re-read, with no debounce in front of it.
+  ///
+  /// Used when the app KNOWS the answer just changed (the registration sheet
+  /// was submitted from the cart): the order gate must reopen on this frame,
+  /// not on the next 20-second tick.
+  Future<void> refreshSession() async {
+    if (!isAuthenticated) return;
+    _lastSessionRefresh = DateTime.now();
+    await _loadSession();
+    notifyListeners();
+  }
+
   DateTime _lastSessionRefresh = DateTime.fromMillisecondsSinceEpoch(0);
   Future<void> refreshSessionIfStale() async {
     if (!isAuthenticated) return;

@@ -15,8 +15,10 @@
 --   * the pack caption is now the SAME sf_pack_badge() string the storefront
 --     card prints, instead of the cart's own "1 Strip".
 --   * cart_availability() joined "MEDICINE" on m.id::text = ci.product_id,
---     which can never use the primary key — a sequential scan of the whole
---     catalogue on every open. Cast the TEXT side instead.
+--     which leans on the functional index medicine_id_text_idx and still pays
+--     a heap fetch per line. Casting the TEXT side instead turns it into an
+--     Index Only Scan on "MEDICINE_pkey" (verified with EXPLAIN), which is the
+--     same join every other cart function already does.
 --
 -- Idempotent: re-running replaces functions and re-asserts copy/indexes.
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -608,9 +610,11 @@ as $function$
   -- it: the count on the row, the verdict, the unavailable tally and the
   -- blocking label.
   -- CMD #2025 — the join was `m.id::text = ci.product_id`, which casts the
-  -- INDEXED side and so scanned the whole catalogue on every cart open. The
-  -- TEXT side is cast instead, guarded by the same digits test cart_state()
-  -- uses, so a non-catalogue row still lands in `unresolved`.
+  -- INDEXED side and so needs the secondary functional index plus a heap
+  -- fetch per line. The TEXT side is cast instead — guarded by the same digits
+  -- test cart_state() uses, so a non-catalogue row still lands in
+  -- `unresolved` — and EXPLAIN then shows an Index Only Scan on the primary
+  -- key, which is what every other cart function already gets.
   WITH lines AS (
     SELECT ci.product_id, ci.product_name, ci.quantity,
            m.id AS mid,
@@ -662,3 +666,110 @@ grant execute on function public._cart_line_json(jsonb, jsonb)
   to anon, authenticated, service_role;
 -- _cart_write_item is an internal step: only the two doors above call it.
 grant execute on function public._cart_write_item(text, integer, uuid) to service_role;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- CMD #2025 — the regression guard this command had to walk through.
+--
+-- `rg_check()` was RED for the whole fleet on c2023_one_zone_availability_truth,
+-- and a red guard blocks dev_cmd_complete for every worker. Its `missing` list
+-- is empty (every card / add / order RPC does reach zone_available — including
+-- this command's new cart_update_item, through _cart_write_item →
+-- storefront_effective_count), so the red was entirely `direct_store_readers`:
+--
+--   _cat_page_ids        — the name appears ONLY in a comment
+--                          ("The anti-join probes catalogue_zone_avail's …")
+--   _search_cards        — the name appears ONLY in a comment
+--                          ("a direct catalogue_zone_avail probe that …")
+--   catalogue_cache_tick — a REAL join, and a deliberate one
+--
+-- Two of the three were flagged for mentioning the table in prose. The checker
+-- greps pg_proc.prosrc, so a comment reads exactly like a query — and the
+-- comments in question were written BY #2023 to explain that those functions
+-- stopped reading the store. Comments are stripped before the test now; that
+-- is a fix to the checker, not a loosening of the contract.
+--
+-- catalogue_cache_tick is the third kind of thing: the per-zone catalogue page
+-- cache builder, which joins the store set-wise in dynamic SQL to materialise a
+-- page. It is a maintainer of the cache, the same class as zone_avail_backfill,
+-- and asking zone_available() per row is precisely the per-row call the cache
+-- exists to avoid. It joins the allow list, with the reason recorded there.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+insert into public.zone_availability_store_allow (fn, note) values
+  ('catalogue_cache_tick',
+   'set-based page-cache builder — joins the store once per zone to materialise '
+   'a catalogue page; a per-row zone_available() is the cost this cache removes')
+on conflict (fn) do update set note = excluded.note;
+
+create or replace function public.zone_availability_contract(p_mode text default 'summary')
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path to 'public'
+as $function$
+declare
+  v_seen     text[] := array['zone_available','zone_available_products'];
+  v_frontier text[] := array['zone_available','zone_available_products'];
+  v_next     text[];
+  v_rx       text;
+  v_round    int := 0;
+  v_missing  jsonb;
+  v_direct   jsonb;
+  v_absent   jsonb;
+begin
+  while coalesce(array_length(v_frontier, 1), 0) > 0 and v_round < 12 loop
+    v_round := v_round + 1;
+    v_rx := '(^|[^a-zA-Z0-9_])(' ||
+            (select string_agg(x, '|') from unnest(v_frontier) x) || ')[[:space:]]*\(';
+    select coalesce(array_agg(distinct p.proname::text), '{}'::text[])
+      into v_next
+      from pg_proc p
+      join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public'
+       and not (p.proname::text = any (v_seen))
+       and p.prosrc ~ v_rx;
+    v_seen     := v_seen || v_next;
+    v_frontier := v_next;
+  end loop;
+
+  select coalesce(jsonb_agg(jsonb_build_object('fn', c.fn, 'kind', c.kind) order by c.fn), '[]'::jsonb)
+    into v_missing
+    from public.zone_availability_contract_fn c
+   where exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname = 'public' and p.proname::text = c.fn)
+     and not (c.fn = any (v_seen));
+
+  -- CMD #2025 — a COMMENT is not a read. Block comments and line comments are
+  -- stripped before the table name is looked for, so a function that explains
+  -- why it no longer touches catalogue_zone_avail stops being reported as
+  -- touching it.
+  select coalesce(jsonb_agg(distinct p.proname::text), '[]'::jsonb)
+    into v_direct
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public'
+     and regexp_replace(
+           regexp_replace(p.prosrc, '/\*.*?\*/', ' ', 'gs'),
+           '--[^' || chr(10) || ']*', ' ', 'g') ~ 'catalogue_zone_avail'
+     and not exists (select 1 from public.zone_availability_store_allow a
+                      where a.fn = p.proname::text);
+
+  select coalesce(jsonb_agg(c.fn order by c.fn), '[]'::jsonb)
+    into v_absent
+    from public.zone_availability_contract_fn c
+   where not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                      where n.nspname = 'public' and p.proname::text = c.fn);
+
+  return jsonb_build_object(
+    'ok', (jsonb_array_length(v_missing) = 0 and jsonb_array_length(v_direct) = 0),
+    'checked', (select count(*) from public.zone_availability_contract_fn),
+    'rounds', v_round,
+    'reaching', coalesce(array_length(v_seen, 1), 0),
+    'missing', v_missing,
+    'direct_store_readers', v_direct,
+    'not_present', v_absent);
+end
+$function$;
+
+revoke all on function public.zone_availability_contract(text) from public;
+grant execute on function public.zone_availability_contract(text) to service_role;

@@ -28,8 +28,7 @@ import 'view_as_state.dart';
 import 'models/cart_model.dart';
 import 'models/order_hours_model.dart';
 import 'models/inquiry_lock_model.dart';
-import 'screens/auth/complete_registration_screen.dart';
-import 'screens/auth/customer_docs_screen.dart';
+import 'screens/auth/one_registration_screen.dart';
 import 'screens/auth/login_screen.dart';
 
 import 'screens/customer/customer_staff_screen.dart'; // CMD #438: /customer/staff
@@ -192,13 +191,21 @@ final Map<String, WidgetBuilder> kAppRoutes = <String, WidgetBuilder>{
   // renders the backend's own sentence for a signed-out or already-registered
   // one. A real route (not a push from inside the login panel) is what lets the
   // form survive the page reload the OAuth round trip performs.
-  '/complete-registration': (_) => const CompleteRegistrationScreen(),
+  // CMD #2061 — ONE form. The details and the documents are the same screen
+  // now, so this address opens the merged surface. Every door (the login
+  // hand-off, the Home banner's Continue, the docs-pending Resume) already
+  // names this route, so nothing else had to learn a new address.
+  '/complete-registration': (_) => const OneRegistrationScreen(),
   // CMD #1935 — step 2 of registration, at a real address for the same reason
   // step 1 has one: the Home banner sends people here, and the backend names
   // the route (customer_registration_banner().route) rather than the app
   // guessing it. The screen guards nothing — kyc_doc_checklist() answers who
   // the viewer is and renders the backend's own sentence for a signed-out one.
-  '/customer/documents': (_) => const CustomerDocsScreen(),
+  // CMD #2061 — there is no separate step 2 any more. The old address stays
+  // alive because links and reminders still carry it, and it opens the one
+  // form, which scrolls straight to the documents section when a starred
+  // paper is still out.
+  '/customer/documents': (_) => const OneRegistrationScreen(),
   // CHANGE #631 (PART A) — the delivery-partner registration form.
   // delivery_partner_register() stamps auth.uid() itself, so the
   // screen asks for a sign-in rather than inventing an anonymous

@@ -7,7 +7,8 @@
 // worse outcome than no rail at all.
 //
 // What goes in it, what it is called and what order it is in are all
-// cart_rail_block()'s decision — read from cart_rail_config, laddering the
+// cart_rail_block()'s decision, carried on cart_render() — read from
+// cart_rail_config, laddering the
 // viewer's wishlist, then the cart's co-purchase companions, then the widely
 // stocked catalogue. This widget renders that list and nothing else.
 
@@ -32,7 +33,7 @@ class CartWishlistRail extends StatelessWidget {
     required this.onOpen,
   });
 
-  /// Builds the rail from the `rail` object of cart_bill_view(). Returns null
+  /// Builds the rail from the `rail` object of cart_render(). Returns null
   /// when the backend says there is nothing to suggest, so the cart omits the
   /// block rather than drawing an empty band.
   static CartWishlistRail? fromPayload(

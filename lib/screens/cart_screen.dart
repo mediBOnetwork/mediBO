@@ -78,10 +78,6 @@ class _CartScreenState extends State<CartScreen> {
   /// read). This flips on the first build so it fires exactly once per visit.
   bool _availOpened = false;
 
-  /// CMD #2025 — one bill read per burst of taps, not one per tap.
-  Timer? _billDebounce;
-  static const Duration _kBillDebounce = Duration(milliseconds: 600);
-
   static String _signatureOf(List<CartLine> lines) {
     final ids = lines.map((l) => l.product.id).toList()..sort();
     return ids.join(',');
@@ -202,50 +198,14 @@ class _CartScreenState extends State<CartScreen> {
   // added_by every time.
   final Set<String> _viewAsChecked = {};
 
-  // ── CMD #2014 — the bill summary card and the suggested rail ─────────────
-  // One RPC, cart_bill_view(), answers both blocks. Every row's label, icon,
-  // order, visibility, amount and popup copy is a cart_bill_row an admin edits;
-  // the rail's contents, title and order are cart_rail_block()'s decision.
-  // Nothing below is computed here — this state holds payloads, not numbers.
-  Map<String, dynamic> _billPayload = const <String, dynamic>{};
-
-  /// Ids AND quantities: the bill moves when a quantity moves, which the
-  /// availability signature (ids only) deliberately does not.
-  String? _billSignature;
-
-  static String _billSignatureOf(List<CartLine> lines) {
-    final parts = lines
-        .map((l) => '${l.product.id}:${l.quantity}')
-        .toList()
-      ..sort();
-    return parts.join(',');
-  }
-
-  @override
-  void dispose() {
-    _billDebounce?.cancel();
-    super.dispose();
-  }
-
-  Future<void> _refreshBill(List<CartLine> lines) async {
-    final signature = _billSignatureOf(lines);
-    _billSignature = signature;
-    if (lines.isEmpty) {
-      if (!mounted) return;
-      setState(() => _billPayload = const <String, dynamic>{});
-      return;
-    }
-    try {
-      final res = await Supabase.instance.client.rpc('cart_bill_view');
-      if (!mounted || _billSignature != signature) return;
-      setState(() => _billPayload = Map<String, dynamic>.from(res as Map));
-    } catch (_) {
-      // A bill that cannot be read must never take the cart down with it: the
-      // items, the checkout bar and Place Order all stand on their own.
-      if (!mounted) return;
-      setState(() => _billPayload = const <String, dynamic>{});
-    }
-  }
+  // ── CMD #2014/#2047 — the bill summary card and the suggested rail ───────
+  // Both blocks arrive on the cart payload itself (cart_render().bill / .rail).
+  // #2014 fetched them with a second call, cart_bill_view(), and every one of
+  // that call's failure modes is silent — so the blocks were simply never on
+  // screen. There is no second request here any more, and therefore nothing
+  // left to swallow: if the cart rendered, the bill rendered with it.
+  //
+  // Nothing below is computed here — the screen holds no bill state at all.
 
   /// CHANGE #597 — the View As selected-line subtotal, computed AND formatted
   /// by cart_selected_total(). It used to be summed in build() from
@@ -884,18 +844,6 @@ class _CartScreenState extends State<CartScreen> {
       });
     }
 
-    // CMD #2014 — the bill moves with quantities, so it has its own signature.
-    // CMD #2025 — and it is debounced: a burst of ten taps costs ONE bill read
-    // after the taps stop, not ten reads racing each other.
-    if (_billSignatureOf(cart.lines) != _billSignature) {
-      _billDebounce?.cancel();
-      _billDebounce = Timer(_kBillDebounce, () {
-        if (!mounted) return;
-        final lines = AppState.of(context).lines;
-        if (_billSignatureOf(lines) != _billSignature) _refreshBill(lines);
-      });
-    }
-
     // CMD #2039 — an unread cart is not an empty cart. Until the first payload
     // lands, `lines` is empty for the same reason a page is blank before it is
     // fetched, and drawing the empty state there told the customer their cart
@@ -972,13 +920,14 @@ class _CartScreenState extends State<CartScreen> {
             ? _UnavailableChip(text: cart.unavailableBadge)
             : null;
 
-    // CMD #2014 — both blocks live INSIDE the page scroll, below the items:
+    // CMD #2014/#2047 — both blocks live INSIDE the page scroll, below the
+    // items, and both are read straight off the cart payload:
     // they are handed to _ItemList as trailing rows rather than stacked around
     // it, so neither is sticky and neither sits under the header. Each returns
     // null when the backend says it has nothing to draw.
-    final bill = CartBillSummary.fromPayload(_billPayload['bill']);
+    final bill = CartBillSummary.fromPayload(cart.billBlock);
     final rail = CartWishlistRail.fromPayload(
-      _billPayload['rail'],
+      cart.railBlock,
       (p) => Navigator.of(context).pushNamed('/product/${p.id}'),
     );
     if (bill != null) RenderLog.write('c2014_bill_rows', bill.rows.length);

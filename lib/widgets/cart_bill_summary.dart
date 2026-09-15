@@ -87,7 +87,7 @@ class CartBillSummary extends StatelessWidget {
 
   const CartBillSummary({super.key, required this.title, required this.rows});
 
-  /// Builds the block from the `bill` object of cart_bill_view(). Returns null
+  /// Builds the block from the `bill` object of cart_render(). Returns null
   /// when there is nothing to draw, so the caller can omit it entirely rather
   /// than render an empty card.
   static CartBillSummary? fromPayload(Object? raw) {

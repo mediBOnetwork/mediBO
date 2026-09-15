@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- CMD #1931 — the name Android's own "Notification access" settings list
+         shows next to the switch. This is an OS-level resource read by the
+         system Settings app before mediBO is ever launched, so it cannot come
+         from ui_copy like the in-app wording does. -->
+    <string name="pay_listener_label">mediBO payment alerts</string>
+</resources>

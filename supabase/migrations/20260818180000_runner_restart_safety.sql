@@ -1,0 +1,27 @@
+-- CHANGE #233 — VM restarts are safe end to end.
+--
+-- Applied live in four parts (names as recorded in supabase_migrations):
+--   runner_restart_safety_checkpoints  — steps/resume columns + steps_set /
+--                                        step_done / _dev_resume_block
+--   runner_restart_safety_liveness     — dev_cmd_release, dev_runner_liveness
+--                                        (cron 1-59/2), config knobs, ui_copy
+--   runner_restart_safety_honest_read  — _dev_cmd_timing staleness cut,
+--                                        dev_ctl_get honesty, claim resume block
+--   runner_restart_safety_list_chips   — dev_cmd_list steps/live/stall/resume
+--
+-- This file is the repo's record of that change. The authoritative bodies live
+-- in the database; `supabase db pull` regenerates them verbatim. Everything in
+-- those four migrations is idempotent (add column if not exists / create or
+-- replace / on conflict do nothing), because a resumed worker WILL re-apply a
+-- migration that already landed and that must be a silent no-op — see the
+-- checkpoint protocol in mediBO-runner/standing_preamble.md.
+--
+-- Guarded read side (why a stopped VM can no longer lie):
+--   * _dev_cmd_timing sets has_eta=false once heartbeat_at is older than 180s,
+--     so a building row with a dead worker shows elapsed, never a countdown.
+--   * dev_ctl_get overrides runner_status to stopped / no command /
+--     remote_control off when alive_at is stale, and blanks pool_state's
+--     workers + counts when updated_at is stale.
+--   * dev_cmd_list emits is_live, live_chip, stall_chip, steps_chip and
+--     resume_chip; every string is composed from ui_copy, never in Dart.
+select 1;

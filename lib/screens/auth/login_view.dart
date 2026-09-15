@@ -23,6 +23,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../utils/render_log.dart';
 import 'google_flow.dart';
 
 export 'google_flow.dart' show GoogleOutcome;
@@ -36,6 +37,40 @@ export 'google_flow.dart' show GoogleOutcome;
 typedef GoogleResult = ({GoogleOutcome outcome, String? message});
 
 /// The backend contract this screen renders. One method per RPC.
+/// CMD #1904 — where a my_session() payload says this user belongs.
+///
+/// A signed-up account with no profile yet owes the registration form, and the
+/// BACKEND names where that form is: `signup_route` is set for exactly those
+/// users and EMPTY for everybody else, so an ordinary login still lands on
+/// `home_route` and nothing here has to know what either address is. Google
+/// signups arrive in the same state through the same payload, which is why one
+/// function serves the full-screen login, the login panel and the view.
+String landingRoute(Map<String, dynamic> s) {
+  final signup = (s['signup_route'] as String?) ?? '';
+  if (signup.isNotEmpty) return signup;
+  return (s['home_route'] as String?) ?? '';
+}
+
+/// CMD #1935 — the same payload, read as a STACK instead of a destination.
+///
+/// `signup_route` used to be pushed with `pushNamedAndRemoveUntil`, which made
+/// the registration form the ROOT of the navigation stack: its own Close
+/// button then popped the last route in the app and left a blank screen behind
+/// it. The backend names two addresses, and they are two different things —
+/// `home_route` is where this user LIVES and `signup_route` is what they still
+/// owe — so home is what the stack is reset to, and the form is pushed on top
+/// of it. Close is then an ordinary pop that always lands on Home.
+///
+/// [overlay] is empty for everybody who owes no form, which is the normal
+/// login and the normal boot. When the backend names nowhere to live, the form
+/// becomes the destination rather than an overlay over nothing.
+({String home, String overlay}) landingPlan(Map<String, dynamic> s) {
+  final signup = (s['signup_route'] as String?) ?? '';
+  final home = (s['home_route'] as String?) ?? '';
+  if (home.isEmpty) return (home: signup, overlay: '');
+  return (home: home, overlay: signup);
+}
+
 abstract class LoginApi {
   /// rpc login_screen_config()
   Future<Map<String, dynamic>> config();
@@ -83,6 +118,7 @@ class LoginView extends StatefulWidget {
     super.key,
     required this.api,
     required this.onHome,
+    this.onOverlay,
     this.pollInterval = const Duration(seconds: 2),
     this.pollTimeout = const Duration(seconds: 15),
   });
@@ -91,6 +127,11 @@ class LoginView extends StatefulWidget {
 
   /// Called with home_route from my_session() once a session exists.
   final void Function(String homeRoute) onHome;
+
+  /// CMD #1935 — called with signup_route AFTER [onHome], for the account that
+  /// still owes the registration form. Null (the default) means the caller has
+  /// no stack to push onto, and the form simply never opens itself.
+  final void Function(String overlayRoute)? onOverlay;
 
   final Duration pollInterval;
   final Duration pollTimeout;
@@ -130,13 +171,19 @@ class _LoginViewState extends State<LoginView> {
   /// address the same identity even if the field is edited afterwards.
   String _sentDigits = '';
 
+  /// CMD #1904 — the backend's own sentence for a number it has never seen.
+  /// Empty for an existing account, and NEVER written here: it is the `note`
+  /// field of login_request_otp, rendered verbatim on the code step so a first
+  /// timer is told they are being signed up rather than logged in.
+  String _newNote = '';
+
   int _resendLeft = 0;
   Timer? _pollTimer;
   Timer? _resendTimer;
 
-  @override
   static const _kLastNumberKey = 'medibo_last_login_number';
 
+  @override
   void initState() {
     super.initState();
     _loadConfig();
@@ -264,6 +311,7 @@ class _LoginViewState extends State<LoginView> {
     setState(() {
       _step = LoginStep.number;
       _message = null;
+      _newNote = '';
       _numCtrl.selection =
           TextSelection.collapsed(offset: _numCtrl.text.length);
     });
@@ -275,6 +323,7 @@ class _LoginViewState extends State<LoginView> {
     setState(() {
       _step = LoginStep.actions;
       _message = null;
+      _newNote = '';
       _codeError = false;
       _sending = false;
     });
@@ -293,6 +342,9 @@ class _LoginViewState extends State<LoginView> {
   }
 
   void _openCode() {
+    // Proof the signup step actually reached the code screen, not just that the
+    // RPC answered: read back from the render-log after a deploy.
+    RenderLog.write('c1904_code_step', _newNote.isEmpty ? 'login' : 'signup');
     _buildCodeFields();
     setState(() {
       _step = LoginStep.code;
@@ -318,6 +370,14 @@ class _LoginViewState extends State<LoginView> {
     });
   }
 
+  /// The backend's new-number note, or '' — never coined here. A response that
+  /// carries no `note` (every existing account) leaves the code step exactly as
+  /// it was.
+  static String _noteOf(Map<String, dynamic> r) {
+    final n = r['note'];
+    return (r['is_new_user'] == true && n is String) ? n : '';
+  }
+
   // ── Send ───────────────────────────────────────────────────────────────────
 
   Future<void> _send() async {
@@ -337,6 +397,7 @@ class _LoginViewState extends State<LoginView> {
     final ok = r['ok'] == true;
     setState(() {
       _setMessage(r['message']);
+      _newNote = _noteOf(r);
       if (!ok) _sending = false;
     });
     // ok:false — nothing was sent. Stay on the number step and show why.
@@ -402,6 +463,7 @@ class _LoginViewState extends State<LoginView> {
     if (!mounted) return;
     setState(() {
       _setMessage(r['message']);
+      _newNote = _noteOf(r);
       _sending = false;
     });
     if (r['ok'] == true) {
@@ -477,9 +539,10 @@ class _LoginViewState extends State<LoginView> {
     // Only leave once the backend says a session exists; otherwise home_route
     // is the login route itself.
     if (s['signed_in'] != true) return;
-    final route = s['home_route'] as String?;
-    if (route == null || route.isEmpty) return;
-    widget.onHome(route);
+    final plan = landingPlan(s);
+    if (plan.home.isEmpty) return;
+    widget.onHome(plan.home);
+    if (plan.overlay.isNotEmpty) widget.onOverlay?.call(plan.overlay);
   }
 
   // ── Build ──────────────────────────────────────────────────────────────────
@@ -695,7 +758,10 @@ class _LoginViewState extends State<LoginView> {
             children: [
               Flexible(
                 child: Text(
-                  _s('code_sent_note'),
+                  // CMD #1904 — one line, two sentences the BACKEND chooses
+                  // between: a first-time number is told it is being signed up,
+                  // everyone else sees the usual confirmation.
+                  _newNote.isNotEmpty ? _newNote : _s('code_sent_note'),
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 13, color: _muted),
                 ),

@@ -32,6 +32,14 @@
 //      category tile hands back `key` (the raw category name, not the pretty
 //      label), and a tile with no key is not tappable at all.
 //
+//   6. CMD #2027 — the See-all PILL is one shared control with no section
+//      colour on it. Its word is `see_all_label`, its photos are
+//      `see_all_thumbs` (the backend has already dropped the products with no
+//      image — the app must never take the first three cards and hope), and a
+//      see-all of type 'companies' hands the tap to the shell rather than
+//      inventing a route. Re-colouring it in a section's accent is the exact
+//      regression this holds down.
+//
 // Fixture mirrors a real storefront_home_v2() response taken off the live
 // database on 2026-08-02. No network, no Supabase, no camera, no goldens.
 
@@ -42,10 +50,13 @@ import 'ui_copy_fixture.dart';
 
 import 'package:pharma_b2b/app_state.dart';
 import 'package:pharma_b2b/models/cart_model.dart';
+import 'package:pharma_b2b/design_tokens.dart';
 import 'package:pharma_b2b/models/home_sections.dart';
 import 'package:pharma_b2b/models/storefront_p3.dart';
 import 'package:pharma_b2b/widgets/compact_product_card.dart';
 import 'package:pharma_b2b/widgets/home_sections_view.dart';
+import 'package:pharma_b2b/utils/render_log.dart';
+import 'package:pharma_b2b/widgets/animations.dart';
 
 /// One rail card — the exact shape storefront_home_v2() sends.
 Map<String, dynamic> _card({
@@ -169,9 +180,11 @@ class _Taps {
   final companies = <String>[];
   final routes = <String>[];
   int browseAll = 0;
+  int companiesList = 0;
 }
 
-Future<_Taps> _pump(WidgetTester tester, Map<String, dynamic> payload) async {
+Future<_Taps> _pump(WidgetTester tester, Map<String, dynamic> payload,
+    {bool settle = true}) async {
   // Tall surface: the feed is a lazy ListView, so a short viewport simply
   // would not build the lower sections and assertions would turn into scroll
   // position tests.
@@ -203,6 +216,7 @@ Future<_Taps> _pump(WidgetTester tester, Map<String, dynamic> payload) async {
             loader: () async => HomeSections.fromMap(payload),
             onCategoryTap: taps.categories.add,
             onBrowseAll: () => taps.browseAll++,
+            onOpenCompanies: () => taps.companiesList++,
             // #638 — this file covers the sections themselves; the strip has
             // its own tests in company_notify_test.dart.
             notificationsLoader: () async => BackInStock.empty,
@@ -211,11 +225,25 @@ Future<_Taps> _pump(WidgetTester tester, Map<String, dynamic> payload) async {
       ),
     ),
   );
-  await tester.pumpAndSettle();
+  // CMD #1813 — the ok:false branch now paints the shimmering skeleton, whose
+  // animation repeats forever, so that one case pumps a couple of frames
+  // instead of settling. Everything else still settles as before.
+  if (settle) {
+    await tester.pumpAndSettle();
+  } else {
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+  }
   return taps;
 }
 
 void main() {
+  // CHANGE #274 — the feed now posts a render-log line counting the cards it
+  // painted (the only evidence a canvas screen can produce). Its 800ms flush
+  // is a real Timer that would outlive these tests and try to reach Supabase,
+  // so it is disabled here exactly as CLAUDE.md's protected-suite note says.
+  setUpAll(() => RenderLog.flushEnabled = false);
+
   setUp(seedUiCopy);
   setUp(() {
     CartModel.rpcTransport = (fn, params) async =>
@@ -273,11 +301,28 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('ok:false shows the retry block, never a blank page or a throw',
-        (tester) async {
-      await _pump(tester, {'ok': false});
+    // CMD #1813 — this test used to assert `find.text('Retry')`.
+    //
+    // On 2026-09-06 every RPC in the app stalled together at ~13.9 s and this
+    // is the block a customer met: an empty feed with a button asking them to
+    // solve it by tapping. The protected behaviour CHANGED with that command,
+    // deliberately and by name — "no blank body, no bare Retry button, ever" —
+    // so the assertion is inverted rather than deleted. What must hold now is
+    // that ok:false is still not a blank page and still not a throw, and that
+    // the way out is the app's own retry rather than the customer's thumb.
+    testWidgets('ok:false is a live skeleton — never a blank page, never a '
+        'throw, and never a Retry button', (tester) async {
+      await _pump(tester, {'ok': false}, settle: false);
 
-      expect(find.text('Retry'), findsOneWidget);
+      expect(find.text('Retry'), findsNothing,
+          reason: 'CMD #1813 — the bare Retry button is gone for good');
+      expect(find.byType(OutlinedButton), findsNothing);
+      expect(find.byType(FilledButton), findsNothing);
+
+      // Still a page, and still the feed's own geometry: the skeleton it uses
+      // everywhere else, so nothing shifts when the payload finally lands.
+      expect(find.byType(HomeSectionsView), findsOneWidget);
+      expect(find.byType(Shimmer), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   });
@@ -471,6 +516,77 @@ void main() {
       expect(find.text('Browse all 77,547'), findsOneWidget);
       expect(find.text('See all'), findsNothing,
           reason: 'rewording the pill is an UPDATE, never a deploy');
+    });
+
+    // CMD #2027 — the pill's photos are the BACKEND's list. The old bar took
+    // section.cards.take(3) and dropped the ones without an image, so a rail
+    // whose first three cards were unphotographed showed one disc, or none,
+    // while the rail behind it was full of pictures.
+    testWidgets('pill thumbs come from see_all_thumbs, not from the cards',
+        (tester) async {
+      final p = _payload();
+      final first = (p['sections'] as List).first as Map<String, dynamic>;
+      first['see_all'] = {'type': 'category', 'key': 'CARDIAC'};
+      first['see_all_thumbs'] = [
+        'https://img.test/a.png',
+        'https://img.test/b.png',
+        'https://img.test/c.png',
+      ];
+      await _pump(tester, p);
+
+      for (var i = 0; i < 3; i++) {
+        expect(find.byKey(ValueKey('c2027_pill_thumb_$i')), findsOneWidget,
+            reason: 'one disc per backend thumb, in payload order');
+      }
+    });
+
+    testWidgets('no thumbs in the payload draws no blank discs',
+        (tester) async {
+      final p = _payload();
+      final first = (p['sections'] as List).first as Map<String, dynamic>;
+      first['see_all'] = {'type': 'category', 'key': 'CARDIAC'};
+      first['see_all_thumbs'] = <String>[];
+      await _pump(tester, p);
+
+      expect(find.byKey(const ValueKey('c2027_pill_thumb_0')), findsNothing,
+          reason: 'an empty white circle is worse than no circle');
+      expect(find.text('See all'), findsOneWidget);
+    });
+
+    testWidgets('the pill is the neutral surface, never the section accent',
+        (tester) async {
+      final p = _payload();
+      final first = (p['sections'] as List).first as Map<String, dynamic>;
+      first['see_all'] = {'type': 'category', 'key': 'CARDIAC'};
+      // A loud section accent — the pill must ignore it completely.
+      first['accent'] = '#7C3AED';
+      await _pump(tester, p);
+
+      final pill = tester.widget<Material>(
+          find.byKey(const Key('c2027_see_all_pill')));
+      expect(pill.color, Ds.c.bg,
+          reason: 'one calm pill on every rail — the search bar grey');
+      expect(pill.color, isNot(const Color(0xFF7C3AED)));
+    });
+
+    // Shop by company carries the SAME pill, and its destination is a name the
+    // backend sent — the app maps it onto navigation it already has.
+    testWidgets('a see-all of type companies hands the tap to the shell',
+        (tester) async {
+      final p = _payload();
+      final company = (p['sections'] as List)
+          .firstWhere((e) => (e as Map)['id'] == 'shop_by_company') as Map;
+      company['see_all'] = {'type': 'companies', 'key': 'all'};
+      company['see_all_label'] = 'See all products';
+      final taps = await _pump(tester, p);
+
+      await tester.tap(find.text('See all products'));
+      await tester.pumpAndSettle();
+
+      expect(taps.companiesList, 1);
+      expect(taps.categories, isEmpty,
+          reason: 'a companies see-all is not a category jump');
+      expect(taps.browseAll, 0);
     });
   });
 

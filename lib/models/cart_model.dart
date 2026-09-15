@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../services/live_feed.dart';
+
 import 'product.dart';
 import '../utils/order_code.dart';
 import '../utils/render_log.dart';
@@ -39,6 +41,29 @@ class CartLine {
   /// that empties carts.
   bool get unavailable => display['unavailable'] == true;
   bool get qtyLocked => display['qty_locked'] == true;
+
+  /// CMD #1912 — `cart_render().items[].row`: the whole compact cart row,
+  /// already worded. The name, the pack caption, the quantity that leads the
+  /// row ("4 Strip"), the Rx chip, the one price line and the expanded detail
+  /// rows all arrive from here. The screen renders them; it derives none of
+  /// them — the unit word alone used to be a chain of `contains()` calls in
+  /// Dart, which is why "1 Strip of 15 Tablets" and "Strip" could disagree.
+  Map<String, dynamic> get row =>
+      (display['row'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  /// One string out of [row] ('' when the payload did not send it).
+  String rows(String key) => (row[key] ?? '').toString();
+
+  /// One nested object out of [row] (empty map when absent).
+  Map<String, dynamic> rowMap(String key) =>
+      (row[key] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  /// The expanded body's label/value pairs, in payload order.
+  List<Map<String, dynamic>> get rowDetails =>
+      ((row['detail_rows'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => e.cast<String, dynamic>())
+          .toList(growable: false);
 
   /// CHANGE #615 — a cart line is worth qty × MRP and nothing else. There is no
   /// sale price, no GST and no discount left to fold in, so `mrp` is the only
@@ -265,6 +290,9 @@ class CartModel extends ChangeNotifier {
     _debounce.clear();
     _localQty.clear();
     _queued.clear();
+    // CMD #2025 — a row failure belongs to the account that caused it.
+    _rowError.clear();
+    _rowRetryQty.clear();
   }
 
   /// Verbatim `message` from the last `ok:false` response, for the UI to show.
@@ -272,7 +300,7 @@ class CartModel extends ChangeNotifier {
   final ValueNotifier<String?> cartError = ValueNotifier<String?>(null);
 
   StreamSubscription<AuthState>? _authSub;
-  RealtimeChannel? _cartChannel;
+  LiveFeedHandle? _cartChannel;
 
   // ── View As mode ──────────────────────────────────────────────────────────
   // CHANGE #559: cart_state()/cart_set_item()/cart_clear() resolve the target
@@ -313,6 +341,15 @@ class CartModel extends ChangeNotifier {
   // completes) can never overwrite a NEWER read's result just because its
   // (longer) request chain happens to resolve later.
   int _loadGen = 0;
+
+  /// CMD #2039 — has a cart payload ever landed in this session?
+  ///
+  /// Until it has, an empty `lines` means "not read yet", not "your cart is
+  /// empty" — and the screen drew the empty state for both. The summary row
+  /// and the item rows now draw a skeleton while this is false, so the row the
+  /// backend already sends on OPEN has somewhere to appear immediately.
+  bool _loadedOnce = false;
+  bool get hasLoaded => _loadedOnce;
 
   Future<void> enterViewAs(String userId) async {
     _viewAsUserId = userId;
@@ -419,6 +456,10 @@ class CartModel extends ChangeNotifier {
   Future<void> _adoptSignedInAccount(String? uid) async {
     // CHANGE #556 rule 3 + #559 rule 4 — clear the cart VIEW before refetch,
     // so no line from the previous account can survive an account switch.
+    // CMD #2039 — and it is UNREAD again, not empty: the screen shows the
+    // skeleton until this account's own payload lands, never "your cart is
+    // empty" for a cart nobody has read yet.
+    _loadedOnce = false;
     _adoptCart(const <String, dynamic>{});
     _adminRemovedLines.clear();
     _clearLocalIntent();
@@ -446,19 +487,21 @@ class CartModel extends ChangeNotifier {
 
   void _subscribeToCartRealtime(String uid) {
     _cartChannel?.unsubscribe();
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    _cartChannel = Supabase.instance.client
-        .channel('customer_cart_${uid}_$ts')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'cart_items',
-          filter: PostgresChangeFilter(
-            type: PostgresChangeFilterType.eq,
-            column: 'user_id',
-            value: uid,
-          ),
-          callback: (_) {
+    // CHANGE #643: cart_items is one of the eight tables the registry still
+    // marks live — one buyer on two devices must agree instantly — and it is
+    // filtered to this user, which is what the registry requires of it.
+    LiveFeed.instance
+        .watch(
+          channelPrefix: 'customer_cart_$uid',
+          tables: const ['cart_items'],
+          filters: {
+            'cart_items': PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'user_id',
+              value: uid,
+            ),
+          },
+          onChange: (_) {
             // CHANGE #610 — our OWN cart_set_item already returned the new
             // cart, and adopting it is what put it on screen. The realtime
             // echo of that same write must not kick off a second full read:
@@ -472,7 +515,10 @@ class CartModel extends ChangeNotifier {
             refresh();
           },
         )
-        .subscribe();
+        .then((h) {
+      _cartChannel?.unsubscribe();
+      _cartChannel = h;
+    });
   }
 
   // ── Reading the server cart ───────────────────────────────────────────────
@@ -513,6 +559,7 @@ class CartModel extends ChangeNotifier {
   /// cannot disagree with itself.
   Future<void> _hydrateAndAdopt(Map<String, dynamic> cart, int gen) async {
     if (gen != _loadGen) return;
+    _loadedOnce = true;
     RenderLog.write('c401_cart_uses_buyable', 'true');
     RenderLog.write(kC610OnePayload, 'roundtrips:1');
     // CHANGE #615 — proves the flat cart rendered: the subtotal strings the
@@ -532,38 +579,44 @@ class CartModel extends ChangeNotifier {
 
   /// Rebuilds `_serverLines` from the payload. Pure — no network, no mutation
   /// of the payload, and no line that is not in `cart['items']`.
+  /// CMD #2025 — ONE payload item becomes ONE [CartLine]. Extracted so the
+  /// full render and the single-row answer from `cart_update_item()` build a
+  /// line the same way; two constructions could disagree about one row.
+  static CartLine lineFromPayload(Map row) {
+    final pid = row['product_id'].toString();
+    // #582 — carry the render strings the payload attached to this item.
+    final disp = row.cast<String, dynamic>();
+    return CartLine(
+      Product.fromCartData(
+        id: pid,
+        name: (row['product_name'] as String?) ?? '',
+        // CHANGE #615 — the cart is ONE number: qty × MRP. cart_state() no
+        // longer returns `price` or `gst_percent`, because there is no sale
+        // price and no GST in the cart any more. Reading a key that is gone
+        // would silently price every line at 0.
+        b2bPrice: (row['mrp'] as num?)?.toDouble() ?? 0.0,
+        mrp: (row['mrp'] as num?)?.toDouble() ?? 0.0,
+        imageUrl: (row['image_url'] as String?) ?? '',
+        manufacturer: (row['manufacturer'] as String?) ?? '',
+        packSize: (row['pack_size'] as String?) ?? '',
+        // CHANGE #610: category, buyable, added_by and the row id all come
+        // from the one payload now — no second read to merge them in.
+        category: (row['category'] as String?) ?? 'Other',
+        buyable: row['buyable'] as bool?,
+      ),
+      (row['quantity'] as num?)?.toInt() ?? 0,
+      addedByAdmin: row['added_by_admin'] == true,
+      cartItemId: (row['id'] as num?)?.toInt(),
+      display: disp,
+    );
+  }
+
   void _adoptCart(Map<String, dynamic> cart) {
     _cart = cart;
     final items = (cart['items'] as List?) ?? const [];
     final lines = <CartLine>[];
     for (final raw in items) {
-      final row = raw as Map;
-      final pid = row['product_id'].toString();
-      // #582 — carry the render strings cart_render() attached to this item.
-      final disp = row.cast<String, dynamic>();
-      lines.add(CartLine(
-        Product.fromCartData(
-          id: pid,
-          name: (row['product_name'] as String?) ?? '',
-          // CHANGE #615 — the cart is ONE number: qty × MRP. cart_state() no
-          // longer returns `price` or `gst_percent`, because there is no sale
-          // price and no GST in the cart any more. Reading a key that is gone
-          // would silently price every line at 0.
-          b2bPrice: (row['mrp'] as num?)?.toDouble() ?? 0.0,
-          mrp: (row['mrp'] as num?)?.toDouble() ?? 0.0,
-          imageUrl: (row['image_url'] as String?) ?? '',
-          manufacturer: (row['manufacturer'] as String?) ?? '',
-          packSize: (row['pack_size'] as String?) ?? '',
-          // CHANGE #610: category, buyable, added_by and the row id all come
-          // from the one payload now — no second read to merge them in.
-          category: (row['category'] as String?) ?? 'Other',
-          buyable: row['buyable'] as bool?,
-        ),
-        (row['quantity'] as num?)?.toInt() ?? 0,
-        addedByAdmin: row['added_by_admin'] == true,
-        cartItemId: (row['id'] as num?)?.toInt(),
-        display: disp,
-      ));
+      lines.add(lineFromPayload(raw as Map));
     }
     // CHANGE #375 / #610: stable add-order. cart_state() used to order by
     // (updated_at, id) — which moved a line to the bottom on every qty edit —
@@ -714,16 +767,21 @@ class CartModel extends ChangeNotifier {
       // A logged-out add needs a guest id to file the row under; mint one on
       // first write rather than for every idle visitor.
       final guest = _isSignedIn ? null : await _ensureGuestUid();
-      final res = await _rpc('cart_set_item', {
+      // CMD #2025 — the FAST door. `cart_update_item()` writes the line and
+      // answers with that one row plus the summary the bar prints. The old
+      // `cart_set_item()` ran a whole cart_render() per tap (avg 1 s, peak
+      // 6.8 s) and the screen then re-read cart_availability() on top of it.
+      final res = await _rpc('cart_update_item', {
         'p_product_id': productId,
         'p_quantity': quantity,
         'p_guest_uid': guest,
       });
       _lastSelfWriteAt = DateTime.now();
-      accepted = await _applyWriteResult(res);
+      accepted = _applyRowResult(productId, quantity, res);
     } catch (e) {
-      // Network threw — the server may never have seen this at all.
-      cartError.value = 'Could not update the cart. Please try again.';
+      // Network threw — the server may never have seen this at all. The row
+      // says so on itself and offers the backend's Retry; no blocking toast.
+      _markRowFailed(productId, quantity, null);
     } finally {
       _inFlight.remove(productId);
       _pending.remove(productId);
@@ -739,6 +797,138 @@ class CartModel extends ChangeNotifier {
       }
       notifyListeners();
     }
+  }
+
+  // ── CMD #2025 — per-row failure, per-row retry ────────────────────────────
+  //
+  // A tap that does not land is that ROW's problem, not the screen's. The old
+  // path raised a banner across the whole cart ("Could not update the cart")
+  // and left every other line looking broken. Now the failing row keeps the
+  // server's quantity, prints the backend's own refusal under itself and
+  // offers the backend's retry word; everything else on the screen is
+  // untouched and still usable.
+  final Map<String, Map<String, String>> _rowError = {};
+
+  /// The quantity a failed row was trying to reach, so Retry can resend it.
+  final Map<String, int> _rowRetryQty = {};
+
+  /// True while this row's last write did not land.
+  bool hasRowError(String productId) => _rowError.containsKey(productId);
+
+  /// The backend's own sentence for why this row did not save ('' when fine).
+  String rowErrorMessage(String productId) =>
+      _rowError[productId]?['message'] ?? '';
+
+  /// The backend's word for the retry control ('' when fine).
+  String rowRetryLabel(String productId) =>
+      _rowError[productId]?['retry_label'] ?? '';
+
+  /// Re-sends the quantity this row was trying to reach.
+  void retryRow(String productId) {
+    final q = _rowRetryQty[productId];
+    if (q == null) return;
+    _rowError.remove(productId);
+    notifyListeners();
+    _requestQty(productId, q);
+  }
+
+  void _clearRowError(String productId) {
+    if (_rowError.remove(productId) != null) _rowRetryQty.remove(productId);
+  }
+
+  void _markRowFailed(String productId, int quantity, Map<String, dynamic>? res) {
+    // Every word here is the payload's. A transport failure carries no payload,
+    // so the row shows the backend's stored retry copy and nothing invented.
+    final retry = (res?['retry'] as Map?)?.cast<String, dynamic>() ?? const {};
+    _rowError[productId] = {
+      'message': (res?['message'] ?? retry['note'] ?? '').toString(),
+      'retry_label': (retry['label'] ?? '').toString(),
+    };
+    _rowRetryQty[productId] = quantity;
+    RenderLog.write(kC2025RowFailed, '$productId:${_rowError[productId]!['message']}');
+  }
+
+  static const kC2025RowFailed = 'c2025_cart_row_failed';
+  static const kC2025FastWrite = 'c2025_cart_fast_write';
+
+  /// Adopts `cart_update_item()`'s answer: ONE row and the summary totals.
+  ///
+  /// Nothing is re-read afterwards — no cart_render(), no cart_availability().
+  /// The row that came back replaces the row that was there (or disappears),
+  /// and the bar's two numbers are the payload's own.
+  bool _applyRowResult(String productId, int quantity, dynamic res) {
+    if (res is! Map) {
+      _markRowFailed(productId, quantity, null);
+      return false;
+    }
+    final m = Map<String, dynamic>.from(res);
+    if (m['ok'] != true) {
+      _markRowFailed(productId, quantity, m);
+      RenderLog.write('c559_cart_write_rejected', '${m['message']}');
+      return false;
+    }
+    _clearRowError(productId);
+
+    final item = m['item'];
+    final items = [...((_cart['items'] as List?) ?? const [])];
+    final at = items.indexWhere(
+        (e) => e is Map && e['product_id'].toString() == productId);
+    if (item is Map) {
+      if (at >= 0) {
+        items[at] = item;
+      } else {
+        items.add(item);
+      }
+    } else if (at >= 0) {
+      items.removeAt(at);
+    }
+    _cart = {..._cart, 'items': items};
+
+    // The summary the bar prints, patched into the render block the screen
+    // already reads. Only the keys the backend just re-answered move; every
+    // other total stays exactly as the last full render reported it.
+    final summary = (m['summary'] as Map?)?.cast<String, dynamic>();
+    if (summary != null) {
+      final render = Map<String, dynamic>.from(
+          (_cart['render'] as Map?)?.cast<String, dynamic>() ?? const {});
+      final block = Map<String, dynamic>.from(
+          (render['summary'] as Map?)?.cast<String, dynamic>() ?? const {});
+      if (summary['bottom'] is Map) block['bottom'] = summary['bottom'];
+      render['summary'] = block;
+      if (summary['item_count'] != null) {
+        render['item_count'] = summary['item_count'];
+      }
+      if (summary['unit_count'] != null) {
+        render['unit_count'] = summary['unit_count'];
+      }
+      if (summary['items_label'] != null) {
+        render['items_label'] = summary['items_label'];
+        final pill = Map<String, dynamic>.from(
+            (render['pill'] as Map?)?.cast<String, dynamic>() ?? const {});
+        if (pill.isNotEmpty) {
+          pill['items_label'] = summary['items_label'];
+          pill['show'] = ((summary['item_count'] as num?)?.toInt() ?? 0) > 0;
+          render['pill'] = pill;
+        }
+      }
+      _cart = {
+        ..._cart,
+        'render': render,
+        if (summary['item_count'] != null) 'item_count': summary['item_count'],
+        if (summary['unit_count'] != null) 'unit_count': summary['unit_count'],
+        if (summary['badge'] != null) 'badge': summary['badge'],
+      };
+    }
+
+    final lines = <CartLine>[];
+    for (final raw in (_cart['items'] as List)) {
+      lines.add(lineFromPayload(raw as Map));
+    }
+    _serverLines = lines;
+    RenderLog.write(kC2025FastWrite,
+        'row:$productId;qty:$quantity;items:${lines.length};'
+        'advance:${(summary?['bottom'] as Map?)?['advance_display'] ?? ''}');
+    return true;
   }
 
   /// Adopts the `cart` a write RPC returned. On `ok:false` the server's own
@@ -848,9 +1038,8 @@ class CartModel extends ChangeNotifier {
       ((_cart['unit_count'] as num?)?.toInt() ?? 0) +
       _sampleLines.values.fold(0, (s, l) => s + l.quantity);
 
-  /// Cart value as the server computed it — the MRP subtotal, which is now the
-  /// only number the cart has. #615: cart_state() returns `subtotal`, not
-  /// `total`; the old key would have read 0 forever.
+  /// Cart value as the server computed it. #355: `subtotal` is the TAXABLE
+  /// trade value (ex-GST); it was the MRP subtotal until this change.
   double get total => (_cart['subtotal'] as num?)?.toDouble() ?? 0.0;
 
   double get subtotal =>
@@ -869,6 +1058,78 @@ class CartModel extends ChangeNotifier {
   String label(String key) =>
       ((render['labels'] as Map?)?[key] ?? '').toString();
 
+  // ── CHANGE #355 — the cart's money is the TRADE rate, never the MRP ───────
+  //
+  // feature_gaps #79: every order in history was billed at MRP because
+  // cart_state() priced each line at its printed ceiling and every total
+  // multiplied that up. cart_pricing_block() now resolves PTR -> discount ->
+  // scheme -> GST server-side and returns the whole block; a line with no
+  // trade rate contributes zero and says so in the backend's own words.
+  //
+  // Nothing here computes: the amounts, the labels, the GST split and the
+  // "N items not priced yet" sentence all arrive formatted.
+
+  /// The cart lines exactly as cart_render() sent them, including the per-line
+  /// trade fields (`has_trade_rate`, `price_display`, `rate_note`, `qty_label`)
+  /// the row widgets print verbatim. Read-only passthrough — the model does not
+  /// reinterpret a line's money.
+  List<Map<String, dynamic>> get rawItems =>
+      ((_cart['items'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => e.cast<String, dynamic>())
+          .toList(growable: false);
+
+  /// The pricing block from cart_render(): totals, the GST breakup and the
+  /// unpriced-line copy.
+  Map<String, dynamic> get pricing =>
+      (render['pricing'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  /// True when at least one line has a trade rate, so there is tax to show.
+  bool get hasTax => render['has_tax'] == true;
+
+  /// Taxable value / CGST / SGST / GST total, in payload order. Each entry is
+  /// {label, value} and both halves are printed verbatim.
+  List<Map<String, dynamic>> get taxLines =>
+      ((render['tax_lines'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => e.cast<String, dynamic>())
+          .toList(growable: false);
+
+  /// "3 items not priced yet — rate comes with the supplier quote", or ''.
+  /// Pluralised by the backend; never assembled here.
+  String get unpricedNote => (pricing['unpriced_note'] ?? '').toString();
+
+  /// Set when a shown GST rate came from the class rules rather than a
+  /// confirmed per-product rate.
+  String get gstNote => (pricing['gst_note'] ?? '').toString();
+
+  /// The payable, formatted. With no line priced yet this is the backend's
+  /// "Awaiting supplier rates", NOT a rupee amount — because there is no
+  /// amount owed until the suppliers quote.
+  String get netPayableDisplay => rs('net_payable_display');
+
+  /// What the basket is worth at the printed ceiling. Reference only: it is
+  /// never the payable (legal_get_page('about'), "How pricing and billing
+  /// actually work").
+  String get mrpWorthDisplay => (pricing['mrp_worth_display'] ?? '').toString();
+  String get mrpWorthLabel => (pricing['mrp_worth_label'] ?? '').toString();
+
+  /// CMD #2047 — the bill summary card and the suggested rail, both straight
+  /// off the ONE cart payload.
+  ///
+  /// #2014 built these blocks and they worked; they were invisible because the
+  /// screen fetched them with a SECOND call whose failures were all silent — a
+  /// customer resolved differently from the cart being described, a rail that
+  /// threw on real catalogue data, a response that lost the race with a
+  /// quantity tap. cart_render() now returns them itself, so the blocks
+  /// describe exactly the basket that is on screen and there is no second
+  /// request left to fail.
+  Map<String, dynamic> get billBlock =>
+      (_cart['bill'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  Map<String, dynamic> get railBlock =>
+      (_cart['rail'] as Map?)?.cast<String, dynamic>() ?? const {};
+
   /// CHANGE #636 — the floating cart pill, rendered entirely by cart_render().
   ///
   /// `show` is the BACKEND's answer to "is there a pill right now?". The app
@@ -878,15 +1139,49 @@ class CartModel extends ChangeNotifier {
   Map<String, dynamic> get pill =>
       (render['pill'] as Map?)?.cast<String, dynamic>() ?? const {};
 
+  /// CMD #791 — "Frequently bought together" for the basket as a whole, from
+  /// `cart_render().companions`. `has` is the backend's verdict; the strip is
+  /// absent on an empty cart and on a basket with no co-purchase evidence,
+  /// because there is nothing honest to suggest.
+  Map<String, dynamic> get companions =>
+      (_cart['companions'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  /// CHANGE #174 — the trade margin on this basket, computed by
+  /// `cart_margin_block()` from the SAME engine the cards use. Empty map when
+  /// the payload carried none.
+  ///
+  /// `has` is the backend's answer to "is any line in this cart priced yet?".
+  /// The app never sums a margin itself, and never treats an un-priced line as
+  /// zero margin — those lines are excluded and counted in `note` instead.
+  Map<String, dynamic> get margin =>
+      (render['margin'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  bool get marginHas => margin['has'] == true;
+  String get marginLabel => (margin['label'] ?? '').toString();
+  String get marginTotalDisplay => (margin['total_display'] ?? '').toString();
+  String get marginNote => (margin['note'] ?? '').toString();
+
   bool get pillShow => pill['show'] == true;
   String get pillItemsLabel => (pill['items_label'] ?? '').toString();
   String get pillCta => (pill['cta'] ?? '').toString();
   String get pillImage => (pill['image'] ?? '').toString();
 
-  /// #615 — the one figure the customer pays, as the SERVER computed it:
-  /// sum(qty × MRP). `grand_total` in the render block, `mrp_total` /
-  /// `subtotal` / `net_payable` at the top level are all the same number by
-  /// construction, so there is nothing left that can disagree.
+  /// CMD #2029 — the pill's thumbnail stack, in the BACKEND's draw order:
+  /// index 0 sits behind, the last entry is the most recently added item and
+  /// is drawn on top. The app never picks which images these are, how many
+  /// there are, or what order they stack in.
+  List<Map<String, dynamic>> get pillThumbs =>
+      ((pill['thumbs'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((m) => m.cast<String, dynamic>())
+          .toList(growable: false);
+
+  /// #355 — the one figure the customer pays, as the SERVER computed it: the
+  /// trade payable (taxable + GST) over the lines that have a trade rate.
+  /// `grand_total` in the render block and `net_payable` at the top level are
+  /// the same number by construction. `mrp_total` is deliberately NOT that
+  /// number any more — it is the reference ceiling, and pricing an order on it
+  /// is what feature_gaps #79 was.
   double get grandTotal => (render['grand_total'] as num?)?.toDouble() ?? 0.0;
 
   /// Total MRP as the SERVER computed it.
@@ -894,8 +1189,8 @@ class CartModel extends ChangeNotifier {
       ((_cart['mrp_total'] as num?)?.toDouble() ?? 0.0) +
       _sampleLines.values.fold(0.0, (s, l) => s + l.product.mrp * l.quantity);
 
-  /// Net payable, straight from cart_state(). #615: identical to the MRP
-  /// subtotal — there is no discount, GST or delivery fee to apply.
+  /// Net payable, straight from cart_state(). #355: the trade total incl. GST
+  /// over priced lines — 0 while no line in the basket has a trade rate yet.
   double get netPayable => (_cart['net_payable'] as num?)?.toDouble() ?? 0.0;
 
   bool get hasSampleItems => _sampleLines.isNotEmpty;
@@ -913,6 +1208,15 @@ class CartModel extends ChangeNotifier {
   /// before.
   bool isPending(String productId) =>
       _pending.contains(productId) && !_localQty.containsKey(productId);
+
+  /// CMD #2039 — true while this row is showing the user's OWN unsent tap.
+  ///
+  /// The stepper prints `row.stepper.qty_text`, which is the SERVER's number.
+  /// Between the tap and the reply that string is one tap stale, so printing
+  /// it is what made a 46 ms write feel slow: the digit did not move until the
+  /// round trip came back. While this is true the stepper prints the tap
+  /// instead — the user's own input echoed, never a backend decision reworded.
+  bool hasLocalIntent(String productId) => _localQty.containsKey(productId);
 
   /// The quantity to display for this product.
   ///
@@ -953,6 +1257,12 @@ class CartModel extends ChangeNotifier {
     final current = quantityOf(productId);
     _requestQty(productId, current > 0 ? current + 1 : 1);
   }
+
+  /// CMD #791 — set an exact quantity by id. The one-tap "Add usual qty (9)"
+  /// on the purchase overlay is a SET, not nine increments: the backend already
+  /// decided the number, so the app writes it once through the same debounced
+  /// path every stepper uses.
+  void setQuantityId(String productId, int qty) => _requestQty(productId, qty);
 
   void incrementId(String productId) =>
       _requestQty(productId, quantityOf(productId) + 1);
@@ -999,7 +1309,14 @@ class CartModel extends ChangeNotifier {
     _queued.remove(productId);
   }
 
-  Future<void> clear() async {
+  /// CMD #2039 — Clear cart asks nothing and can be taken back.
+  ///
+  /// `cart_clear()` photographs the lines before it deletes them and returns
+  /// the snapshot id together with the words the snackbar prints — the
+  /// sentence, the action word and how many seconds it stays. None of that is
+  /// written here: the returned `undo` block IS the snackbar, and an empty map
+  /// means the backend says there is nothing to offer.
+  Future<Map<String, dynamic>> clear() async {
     _sampleTimer?.cancel();
     _sampleTimer = null;
     _sampleCountdown = 15;
@@ -1008,9 +1325,48 @@ class CartModel extends ChangeNotifier {
     try {
       final res = await _rpc('cart_clear', {'p_guest_uid': _guestParam});
       await _applyWriteResult(res);
+      if (res is Map) {
+        final undo = (res['undo'] as Map?)?.cast<String, dynamic>();
+        if (undo != null && undo['has'] == true) {
+          RenderLog.write(kC2039ClearUndo,
+              'snapshot:${undo['snapshot_id']};seconds:${undo['seconds']}');
+          return undo;
+        }
+      }
     } catch (_) {
       await refresh();
     }
+    return const <String, dynamic>{};
+  }
+
+  static const kC2039ClearUndo = 'c2039_cart_clear_undo';
+  static const kC2039UndoDone = 'c2039_cart_undo_done';
+
+  /// Puts back every line and quantity the snapshot holds. The answer carries
+  /// the whole cart, so the screen is correct again without a re-read, and its
+  /// `message` is the backend's own — including the refusal when the window
+  /// has closed.
+  Future<String> undoClear(String snapshotId) async {
+    try {
+      final res = await _rpc('cart_clear_undo', {
+        'p_snapshot_id': snapshotId,
+        'p_guest_uid': _guestParam,
+      });
+      if (res is Map) {
+        final m = Map<String, dynamic>.from(res);
+        final cart = m['cart'];
+        if (cart is Map) {
+          await _hydrateAndAdopt(Map<String, dynamic>.from(cart), ++_loadGen);
+        } else {
+          await refresh();
+        }
+        RenderLog.write(kC2039UndoDone, 'ok:${m['ok']};restored:${m['restored'] ?? 0}');
+        return (m['message'] ?? '').toString();
+      }
+    } catch (_) {
+      await refresh();
+    }
+    return '';
   }
 
   void addSampleItems(List<MapEntry<Product, int>> items) {

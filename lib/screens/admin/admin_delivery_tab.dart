@@ -30,13 +30,22 @@
 // ready_count, status_label, status_colors and every partner label in the
 // picker arrive finished.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../fulfill/fulfill_lookups.dart';
 import '../../services/admin_date_scope.dart';
 import '../../services/admin_zone_scope.dart';
+import '../../services/masked_call_service.dart';
 import '../../utils/render_log.dart';
+import '../../widgets/masked_call_button.dart';
+import 'admin_delivery_ops_screen.dart';
+import 'admin_delivery_waves_screen.dart';
+import '../delivery/delivery_run_track_sheet.dart';
+import '../../services/ui_copy.dart';
+import '../../design_tokens.dart';
 
 Color get _kGreen => FulfillLookups.instance.color('c_ff1b7a43', const Color(0xFF1B7A43));
 Color get _kBorder => FulfillLookups.instance.color('c_ffe5e7eb', const Color(0xFFE5E7EB));
@@ -74,6 +83,11 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
   String _zoneLabel = '';
   int _readyCount = 0;
   List<Map<String, dynamic>> _orders = const [];
+
+  // CHANGE #404 — order_id -> the masked-call buttons THIS admin gets on it.
+  // The screen never learns a counterparty number; call_mask_targets decides
+  // who is callable and what each button says.
+  Map<String, List<MaskedCallTarget>> _callTargets = const {};
   List<Map<String, dynamic>> _partners = const [];
 
   /// order_id -> selected. Only ever holds ids the backend said can_assign.
@@ -140,6 +154,11 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
         _loading = false;
       });
 
+      // A second read, deliberately not folded into admin_delivery_queue: the
+      // callable set depends on the VIEWER, not on the queue, and every screen
+      // that grows a call button asks the same one question here.
+      unawaited(_loadCallTargets());
+
       // `allowed` is logged so an empty zone/date reads as "this caller is not
       // an admin" rather than "the zone filter is broken" — the two look
       // identical in the log otherwise.
@@ -150,6 +169,26 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
       if (!mounted) return;
       setState(() => _loading = false);
       RenderLog.write('c629_delivery_err', e.toString());
+    }
+  }
+
+  Future<void> _loadCallTargets() async {
+    final ids = <String>[
+      for (final o in _orders)
+        if ((o['order_id']?.toString() ?? '').isNotEmpty) o['order_id'].toString(),
+    ];
+    if (ids.isEmpty) {
+      if (mounted) setState(() => _callTargets = const {});
+      return;
+    }
+    try {
+      final t = await MaskedCallService.targets(ids);
+      if (!mounted) return;
+      setState(() => _callTargets = t);
+    } catch (e) {
+      // A masking layer that is down must not blank the delivery queue — the
+      // buttons simply do not appear.
+      RenderLog.write('c404_masked_call_err', e.toString());
     }
   }
 
@@ -333,6 +372,56 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
     } catch (_) {}
   }
 
+  /// One entry point for every backend-declared row action (CMD #454). The
+  /// screen never decides WHICH actions exist — only what each key does.
+  Future<void> _runAction(
+      Map<String, dynamic> action, String deliveryId, String orderId) async {
+    switch (action['key']?.toString() ?? '') {
+      case 'reassign':
+        await _reassign(deliveryId);
+        break;
+      case 'rto_receive':
+        await _rtoReceive(deliveryId);
+        break;
+      case 'redeliver':
+        await _redeliver(orderId);
+        break;
+      case 'track':
+        final runId = action['run_id']?.toString() ?? '';
+        if (runId.isNotEmpty && mounted) {
+          await DeliveryRunTrackSheet.open(context, runId);
+        }
+        break;
+    }
+  }
+
+  /// feature_gaps #100 — a finished delivery is never silently reopened by an
+  /// ordinary assign; this is the explicit path, and it clears the old proof.
+  Future<void> _redeliver(String orderId) async {
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet)),
+      ),
+      builder: (ctx) => _PartnerPicker(
+        partners: _partners,
+        suggested: null,
+        zoneLabel: _zoneLabel,
+        count: 1,
+      ),
+    );
+    if (picked == null || picked.isEmpty) return;
+    try {
+      final res = await Supabase.instance.client.rpc('delivery_redeliver',
+          params: {'p_order_id': orderId, 'p_partner_id': picked});
+      if (!mounted) return;
+      await _load();
+      if (res is Map) _toast(res['message']?.toString() ?? '');
+    } catch (_) {}
+  }
+
   Future<void> _rtoReceive(String deliveryId) async {
     try {
       final res = await Supabase.instance.client
@@ -364,6 +453,18 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
           children: [
             _zoneHeader(),
             const SizedBox(height: 16),
+            // CHANGE #309 — the way in to payouts, claims, serviceability,
+            // rider documents and ratings. It lives here rather than in the
+            // admin nav because this tab is already "delivery", and an admin
+            // looking for a payout is looking at deliveries.
+            _opsEntry(),
+            SizedBox(height: Ds.space.x12),
+            // CHANGE #405 follow-up — the SECOND door into wave planning. The
+            // screen, its /admin/delivery-waves route and its dashboard tile
+            // shipped already; an admin standing on the Delivery tab should
+            // not have to go back to the dashboard to plan a wave.
+            _wavesEntry(),
+            SizedBox(height: Ds.space.x24),
             if (_orders.isEmpty)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 32),
@@ -383,6 +484,78 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
           child: _assignBar(),
         ),
     ]);
+  }
+
+  /// CHANGE #309 — entry point to the delivery operations screen. The two
+  /// words on it are ui_copy keys, so this row contains no display literal.
+  Widget _opsEntry() {
+    // Reachability proof: this is the ONE tappable way into the delivery
+    // operations screen, so the render-log records that it actually painted on
+    // the live build — a canvas app cannot be clicked by a headless verifier,
+    // and "the code compiled" is not evidence that the door exists.
+    RenderLog.write('c309_ops_entry', 1);
+    return InkWell(
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const AdminDeliveryOpsScreen()),
+      ),
+      child: Container(
+        padding: EdgeInsets.all(Ds.space.x16),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          border: Border.all(color: _kBorder),
+          borderRadius: Ds.r.rCard,
+        ),
+        child: Row(children: [
+          Icon(Icons.local_shipping_outlined, size: 20, color: _kGreen),
+          SizedBox(width: Ds.space.x12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(c('admin.delivery.ops_entry'),
+                  style: Ds.t.body.copyWith(fontWeight: FontWeight.w700)),
+              SizedBox(height: Ds.space.x4),
+              Text(c('admin.delivery.ops_subtitle'), style: Ds.t.caption),
+            ]),
+          ),
+          Icon(Icons.chevron_right, size: 20, color: _kSub),
+        ]),
+      ),
+    );
+  }
+
+  /// CHANGE #405 follow-up — entry point to the delivery waves screen, built
+  /// exactly like _opsEntry() above: two ui_copy keys and a push, so the row
+  /// carries no display literal of its own.
+  Widget _wavesEntry() {
+    // Reachability proof for the second door: a canvas app cannot be clicked
+    // by a headless verifier, so the render-log is how the live build proves
+    // this card actually painted next to the operations card.
+    RenderLog.write('c405_waves_entry', 1);
+    return InkWell(
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const AdminDeliveryWavesScreen()),
+      ),
+      child: Container(
+        padding: EdgeInsets.all(Ds.space.x16),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          border: Border.all(color: _kBorder),
+          borderRadius: Ds.r.rCard,
+        ),
+        child: Row(children: [
+          Icon(Icons.schedule_outlined, size: 20, color: _kGreen),
+          SizedBox(width: Ds.space.x12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(c('admin.delivery.waves_entry'),
+                  style: Ds.t.body.copyWith(fontWeight: FontWeight.w700)),
+              SizedBox(height: Ds.space.x4),
+              Text(c('admin.delivery.waves_subtitle'), style: Ds.t.caption),
+            ]),
+          ),
+          Icon(Icons.chevron_right, size: 20, color: _kSub),
+        ]),
+      ),
+    );
   }
 
   /// A3 — the zone is never ambiguous.
@@ -508,34 +681,54 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
             _statusChip(delivery),
             const SizedBox(width: 8),
             Expanded(
-              child: Text(delivery['partner_name']?.toString() ?? '',
+              // C704 — an agency stop has no rider yet, so the queue prints the
+              // backend's chain sentence ("<agency> -> picking a rider", then
+              // "<agency> -> <rider>") when one was sent. Composed in SQL; this
+              // only chooses which of the two strings the payload carries.
+              child: Text(
+                  (delivery['chain_label']?.toString() ?? '').trim().isNotEmpty
+                      ? delivery['chain_label'].toString()
+                      : (delivery['partner_name']?.toString() ?? ''),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(fontSize: 12.5, color: _kSub)),
             ),
           ]),
-          const SizedBox(height: 8),
-          Row(children: [
-            OutlinedButton(
-              style: OutlinedButton.styleFrom(
-                visualDensity: VisualDensity.compact,
-                side: BorderSide(color: _kBorder),
-                foregroundColor: _kText,
-              ),
-              onPressed: () => _reassign(delivery['delivery_id']?.toString() ?? ''),
-              child: Text(_ui('dlv_reassign'), style: const TextStyle(fontSize: 12.5)),
-            ),
-            const SizedBox(width: 8),
-            OutlinedButton(
-              style: OutlinedButton.styleFrom(
-                visualDensity: VisualDensity.compact,
-                side: BorderSide(color: _kBorder),
-                foregroundColor: _kText,
-              ),
-              onPressed: () => _rtoReceive(delivery['delivery_id']?.toString() ?? ''),
-              child: Text(_ui('dlv_rto_receive'), style: const TextStyle(fontSize: 12.5)),
-            ),
-          ]),
+          SizedBox(height: Ds.space.x8),
+          // CMD #454 — the buttons are the payload's `actions[]`, printed in
+          // its order with its labels. A state this build has never heard of
+          // simply offers nothing, instead of the screen guessing which of
+          // reassign / check-in / re-deliver / track applies.
+          Wrap(
+            spacing: Ds.space.x8,
+            runSpacing: Ds.space.x8,
+            children: [
+              for (final a in (delivery['actions'] as List? ?? const []))
+                if (a is Map)
+                  OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      side: BorderSide(color: _kBorder),
+                      foregroundColor: _kText,
+                    ),
+                    onPressed: () => _runAction(
+                      Map<String, dynamic>.from(a),
+                      delivery['delivery_id']?.toString() ?? '',
+                      orderId,
+                    ),
+                    child: Text(a['label']?.toString() ?? '', style: Ds.t.caption),
+                  ),
+            ],
+          ),
+        ],
+
+        // CHANGE #404 — masked calling. Ops reaches the pharmacy or the rider
+        // on this order through a DID; no counterparty number is in this
+        // payload, this widget, or the browser. An order with nobody callable
+        // renders nothing at all.
+        if ((_callTargets[orderId] ?? const []).isNotEmpty) ...[
+          SizedBox(height: Ds.space.x12),
+          MaskedCallRow(targets: _callTargets[orderId]!, dense: true),
         ],
       ]),
     );

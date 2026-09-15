@@ -49,6 +49,11 @@ scripts/*.json
 /app.apk
 build/web/app.apk
 android/key.properties
+# The upload keystore itself (CHANGE #276). key.properties was already ignored
+# but the .jks it points at was not — deploy.sh does `git add -A`, so a restored
+# keystore sitting in android/ would have been committed on the next deploy.
+*.jks
+*.keystore
 medibo-release.jks
 
 # Claude Code worktrees (per-change isolated checkouts) — never track these
@@ -56,3 +61,36 @@ medibo-release.jks
 build/native_assets/
 build/test_cache/
 build/unit_test_assets/
+
+# CHANGE #304 — Gradle/AAB build outputs. Only build/web is tracked (deploy.sh
+# commits the fingerprinted bundle); everything else under build/ is a rebuildable
+# artifact, and one `git add -A` after an Android release swept 17,222 of them —
+# including a 26 MB libapp.so and the 98 MB AAB — into a single commit.
+build/app/
+build/app_links/
+build/audioplayers_android/
+build/file_picker/
+build/firebase_core/
+build/*/intermediates/
+build/*/outputs/
+build/*/tmp/
+build/reports/
+build/kotlin/
+build/firebase_messaging/
+build/google_maps_flutter_android/
+build/google_mlkit_document_scanner/
+build/google_sign_in_android/
+build/image_picker_android/
+build/mobile_scanner/
+build/path_provider_android/
+build/permission_handler_android/
+build/shared_preferences_android/
+build/sqflite_android/
+build/url_launcher_android/
+build/flutter_plugin_android_lifecycle/
+build/package_info_plus/
+build/share_plus/
+build/record_android/
+
+# CHANGE #1674 — the build phase hands the upload phase its fingerprint
+.deploy_phase_state

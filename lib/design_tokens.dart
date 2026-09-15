@@ -25,6 +25,24 @@ class Ds {
   static final ValueNotifier<int> revision = ValueNotifier<int>(0);
 
   static DsColors c = DsColors._defaults();
+
+  // CHANGE #1017 (4) — dark mode is a second palette in the SAME token set
+  // (`design.dark.colors`, data via ui_design_set) and one switch. Only the
+  // ground and the text swap; the state colours keep their meaning. `_light`
+  // remembers the day palette so a toggle is a swap, never a re-fetch.
+  static DsColors _light = DsColors._defaults();
+  static DsColors dark = DsColors._darkDefaults();
+  static Brightness brightness = Brightness.light;
+  static bool get isDark => brightness == Brightness.dark;
+
+  /// Switch the live palette. The theme is rebuilt by whoever listens to
+  /// [revision] — the same bump every token change already makes.
+  static void setBrightness(Brightness b) {
+    if (brightness == b) return;
+    brightness = b;
+    c = b == Brightness.dark ? dark : _light;
+    revision.value++;
+  }
   static DsRadius r = DsRadius._defaults();
   static DsType t = DsType._defaults();
   static DsSpace space = DsSpace._defaults();
@@ -40,7 +58,9 @@ class Ds {
   /// their current value, so a partial patch never blanks the theme.
   static void apply(Object? design) {
     if (design is! Map) return;
-    c = DsColors._from(_asMap(design['colors']), c);
+    _light = DsColors._from(_asMap(design['colors']), _light);
+    dark = DsColors._from(_asMap(_asMap(design['dark'])['colors']), dark);
+    c = isDark ? dark : _light;
     r = DsRadius._from(_asMap(design['radius']), r);
     t = DsType._from(_asMap(design['type']), t);
     space = DsSpace._from(design['spacing'], space);
@@ -104,6 +124,22 @@ class DsColors {
         info: Color(0xFF0A84FF),
       );
 
+  /// The dark defaults, for a boot before the tokens arrive. The live values
+  /// are the backend's (`design.dark.colors`); these only stop a flash.
+  factory DsColors._darkDefaults() => const DsColors(
+        bg: Color(0xFF0F1113),
+        surface: Color(0xFF1A1D21),
+        brand: Color(0xFF2FB25A),
+        brandDark: Color(0xFF1B873F),
+        text: Color(0xFFF2F3F5),
+        textSecondary: Color(0xFFA0A6AD),
+        divider: Color(0xFF2A2F35),
+        success: Color(0xFF34C759),
+        warning: Color(0xFFFF9F0A),
+        danger: Color(0xFFFF453A),
+        info: Color(0xFF409CFF),
+      );
+
   factory DsColors._from(Map m, DsColors f) => DsColors(
         bg: Ds.hex(m['bg'], f.bg),
         surface: Ds.hex(m['surface'], f.surface),
@@ -164,6 +200,9 @@ class DsSpace {
   double get x24 => _at(4);
   double get x32 => _at(5);
   double get x48 => _at(6);
+  /// A hairline rule — the one sub-scale width the design system allows
+  /// (dividers, 1px borders). Defined here so screens never write `1`.
+  double get hairline => 1;
   double call(int i) => _at(i);
 }
 
@@ -239,6 +278,12 @@ class DsType {
   TextStyle get subtitle => _style(subtitleSize, subtitleWeight, Ds.c.text, tracking: -0.2);
   TextStyle get body => _style(bodySize, bodyWeight, Ds.c.text);
   TextStyle get bodySecondary => _style(bodySize, bodyWeight, Ds.c.textSecondary);
+
+  /// CHANGE #286 — body size at the subtitle weight. The slim update bar's
+  /// one line and its pill label are "15px semibold" in the spec; both numbers
+  /// stay backend tokens (type.body.size + type.subtitle.weight) instead of
+  /// becoming literals at the call site.
+  TextStyle get bodyStrong => _style(bodySize, subtitleWeight, Ds.c.text);
   TextStyle get caption => _style(captionSize, captionWeight, Ds.c.textSecondary);
 }
 
@@ -246,22 +291,33 @@ class DsType {
 class DsElevation {
   final double e1x, e1y, e1blur, e1alpha;
   final double e2x, e2y, e2blur, e2alpha;
+
+  /// CMD #2037 — the UPWARD shadow. A bar that sits ON something (the update
+  /// card on the bottom nav, a pinned footer on a list) needs its shadow cast
+  /// up out of its top edge; e1/e2 both fall downwards, where nothing can see
+  /// them. Same three numbers, negative y, so it is retunable from the backend
+  /// like every other elevation.
+  final double eUpx, eUpy, eUpblur, eUpalpha;
   const DsElevation({
     required this.e1x, required this.e1y, required this.e1blur, required this.e1alpha,
     required this.e2x, required this.e2y, required this.e2blur, required this.e2alpha,
+    required this.eUpx, required this.eUpy, required this.eUpblur, required this.eUpalpha,
   });
   factory DsElevation._defaults() => const DsElevation(
         e1x: 0, e1y: 1, e1blur: 3, e1alpha: 0.06,
         e2x: 0, e2y: 4, e2blur: 12, e2alpha: 0.08,
+        eUpx: 0, eUpy: -4, eUpblur: 16, eUpalpha: 0.08,
       );
   factory DsElevation._from(Map m, DsElevation f) {
     Map g(String k) => m[k] is Map ? m[k] as Map : const {};
-    final a = g('e1'), b = g('e2');
+    final a = g('e1'), b = g('e2'), u = g('eUp');
     return DsElevation(
       e1x: Ds._num(a['x'], f.e1x), e1y: Ds._num(a['y'], f.e1y),
       e1blur: Ds._num(a['blur'], f.e1blur), e1alpha: Ds._num(a['alpha'], f.e1alpha),
       e2x: Ds._num(b['x'], f.e2x), e2y: Ds._num(b['y'], f.e2y),
       e2blur: Ds._num(b['blur'], f.e2blur), e2alpha: Ds._num(b['alpha'], f.e2alpha),
+      eUpx: Ds._num(u['x'], f.eUpx), eUpy: Ds._num(u['y'], f.eUpy),
+      eUpblur: Ds._num(u['blur'], f.eUpblur), eUpalpha: Ds._num(u['alpha'], f.eUpalpha),
     );
   }
   List<BoxShadow> get e1 => [
@@ -269,6 +325,11 @@ class DsElevation {
       ];
   List<BoxShadow> get e2 => [
         BoxShadow(color: const Color(0xFF000000).withValues(alpha: e2alpha), offset: Offset(e2x, e2y), blurRadius: e2blur),
+      ];
+
+  /// A soft shadow cast UPWARDS out of the top edge.
+  List<BoxShadow> get eUp => [
+        BoxShadow(color: const Color(0xFF000000).withValues(alpha: eUpalpha), offset: Offset(eUpx, eUpy), blurRadius: eUpblur),
       ];
 }
 
@@ -303,10 +364,70 @@ class DsMotion {
 /// Touch-target minimums.
 class DsTouch {
   final double minTarget, listRowMinHeight;
-  const DsTouch({required this.minTarget, required this.listRowMinHeight});
-  factory DsTouch._defaults() => const DsTouch(minTarget: 44, listRowMinHeight: 56);
+
+  /// CMD #2030 — the storefront header band's height, in logical pixels. It is
+  /// a token rather than a constant because the band is now scroll-linked: the
+  /// number is both the row's height AND the exact distance the band travels
+  /// before it is gone, so the two can never be set apart by an edit. Retuning
+  /// the header is one `ui_design_set` away, with no deploy.
+  final double headerBand;
+
+  /// CMD #2038 — how far the finger has to travel in the NEW direction before
+  /// the scroll-linked header is allowed to turn around, in logical pixels.
+  /// Anything smaller is jitter, a bounce or a snap-back, and the band ignores
+  /// it. A token, not a constant, so the flicker guard is retunable with one
+  /// `ui_design_set` and no deploy.
+  ///
+  /// CMD #2052 — it is 40 now, and it is measured on the FINGER rather than on
+  /// the list: a deliberate change of mind, not a tremor.
+  final double headerHysteresis;
+
+  /// CMD #2052 — how long the band takes to finish itself off once the finger
+  /// has left the glass, in milliseconds. The gesture decides WHICH end (the
+  /// direction the drag was going); this decides how fast it gets there, so the
+  /// band is never left half open. A token, so the feel is an `ui_design_set`.
+  final double headerSettleMs;
+
+  /// CHANGE #286 — how far above the bottom of the screen a pinned bar floats,
+  /// so it clears the bottom nav (and any floating cart pill) instead of
+  /// covering it. Backend token, so the offset is retunable with zero deploy.
+  final double bottomBarGap;
+
+  const DsTouch({
+    required this.minTarget,
+    required this.listRowMinHeight,
+    required this.bottomBarGap,
+    required this.headerBand,
+    required this.headerHysteresis,
+    required this.headerSettleMs,
+  });
+  factory DsTouch._defaults() => const DsTouch(
+      minTarget: 44,
+      listRowMinHeight: 56,
+      bottomBarGap: 56,
+      // CMD #2037 — back to the height the header had before #2030 (a 40 px
+      // avatar in 12 px of padding, top and bottom). #2030 made the band's
+      // height and its scroll travel ONE number and set that number to 56,
+      // which shortened the header as a side effect of making it move; this
+      // puts the height back without touching the 1:1 travel, because the
+      // travel is still the same token.
+      headerBand: 64,
+      // CMD #2052 — 40 px of FINGER travel. #2038's 8 was measured on the
+      // list's own deltas, where 8 px was already generous; on the pointer it
+      // is a twitch. Forty is the spec's own number: a deliberate change of
+      // mind, and nothing smaller turns the header around.
+      headerHysteresis: 40,
+      // CMD #2052 — the settle. Long enough to read as a movement, short
+      // enough that a fast scroller never sees a half-open header.
+      headerSettleMs: 180);
   factory DsTouch._from(Map m, DsTouch f) => DsTouch(
         minTarget: Ds._num(m['minTarget'], f.minTarget),
         listRowMinHeight: Ds._num(m['listRowMinHeight'], f.listRowMinHeight),
+        bottomBarGap: Ds._num(m['bottomBarGap'], f.bottomBarGap),
+        headerBand: Ds._num(m['headerBand'], f.headerBand),
+        headerHysteresis:
+            Ds._num(m['headerHysteresis'], f.headerHysteresis),
+        headerSettleMs:
+            Ds._num(m['headerSettleMs'], f.headerSettleMs),
       );
 }

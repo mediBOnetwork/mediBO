@@ -58,6 +58,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../design_tokens.dart';
 import '../../features/whatsapp/ui/wa_campaign_chips.dart';
 import '../../features/whatsapp/ui/wa_channel_preview.dart';
 import '../../services/ui_copy.dart';
@@ -98,6 +99,16 @@ typedef WaContactLedgerRpc =
 // p_label defaults to null; an empty p_phone clears the number and the zone
 // falls back to the default zone's. The save RPC validates the number itself
 // and returns the reason it refuses — this file never reads a phone.
+// wa_template_pipeline() — the message -> template -> Meta status -> route table.
+// Read-only; every label, tone and sentence in it is written by the backend.
+typedef WaTemplatePipelineRpc = Future<Map<String, dynamic>> Function();
+// CHANGE #294 — wa_send_health(p_hours) / wa_send_retry(p_attempt_id).
+// The delivery ledger: every customer-facing notification attempt, whether it
+// went as an approved template or as a free-form message inside the 24h window,
+// and the reason when it was skipped. Every label, tone and sentence in it is
+// written by the backend; this file prints them and sends the id back.
+typedef WaSendHealthRpc = Future<Map<String, dynamic>> Function(int hours);
+typedef WaSendRetryRpc = Future<Map<String, dynamic>> Function(int attemptId);
 typedef ZonesContactScreenRpc = Future<Map<String, dynamic>> Function();
 typedef ZoneContactSaveRpc =
     Future<Map<String, dynamic>> Function(Map<String, dynamic> params);
@@ -127,6 +138,15 @@ Future<Map<String, dynamic>> waContactLedger(int days, String? phone) async =>
         params: {'p_days': days, 'p_phone': phone},
       ),
     );
+
+Future<Map<String, dynamic>> waTemplatePipeline() async =>
+    _asMap(await _db.rpc('wa_template_pipeline'));
+
+Future<Map<String, dynamic>> waSendHealth(int hours) async =>
+    _asMap(await _db.rpc('wa_send_health', params: {'p_hours': hours}));
+
+Future<Map<String, dynamic>> waSendRetry(int attemptId) async =>
+    _asMap(await _db.rpc('wa_send_retry', params: {'p_attempt_id': attemptId}));
 
 Future<Map<String, dynamic>> zonesContactScreen() async =>
     _asMap(await _db.rpc('zones_contact_screen'));
@@ -173,6 +193,9 @@ class WaOpsScreen extends StatefulWidget {
   final WaWabaStatusRpc? wabaStatusRpc;
   final WaWabaRefreshRpc? wabaRefreshRpc;
   final WaContactLedgerRpc? ledgerRpc;
+  final WaTemplatePipelineRpc? pipelineRpc;
+  final WaSendHealthRpc? sendHealthRpc;
+  final WaSendRetryRpc? sendRetryRpc;
   final ZonesContactScreenRpc? zonesRpc;
   final ZoneContactSaveRpc? zoneSaveRpc;
   final WaChannelPreviewRpc? channelPreviewRpc;
@@ -190,6 +213,9 @@ class WaOpsScreen extends StatefulWidget {
     this.wabaStatusRpc,
     this.wabaRefreshRpc,
     this.ledgerRpc,
+    this.pipelineRpc,
+    this.sendHealthRpc,
+    this.sendRetryRpc,
     this.zonesRpc,
     this.zoneSaveRpc,
     this.channelPreviewRpc,
@@ -223,6 +249,18 @@ class _WaOpsScreenState extends State<WaOpsScreen> {
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 40),
         children: [
           _SectionHeading(
+            icon: Icons.mark_email_read_outlined,
+            // Status before configuration: this page is where you land when a
+            // pharmacy says "I never got it", so the delivery ledger is the
+            // first thing on it, not a section you scroll to.
+            text: 'Notification delivery',
+          ),
+          _SendHealthSection(
+            healthRpc: widget.sendHealthRpc,
+            retryRpc: widget.sendRetryRpc,
+          ),
+          SizedBox(height: Ds.space.x24),
+          _SectionHeading(
             icon: Icons.settings_suggest_outlined,
             // Section headings are the screen's own furniture, not data.
             text: 'Automatic messages',
@@ -233,6 +271,12 @@ class _WaOpsScreenState extends State<WaOpsScreen> {
             channelPreviewRpc: widget.channelPreviewRpc,
             channelResetRpc: widget.channelResetRpc,
           ),
+          SizedBox(height: Ds.space.x24),
+          _SectionHeading(
+            icon: Icons.fact_check_outlined,
+            text: 'Template pipeline',
+          ),
+          _TemplatePipelineSection(pipelineRpc: widget.pipelineRpc),
           const SizedBox(height: 22),
           _SectionHeading(
             icon: Icons.verified_outlined,
@@ -438,9 +482,41 @@ class _EventRoutesSectionState extends State<_EventRoutesSection> {
       grouped[aud]!.add(r);
     }
 
+    // CMD #450 — routes that were switched on BEFORE save-time validation
+    // existed. The count and the sentence are both the backend's.
+    final blockedLabel = (_payload?['blocked_label'] ?? '').toString();
+    final blockedNote = (_payload?['blocked_note'] ?? '').toString();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (blockedLabel.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x8),
+            child: Container(
+              padding: EdgeInsets.all(Ds.space.x12),
+              decoration: BoxDecoration(
+                color: Ds.c.dangerSoft,
+                borderRadius: Ds.r.rCard,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    blockedLabel,
+                    style: Ds.t.body.copyWith(
+                      color: _kRed,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  if (blockedNote.isNotEmpty) ...[
+                    SizedBox(height: Ds.space.x4),
+                    Text(blockedNote, style: Ds.t.caption),
+                  ],
+                ],
+              ),
+            ),
+          ),
         if (note.isNotEmpty) _NoteBlock(note),
         // The filter row: one chip per audience present, in the same order. A
         // user type with no routes never reaches this list, so it shows no chip
@@ -650,8 +726,25 @@ class _EventRouteCard extends StatelessWidget {
                 label: _s('status_label'),
                 tone: _chipTone(row['status_tone']?.toString()),
               ),
+              // CMD #450 (feature_gaps #43) — the pre-send blocker. A route can
+              // be switched ON, look live, and have every send refused: an
+              // approved template whose media header has no sample handle dies
+              // at Meta with missing_header_media, 35 times before anybody
+              // looked. wa_route_blockers() decides it; this chip prints it.
+              if (row['blocked'] == true)
+                WaToneChip(
+                  label: _s('blocker_label'),
+                  tone: _chipTone(row['blocker_tone']?.toString()),
+                ),
             ],
           ),
+          if (row['blocked'] == true && _s('blocker_detail').isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(
+              _s('blocker_detail'),
+              style: Ds.t.caption.copyWith(color: _kRed),
+            ),
+          ],
           const SizedBox(height: 8),
           // The only figures on this card the backend did not pre-word.
           // sent_30d is a bare count and updated_label is already a date
@@ -936,9 +1029,18 @@ class _AccountHealthSectionState extends State<_AccountHealthSection> {
     final note = s('note');
     final pct = ((p['templates_pct'] as num?) ?? 0).toDouble().clamp(0, 100);
 
+    // #42 — the send-fault banner sits ABOVE the Meta card, because the two
+    // blocks answer different questions and the register row exists precisely
+    // because the green one was read as an answer to the red one's question.
+    // Everything in it is a backend string; `show` is the backend's decision.
+    final health = p['send_health'] is Map
+        ? Map<String, dynamic>.from(p['send_health'] as Map)
+        : const <String, dynamic>{};
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (health['show'] == true) _SendFaultBanner(health: health),
         Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
@@ -1056,6 +1158,118 @@ class _AccountHealthSectionState extends State<_AccountHealthSection> {
         ),
         if (note.isNotEmpty) _NoteBlock(note, topGap: 10),
       ],
+    );
+  }
+}
+
+/// #42 — "a WABA billing block stopped a real login OTP and no screen said so".
+///
+/// The Meta card below this one reports the ACCOUNT REVIEW: on 2026-08-30 it
+/// read APPROVED / GREEN / TIER_250 while Meta was refusing our sends for
+/// billing, and two of the refused sends were login OTPs — a customer could not
+/// sign in and no screen in the app said a word about it.
+///
+/// So this banner is not a second opinion on the same figure; it is the OTHER
+/// question, asked of our own send log. It computes NOTHING: `show`, `tone`,
+/// the title, the sentence, the counts, the sign-in line and the contradiction
+/// line are all backend strings, and `meta_reason` is Meta's wording carried
+/// through untouched — the one string here that must never be rephrased,
+/// because it is what an admin pastes into Meta support.
+///
+/// Styling comes from `Ds` rather than this file's legacy `_k*` constants:
+/// new work does not add to the literal baseline (DESIGN.md, CHANGE #66).
+class _SendFaultBanner extends StatelessWidget {
+  final Map<String, dynamic> health;
+  const _SendFaultBanner({required this.health});
+
+  @override
+  Widget build(BuildContext context) {
+    String s(String k) => (health[k] ?? '').toString();
+    final tone = s('tone');
+    final ink = _toneInk(tone);
+    final reason = s('meta_reason');
+    final auth = s('auth_label');
+    final contradiction = s('contradiction_label');
+    final action = s('action_label');
+    final counts = [s('count_label'), s('last_label')]
+        .where((t) => t.isNotEmpty)
+        .join(' \u00b7 ');
+
+    try {
+      RenderLog.write('wa_ops_send_fault', tone);
+    } catch (_) {}
+
+    return Container(
+      key: const Key('wa_ops_send_fault'),
+      margin: EdgeInsets.only(bottom: Ds.space.x12),
+      padding: EdgeInsets.all(Ds.space.x16),
+      decoration: BoxDecoration(
+        color: _toneWash(tone),
+        border: Border.all(color: ink.withValues(alpha: 0.35)),
+        borderRadius: Ds.r.rCard,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Icon(Icons.error_outline, size: Ds.space.x16 + Ds.space.x4, color: ink),
+            SizedBox(width: Ds.space.x8),
+            Expanded(
+              child: Text(s('title'),
+                  style: Ds.t.subtitle.copyWith(color: ink)),
+            ),
+          ]),
+          if (reason.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x12),
+            Container(
+              key: const Key('wa_ops_send_fault_reason'),
+              width: double.infinity,
+              padding: EdgeInsets.symmetric(
+                  horizontal: Ds.space.x12, vertical: Ds.space.x8),
+              decoration: BoxDecoration(
+                color: Ds.c.surface,
+                borderRadius: Ds.r.rChip,
+                border: Border.all(color: Ds.c.divider),
+              ),
+              child: Text(reason,
+                  style: Ds.t.body.copyWith(fontWeight: FontWeight.w600)),
+            ),
+          ],
+          if (s('detail').isNotEmpty) ...[
+            SizedBox(height: Ds.space.x12),
+            Text(s('detail'), style: Ds.t.caption.copyWith(color: ink)),
+          ],
+          if (auth.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x8),
+            Text(auth,
+                key: const Key('wa_ops_send_fault_auth'),
+                style: Ds.t.caption
+                    .copyWith(color: ink, fontWeight: FontWeight.w700)),
+          ],
+          if (contradiction.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x8),
+            Text(contradiction,
+                key: const Key('wa_ops_send_fault_contradiction'),
+                style: Ds.t.caption),
+          ],
+          if (counts.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x12),
+            Text(counts, style: Ds.t.caption),
+          ],
+          if (action.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x12),
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Icon(Icons.arrow_forward, size: Ds.space.x16, color: ink),
+              SizedBox(width: Ds.space.x8),
+              Expanded(
+                child: Text(action,
+                    style: Ds.t.caption
+                        .copyWith(color: ink, fontWeight: FontWeight.w600)),
+              ),
+            ]),
+          ],
+        ],
+      ),
     );
   }
 }
@@ -1659,4 +1873,523 @@ class _ErrorBlock extends StatelessWidget {
       ],
     ),
   );
+}
+
+// ── SECTION B — template pipeline ────────────────────────────────────────────
+//
+// CHANGE #228. Every automatic WhatsApp message mediBO sends is one row here:
+// the message, the Meta template behind it, where that template is in Meta's
+// review, whether the route is live, and yes/no on approval.
+//
+// The point of the screen is that there is NOTHING to do on it. mediBO writes
+// the template, lints it, re-uploads its sample file, submits it to Meta, and
+// switches the route on when the verdict comes back. So this section has no
+// buttons: it is a read-out of an automation, not a console for driving one.
+//
+// Nothing is decided here. status_label / status_tone / route_label /
+// route_tone / approved_label / header_label / note / reason all arrive as
+// finished strings and tokens; the file maps tone->colour through the SAME
+// _chipTone adapter section A uses, so "warn" can never mean two colours in one
+// screen. media_ready is a backend boolean, never a date this file compares.
+class _TemplatePipelineSection extends StatefulWidget {
+  final WaTemplatePipelineRpc? pipelineRpc;
+  const _TemplatePipelineSection({this.pipelineRpc});
+
+  @override
+  State<_TemplatePipelineSection> createState() =>
+      _TemplatePipelineSectionState();
+}
+
+class _TemplatePipelineSectionState extends State<_TemplatePipelineSection> {
+  Map<String, dynamic>? _payload;
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final res = await (widget.pipelineRpc ?? waTemplatePipeline)();
+      if (!mounted) return;
+      if (_isError(res)) {
+        setState(() {
+          _loading = false;
+          _error = _errorText(res);
+        });
+        return;
+      }
+      setState(() {
+        _payload = res;
+        _loading = false;
+      });
+      try {
+        RenderLog.write('wa_ops_pipeline', 'rows=${_rows.length}');
+      } catch (_) {}
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = e.toString();
+      });
+    }
+  }
+
+  List<Map<String, dynamic>> get _rows =>
+      ((_payload?['rows'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const _Loading();
+    if (_error != null) {
+      return _ErrorBlock(message: _error!, onRetry: _load);
+    }
+
+    final rows = _rows;
+    final summary = (_payload?['summary_label'] ?? '').toString();
+    final note = (_payload?['note'] ?? '').toString();
+
+    if (rows.isEmpty) {
+      return _NoteBlock((_payload?['empty_label'] ?? '').toString());
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (summary.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x8),
+            child: Row(
+              children: [
+                WaToneChip(
+                  label: summary,
+                  tone: _chipTone((_payload?['summary_tone'] ?? '').toString()),
+                ),
+              ],
+            ),
+          ),
+        if (note.isNotEmpty) _NoteBlock(note),
+        for (final r in rows) _PipelineRow(row: r),
+      ],
+    );
+  }
+}
+
+class _PipelineRow extends StatelessWidget {
+  final Map<String, dynamic> row;
+  const _PipelineRow({required this.row});
+
+  @override
+  Widget build(BuildContext context) {
+    final message = (row['message'] ?? '').toString();
+    final template = (row['template_name'] ?? '').toString();
+    final status = (row['status_label'] ?? '').toString();
+    final route = (row['route_label'] ?? '').toString();
+    final approved = (row['approved_label'] ?? '').toString();
+    final header = (row['header_label'] ?? '').toString();
+    final note = (row['note'] ?? '').toString();
+    final reason = (row['reason'] ?? '').toString();
+    final mediaReady = row['media_ready'] == true;
+
+    return Container(
+      margin: EdgeInsets.only(bottom: Ds.space.x8),
+      padding: EdgeInsets.all(Ds.space.x12),
+      decoration: BoxDecoration(
+        color: _kCard,
+        borderRadius: Ds.r.rCard,
+        border: Border.all(color: _kBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  message,
+                  style: Ds.t.body.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ),
+              WaToneChip(
+                label: status,
+                tone: _chipTone((row['status_tone'] ?? '').toString()),
+              ),
+            ],
+          ),
+          SizedBox(height: Ds.space.x4),
+          Text(template, style: Ds.t.caption),
+          SizedBox(height: Ds.space.x8),
+          Wrap(
+            spacing: Ds.space.x8,
+            runSpacing: Ds.space.x4,
+            children: [
+              WaToneChip(
+                label: route,
+                tone: _chipTone((row['route_tone'] ?? '').toString()),
+              ),
+              WaToneChip(
+                label: approved,
+                tone: _chipTone((row['approved_tone'] ?? '').toString()),
+              ),
+              if (header.isNotEmpty)
+                WaToneChip(
+                  label: header,
+                  tone: mediaReady ? null : _chipTone('warn'),
+                ),
+            ],
+          ),
+          if (note.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x8),
+            Text(note, style: Ds.t.caption),
+          ],
+          if (reason.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(reason, style: Ds.t.caption.copyWith(color: _kRed)),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// ── SECTION B2 — notification delivery (CHANGE #294) ─────────────────────────
+//
+// The incident this section exists for: order CPO230826CHAO1 was placed and the
+// pharmacy was never told. The order-placed message had ALWAYS gone out as a
+// free-form document, which Meta only delivers inside the 24-hour window after
+// the customer writes to us. When that window was shut the send failed with
+// "Re-engagement message" and died in a log nobody reads.
+//
+// So the failure now has a face. Every attempt — approved template, free-form
+// inside an open window, or a deliberate skip and its reason — is a row here,
+// and a row that did not reach the customer offers Resend.
+//
+// Nothing is decided in Dart. path_label / status_label / tone / reason /
+// phone_label / when_label / retry_label / summary_label all arrive finished;
+// `can_retry` is the backend's boolean, never a condition this file evaluates.
+class _SendHealthSection extends StatefulWidget {
+  final WaSendHealthRpc? healthRpc;
+  final WaSendRetryRpc? retryRpc;
+  const _SendHealthSection({this.healthRpc, this.retryRpc});
+
+  @override
+  State<_SendHealthSection> createState() => _SendHealthSectionState();
+}
+
+class _SendHealthSectionState extends State<_SendHealthSection> {
+  Map<String, dynamic>? _payload;
+  bool _loading = true;
+  String? _error;
+  int? _busyId;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final res = await (widget.healthRpc ?? waSendHealth)(48);
+      if (!mounted) return;
+      if (_isError(res)) {
+        setState(() {
+          _loading = false;
+          _error = _errorText(res);
+        });
+        return;
+      }
+      setState(() {
+        _payload = res;
+        _loading = false;
+      });
+      try {
+        RenderLog.write('wa_send_health', 'rows=${_rows.length}');
+      } catch (_) {}
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = e.toString();
+      });
+    }
+  }
+
+  Future<void> _retry(int id) async {
+    setState(() => _busyId = id);
+    Map<String, dynamic> res;
+    try {
+      res = await (widget.retryRpc ?? waSendRetry)(id);
+    } catch (e) {
+      res = <String, dynamic>{'message': e.toString()};
+    }
+    if (!mounted) return;
+    setState(() => _busyId = null);
+    // The backend writes the sentence for both outcomes; we only show it.
+    final msg = (res['message'] ?? _errorText(res)).toString();
+    if (msg.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    }
+    await _load();
+  }
+
+  List<Map<String, dynamic>> get _rows =>
+      ((_payload?['rows'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const _Loading();
+    if (_error != null) return _ErrorBlock(message: _error!, onRetry: _load);
+
+    final rows = _rows;
+    final summary = (_payload?['summary_label'] ?? '').toString();
+    final range = (_payload?['range_label'] ?? '').toString();
+    final note = (_payload?['window_note'] ?? '').toString();
+    final retryLabel = (_payload?['retry_label'] ?? '').toString();
+    // CMD #450 (feature_gaps #41) — the window grouped by reason. The counts,
+    // the share, the first/last seen and "None of these carry a number to send
+    // to" are all wa_send_health()'s; this widget adds nothing to them.
+    final reasons = ((_payload?['reasons'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    final reasonsTitle = (_payload?['reasons_title'] ?? '').toString();
+    final retryableLabel = (_payload?['retryable_label'] ?? '').toString();
+    // CMD #450 QA round 1. Two numbers on this screen count two different
+    // populations — the banner's total_failed unions Meta's own delivery
+    // failures with our send log, summary_label counts the log alone — and the
+    // feed is capped, so it must say what it left out. Both sentences are the
+    // backend's; neither is inferred here.
+    final totalFailedLabel = (_payload?['total_failed_label'] ?? '').toString();
+    final truncatedLabel = (_payload?['truncated_label'] ?? '').toString();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (summary.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x8),
+            child: Wrap(
+              spacing: Ds.space.x8,
+              runSpacing: Ds.space.x4,
+              children: [
+                WaToneChip(
+                  label: summary,
+                  tone: _chipTone((_payload?['summary_tone'] ?? '').toString()),
+                ),
+                if (range.isNotEmpty) WaToneChip(label: range),
+              ],
+            ),
+          ),
+        if (totalFailedLabel.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x4),
+            child: Text(totalFailedLabel, style: Ds.t.caption),
+          ),
+        if (retryableLabel.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x8),
+            child: WaToneChip(label: retryableLabel, tone: _chipTone('info')),
+          ),
+        if (reasons.isNotEmpty) ...[
+          if (reasonsTitle.isNotEmpty)
+            Padding(
+              padding: EdgeInsets.only(bottom: Ds.space.x8),
+              child: Text(
+                reasonsTitle,
+                style: Ds.t.body.copyWith(fontWeight: FontWeight.w700),
+              ),
+            ),
+          for (final g in reasons) _SendReasonRow(group: g),
+          SizedBox(height: Ds.space.x16),
+        ],
+        if (note.isNotEmpty) _NoteBlock(note),
+        if (truncatedLabel.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x8),
+            child: Text(truncatedLabel, style: Ds.t.caption),
+          ),
+        if (rows.isEmpty)
+          _NoteBlock((_payload?['empty_label'] ?? '').toString())
+        else
+          for (final r in rows)
+            _SendHealthRow(
+              row: r,
+              retryLabel: retryLabel,
+              busy:
+                  _busyId != null &&
+                  _busyId == (r['id'] is num ? (r['id'] as num).toInt() : null),
+              onRetry: () {
+                final id = r['id'];
+                if (id is num) _retry(id.toInt());
+              },
+            ),
+      ],
+    );
+  }
+}
+
+/// CMD #450 — one grouped failure reason. Every string on it (count_label,
+/// share_label, first/last seen, the retryable sentence and the tone) is
+/// wa_send_health()'s; this widget prints them and computes nothing.
+class _SendReasonRow extends StatelessWidget {
+  final Map<String, dynamic> group;
+  const _SendReasonRow({required this.group});
+
+  String _g(String k) => (group[k] ?? '').toString();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: EdgeInsets.only(bottom: Ds.space.x8),
+      padding: EdgeInsets.all(Ds.space.x12),
+      decoration: BoxDecoration(
+        color: _kCard,
+        borderRadius: Ds.r.rCard,
+        border: Border.all(color: _kBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _g('reason'),
+                  style: Ds.t.body.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ),
+              WaToneChip(
+                label: _g('count_label'),
+                tone: _chipTone(_g('tone')),
+              ),
+            ],
+          ),
+          SizedBox(height: Ds.space.x4),
+          Text(
+            [
+              _g('event_key'),
+              _g('share_label'),
+              _g('last_label'),
+            ].where((e) => e.isNotEmpty).join(' · '),
+            style: Ds.t.caption,
+          ),
+          if (_g('detail').isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(_g('detail'), style: Ds.t.caption),
+          ],
+          if (_g('retryable_label').isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(_g('retryable_label'), style: Ds.t.caption),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _SendHealthRow extends StatelessWidget {
+  final Map<String, dynamic> row;
+  final String retryLabel;
+  final bool busy;
+  final VoidCallback onRetry;
+  const _SendHealthRow({
+    required this.row,
+    required this.retryLabel,
+    required this.busy,
+    required this.onRetry,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final title = (row['title'] ?? '').toString();
+    final code = (row['order_code'] ?? '').toString();
+    final phone = (row['phone_label'] ?? '').toString();
+    final when = (row['when_label'] ?? '').toString();
+    final path = (row['path_label'] ?? '').toString();
+    final status = (row['status_label'] ?? '').toString();
+    final reason = (row['reason'] ?? '').toString();
+    final tone = (row['tone'] ?? '').toString();
+    final canRetry = row['can_retry'] == true && retryLabel.isNotEmpty;
+
+    return Container(
+      margin: EdgeInsets.only(bottom: Ds.space.x8),
+      padding: EdgeInsets.all(Ds.space.x12),
+      decoration: BoxDecoration(
+        color: _kCard,
+        borderRadius: Ds.r.rCard,
+        border: Border.all(color: _kBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: Ds.t.body.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ),
+              WaToneChip(label: status, tone: _chipTone(tone)),
+            ],
+          ),
+          SizedBox(height: Ds.space.x4),
+          Text(
+            [if (code.isNotEmpty) code, phone, when].join(' · '),
+            style: Ds.t.caption,
+          ),
+          SizedBox(height: Ds.space.x8),
+          Row(
+            children: [
+              Expanded(
+                child: Wrap(
+                  spacing: Ds.space.x8,
+                  runSpacing: Ds.space.x4,
+                  children: [WaToneChip(label: path)],
+                ),
+              ),
+              if (canRetry)
+                TextButton(
+                  onPressed: busy ? null : onRetry,
+                  child: Text(
+                    retryLabel,
+                    style: Ds.t.caption.copyWith(
+                      color: _kGreen,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          if (reason.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(
+              reason,
+              style: Ds.t.caption.copyWith(
+                color: tone == 'bad' ? _kRed : _kMuted,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 }

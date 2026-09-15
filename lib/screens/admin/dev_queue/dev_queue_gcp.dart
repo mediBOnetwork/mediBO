@@ -7,6 +7,7 @@ import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
 import 'dev_queue_common.dart';
 import 'dev_queue_service.dart';
+import 'dev_queue_waste_card.dart';
 
 /// GCP Control — the super-admin cockpit for the VM/cloud, rendered entirely
 /// from `dev_gcp_get` (polled 15s). Every one-tap action enqueues a gcp command
@@ -175,6 +176,8 @@ class _GcpControlScreenState extends State<GcpControlScreen> {
                   _panelCard(),
                   const SizedBox(height: 12),
                   _costCard(),
+                  const SizedBox(height: 12),
+                  _wasteCard(),
                   const SizedBox(height: 12),
                   _actionsCard(),
                   const SizedBox(height: 12),
@@ -608,6 +611,24 @@ class _GcpControlScreenState extends State<GcpControlScreen> {
       ]),
     );
   }
+
+  // ── Monthly cloud waste scan (cmd #433) ───────────────────────────────────
+  /// The scan's result, drawn verbatim from `dev_gcp_get().waste`. "Scan now"
+  /// calls the edge function directly rather than enqueueing a command, so the
+  /// card refreshes in the same tap instead of when a runner next wakes up —
+  /// the scan is three read-only Describe calls and a storage query, not a
+  /// build. It is also what the monthly schedule runs, so the button and the
+  /// 1st-of-the-month command produce the identical payload.
+  Widget _wasteCard() => DevQueueWasteCard(
+        waste: (_g['waste'] as Map?)?.cast<String, dynamic>() ?? const {},
+        busy: _busy,
+        onScan: () => _run(() async {
+          final r = await widget.service.wasteScan();
+          if (!mounted) return;
+          final msg = (r['message'] ?? r['error'] ?? '').toString();
+          if (msg.isNotEmpty) showToast(context, msg, isError: r['error'] != null);
+        }),
+      );
 
   // ── One-tap actions ───────────────────────────────────────────────────────
   Widget _actionsCard() {

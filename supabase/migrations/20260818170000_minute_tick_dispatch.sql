@@ -1,0 +1,23 @@
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SUPERSEDED — DO NOT APPLY. Intentionally a no-op.
+--
+-- This file was the STAGED (never-applied) draft of the per-minute cron
+-- collapse, authored under CHANGE #229 after the 06:13 UTC outage and held back
+-- because it unschedules every live per-minute job.
+--
+-- It was rehearsed and applied — with two defects fixed — as
+--   supabase/migrations/20260818103000_minute_tick_cutover.sql
+-- after the THIRD outage of 2026-08-18 (10:01 UTC). The fixes:
+--   1. tail starvation — a budget-truncated tick restarted at ord 1 every
+--      minute, so jobs sorting last would never run again. The live version
+--      keeps a round-robin cursor in minute_tick_state.
+--   2. no per-step timeout — one hung tick could eat the whole 45s budget and
+--      starve the other twenty. The live version sets a per-step
+--      statement_timeout.
+--
+-- The body is emptied rather than deleted so the file keeps its place in the
+-- migration order: re-applying the original draft would REPLACE the fixed
+-- procedure with the defective one. The outage analysis it carried now lives
+-- in the header of the cutover migration.
+-- ─────────────────────────────────────────────────────────────────────────────
+select 1 where false;

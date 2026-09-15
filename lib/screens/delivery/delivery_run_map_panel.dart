@@ -214,7 +214,12 @@ class _DeliveryRunMapPanelState extends State<DeliveryRunMapPanel> {
         iconBytes: _iconCache[_iconKey(s)],
         tipAtPoint: true,
         fallbackColor: colorFromBackendHex(s['pin_color']?.toString()),
-        title: s['pharmacy_name']?.toString() ?? '',
+        // CHANGE #405 — when the stop came from an auto-assigned wave the
+        // backend sends `map_title`, which is the pharmacy name followed by the
+        // engine's own reason sentence ("Given to Ravi — lightest load in this
+        // zone (2 stops) in hand."). It is printed verbatim; nothing is joined
+        // here, and a stop with no wave keeps the plain name.
+        title: (s['map_title'] ?? s['pharmacy_name'])?.toString() ?? '',
         zIndex: 1000 - seq,
         onTap: widget.onTapStop == null ? null : () => widget.onTapStop!(s),
       ));

@@ -1,0 +1,465 @@
+// CHANGE #536 — MY SHOP, the pharmacy account's own home for the suite.
+//
+// Every one of these features was registered onto the ADMIN dashboard, where
+// the screen behind the tile resolves the caller's OWN pharmacy and so answers
+// an admin with "... is available on a pharmacy account". The shop that owns
+// the data reached the counter through one row in the account dropdown and
+// everything else by chaining app-bar buttons off it. This tab is where they
+// live now.
+//
+// It decides nothing. `customer_shop_home()` sends the sections, their order,
+// their labels, every tile's label and caption, its icon key and the route it
+// opens; this file walks that payload in the order it arrived. A new tile
+// tomorrow is one INSERT into feature_registry — there is no list in this file
+// to add it to, and no `switch` on a feature key anywhere below.
+//
+// Sections after the first arrive collapsed on purpose: a pharmacy that only
+// ever places orders opens this tab, sees Billing and four folded headers, and
+// is not handed nineteen tiles at once.
+import 'package:flutter/material.dart';
+
+import '../../design_tokens.dart';
+import '../../services/customer_shop_api.dart';
+import '../../services/ui_copy.dart';
+import '../../utils/render_log.dart';
+import '../admin/nav_registry_view.dart' show navIcon, navIconLetter, navIconResolves;
+
+String _s(Object? v) => v == null ? '' : v.toString();
+
+List<Map<String, dynamic>> _rows(Object? v) => v is List
+    ? v.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList()
+    : const <Map<String, dynamic>>[];
+
+/// The pharmacy account's shop home.
+///
+/// [navigate] is HomeShell's own route handler — the same one the admin
+/// dashboard tiles use — so a tile opens the screen that is already built
+/// rather than a second address that could drift from it.
+class MyShopScreen extends StatefulWidget {
+  final ValueChanged<String> navigate;
+
+  /// Whether this page is the one on screen.
+  ///
+  /// CHANGE #536 QA round 1 — the shell's IndexedStack builds every child at
+  /// boot, so loading in initState fired customer_shop_home() once per visitor
+  /// including signed-out ones, who can only ever get a 401 back. On a 60-
+  /// connection instance with a documented exhaustion outage that is a round
+  /// trip nobody asked for. The tab asks for its payload when it is opened,
+  /// once, and keeps it.
+  final bool active;
+
+  final CustomerShopRpc? rpc;
+
+  const MyShopScreen({
+    super.key,
+    required this.navigate,
+    this.active = true,
+    this.rpc,
+  });
+
+  @override
+  State<MyShopScreen> createState() => _MyShopScreenState();
+}
+
+class _MyShopScreenState extends State<MyShopScreen> {
+  Map<String, dynamic>? _payload;
+  bool _loading = true;
+  bool _failed = false;
+  final Set<String> _open = <String>{};
+
+  bool _asked = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.active) _ask();
+  }
+
+  @override
+  void didUpdateWidget(MyShopScreen old) {
+    super.didUpdateWidget(old);
+    if (widget.active) _ask();
+  }
+
+  /// The first activation loads; later ones are free. Pull-to-refresh is how a
+  /// shop asks for a fresh answer.
+  void _ask() {
+    if (_asked) return;
+    _asked = true;
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _failed = false;
+    });
+    try {
+      final res = await (widget.rpc != null
+          ? widget.rpc!('customer_shop_home', const {})
+          : CustomerShopApi.home());
+      if (!mounted) return;
+      final sections = _rows(res['sections']);
+      setState(() {
+        _payload = res;
+        _loading = false;
+        // The first section is the one a shop opens this tab for; the rest
+        // stay folded until asked for.
+        if (_open.isEmpty && sections.isNotEmpty) {
+          _open.add(_s(sections.first['key']));
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _failed = true;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const _Skeleton();
+
+    final res = _payload;
+
+    // A load that never landed: the retry is the whole screen, because there is
+    // nothing truthful to draw underneath it.
+    //
+    // CHANGE #536 QA round 2 — this used to read `res?['empty_message']`, and on
+    // a FAILED load `res` is null by definition, so the "one-message state" was
+    // one empty string and an empty button: a blank page with nothing to read
+    // and nothing to press. The copy for a payload that never arrived cannot
+    // come from the payload; it comes from ui_copy, which is backend-owned and
+    // already in memory, so re-wording it stays an UPDATE and never a deploy.
+    if (_failed || res == null) {
+      return _Centered(
+        message: c('my_shop.load_failed'),
+        actionLabel: c('my_shop.retry'),
+        onAction: _load,
+      );
+    }
+
+    // The backend's own refusal — an admin, a supplier, a rider. Its sentence,
+    // with nothing of ours added to it.
+    if (res['ok'] != true) {
+      return _Centered(message: _s(res['message']));
+    }
+
+    final sections = _rows(res['sections']);
+    if (sections.isEmpty) {
+      return _Centered(message: _s(res['empty_message']));
+    }
+
+    // Written HERE, on the paint, not in _load() after the RPC returns.
+    // CHANGE #536 QA round 1 taught the difference: while the page loaded
+    // eagerly at boot the key was written whether or not anyone ever reached
+    // the tab, so a green render-log proved the RPC ran and NOT that the tab
+    // was reachable — a proof that would have stayed green through the desktop
+    // regression QA actually found. A key on the paint cannot be true unless
+    // the widget is on screen.
+    // writeNow, not write: the 800 ms debounce is useless on a surface whose
+    // whole purpose is to be navigated AWAY from into one of nineteen feature
+    // screens, and a verifier that reads the log the instant boot paints — one
+    // RPC before this tab does — sees the debounced value not at all.
+    // Om's placement rule: a plain ordering customer with no shop activity yet
+    // KEEPS this tab and is met by a short intro instead of being dropped
+    // straight into nineteen counter tools. Whether that account "is a shop
+    // yet" is the backend's answer (`intro.has`), never emptiness inferred here.
+    final intro = res['intro'];
+    final introMap = intro is Map ? Map<String, dynamic>.from(intro) : const {};
+    final showIntro = introMap['has'] == true;
+
+    RenderLog.writeNow(
+      'c536_my_shop',
+      'sections:${sections.length};tiles:${sections.fold<int>(0, (n, s) => n + _rows(s['items']).length)}'
+          ';intro:${showIntro ? 1 : 0}',
+    );
+
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: ListView(
+        padding: EdgeInsets.fromLTRB(
+            Ds.space.x16, Ds.space.x16, Ds.space.x16, Ds.space.x32),
+        children: [
+          Text(_s(res['title']), style: Ds.t.title),
+          if (_s(res['subtitle']).isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(_s(res['subtitle']), style: Ds.t.caption),
+          ],
+          if (showIntro) ...[
+            SizedBox(height: Ds.space.x16),
+            _Intro(
+              title: _s(introMap['title']),
+              body: _s(introMap['body']),
+            ),
+          ],
+          SizedBox(height: Ds.space.x24),
+          for (final section in sections) ...[
+            _Section(
+              label: _s(section['label']),
+              iconKey: _s(section['icon_key']),
+              items: _rows(section['items']),
+              expanded: _open.contains(_s(section['key'])),
+              onToggle: () => setState(() {
+                final key = _s(section['key']);
+                if (!_open.remove(key)) _open.add(key);
+              }),
+              onOpen: (navKey) {
+                if (navKey.isEmpty) return;
+                widget.navigate(navKey);
+              },
+            ),
+            SizedBox(height: Ds.space.x12),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// One collapsible group of tiles. The header is a 48 px tap target in its own
+/// right, so folding a section never needs a precise tap on the chevron.
+class _Section extends StatelessWidget {
+  final String label;
+  final String iconKey;
+  final List<Map<String, dynamic>> items;
+  final bool expanded;
+  final VoidCallback onToggle;
+  final ValueChanged<String> onOpen;
+
+  const _Section({
+    required this.label,
+    required this.iconKey,
+    required this.items,
+    required this.expanded,
+    required this.onToggle,
+    required this.onOpen,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        boxShadow: Ds.elevation.e1,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            onTap: onToggle,
+            borderRadius: Ds.r.rCard,
+            child: Padding(
+              padding: EdgeInsets.symmetric(
+                  horizontal: Ds.space.x16, vertical: Ds.space.x16),
+              child: Row(
+                children: [
+                  Icon(navIcon(iconKey), size: Ds.space.x24, color: Ds.c.brand),
+                  SizedBox(width: Ds.space.x12),
+                  Expanded(child: Text(label, style: Ds.t.subtitle)),
+                  Text('${items.length}', style: Ds.t.caption),
+                  SizedBox(width: Ds.space.x8),
+                  Icon(
+                    expanded ? Icons.expand_less : Icons.expand_more,
+                    size: Ds.space.x24,
+                    color: Ds.c.textSecondary,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (expanded) ...[
+            Divider(height: 1, color: Ds.c.divider),
+            for (final item in items)
+              _Tile(row: item, onOpen: () => onOpen(_s(item['nav_key']))),
+            SizedBox(height: Ds.space.x8),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// One feature. Label, caption and glyph are the payload's; the row knows
+/// nothing about which feature it is drawing.
+class _Tile extends StatelessWidget {
+  final Map<String, dynamic> row;
+  final VoidCallback onOpen;
+
+  const _Tile({required this.row, required this.onOpen});
+
+  @override
+  Widget build(BuildContext context) {
+    final caption = _s(row['caption']);
+    return InkWell(
+      onTap: onOpen,
+      child: Padding(
+        padding: EdgeInsets.symmetric(
+            horizontal: Ds.space.x16, vertical: Ds.space.x12),
+        child: Row(
+          children: [
+            Container(
+              width: Ds.space.x48,
+              height: Ds.space.x48,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: Ds.c.brandSoft,
+                borderRadius: Ds.r.rChip,
+              ),
+              child: navIconResolves(_s(row['icon_key']))
+                  ? Icon(navIcon(_s(row['icon_key'])),
+                      size: Ds.space.x24, color: Ds.c.brand)
+                  : Text(navIconLetter(row), style: Ds.t.bodyStrong),
+            ),
+            SizedBox(width: Ds.space.x12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(_s(row['label']), style: Ds.t.bodyStrong),
+                  if (caption.isNotEmpty) ...[
+                    SizedBox(height: Ds.space.x4),
+                    Text(caption, style: Ds.t.caption),
+                  ],
+                ],
+              ),
+            ),
+            SizedBox(width: Ds.space.x8),
+            Icon(Icons.chevron_right,
+                size: Ds.space.x24, color: Ds.c.textSecondary),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// CHANGE #536 — the intro a plain ordering customer is met by, printed.
+///
+/// Om: "For accounts that are plain ordering customers with no shop activity
+/// yet, the tab still shows with a simple intro state — do not hide it." Both
+/// sentences arrive in the payload; this widget owns the box they sit in and
+/// not one word inside it.
+class _Intro extends StatelessWidget {
+  final String title;
+  final String body;
+
+  const _Intro({required this.title, required this.body});
+
+  @override
+  Widget build(BuildContext context) {
+    if (title.isEmpty && body.isEmpty) return const SizedBox.shrink();
+    return Container(
+      padding: EdgeInsets.all(Ds.space.x16),
+      decoration: BoxDecoration(
+        color: Ds.c.infoSoft,
+        borderRadius: Ds.r.rCard,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (title.isNotEmpty)
+            Text(title, style: Ds.t.subtitle),
+          if (title.isNotEmpty && body.isNotEmpty)
+            SizedBox(height: Ds.space.x8),
+          if (body.isNotEmpty)
+            Text(body, style: Ds.t.caption),
+        ],
+      ),
+    );
+  }
+}
+
+/// A one-message state: the backend's sentence, and a Retry when the failure
+/// was ours rather than an answer.
+class _Centered extends StatelessWidget {
+  final String message;
+  final String actionLabel;
+  final VoidCallback? onAction;
+
+  const _Centered({
+    required this.message,
+    this.actionLabel = '',
+    this.onAction,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: EdgeInsets.all(Ds.space.x32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (message.isNotEmpty)
+              Text(message, style: Ds.t.body, textAlign: TextAlign.center),
+            // CHANGE #536 QA round 2 — the retry is offered whenever there IS
+            // one, not only when the copy for it arrived. ui_copy is fetched
+            // like everything else, so a cold offline boot can hand us an
+            // empty label; the old `&& actionLabel.isNotEmpty` turned that
+            // into a page with no way forward. The label stays backend-owned —
+            // when it is missing the button carries the refresh icon and no
+            // word of our own.
+            if (onAction != null) ...[
+              SizedBox(height: Ds.space.x16),
+              if (actionLabel.isNotEmpty)
+                OutlinedButton(onPressed: onAction, child: Text(actionLabel))
+              else
+                OutlinedButton(
+                  onPressed: onAction,
+                  child: const Icon(Icons.refresh),
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The shape of the list, drawn while it loads — never a bare spinner.
+class _Skeleton extends StatelessWidget {
+  const _Skeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    Widget bar(double width, double height) => Container(
+          width: width,
+          height: height,
+          decoration: BoxDecoration(
+            color: Ds.c.divider,
+            borderRadius: Ds.r.rChip,
+          ),
+        );
+
+    return ListView(
+      padding: EdgeInsets.all(Ds.space.x16),
+      children: [
+        bar(Ds.space.x48 * 3, Ds.space.x24),
+        SizedBox(height: Ds.space.x24),
+        for (var i = 0; i < 4; i++) ...[
+          Container(
+            padding: EdgeInsets.all(Ds.space.x16),
+            decoration: BoxDecoration(
+              color: Ds.c.surface,
+              borderRadius: Ds.r.rCard,
+              boxShadow: Ds.elevation.e1,
+            ),
+            child: Row(
+              children: [
+                bar(Ds.space.x24, Ds.space.x24),
+                SizedBox(width: Ds.space.x12),
+                Expanded(child: bar(double.infinity, Ds.space.x16)),
+              ],
+            ),
+          ),
+          SizedBox(height: Ds.space.x12),
+        ],
+      ],
+    );
+  }
+}

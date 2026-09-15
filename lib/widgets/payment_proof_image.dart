@@ -22,16 +22,19 @@ import 'native_signed_image.dart';
 /// the browser only ever receives the small render. `resize: contain` is
 /// mandatory: without it Supabase scales the given dimension only and leaves
 /// the other at full size, producing an aspect-ratio-broken sliver (see #469).
+///
+/// CHANGE #643 — the server-side resize is gone. Supabase image
+/// transformations were at 86 of 100 for the cycle, and every transformed
+/// render is a distinct billable origin fetch. These objects are PRIVATE
+/// (payment proofs, customer bills) and stay private: a public R2 URL is not
+/// an option for them, and `app_settings.r2_public_base` is empty in any case.
+/// So the signed URL is now plain, and the picture is scaled where it is
+/// displayed instead. [ProofTransform] is kept because it still says how wide
+/// the render should be — it just stops being a query parameter.
 Future<String> liveProofSigner(
     String bucket, String path, int expiresIn, ProofTransform? transform) {
   final storage = Supabase.instance.client.storage.from(bucket);
-  if (transform == null) return storage.createSignedUrl(path, expiresIn);
-  return storage.createSignedUrl(path, expiresIn,
-      transform: TransformOptions(
-        width: transform.width,
-        quality: transform.quality,
-        resize: ResizeMode.contain,
-      ));
+  return storage.createSignedUrl(path, expiresIn);
 }
 
 /// The production loader — live signer, RenderLog as the diagnostic sink.

@@ -7,6 +7,23 @@
     <uses-permission android:name="android.permission.CAMERA"/>
     <!-- Android 13+ push/local notifications. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- CHANGE #985 — the rider's position while the run screen is open
+         (in-app polling). The CHANGE #700 foreground location service and its
+         FOREGROUND_SERVICE / FOREGROUND_SERVICE_LOCATION permissions were
+         removed for the 1.3.21 (35) Play release: Play gates them behind a
+         Console-only declaration form. ACCESS_BACKGROUND_LOCATION is still
+         deliberately NOT requested. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <!-- CMD #2015 — the order alert is an ordinary notification again.
+         The full-screen-intent permission is GONE: a lock-screen takeover is the
+         alarm/calling treatment that let the old alert bypass silent mode,
+         Do Not Disturb and the volume keys. The alert is now a heads-up
+         notification on a normal channel that honours the ringer, with a
+         Stop action on it. VIBRATE stays for the system's own use; WAKE_LOCK
+         is what lets the tray update while the screen is off. -->
+    <uses-permission android:name="android.permission.VIBRATE"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <application
         android:label="mediBO"
         android:name="${applicationName}"
@@ -16,6 +33,8 @@
             android:exported="true"
             android:launchMode="singleTop"
             android:taskAffinity=""
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
             android:theme="@style/LaunchTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
@@ -33,6 +52,46 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- CHANGE #306 — data-only order alerts land here even when the app
+             is backgrounded or dead, which is the only way a full-screen
+             intent can be raised. The firebase_messaging plugin drives Dart
+             from its OWN broadcast receiver, so this service never takes the
+             Flutter path away from it. -->
+        <service
+            android:name=".MediboMessagingService"
+            android:exported="false"
+            android:directBootAware="true">
+            <intent-filter android:priority="1">
+                <action android:name="com.google.firebase.MESSAGING_EVENT"/>
+            </intent-filter>
+        </service>
+        <!-- CMD #1931 — the payment notification listener. Android binds it
+             itself once the user grants notification access in Settings; it is
+             never started by the app. It reads ONLY the packages the backend
+             listed (payment_listener_boot) and drops everything else on the
+             phone. Play treats this as a sensitive permission: the
+             notification-listener declaration is filed against every release. -->
+        <service
+            android:name=".PaymentNotificationListenerService"
+            android:exported="true"
+            android:label="@string/pay_listener_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService"/>
+            </intent-filter>
+        </service>
+
+        <!-- CMD #2015 — Stop. The one button on the notification that kills
+             the sound and the alert on the spot. Accept / Reject left this
+             surface in CMD #1988: a decision is taken on the order screen. -->
+        <receiver
+            android:name=".OrderAlertActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="in.medibo.app.ORDER_ALERT_STOP"/>
+            </intent-filter>
+        </receiver>
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

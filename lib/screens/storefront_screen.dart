@@ -9,13 +9,22 @@ import 'package:flutter/material.dart';
 import 'storefront_scrollbar.dart';
 import '../app_state.dart'; // CHANGE #454
 import '../data/medicine_repository.dart';
+import '../data/storefront_labels.dart';
+import '../design_tokens.dart';
 import '../models/product.dart';
+import '../models/search_page.dart';
 import '../services/ui_copy.dart';
+import '../services/payload_cache.dart';
 import '../theme.dart';
 import '../util.dart';
 import '../utils/render_log.dart';
+import '../widgets/bottom_stack.dart';
 import '../widgets/animations.dart';
 import '../widgets/compact_product_card.dart';
+import '../widgets/product_card_grid.dart';
+import '../widgets/search_surface.dart';
+import 'catalogue_extras.dart';
+import '../widgets/recently_viewed_rail.dart';
 import '../widgets/home_sections_view.dart'; // C637
 
 const double _kMaxContent = 1200;
@@ -30,8 +39,23 @@ const double _kMaxContent = 1200;
 class StorefrontScreen extends StatefulWidget {
   final String query;
   final String category;
+
+  /// CMD #1906 — the search state (query, filters, page) this screen is
+  /// showing. It is the SAME value the Catalogue carries and the same value
+  /// that lives in the URL, so moving between the two screens keeps the
+  /// search. When it has no query this screen browses exactly as before.
+  final SearchQueryState search;
+
+  /// Hands the shell the payload this screen just fetched, so the header's
+  /// filter chips and recent strip are drawn from the SAME answer as the rows
+  /// — one round trip, one source of truth for both halves of the surface.
+  final ValueChanged<SearchPagePayload>? onSearchPayload;
+
+  /// A search-state change made from inside the results body — today that is
+  /// the empty state's "Clear all" button, whose `kind` the backend sent.
+  final ValueChanged<SearchQueryState>? onSearchChanged;
+
   final ValueChanged<String> onCategorySelected;
-  final ValueChanged<String> onSuggestionTap;
   final MedicineRepository repo;
   // Incremented by the parent on explicit search submit (button / Enter).
   // StorefrontScreen scrolls to the results section whenever this changes.
@@ -55,6 +79,10 @@ class StorefrontScreen extends StatefulWidget {
   // products" / "Browse catalogue" target).
   final VoidCallback? onBrowseAll;
 
+  // CMD #2027 — the See-all pill on "Shop by company". The shell opens the
+  // catalogue's companies list; this screen only passes the tap along.
+  final VoidCallback? onOpenCompanies;
+
   // Footer navigation callbacks.
   final VoidCallback? onFooterSearch;
   final VoidCallback? onFooterBulkUpload;
@@ -65,8 +93,10 @@ class StorefrontScreen extends StatefulWidget {
     super.key,
     required this.query,
     required this.category,
+    this.search = SearchQueryState.blank,
+    this.onSearchPayload,
+    this.onSearchChanged,
     required this.onCategorySelected,
-    required this.onSuggestionTap,
     required this.repo,
     this.scrollTrigger = 0,
     this.scrollToTopTrigger = 0,
@@ -74,6 +104,7 @@ class StorefrontScreen extends StatefulWidget {
     this.showCategoryTiles = true,
     this.browseAll = false,
     this.onBrowseAll,
+    this.onOpenCompanies,
     this.onMetaLoaded,
     this.onFooterSearch,
     this.onFooterBulkUpload,
@@ -101,6 +132,13 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   Object? _metaError;
   bool _metaNetworkError = false;
 
+  // CMD #1906 — the ONE search answer, when a query is being shown. Its rows,
+  // its header line, its filters, its empty state and its paging all come from
+  // `search_page()`; nothing about a search is decided in this file.
+  SearchPagePayload? _searchPayload;
+  bool _searchLoadingMore = false;
+  Object? _searchError;
+
   // Paginated product list for the current filter.
   final List<Product> _items = [];
   int _loadToken = 0; // invalidates in-flight requests on filter change
@@ -108,7 +146,6 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   bool _loadingMore = false;
   Object? _pageError;
   bool _pageNetworkError = false;
-  List<String> _suggestions = [];
 
   // Buyable-only category total from get_storefront_count (real total, not capped at 200).
   int? _buyableCategoryTotal;
@@ -120,6 +157,14 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   // "Showing 0 of 32133". Null only on the outage fallback, which prints
   // nothing rather than a number it made up.
   String? _showingLabel;
+
+  /// CHANGE #174 — the sort control, exactly as the backend sent it.
+  /// [_sortOptions] empty means there is no control to draw (no viewer margin,
+  /// or nothing priced yet); [_sort] is the key of the chip currently active,
+  /// which is only ever a key the backend itself put on a chip.
+  List<Map<String, dynamic>> _sortOptions = const [];
+
+  String _sort = 'default';
   String? _emptyLabel;
 
   // #677 — the Load-more button word and the end-of-feed line, both backend
@@ -153,7 +198,27 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     _loadAllCounts();
     _resetAndLoad();
     _injectScrollbarCss();
+    // A customer can land straight on a search URL without ever passing the
+    // home feed, which is the only other place that loads the label set — and
+    // every caption on this screen is one of those rows.
+    if (!StorefrontLabels.isLoaded) {
+      unawaited(widget.repo.loadStorefrontLabels().then((_) {
+        if (mounted) setState(() {});
+      }));
+    }
   }
+
+  // ── CHANGE #746 — compare is NOT a card affordance ───────────────────────
+  //
+  // CMD #410 put a Compare tick under every card in search results and in the
+  // category grid. Comparing two products means comparing their alternatives,
+  // which is a decision made on the full product page — the tick on a grid of
+  // 250 cards was an invitation to a table the customer had no reason to open
+  // from there. The backend already stopped sending this surface the compare
+  // labels (storefront_labels() drops cmp_add/cmp_cta/cmp_clear/cmp_full), so
+  // nothing here could render anyway; the state, the toggle and the sheet
+  // launcher go with it. product_detail_screen.dart keeps the whole flow, fed
+  // by product_detail_v2().compare.
 
   Future<void> _loadAllCounts() async {
     // CHANGE #497: cache-first + retry, same treatment as categories (B5) —
@@ -169,6 +234,12 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     if (fresh != null && mounted) {
       setState(() => _categoryCounts = fresh);
       RenderLog.write('c441_counts', 'cached=${_categoryCounts.length}');
+      // CHANGE #678 — the counts are the VIEWER's: get_all_storefront_counts
+      // answers with the zone's numbers for an approved customer and the global
+      // feed's for anyone else. Nothing here decides which; the log just shows
+      // what arrived so the live render can be checked against the backend.
+      RenderLog.write('c678_counts',
+          'all=${fresh['ALL'] ?? ''};categories=${fresh.length}');
     }
     // On total failure, keep whatever's already showing (cache or empty) —
     // _countFor() also falls back to a live per-category fetch below.
@@ -206,9 +277,17 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   @override
   void didUpdateWidget(StorefrontScreen old) {
     super.didUpdateWidget(old);
+    if (old.search.toQueryString() != widget.search.toQueryString()) {
+      _resetAndLoad();
+      return;
+    }
     if (old.category != widget.category ||
         old.query != widget.query ||
         old.browseAll != widget.browseAll) {
+      // #174 — the margin lane is its own list, not a filter on this category.
+      // Changing category or query asks a different question, so it returns to
+      // the backend's default ranking rather than silently staying on margin.
+      _sort = 'default';
       _resetAndLoad();
     }
     if (old.category != widget.category) {
@@ -329,7 +408,23 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   bool get _isHome =>
       widget.query.trim().isEmpty && widget.category == 'All' && !widget.browseAll;
 
+  /// CHANGE #174 — a sort chip was tapped. The key is the backend's own, sent
+  /// straight back on the next request; nothing here knows what 'margin' means
+  /// or how the resulting list is ordered.
+  void _onSortSelected(String key) {
+    if (key == _sort) return;
+    RenderLog.write('c174_sort_tap', key);
+    setState(() => _sort = key);
+    _resetAndLoad();
+  }
+
   Future<void> _resetAndLoad() async {
+    // CMD #1906 — a query goes through search_page(), the one entry the
+    // Catalogue uses too. The browse path below is untouched.
+    if (widget.search.hasQuery) {
+      await _loadSearch();
+      return;
+    }
     // Home does not render the paged grid any more, so fetching a page of
     // storefront_page() for it would be a round trip nobody displays.
     if (_isHome) {
@@ -348,10 +443,10 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       _moreLimit = null;
       _pageError = null;
       _pageNetworkError = false;
-      _suggestions = [];
       _buyableCategoryTotal = null;
       _showingLabel = null;
       _emptyLabel = null;
+      _sortOptions = const [];
       _moreLabel = '';
       _endLabel = '';
     });
@@ -362,6 +457,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         offset: 0,
         afterId: null,
         onlyBuyable: _onlyBuyable,
+        sort: _sort,
       );
       sw.stop();
       if (token != _loadToken || !mounted) return;
@@ -459,6 +555,15 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
               'category=${widget.category};loadedCount=${page.length}');
         }
       }
+      // CMD #434 — an EMPTY showing_label is no longer a mystery. It means
+      // exactly one thing: this page came from the outage fallback, which has
+      // no envelope and therefore no counter. Saying so beside the empty label
+      // is the difference between "the backend regressed" and "one RPC call
+      // hiccuped and the keyset lane served the page".
+      RenderLog.write('c434_page_degraded',
+          'category=${widget.category};degraded=${pageResult.degraded};'
+          'cached=${MedicineRepository.lastCallWasCacheHit};'
+          'rpc=${browseErr ?? '-'}');
       // CHANGE #553 — take the backend's rendered labels as-is.
       RenderLog.write('c553_showing_label', pageResult.showingLabel ?? '');
       RenderLog.write('c553_gated', pageResult.gated ? '1' : '0');
@@ -470,6 +575,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         _emptyLabel = pageResult.emptyLabel;
         _moreLabel = pageResult.moreLabel ?? '';
         _endLabel = pageResult.endLabel ?? '';
+        _sortOptions = pageResult.sortOptions;
         _loadingFirst = false;
         // #677 — end-of-feed is the backend's word, not a short page. A
         // fallback response carries no plan, and then hasMore is false only
@@ -483,10 +589,23 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         WidgetsBinding.instance
             .addPostFrameCallback((_) { if (mounted) _scrollToProducts(); });
       }
-      if (page.isEmpty && widget.query.trim().isNotEmpty) {
-        _loadSuggestions();
-      }
     } catch (e) {
+      // CMD #434 — WRITE THE REASON FIRST. This catch used to swallow the
+      // exception straight into _pageError, so a category page that failed on
+      // the live build showed `c410_compare_tick=...;state=error` and an EMPTY
+      // c553_count_label with nothing anywhere saying WHY — while
+      // storefront_page() called directly was healthy. The grid is a canvas no
+      // browser tool can read, so this line is the only evidence production
+      // can produce. Written before the early return on purpose: a stale token
+      // still means this fetch failed.
+      RenderLog.write(
+        'c434_page_error',
+        'category=${widget.category};query=${widget.query.trim().isEmpty ? '-' : widget.query.trim()};'
+        'sort=$_sort;buyable=$_onlyBuyable;stale=${token != _loadToken};'
+        'type=${e.runtimeType};rpc=${MedicineRepository.browseRpcError ?? '-'};'
+        'err=${_shortErr(e)}',
+      );
+      MedicineRepository.browseRpcError = null;
       if (token != _loadToken || !mounted) return;
       widget.onLoadingChanged?.call(false);
       setState(() {
@@ -497,10 +616,81 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     }
   }
 
-  Future<void> _loadSuggestions() async {
-    final suggestions = await widget.repo.fetchSuggestions(widget.query);
-    if (!mounted) return;
-    setState(() => _suggestions = suggestions);
+  /// CMD #434 — the render log is one DOM node; a full Postgrest stack in it
+  /// would drown every other key `render_verify.js` reads.
+  static String _shortErr(Object e) {
+    final s = e.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
+    return s.length <= 140 ? s : '${s.substring(0, 140)}…';
+  }
+
+  /// CMD #1906 — one search, one RPC, the same one the Catalogue calls.
+  Future<void> _loadSearch() async {
+    final token = ++_loadToken;
+    widget.onLoadingChanged?.call(true);
+    setState(() {
+      _loadingFirst = true;
+      _searchError = null;
+      _searchLoadingMore = false;
+      // CMD #2010 — only an ENDED search clears the rows. While the shopper
+      // is still typing the previous answer stays under the box until the
+      // next one lands: one grid that filters, not a skeleton that flashes.
+      if (widget.search.page == 0 && !widget.search.hasQuery) {
+        _searchPayload = null;
+      }
+    });
+    try {
+      final p = await widget.repo.searchPage(widget.search);
+      if (token != _loadToken || !mounted) return;
+      setState(() {
+        _searchPayload = p;
+        _loadingFirst = false;
+      });
+      widget.onSearchPayload?.call(p);
+      RenderLog.write(
+        'c1906_search_page',
+        'q=${widget.search.query};rows=${p.items.length};total=${p.total};'
+        'filters=${p.filtersActive};groups=${p.filters.groups.length};'
+        'rail=${p.rail.has ? p.rail.kind : 'none'};'
+        'more=${p.paging.hasMore};surface=home',
+      );
+      widget.onLoadingChanged?.call(false);
+    } catch (e) {
+      if (token != _loadToken || !mounted) return;
+      setState(() {
+        _searchError = e;
+        _loadingFirst = false;
+      });
+      widget.onLoadingChanged?.call(false);
+    }
+  }
+
+  /// The next page of the SAME search. The later payload wins for every label
+  /// and count, because the backend recomputed them for the page it answered.
+  Future<void> _loadMoreSearch() async {
+    final current = _searchPayload;
+    if (current == null || _searchLoadingMore || !current.paging.hasMore) return;
+    final token = _loadToken;
+    setState(() => _searchLoadingMore = true);
+    try {
+      final next = await widget.repo
+          .searchPage(SearchQueryState(
+            query: widget.search.query,
+            category: widget.search.category,
+            packTypes: widget.search.packTypes,
+            rx: widget.search.rx,
+            flags: widget.search.flags,
+            sort: widget.search.sort,
+            page: current.paging.nextPage,
+          ));
+      if (token != _loadToken || !mounted) return;
+      setState(() {
+        _searchPayload = current.appended(next);
+        _searchLoadingMore = false;
+      });
+    } catch (_) {
+      if (token != _loadToken || !mounted) return;
+      setState(() => _searchLoadingMore = false);
+    }
   }
 
   Future<void> _loadMore() async {
@@ -522,6 +712,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         // before any envelope has arrived, and then it picks its own again.
         limit: _moreLimit,
         onlyBuyable: _onlyBuyable,
+        sort: _sort,
       );
       if (token != _loadToken || !mounted) return;
       final page = pageResult.items;
@@ -546,6 +737,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         if (pageResult.emptyLabel != null) _emptyLabel = pageResult.emptyLabel;
         if (pageResult.moreLabel != null) _moreLabel = pageResult.moreLabel!;
         if (pageResult.endLabel != null) _endLabel = pageResult.endLabel!;
+        if (pageResult.sortOptions.isNotEmpty) _sortOptions = pageResult.sortOptions;
         _loadingMore = false;
         _hasMore = pageResult.hasMore;
         _nextOffset = pageResult.nextOffset ?? (offset + page.length);
@@ -596,8 +788,88 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       _meta?.categories.map((c) => c.name).toList(growable: false) ??
       const <String>[];
 
+  /// CMD #1906 — the empty state's buttons are the backend's, and so is what
+  /// they do: `clear_filters` clears exactly what the shopper narrowed, and
+  /// `request` opens the SAME request sheet the Catalogue opens, with the same
+  /// `catalogue_extras()` config behind it. Anything else the backend sends in
+  /// a later release is ignored rather than guessed at.
+  Future<void> _onEmptyAction(String kind) async {
+    if (kind == 'clear_filters') {
+      widget.onSearchChanged?.call(widget.search.cleared());
+      return;
+    }
+    if (kind != 'request') return;
+    try {
+      final ex = await widget.repo.catalogueExtras();
+      final cfg = ex['request'];
+      if (!mounted || cfg is! Map) return;
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Ds.c.surface,
+        shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+        builder: (_) =>
+            CatalogueRequestSheet(config: Map<String, dynamic>.from(cfg)),
+      );
+    } catch (_) {
+      // The sheet is an offer, not a promise: a dead config opens nothing
+      // rather than an error the shopper cannot act on.
+    }
+  }
+
+  /// CMD #1906 — the search body, identical to the Catalogue's: the backend's
+  /// header line, its Load more and its empty state. CMD #2044 — and the SAME
+  /// [ProductCardGrid] Home draws, never a list row.
+  Widget _searchBody() {
+    if (_loadingFirst && _searchPayload == null) {
+      return const SearchResultsSkeleton();
+    }
+    final p = _searchPayload;
+    if (p == null || (!p.ok && _searchError != null)) {
+      return _InlineError(onRetry: _resetAndLoad);
+    }
+    return Column(
+      children: [
+        SearchResultsView(
+          surface: 'home',
+          payload: p,
+          loadingMore: _searchLoadingMore,
+          onOpenProduct: (id) {
+            // CMD #2044 — opening a result is what makes a query worth
+            // remembering; the history is a list of searches, not of typing.
+            unawaited(widget.repo.searchRecentAdd(widget.search.query));
+            Navigator.of(context).pushNamed('/product/$id');
+          },
+          onLoadMore: _loadMoreSearch,
+          onEmptyAction: _onEmptyAction,
+        ),
+        // CMD #2051 — room at the end for the whole bottom stack, measured.
+        const BottomStackSpacer(),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    // CMD #1906 — a query is a SEARCH, and a search looks the same here as it
+    // does on the Catalogue: the shared surface, nothing else on the page.
+    if (widget.search.hasQuery) {
+      return MouseRegion(
+        onEnter: (_) { if (kIsWeb) _focusNode.requestFocus(); },
+        child: Focus(
+          focusNode: _focusNode,
+          onKeyEvent: _onKeyEvent,
+          child: Container(
+            color: Ds.c.bg,
+            child: SingleChildScrollView(
+              controller: _scroll,
+              physics: platformScrollPhysics(),
+              child: _searchBody(),
+            ),
+          ),
+        ),
+      );
+    }
     // CHANGE #637 — HOME is now the sectioned feed from storefront_home_v2().
     // Category listing and search results still render _ProductsSection below,
     // unchanged; the only discriminator was always these two values.
@@ -614,8 +886,14 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
           focusNode: _focusNode,
           onKeyEvent: _onKeyEvent,
           child: HomeSectionsView(
+            // CMD #2021 — home is the ONE scrollable here, so the shell's
+            // scroll-to-top has to reach the feed's own controller. _scroll
+            // below is not attached while this branch renders, which is why
+            // _scrollToTop() was a no-op on the home feed.
+            scrollToTopTrigger: widget.scrollToTopTrigger,
             onCategoryTap: (c) => widget.onCategorySelected(c),
             onBrowseAll: widget.onBrowseAll,
+            onOpenCompanies: widget.onOpenCompanies,
             // CHANGE #638 — company tiles now push /company/<key> themselves;
             // the search-prefill fallback is gone.
             footer: Column(
@@ -671,6 +949,8 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
                 categoryTotal: _categoryTotal(),
                 showingLabel: _showingLabel,
                 emptyLabel: _emptyLabel,
+                sortOptions: _sortOptions,
+                onSortSelected: _onSortSelected,
                 query: widget.query,
                 category: widget.category,
                 loadingFirst: _loadingFirst,
@@ -681,10 +961,8 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
                 totalN: _countFor(widget.category),
                 error: _pageError,
                 isNetworkError: _pageNetworkError,
-                suggestions: _suggestions,
                 onClear: () => widget.onCategorySelected('All'),
                 onRetry: _resetAndLoad,
-                onSuggestionTap: widget.onSuggestionTap,
                 onLoadMore: _handleLoadMore,
               ),
             ),
@@ -724,6 +1002,103 @@ class _Section extends StatelessWidget {
           constraints: const BoxConstraints(maxWidth: _kMaxContent),
           child: Padding(padding: padding, child: child),
         ),
+      ),
+    );
+  }
+}
+
+/// CHANGE #174 — the storefront sort control.
+///
+/// Every part of it is the payload's: the chips that exist, their words, and
+/// which one is active. This widget decides nothing — it does not know that
+/// one of them means "margin", does not track a selection of its own, and does
+/// not appear at all when `options` is empty (a viewer with no trade pricing
+/// sees the storefront exactly as it was before #174).
+class _SortChips extends StatelessWidget {
+  final List<Map<String, dynamic>> options;
+  final ValueChanged<String> onSelected;
+  const _SortChips({required this.options, required this.onSelected});
+
+  @override
+  Widget build(BuildContext context) {
+    RenderLog.write(
+        'c174_sort_chips',
+        options
+            .map((o) => '${o['key']}${o['active'] == true ? '*' : ''}')
+            .join(','));
+    return Wrap(
+      spacing: Ds.space.x8,
+      runSpacing: Ds.space.x8,
+      children: [
+        for (final o in options)
+          _SortChip(
+            label: (o['label'] ?? '').toString(),
+            // Absent is not active. The backend marks exactly one chip.
+            active: o['active'] == true,
+            onTap: () => onSelected((o['key'] ?? '').toString()),
+          ),
+      ],
+    );
+  }
+}
+
+class _SortChip extends StatelessWidget {
+  final String label;
+  final bool active;
+  final VoidCallback onTap;
+  const _SortChip(
+      {required this.label, required this.active, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: active ? Ds.c.brand : Ds.c.surface,
+      borderRadius: Ds.r.rChip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: Ds.r.rChip,
+        child: Container(
+          // No `alignment` and no width here on purpose: a Container that is
+          // given an alignment expands to the incoming max width, and inside a
+          // Wrap that is the full row — which rendered each chip as a
+          // full-width bar (caught on #749's screenshot). Padding alone sizes
+          // the chip to its label. Vertical 12 + a ~21 px body line clears the
+          // 44 px touch target without a fixed height.
+          padding: EdgeInsets.symmetric(
+              horizontal: Ds.space.x16, vertical: Ds.space.x12),
+          decoration: BoxDecoration(
+            borderRadius: Ds.r.rChip,
+            border: Border.all(color: active ? Ds.c.brand : Ds.c.divider),
+          ),
+          child: Text(
+            label,
+            style: active
+                ? Ds.t.body.copyWith(color: Ds.c.surface)
+                : Ds.t.body.copyWith(color: Ds.c.text),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// CMD #1903 — the whole header of a search page: one small grey line, the
+/// backend's `showing_label` ("126 results for monticope"), and nothing else.
+/// The plural is the backend's too — this widget prints the string it is given.
+class _SearchCountLine extends StatelessWidget {
+  final String label;
+  const _SearchCountLine({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    if (label.isEmpty) return const SizedBox.shrink();
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Ds.t.caption.copyWith(color: Ds.c.textSecondary),
       ),
     );
   }
@@ -825,40 +1200,17 @@ class _CategoryTiles extends StatelessWidget {
             if (metaError != null) {
               // Show wifi-offline UI only for real network failures.
               // For API/config errors show a quieter retry prompt.
+              // CMD #1813 — a stalled database must not hand the customer a
+              // button. Both branches now retry themselves on the backend's
+              // backoff and say so in one quiet line.
               if (isNetworkError) {
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.wifi_off_rounded, size: 56, color: Colors.grey),
-                    const SizedBox(height: 16),
-                    Text(c('storefront_screen.offline_title'),
-                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 8),
-                    Text(
-                      c('storefront_screen.offline_body'),
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Brand.inkMuted, fontSize: 13),
-                    ),
-                    const SizedBox(height: 20),
-                    FilledButton(
-                      onPressed: onRetry,
-                      style: FilledButton.styleFrom(backgroundColor: Brand.green),
-                      child: Text(c('storefront_screen.retry')),
-                    ),
-                  ],
+                return _AutoRetry(
+                  onRetry: onRetry,
+                  title: c('storefront_screen.offline_title'),
+                  body: c('storefront_screen.offline_body'),
                 );
               }
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 24),
-                child: Center(
-                  child: FilledButton.icon(
-                    onPressed: onRetry,
-                    style: FilledButton.styleFrom(backgroundColor: Brand.green),
-                    icon: const Icon(Icons.refresh, size: 16),
-                    label: Text(c('storefront_screen.reload_categories')),
-                  ),
-                ),
-              );
+              return _AutoRetry(onRetry: onRetry, body: c('net.updating'));
             }
 
             final categories = meta!.categories;
@@ -994,6 +1346,13 @@ class _ProductsSection extends StatelessWidget {
   /// verbatim; never derived from [items].length.
   final String? showingLabel;
   final String? emptyLabel;
+
+  /// CHANGE #174 — the sort chips, straight from the payload. Empty draws no
+  /// control at all: a storefront with no trade pricing looks exactly as it
+  /// did before #174 shipped.
+  final List<Map<String, dynamic>> sortOptions;
+
+  final ValueChanged<String> onSortSelected;
   final String query;
   final String category;
   final bool loadingFirst;
@@ -1010,16 +1369,17 @@ class _ProductsSection extends StatelessWidget {
   final int totalN;
   final Object? error;
   final bool isNetworkError;
-  final List<String> suggestions;
   final VoidCallback onClear;
   final VoidCallback onRetry;
-  final ValueChanged<String> onSuggestionTap;
   final VoidCallback onLoadMore;
+
   const _ProductsSection({
     required this.items,
     required this.categoryTotal,
     required this.showingLabel,
     required this.emptyLabel,
+    required this.sortOptions,
+    required this.onSortSelected,
     required this.query,
     required this.category,
     required this.loadingFirst,
@@ -1030,10 +1390,8 @@ class _ProductsSection extends StatelessWidget {
     required this.totalN,
     required this.error,
     this.isNetworkError = false,
-    required this.suggestions,
     required this.onClear,
     required this.onRetry,
-    required this.onSuggestionTap,
     required this.onLoadMore,
   });
 
@@ -1052,7 +1410,12 @@ class _ProductsSection extends StatelessWidget {
   Widget build(BuildContext context) {
     RenderLog.write('c195_grid_manual_mode', 'category=$category');
     final searching = query.trim().isNotEmpty;
-    final title = searching ? 'Search Results' : (category == 'All' ? 'Best Sellers' : prettyCategory(category));
+    // CMD #1903 — a search has no title any more. The "Search Results" heading
+    // was a Dart literal shouting a word the query already said; what a buyer
+    // needs above the list is how many rows there are, and that is the
+    // backend's own `showing_label` ("126 results for monticope"), small and
+    // grey. Browse keeps its heading.
+    final title = category == 'All' ? 'Best Sellers' : prettyCategory(category);
 
     // CHANGE #454 D — chip/cart counts, aggregated here (once per grid build)
     // rather than per-card, since RenderLog.write overwrites: a per-card write
@@ -1089,7 +1452,14 @@ class _ProductsSection extends StatelessWidget {
               ),
             ),
           ),
-        _SectionHeader(title: title, subtitle: _buildSubtitle()),
+        if (searching)
+          _SearchCountLine(label: _buildSubtitle())
+        else
+          _SectionHeader(title: title, subtitle: _buildSubtitle()),
+        if (sortOptions.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x12),
+          _SortChips(options: sortOptions, onSelected: onSortSelected),
+        ],
         const SizedBox(height: 20),
         // Cross-fade the grid on category change OR on each new search query.
         AnimatedSwitcher(
@@ -1192,63 +1562,60 @@ class _ProductsSection extends StatelessWidget {
   }
 
   Widget _gridBody() {
+    // CHANGE #746 — the same reachability probe, now proving the OPPOSITE: the
+    // grid is a canvas no browser tool can click, so the render log is the
+    // only evidence about what the cards carry on the live build. `compare=0`
+    // is the claim being made — no tick on any card, in every state the
+    // section can be in, not only on the loaded happy path.
+    RenderLog.write(
+      'c746_card_compare',
+      'compare=0;label=${StorefrontLabels.get('cmp_add')};cards=${items.length};'
+      'state=${loadingFirst ? 'loading' : (error != null ? 'error' : (items.isEmpty ? 'empty' : 'grid'))}',
+    );
     if (loadingFirst) return const _SkeletonGrid();
     // Show offline widget ONLY on genuine network failure.
     // API errors / empty results are NOT offline — show retry or no-results.
+    // CMD #1813 — neither branch is a dead end any more, and the label is the
+    // backend's word rather than a Dart literal.
     if (error != null && isNetworkError) {
       return _InlineError(onRetry: onRetry);
     }
     if (error != null) {
-      // Non-network error: show quiet retry without the wifi icon
       return _EmptyResults(
         query: query,
-        suggestions: const [],
-        onSuggestionTap: onSuggestionTap,
-        overrideLabel: 'Something went wrong — tap to retry',
-        onRetry: onRetry,
+        overrideLabel: c('storefront_screen.search_failed'),
+        onRetry: null,
+        autoRetry: onRetry,
       );
     }
     // CHANGE #553 — when the backend sent an empty_label, print it verbatim.
     if (items.isEmpty) {
-      return _EmptyResults(
-        query: query,
-        suggestions: suggestions,
-        onSuggestionTap: onSuggestionTap,
-        backendLabel: emptyLabel,
+      // CMD #409 — a search that found nothing is the one moment a customer
+      // most wants what they were just looking at. The rail draws itself only
+      // when `recently_viewed_rail()` says `has` — signed out, no history, or
+      // everything viewed gone off-sale all render as nothing.
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _EmptyResults(
+            query: query,
+            backendLabel: emptyLabel,
+          ),
+          const RecentlyViewedRail(),
+        ],
       );
     }
-    return LayoutBuilder(
-      builder: (context, c) {
-        final count = c.maxWidth >= 900 ? 4 : c.maxWidth >= 600 ? 3 : 2;
-        return GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          addAutomaticKeepAlives: false,
-          addRepaintBoundaries: true,
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: count,
-            // CHANGE #636 — the extent is the card's own constant, summed from
-            // the parts it lays out with. The old hardcoded 365 was duplicated
-            // here and in the skeleton, so a taller card overflowed silently.
-            mainAxisExtent: CompactProductCard.extent,
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 14,
-          ),
-          itemCount: items.length,
-          // CHANGE #678a — no entrance animation.
-          //
-          // The first page used to fade-and-slide in on a 30ms-per-card
-          // stagger. Scrolling back up replayed it, so products appeared to
-          // drop in from above every time — the page never looked settled. A
-          // product grid is a list of products; it is painted, not performed.
-          itemBuilder: (context, i) => CompactProductCard(
-            key: ValueKey(items[i].id),
-            product: items[i],
-            onTap: () =>
-                Navigator.of(context).pushNamed('/product/${items[i].id}'),
-          ),
-        );
-      },
+    // CMD #2044 — CMD #1903's flat ROW list is gone, and so are the three
+    // breakpoints that used to be typed into the browse branch. Search and
+    // browse are the same products, so they are the same card in the same
+    // grid: [ProductCardGrid] measures the card it is laying out and owns the
+    // column count for every surface. The only difference left between the
+    // two is the order the payload arrives in.
+    return Builder(
+      builder: (context) => ProductCardGrid(
+        items: items,
+        onOpen: (p) => Navigator.of(context).pushNamed('/product/${p.id}'),
+      ),
     );
   }
 }
@@ -1256,20 +1623,22 @@ class _ProductsSection extends StatelessWidget {
 
 class _EmptyResults extends StatelessWidget {
   final String query;
-  final List<String> suggestions;
-  final ValueChanged<String> onSuggestionTap;
   final String? overrideLabel;
 
   /// CHANGE #553 — `empty_label`, rendered by storefront_search_page.
   final String? backendLabel;
   final VoidCallback? onRetry;
+
+  /// CMD #1813 — when the empty state is really a FAILURE, this fires on the
+  /// backend's backoff instead of waiting for a tap. A genuinely empty search
+  /// leaves it null and stays a plain empty state.
+  final VoidCallback? autoRetry;
   const _EmptyResults({
     this.query = '',
-    this.suggestions = const [],
-    required this.onSuggestionTap,
     this.overrideLabel,
     this.backendLabel,
     this.onRetry,
+    this.autoRetry,
   });
 
   @override
@@ -1288,7 +1657,8 @@ class _EmptyResults extends StatelessWidget {
         children: [
           const Icon(Icons.search_off, size: 48, color: Brand.inkMuted),
           const SizedBox(height: 12),
-          Text(label,
+          if (autoRetry != null) _AutoRetry(onRetry: autoRetry!, body: label),
+          if (autoRetry == null) Text(label,
               style: const TextStyle(
                   fontSize: 15,
                   fontWeight: FontWeight.w600,
@@ -1307,31 +1677,6 @@ class _EmptyResults extends StatelessWidget {
               label: Text(c('storefront_screen.retry')),
             ),
           ],
-          if (suggestions.isNotEmpty) ...[
-            const SizedBox(height: 20),
-            Text(c('storefront_screen.did_you_mean'),
-                style: const TextStyle(
-                    color: Brand.inkMuted,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600)),
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              alignment: WrapAlignment.center,
-              children: suggestions
-                  .map((s) => ActionChip(
-                        label: Text(s,
-                            style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w500)),
-                        onPressed: () => onSuggestionTap(s),
-                        backgroundColor: Brand.mint,
-                        side: BorderSide(color: Brand.green.withValues(alpha: 0.3)),
-                      ))
-                  .toList(),
-            ),
-          ],
         ],
       ),
     );
@@ -1343,29 +1688,101 @@ class _InlineError extends StatelessWidget {
   const _InlineError({required this.onRetry});
 
   @override
+  Widget build(BuildContext context) => _AutoRetry(
+        onRetry: onRetry,
+        title: c('storefront_screen.offline_title'),
+        body: c('storefront_screen.offline_body'),
+        icon: Icons.wifi_off_rounded,
+      );
+}
+
+/// CMD #1813 — what replaced every bare Retry button on this screen.
+///
+/// The stall that made this necessary hit every RPC at once for about fourteen
+/// seconds; a button asked the customer to solve it by tapping. This block
+/// retries by itself on the schedule the BACKEND owns (`net.retry_backoff_ms`),
+/// prints the backend's own words, and shows a spinner so it is visibly alive.
+/// It never grows a button, and it stops the moment its parent rebuilds with a
+/// payload.
+class _AutoRetry extends StatefulWidget {
+  const _AutoRetry({
+    required this.onRetry,
+    this.title,
+    required this.body,
+    this.icon,
+  });
+
+  final VoidCallback onRetry;
+  final String? title;
+  final String body;
+  final IconData? icon;
+
+  @override
+  State<_AutoRetry> createState() => _AutoRetryState();
+}
+
+class _AutoRetryState extends State<_AutoRetry> {
+  Timer? _t;
+  int _attempt = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _schedule();
+  }
+
+  void _schedule() {
+    _t?.cancel();
+    _attempt++;
+    _t = Timer(PayloadTiming.delayFor(_attempt), () {
+      if (!mounted) return;
+      widget.onRetry();
+      _schedule();
+    });
+  }
+
+  @override
+  void dispose() {
+    _t?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final title = widget.title;
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 48),
+      padding: EdgeInsets.symmetric(vertical: Ds.space.x32),
       alignment: Alignment.center,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.wifi_off_rounded, size: 56, color: Colors.grey),
-          const SizedBox(height: 16),
-          Text(c('storefront_screen.offline_title'),
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 8),
-          Text(
-            c('storefront_screen.offline_body'),
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: Brand.inkMuted, fontSize: 13),
-          ),
-          const SizedBox(height: 20),
-          FilledButton(
-            onPressed: onRetry,
-            style: FilledButton.styleFrom(backgroundColor: Brand.green),
-            child: Text(c('storefront_screen.retry')),
+          if (widget.icon != null)
+            Icon(widget.icon, size: 48, color: Ds.c.textSecondary),
+          if (widget.icon != null) SizedBox(height: Ds.space.x16),
+          if (title != null && title.isNotEmpty) ...[
+            Text(title, style: Ds.t.subtitle, textAlign: TextAlign.center),
+            SizedBox(height: Ds.space.x8),
+          ],
+          if (widget.body.isNotEmpty)
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+              child: Text(widget.body,
+                  textAlign: TextAlign.center, style: Ds.t.caption),
+            ),
+          SizedBox(height: Ds.space.x16),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: Ds.space.x12,
+                height: Ds.space.x12,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: Ds.c.textSecondary),
+              ),
+              SizedBox(width: Ds.space.x8),
+              Text(c('net.updating'), style: Ds.t.caption),
+            ],
           ),
         ],
       ),
@@ -1470,7 +1887,6 @@ class _Footer extends StatelessWidget {
   });
 
   static const _kBg = Color(0xFF1B5E20);
-  static const _kAccent = Color(0xFF4CAF50);
   static const _kLink = Color(0xFFA5D6A7);
   static const _kHeading = TextStyle(
     color: Colors.white,
@@ -1498,14 +1914,25 @@ class _Footer extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // CHANGE #460 — _servicesCol and _categoryCol were written in
+                // #742 and never called by either layout, so Search / Bulk
+                // Upload / My Orders / Cart and the category links were dead
+                // from birth: the four callbacks and the category list were
+                // being passed into a footer that had nowhere to draw them.
+                // They render now — services everywhere, categories only where
+                // a fifth column genuinely fits.
                 LayoutBuilder(
                   builder: (ctx, c) {
                     final wide = c.maxWidth >= 600;
+                    final roomForCategories = c.maxWidth >= 900;
                     if (wide) {
                       return Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Expanded(flex: 3, child: _brandCol()),
+                          if (roomForCategories)
+                            Expanded(flex: 2, child: _categoryCol(shown)),
+                          Expanded(flex: 2, child: _servicesCol()),
                           Expanded(flex: 2, child: _quickCol(context)),
                           Expanded(flex: 2, child: _legalCol(context)),
                         ],
@@ -1515,6 +1942,8 @@ class _Footer extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         _brandCol(),
+                        const SizedBox(height: 32),
+                        _servicesCol(),
                         const SizedBox(height: 32),
                         _quickCol(context),
                         const SizedBox(height: 32),
@@ -1615,10 +2044,10 @@ class _Footer extends StatelessWidget {
       children: [
         Text(c('storefront_screen.footer_our_services'), style: _kHeading),
         const SizedBox(height: 16),
-        _footerLink('Search Medicines', onSearch),
-        _footerLink('Bulk Upload', onBulkUpload),
-        _footerLink('My Orders', onOrders),
-        _footerLink('Cart', onCart),
+        _footerLink(c('storefront_screen.footer_search_medicines'), onSearch),
+        _footerLink(c('storefront_screen.footer_bulk_upload'), onBulkUpload),
+        _footerLink(c('storefront_screen.footer_my_orders'), onOrders),
+        _footerLink(c('storefront_screen.footer_cart'), onCart),
       ],
     );
   }
@@ -1629,9 +2058,9 @@ class _Footer extends StatelessWidget {
       children: [
         Text(c('storefront_screen.footer_quick_links'), style: _kHeading),
         const SizedBox(height: 16),
-        _footerLink('About Us',
+        _footerLink(c('storefront_screen.footer_about_us'),
             () => Navigator.pushNamed(context, '/about-app')),
-        _footerLink('Contact Us',
+        _footerLink(c('storefront_screen.footer_contact_us'),
             () => Navigator.pushNamed(context, '/contact')),
       ],
     );
@@ -1643,17 +2072,17 @@ class _Footer extends StatelessWidget {
       children: [
         Text(c('storefront_screen.footer_legal'), style: _kHeading),
         const SizedBox(height: 16),
-        _footerLink('Terms & Conditions',
+        _footerLink(c('storefront_screen.footer_terms'),
             () => Navigator.pushNamed(context, '/terms')),
-        _footerLink('Privacy Policy',
+        _footerLink(c('storefront_screen.footer_privacy'),
             () => Navigator.pushNamed(context, '/privacy')),
-        _footerLink('Delete Account & Data',
+        _footerLink(c('storefront_screen.footer_data_deletion'),
             () => Navigator.pushNamed(context, '/data-deletion')),
-        _footerLink('Refund & Return',
+        _footerLink(c('storefront_screen.footer_refund'),
             () => Navigator.pushNamed(context, '/refund')),
-        _footerLink('Shipping Policy',
+        _footerLink(c('storefront_screen.footer_shipping'),
             () => Navigator.pushNamed(context, '/shipping')),
-        _footerLink('Cancellation Policy',
+        _footerLink(c('storefront_screen.footer_cancellation'),
             () => Navigator.pushNamed(context, '/cancellation')),
       ],
     );
@@ -1678,23 +2107,19 @@ class _SkeletonGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // CMD #2044 — the skeleton reads the SAME delegate the real grid reads, so
+    // the skeleton→content swap cannot move a pixel even after the card or the
+    // column rule changes.
     return Shimmer(
       child: LayoutBuilder(
         builder: (context, c) {
-          final count = c.maxWidth >= 900 ? 4 : c.maxWidth >= 600 ? 3 : 2;
+          final count = ProductCardGrid.columnsFor(c.maxWidth);
           return GridView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
             addAutomaticKeepAlives: false,
             addRepaintBoundaries: true,
-            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: count,
-              // Same extent and spacing as the real grid — the skeleton→content
-              // swap must not move a single pixel.
-              mainAxisExtent: CompactProductCard.extent,
-              crossAxisSpacing: 12,
-              mainAxisSpacing: 14,
-            ),
+            gridDelegate: ProductCardGrid.delegateFor(c.maxWidth),
             itemCount: count * 2,
             itemBuilder: (context, i) => const CompactCardSkeleton(),
           );

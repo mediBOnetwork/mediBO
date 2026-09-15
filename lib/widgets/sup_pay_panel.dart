@@ -19,6 +19,7 @@ import '../utils/toast.dart';
 import 'fullscreen_image.dart';
 import 'pay_qr_card.dart';
 import 'upi_pay_sheet.dart';
+import '../services/idempotency.dart';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -1103,6 +1104,12 @@ class _C330ConfirmSheetState extends State<C330ConfirmSheet> {
 
   String _s(String key) => (widget.ocrMap[key] as String? ?? '').trim();
 
+  /// CHANGE #472 — this payment's key, minted on the first Save and reused by
+  /// every retry. Before #472 a payment whose screenshot carried no UTR (a
+  /// cash payment) had NO dedupe at all: two taps recorded the supplier as
+  /// paid twice.
+  final ActionSlot _payKey = ActionSlot();
+
   Future<void> _save() async {
     final amount = double.tryParse(_amtCtrl.text.trim());
     if (amount == null || amount <= 0) {
@@ -1122,11 +1129,13 @@ class _C330ConfirmSheetState extends State<C330ConfirmSheet> {
           'p_screenshot_path':   widget.uploadedPath,
           'p_screenshot_bucket': 'supplier-bills',
           'p_ocr':               widget.ocrMap,
+          'p_client_action_id':  _payKey.key,
         },
       );
       final resMap = (res as Map<String, dynamic>?) ?? {};
       if (!mounted) return;
       if (resMap['ok'] == true) {
+        _payKey.done();
         Navigator.of(context).pop('ok');
       } else {
         final err = resMap['error'] as String? ?? 'unknown';

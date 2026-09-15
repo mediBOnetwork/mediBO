@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.3.7+20
+version: 1.3.13+26
 
 environment:
   sdk: ^3.12.0
@@ -79,6 +79,20 @@ dependencies:
   # browser anchor-download on web. Reached ONLY through download_bytes_stub.dart.
   share_plus: ^10.1.4
   path_provider: ^2.1.5
+  # CHANGE #298 — push notifications. firebase_core is initialised at runtime
+  # with FirebaseOptions built from push_config_get(), NOT from a build-time
+  # google-services.json: the Gradle plugin hard-fails the Android build when
+  # that file is absent, and holding the values in the backend lets Om point
+  # the app at a Firebase project with no rebuild and no deploy.
+  firebase_core: ^3.8.0
+  firebase_messaging: ^15.1.5
+
+  # CHANGE #473 — client crash reporting. Web + Android crash and unhandled
+  # exception capture. Every option (DSN, sample rates, scrub rules, release
+  # template) arrives from crash_config_get(); nothing about Sentry is decided
+  # in Dart. With no DSN the SDK is never initialised and CrashReporting falls
+  # back to the backend's own local queue — see lib/services/crash_reporting.dart.
+  sentry_flutter: ^9.28.0
 
 dev_dependencies:
   flutter_test:

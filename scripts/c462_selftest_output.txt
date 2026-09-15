@@ -1,0 +1,121 @@
+BEGIN
+                                                                                                                               db_session_guard                                                                                                                               
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ {"ok": true, "note": "Session capped. Bulk writes must run in batches of at most 20000 rows, committing each batch — never one giant transaction.", "lock_timeout": "5s", "max_batch_rows": 20000, "statement_timeout": "55s", "idle_in_transaction_session_timeout": "30s"}
+(1 row)
+
+CREATE TABLE
+DO
+--- GAP 107: co-located stops keep ONE group; total_stops is one rule
+UPDATE 1
+    proof    | open_groups | want 
+-------------+-------------+------
+ g107_groups |           2 |    2
+(1 row)
+
+           proof            | got | want 
+----------------------------+-----+------
+ g107_colocated_share_group | t   | t
+(1 row)
+
+           proof            | got | want 
+----------------------------+-----+------
+ g107_far_stop_is_own_group | t   | t
+(1 row)
+
+      proof       | total_stops | want_two_drop_points 
+------------------+-------------+----------------------
+ g107_total_stops |           2 |                    2
+(1 row)
+
+    proof     | total_stops |                          note                          
+--------------+-------------+--------------------------------------------------------
+ g107_run_row |           2 | was 999 in the fixture — one rule now owns this number
+(1 row)
+
+UPDATE 1
+--- GAP 105: a failed stop must not be deliverable (want error=bad_state)
+        proof        |    got    |   want    
+---------------------+-----------+-----------
+ g105_failed_refused | bad_state | bad_state
+(1 row)
+
+--- GAP 106: the completion distance is computed, stored and flagged (radius 150 m, scan ~1.5 km away)
+   proof    |                                                                                             reply                                                                                             
+------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ g106_reply | {"ok": true, "method": "photo", "status": "delivered", "flagged": true, "message": "Delivered", "distance_m": 1501, "geofence_ok": false, "delivered_at": "2026-09-01T19:09:27.438259+00:00"}
+(1 row)
+
+    proof    | delivered_distance_m | geofence_ok | completion_flagged 
+-------------+----------------------+-------------+--------------------
+ g106_stored |                 1501 | f           | t
+(1 row)
+
+   proof    | geofence_flag_events 
+------------+----------------------
+ g106_event |                    1
+(1 row)
+
+--- GAP 105: the same stop cannot be delivered twice (want already=true)
+    proof     | got  | want 
+--------------+------+------
+ g105_already | true | true
+(1 row)
+
+--- GAP 108: rejecting a stop drops it out of the run count
+UPDATE 1
+    proof    | total_stops_before | want 
+-------------+--------------------+------
+ g108_before |                  2 |    2
+(1 row)
+
+UPDATE 1
+       proof       | total_stops_after | want 
+-------------------+-------------------+------
+ g108_after_reject |                 1 |    1
+(1 row)
+
+         proof         | got | want 
+-----------------------+-----+------
+ g108_respond_recounts |   1 |    1
+(1 row)
+
+          proof           | got | want 
+--------------------------+-----+------
+ g108_cooldown_in_suggest |   1 |    1
+(1 row)
+
+--- GAP 104: the customer QR is gated on rider arrival
+       proof       | got | want 
+-------------------+-----+------
+ g104_gate_present |   1 |    1
+(1 row)
+
+              proof              | got | want 
+---------------------------------+-----+------
+ g104_token_hidden_until_arrival |   2 |    2
+(1 row)
+
+--- GAP 109: a pincode now lands, and the zone resolves
+        proof        | got | want 
+---------------------+-----+------
+ g109_pincode_column |   1 |    1
+(1 row)
+
+       proof        | got | want 
+--------------------+-----+------
+ g109_zone_resolver |   1 |    1
+(1 row)
+
+--- GAP 110: anon cannot execute, and a session-less call is refused
+     proof     | got | want 
+---------------+-----+------
+ g110_anon_acl |   0 |    0
+(1 row)
+
+      proof      |      got      |     want      
+-----------------+---------------+---------------
+ g110_no_session | not_signed_in | not_signed_in
+(1 row)
+
+ROLLBACK

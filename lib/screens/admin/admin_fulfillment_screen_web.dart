@@ -12,9 +12,12 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:convert';
+import '../../design_tokens.dart';
 import '../../utils/render_log.dart';
 import 'dispute/dispute_models.dart';
+import '../../models/c529_admin_gaps.dart';
 import '../../fulfill/fulfill_view_logic.dart'; // C355: shared logic for both layouts
+import '../../fulfill/fulfill_landing_stage.dart';
 import '../../fulfill/fulfill_lookups.dart'; // C531: backend-owned strings/colours cache
 // dispute_card.dart removed in #170 — Disputes tab rebuilt with accordion layout
 import '../../utils/responsive.dart';
@@ -34,7 +37,14 @@ import '../../services/date_labels.dart'; // C546: backend-owned date strings
 import '../../supabase_config.dart' show SupabaseConfig;
 import 'voice_receive.dart';
 import 'admin_delivery_tab.dart'; // CHANGE #629: Delivery tab (zone + date scoped)
+import 'ops_board_tab.dart'; // CHANGE #688: Ops board (SLA clocks, breach-sorted)
+import 'admin_customer_screen.dart'; // CHANGE #537: pipeline stage 1 reuses this screen
+import 'admin_supplier_screen.dart'; // CHANGE #537: pipeline stages 2 and 3 reuse this screen
+import '../../fulfill/fulfill_pipeline_tabs.dart'; // CHANGE #537: the 9-stage bar
+import '../../design_tokens.dart'; // CHANGE #537: skeleton + empty state on tokens
 import 'barcode_count_screen.dart'; // CHANGE #624: barcode counting screen
+import 'exceptions_screen.dart'; // CHANGE #690: stage 10 — the exceptions console
+import 'admin_dashboard_screen.dart' show QuickLinkNavigator; // CHANGE #690: an exception's non-stage route
 import '../../fulfill/count_voice_hooks.dart'; // COUNT MODE: voice bridge
 import '../../widgets/pinned_footer_list.dart';
 import '../../widgets/fulfill_item_sheet.dart';
@@ -1073,6 +1083,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (s.isNotEmpty) _activeBagBySupplier[s] = v;
   }
   bool _confirmingAll = false;
+  // cmd #401 — per-supplier "closed until … · ready from … · N parcels",
+  // rendered verbatim under the supplier's name on the Collect card.
+  Map<String, String> _supplierStatusLine = const {};
   bool _submittingCollect = false; // #125: Z1 guard — disables both Collect submit buttons mid-flight
 
   // #116: supplier count mode from fw_get_state ('shop'|'warehouse'|null)
@@ -1080,6 +1093,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // #147: scroll controller for the supplier list + per-row keys for ensureVisible
   final ScrollController _listScrollCtrl = ScrollController();
+
+  /// CHANGE #1890 — the Supplier Shop tab's OUTER scroll, the one that carries
+  /// the map card away. The inner list keeps [_listScrollCtrl] and with it the
+  /// open/close scroll restoration (#152) exactly as it was.
+  final ScrollController _shopScrollCtrl = ScrollController();
   final Map<String, GlobalKey> _rowKeys = {};
   // #152: saved scroll offset — restored when a supplier is closed
   double _savedScrollOffset = 0.0;
@@ -1387,6 +1405,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     FulfillRealtime.instance.removeListener(_onVoiceMentionsRealtime);
     AdminDateScope.instance.removeListener(_onDateScopeChanged);
     _listScrollCtrl.dispose();
+    _shopScrollCtrl.dispose();
     _agentBubbleEntry?.remove();
     _agentBubbleEntry = null;
     _spokenPopupEntry?.remove();
@@ -1663,6 +1682,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final packedMap = <String, Map<String, String>>{};
       final methodMap = <String, Map<String, String>>{};
       final submitMap = <String, Map<String, String>>{};
+      // cmd #401: the closed-until sentence and the ready-for-pickup line, both
+      // composed by the backend (supplier_closure_state / supplier_ready_block)
+      // and printed here verbatim. Only a shop that IS closed, and only a
+      // supplier who actually stated a ready time, contribute a line — silence
+      // stays silent rather than becoming a reassuring default.
+      final statusMap = <String, String>{};
       Map<String, String>? asDot(dynamic v) => v is Map
           ? {
               'fill': v['fill']?.toString() ?? '',
@@ -1680,7 +1705,21 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         if (dm != null) methodMap[s] = dm;
         final ds = asDot(m['dot_submit']);
         if (ds != null) submitMap[s] = ds;
+        final parts = <String>[];
+        final closed = m['closed'];
+        if (closed is Map && closed['closed'] == true) {
+          parts.add((closed['status_label'] ?? '').toString());
+        }
+        final ready = m['ready'];
+        if (ready is Map && ready['has_ready'] == true) {
+          parts.add((ready['ready_label'] ?? '').toString());
+          final pl = ready['parcels_label'];
+          if (pl != null) parts.add(pl.toString());
+        }
+        final line = parts.where((p) => p.isNotEmpty).join(' · ');
+        if (line.isNotEmpty) statusMap[s] = line;
       }
+      RenderLog.write('c401_collect_status', '${statusMap.length}');
       RenderLog.write('78_collect_suppliers_count', '${names.length}');
       RenderLog.write('c444_shop_suppliers', '${names.length}');
       setState(() {
@@ -1689,6 +1728,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         _supplierDotPackedMap = {..._supplierDotPackedMap, ...packedMap};
         _supplierDotMethodMap = {..._supplierDotMethodMap, ...methodMap};
         _supplierDotSubmitMap = {..._supplierDotSubmitMap, ...submitMap};
+        _supplierStatusLine = {..._supplierStatusLine, ...statusMap};
       });
       widget.onSupplierCountChanged?.call(names.length);
       _loadCollectModes(); // #120: populate C/CR badge map
@@ -4180,7 +4220,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            if (!widget.arrivals) const SupplierMapGroupsPanel(),
+            // CHANGE #754 — the map card is pinned by build(); an empty day no
+            // longer drags it into the middle of the screen.
             Text(FulfillLookups.instance.emptyOrdersLabel ?? '',
                 style: TextStyle(color: _kSub, fontSize: 15),
                 textAlign: TextAlign.center),
@@ -4203,11 +4244,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         child: ConstrainedBox(
           constraints: BoxConstraints(maxWidth: maxW),
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            if (!widget.arrivals)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                child: const SupplierMapGroupsPanel(),
-              ),
+            // CHANGE #754 — pinned by build(), not rebuilt per branch.
             Expanded(
               child: ListView.builder(
                 controller: _listScrollCtrl,
@@ -4337,6 +4374,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     return _SupplierAccordionShell(
       name: name,
       hexDots: hexDots,
+      statusLine: _supplierStatusLine[name],
       isExpanded: isExpanded,
       anyExpanded: _selectedSupplier != null,
       rowKey: rowKey,
@@ -4385,7 +4423,54 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // ── BUILD ───────────────────────────────────────────────────────────────────
 
   @override
+  /// CHANGE #754 — the Supplier Shop map, as ONE widget for the life of the
+  /// tab.
+  ///
+  /// It used to be three separate `const SupplierMapGroupsPanel()`s: one in
+  /// the empty-day branch, one in the mobile list and one in the wide layout.
+  /// Crossing between those branches — an empty day, a filter that matched
+  /// nothing, a rotation, a viewport change — destroyed the map and built a
+  /// new one, and every new Google Maps load is billed. Held in a field and
+  /// rendered ABOVE the branch, so no branch can take it away.
+  final Widget _mapPanel = const SupplierMapGroupsPanel();
+
+  @override
   Widget build(BuildContext context) {
+    // Pinned at the TOP of the tab (Om: it floated mid-screen on a day with no
+    // orders, because the only thing on screen was a centred empty state and
+    // the card was inside it).
+    if (widget.arrivals) return _buildCollectBody(context);
+    // CHANGE #1890 — the WHOLE tab is one scroll view.
+    //
+    // The map card used to be pinned above an Expanded body, so on a phone it
+    // ate the top of the viewport permanently and the supplier list lived in
+    // whatever was left (Om: the list was unreachable once the map opened).
+    // Now the card is the first sliver: scroll and it leaves, and the body
+    // underneath gets the full viewport height it always had — which is what
+    // keeps the wide layout's Expanded item table working unchanged.
+    //
+    // _mapPanel is still ONE widget built above the branch, exactly as #754
+    // requires; only where it is rendered changed.
+    RenderLog.write('c1890_shop_one_scroll', 'slivers=map+body');
+    return CustomScrollView(
+      controller: _shopScrollCtrl,
+      slivers: [
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+                Ds.space.x16, Ds.space.x12, Ds.space.x16, 0),
+            child: _mapPanel,
+          ),
+        ),
+        SliverFillRemaining(
+          hasScrollBody: true,
+          child: _buildCollectBody(context),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCollectBody(BuildContext context) {
     if (_loadingSuppliers) {
       return Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
     }
@@ -5161,11 +5246,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         'items=${_items.length};visible=${visibleItems.length};error=${_error != null}');
 
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      // ── Supplier map dropdown (Supplier Shop tab only) — purely additive ─────
-      if (!widget.arrivals) ...[
-        const SupplierMapGroupsPanel(),
-        const SizedBox(height: 12),
-      ],
+      // CHANGE #754 — the map card is pinned above this layout by build(), so
+      // switching between the wide and narrow layouts no longer disposes it.
       // ── Single merged bar (dropdown + progress + both pills) ─────────────────
       _buildWideSingleBar(isAdmin),
       const SizedBox(height: 16),
@@ -7735,6 +7817,9 @@ class _SupplierAccordionShell extends StatelessWidget {
   // dot_packed]) — already ordered by the caller. null entries render the
   // fallback yellow dot.
   final List<Map<String, String>?>? hexDots;
+  /// cmd #401 — one backend-composed line (closed-until / ready-from /
+  /// parcels). Null when the backend sent nothing worth saying.
+  final String? statusLine;
 
   const _SupplierAccordionShell({
     required this.name,
@@ -7743,6 +7828,7 @@ class _SupplierAccordionShell extends StatelessWidget {
     required this.rowKey,
     required this.onTap,
     required this.expandedContent,
+    this.statusLine,
     this.hexDots,
   });
 
@@ -7776,12 +7862,21 @@ class _SupplierAccordionShell extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
               child: Row(children: [
                 Expanded(
-                  child: Text(name,
-                      style: TextStyle(
-                        fontSize: 15, fontWeight: FontWeight.w600,
-                        color: isExpanded ? _kGreen : _kText,
-                      ),
-                      maxLines: 2, overflow: TextOverflow.ellipsis),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(name,
+                          style: TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w600,
+                            color: isExpanded ? _kGreen : _kText,
+                          ),
+                          maxLines: 2, overflow: TextOverflow.ellipsis),
+                      if (statusLine != null && statusLine!.isNotEmpty)
+                        Text(statusLine!, style: Ds.t.caption,
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                    ],
+                  ),
                 ),
                 const SizedBox(width: 8),
                 // #183: AnimatedRotation — same turns/duration/curve as Disputes chevron
@@ -8504,8 +8599,69 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
 
 class AdminFulfillmentScreen extends StatefulWidget {
   static final _key = GlobalKey<_AdminFulfillmentScreenState>();
-  AdminFulfillmentScreen() : super(key: _key);
+
+  /// CHANGE #307 — a partner opens ONE tab of this screen from their home
+  /// (Collect / Count / Bag / Pack / Assign to delivery), so the tab it starts
+  /// on is a construction parameter rather than a second copy of the screen.
+  /// Default 0 keeps every existing call site byte-identical.
+  ///
+  /// LEGACY as of CHANGE #537: this is an index into the pre-#537 six-tab bar,
+  /// and an index is exactly what stopped working once a partner's bar can be
+  /// shorter than an admin's. It is kept — the partner console's route map
+  /// still passes it — and mapped through [_legacyStages] below. New callers
+  /// pass [initialStage] instead, which is the backend's own key and cannot
+  /// mean a different screen for a different user.
+  final int initialTab;
+
+  /// CHANGE #528 (feature_gaps row 142) — the tab indexes this caller may see.
+  /// `null` = unbounded, which is every admin/super-admin call site and keeps
+  /// them byte-identical. A partner is handed the list `partner_open().tabs`
+  /// returned, so ONE grant no longer opens all six tabs.
+  ///
+  /// LEGACY as of CHANGE #537, together with [initialTab]: both are INDEXES
+  /// into the pre-#537 six-tab bar, and an index is exactly what stops meaning
+  /// one thing once a partner's bar can be shorter than an admin's. Both are
+  /// kept — the partner console still passes them — and translated through
+  /// `_legacyStages` in the State. New callers name the backend's own stage
+  /// key via [initialStage], which cannot mean a different screen for a
+  /// different user.
+  final Set<int>? allowedTabs;
+
+  /// CHANGE #537 — the stage to open on, as a BACKEND key
+  /// (`fulfill_tabs().tabs[].stage_key` / `feature_registry.route_key`). Wins
+  /// over [initialTab]. A stage this user cannot see is ignored and the first
+  /// stage they CAN see opens instead.
+  final String? initialStage;
+
+  AdminFulfillmentScreen(
+      {this.initialTab = 0, this.allowedTabs, this.initialStage})
+      : super(key: _key);
   static void triggerFocus() => _key.currentState?._onFocus();
+
+  /// CHANGE #537 — deep link straight to a pipeline stage.
+  ///
+  /// The caller passes the BACKEND's own stage key ('warehouse', 'dispute',
+  /// 'customer_order'…), which is what `fulfill_tabs().tabs[].stage_key` and
+  /// the registry's route_key both are. A key this build has never heard of,
+  /// or one the caller has no permission for (so the backend never sent that
+  /// tab), selects nothing and leaves the current tab alone — never an
+  /// exception, never a blank body.
+  /// CHANGE #690 — a deep link can land before this screen EXISTS. The admin
+  /// pages are lazy inside the IndexedStack, so the shell's post-frame callback
+  /// runs in the same frame that first builds this widget and `_key.currentState`
+  /// is still null: `/admin/go/exceptions` opened Fulfil on whatever tab was
+  /// last used and silently dropped the stage. The request is therefore parked
+  /// on the CLASS, and the state picks it up in initState.
+  static String _pendingOpen = '';
+
+  static void openStage(String stageKey) {
+    final st = _key.currentState;
+    if (st != null) {
+      st._requestStage(stageKey);
+      return;
+    }
+    _pendingOpen = stageKey;
+  }
 
   @override
   State<AdminFulfillmentScreen> createState() => _AdminFulfillmentScreenState();
@@ -8513,15 +8669,61 @@ class AdminFulfillmentScreen extends StatefulWidget {
 
 class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     with WidgetsBindingObserver {
-  int _tab = 0;
-  int _disputeCount = 0; // #132C: open dispute count for tab badge
-  int _shopCount = 0;      // CHANGE #473: Supplier Shop tab badge
-  int _warehouseCount = 0; // CHANGE #473: Warehouse tab badge
+  // ── CHANGE #537: the tab bar is a payload, not nine widgets ──────────────
+  //
+  // The pipeline an order travels — Customer order → Supplier inquiry →
+  // Supplier order → Supplier shop → Warehouse → Bag → Pack → Delivery →
+  // Dispute — is NOT written down in this file. `fulfill_tabs()` sends the
+  // stages, their order, their labels and their badges; this screen renders
+  // them and maps each stage key to the body that already existed for it.
+  //
+  // That is also the whole of the partner story: a region partner calls the
+  // same RPC and is simply not sent a stage their permission matrix does not
+  // grant. The order of the rest is untouched, because the order is the
+  // backend's `sort` and never an index in Dart.
+  //
+  // The selected tab is therefore a STAGE KEY, not an index. An index would
+  // mean tab 4 is a different screen for an admin than for a partner.
+  FulfillPipelinePayload _pipeline = FulfillPipelinePayload.empty;
+  bool _pipelineLoading = true;
+  String _stage = '';
+
+  /// Stages whose body has been opened at least once. A body is built on
+  /// first visit and then kept alive — nine stages include three full consoles
+  /// (Customer orders, Supplier inquiry, Supplier orders), and building all
+  /// nine on mount would fire every one of their loads at once for tabs the
+  /// operator may never open.
+  final Set<String> _visited = <String>{};
+
+  Timer? _pipelineDebounce;
+
+  /// CHANGE #690 — a stage asked for BEFORE fulfill_tabs() has answered. A deep
+  /// link lands on an empty bar, and dropping the request there is how
+  /// /admin/go/<stage> silently opened the wrong tab. It is applied the moment
+  /// the payload arrives, and only if the payload actually contains it.
+  String _pendingStage = '';
+
+  /// CHANGE #688 — has the first fulfill_tabs() payload landed, and has the
+  /// operator chosen a tab since? Together they keep the backend's landing
+  /// stage a FIRST-mount decision and never a tab that moves under someone.
+  bool _landed = false;
+  bool _stagePicked = false;
+
+  int _disputeCount = 0; // #132C: open dispute count (now also proven server-side)
+  int _shopCount = 0;      // CHANGE #473: Supplier Shop count
+  int _warehouseCount = 0; // CHANGE #473: Warehouse count
   final _collectKey   = GlobalKey<_PickToLightScreenState>();
   final _disputesKey  = GlobalKey<_DisputesScreenState>();
   final _packTabKey   = GlobalKey<_PackTabState>();
   final _bagTabKey    = GlobalKey<_BagTabState>();
   final _deliveryKey  = GlobalKey<AdminDeliveryTabState>(); // CHANGE #629
+  final _opsBoardKey  = GlobalKey<OpsBoardTabState>();      // CHANGE #688
+  // CHANGE #537 — stages 1-3 reuse the existing consoles. Their own keys (not
+  // the screens' static ones) are what let an embedded instance coexist with
+  // the shell's.
+  final _customerOrderKey   = GlobalKey();
+  final _supplierInquiryKey = GlobalKey();
+  final _supplierOrderKey   = GlobalKey();
 
   // ── #187→C353: realtime now via the single FulfillRealtime channel ────────
   Timer? _collectDebounce;
@@ -8560,46 +8762,53 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     if (!mounted) return;
     // C355: an event reached THIS device (local or from another device) and is now
     // driving a visible-tab refetch — same code path for both. This is the unify point.
-    RenderLog.write('c355_rt_refetch', 'tab=$_tab');
+    RenderLog.write('c355_rt_refetch', 'tab=$_stage');
+    // CHANGE #537 — a pipeline change moves the badges too, not just the rows.
+    _schedulePipelineReload();
     // C358 B1: proof that a refetch is triggered ONLY by a real Postgres change event
     // (never a timer). Carries the changed table(s). The refetch itself is now SILENT.
     RenderLog.write('c358_rt_only', 'tbl=${changedTables.join("+")}');
     // C358 B3: a dispute change re-renders the Supplier Shop / Warehouse rows (chips +
     // the #357 Dispute Type / Item Status columns) so resolutions reflect back here.
-    if (changedTables.contains('supplier_disputes') && (_tab == 0 || _tab == 1)) {
-      RenderLog.write('c358_line_synced', 'tab=${_tab == 0 ? 'shop' : 'warehouse'}');
+    if (changedTables.contains('supplier_disputes') &&
+        (_stage == 'supplier_shop' || _stage == 'warehouse')) {
+      RenderLog.write('c358_line_synced',
+          'tab=${_stage == 'supplier_shop' ? 'shop' : 'warehouse'}');
     }
     // C360: a realtime change (e.g. a dispute raised at confirm) silently re-renders
     // the visible counting tab — no manual refresh, no polling.
-    if (_tab == 0 || _tab == 1) {
-      RenderLog.write('c361_synced', 'tab=${_tab == 0 ? 'shop' : 'warehouse'},src=rt');
+    if (_stage == 'supplier_shop' || _stage == 'warehouse') {
+      RenderLog.write('c361_synced',
+          'tab=${_stage == 'supplier_shop' ? 'shop' : 'warehouse'},src=rt');
     }
     // C354: a dispute change alters recounts/splits/chips on EVERY tab, not just the
     // visible one. Refresh the Pack dispute index regardless of which tab is showing so
     // its read-only chips are correct the instant the packer switches to it.
-    if (changedTables.contains('supplier_disputes') && _tab != 3) {
+    if (changedTables.contains('supplier_disputes') && _stage != 'pack') {
       _packTabKey.currentState?.refreshDisputeIndex();
     }
-    switch (_tab) {
-      case 0: // Supplier Shop
+    switch (_stage) {
+      case 'supplier_shop':
         _collectKey.currentState?._refetchFromRealtime();
         break;
-      case 1: // Warehouse / Arrivals (logs c353_refetch inside)
+      case 'warehouse': // logs c353_refetch inside
         _arrivalsKey.currentState?.refreshAll();
         break;
-      case 2: // Bag
+      case 'bag':
         RenderLog.write('c353_refetch', 'src=rt,tab=bag');
         _bagTabKey.currentState?.refreshFromRealtime();
         break;
-      case 3: // Pack
+      case 'pack':
         RenderLog.write('c353_refetch', 'src=rt,tab=pack');
         _packTabKey.currentState?.refreshFromRealtime();
         break;
-      case 4: // Disputes (chips data on Collect invalidated too)
+      case 'dispute': // chips data on Collect invalidated too
         RenderLog.write('c353_refetch', 'src=rt,tab=disputes');
         _disputesKey.currentState?._load();
         _collectKey.currentState?._loadDisputes();
         break;
+      // Stages 1-3 are whole consoles that own their realtime refetch; a
+      // stage this build has never heard of falls through in silence.
     }
   }
 
@@ -8616,19 +8825,43 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   }
   // #132A: called by _PickToLightScreenState after loading disputes.
   void _setDisputeCount(int n) {
-    if (mounted && n != _disputeCount) setState(() => _disputeCount = n);
+    if (mounted && n != _disputeCount) {
+      setState(() => _disputeCount = n);
+      _schedulePipelineReload();
+    }
   }
-  // CHANGE #473: tab badge counts for Supplier Shop / Warehouse.
+  // CHANGE #473 → #537: the tab badges are now the BACKEND's numbers
+  // (fulfill_tabs()), so a child reporting a new count is a signal that the
+  // pipeline moved, not the badge itself. Refresh the payload and let the
+  // server say what the badges are.
   void _setShopCount(int n) {
-    if (mounted && n != _shopCount) setState(() => _shopCount = n);
+    if (mounted && n != _shopCount) {
+      setState(() => _shopCount = n);
+      _schedulePipelineReload();
+    }
   }
   void _setWarehouseCount(int n) {
-    if (mounted && n != _warehouseCount) setState(() => _warehouseCount = n);
+    if (mounted && n != _warehouseCount) {
+      setState(() => _warehouseCount = n);
+      _schedulePipelineReload();
+    }
   }
-  // #132B: open Disputes tab from item popup "View dispute". (#280: Disputes is now index 4)
-  void _openDisputesTab() {
-    if (mounted) setState(() => _tab = 4);
+  // CHANGE #690 — an exception's next_action.route. Whether it is one of THIS
+  // bar's stages is decided from the backend's own tab list, never a list of
+  // stage names written here; anything else is an admin destination and goes
+  // to the shell's quick-link navigator exactly as the ops board's does.
+  void _openExceptionRoute(String route) {
+    if (route.isEmpty) return;
+    final isStage = _pipeline.tabs.any((t) => t.stageKey == route);
+    if (isStage) {
+      _selectStage(route);
+      return;
+    }
+    QuickLinkNavigator.of(context)?.navigate(route);
   }
+
+  // #132B: open the Dispute stage from an item popup's "View dispute".
+  void _openDisputesTab() => _selectStage('dispute');
 
   // C174/B6+B15: single refresh point — call after any dispute-state-changing action.
   void _refreshDisputeState() {
@@ -8638,11 +8871,20 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   }
   final _arrivalsKey = GlobalKey<_ArrivalsScreenState>();
 
+  // CHANGE #690 — stage 10. The console reloads itself when the stage is
+  // re-opened, exactly like every other stage on this bar.
+  final _exceptionsKey = GlobalKey<ExceptionsScreenState>();
+
   // CHANGE #545 — repaint the header when the central admin date moves. Each of
   // the 5 tab widgets listens to AdminDateScope independently for its own
   // refetch, so this listener only needs to rebuild this shell.
   void _onDateScopeChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    setState(() {});
+    // CHANGE #537 — the badges are "orders at that stage on the ACTIVE date",
+    // so the date moving is a badge change. The RPC re-reads the scope itself;
+    // no date is sent from here (#545).
+    _loadPipeline();
   }
 
   // CHANGE #531: repaint when the backend lookup payloads land, so the tabs
@@ -8651,9 +8893,78 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     if (mounted) setState(() {});
   }
 
+  /// CHANGE #528 row 142 — the permission question, asked in ONE place.
+  bool _tabAllowed(int i) =>
+      widget.allowedTabs == null || widget.allowedTabs!.contains(i);
+
+  int? _firstAllowedTab() {
+    for (var i = 0; i < 6; i++) {
+      if (_tabAllowed(i)) return i;
+    }
+    return null;
+  }
+
+  /// CHANGE #537 — the pre-#537 tab order, kept ONLY so the two index-based
+  /// inputs this screen still accepts keep meaning what their callers meant:
+  /// [AdminFulfillmentScreen.initialTab] (#307) and
+  /// [AdminFulfillmentScreen.allowedTabs] (#528). Note index 4 was Disputes
+  /// and 5 was Delivery — the old bar was not in pipeline order, which is the
+  /// thing this change fixes.
+  static const List<String> _legacyStages = <String>[
+    'supplier_shop', 'warehouse', 'bag', 'pack', 'dispute', 'delivery',
+  ];
+
+  String _stageForLegacyTab(int i) =>
+      (i >= 0 && i < _legacyStages.length) ? _legacyStages[i] : '';
+
+  /// #528's fence, restated in stage terms: a stage key must never WIDEN a
+  /// grant. An index-bounded caller keeps only the stages whose legacy index
+  /// it was granted; the three stages that never had an index (Customer
+  /// order, Supplier inquiry, Supplier order) are therefore unbounded-only,
+  /// which is the safe direction. An unbounded caller — every admin — is
+  /// governed by the backend payload alone.
+  bool _stageAllowed(String key) {
+    if (widget.allowedTabs == null) return true;
+    final i = _legacyStages.indexOf(key);
+    // CHANGE #688 — a stage the legacy INDEX scheme never knew about is not
+    // "denied", it is simply outside that scheme. `_legacyStages` freezes the
+    // six stages that once had numbers; allowedTabs bounds a login by those
+    // numbers. Returning false for anything newer silently deleted every stage
+    // added since (Ops board first) from exactly the bounded logins — a
+    // partner granted three tabs — while fulfill_tabs() had already decided
+    // they may see it. The backend's matrix is the gate; this list is only a
+    // translation table for the numbers.
+    if (i < 0) return true;
+    return _tabAllowed(i);
+  }
+
   @override
   void initState() {
     super.initState();
+    // CHANGE #690 — a stage asked for before this screen was built (see
+    // AdminFulfillmentScreen.openStage). Taken once, then applied by
+    // _loadPipeline the moment fulfill_tabs() answers.
+    if (AdminFulfillmentScreen._pendingOpen.isNotEmpty) {
+      _pendingStage = AdminFulfillmentScreen._pendingOpen;
+      AdminFulfillmentScreen._pendingOpen = '';
+    }
+    // CHANGE #307 → #537: the requested tab is now a STAGE. A caller that
+    // named the stage outright wins; otherwise the legacy index is translated.
+    var want = widget.initialTab;
+    // CHANGE #528 row 142 — a bounded caller can never land on, or reach, a
+    // tab it was not granted. The clamp is here as well as on the tab row so
+    // an out-of-range initialTab cannot smuggle one in.
+    if (!_tabAllowed(want)) {
+      final first = _firstAllowedTab();
+      if (first != null) want = first;
+    }
+    final named = widget.initialStage;
+    // _loadPipeline() keeps this stage if the backend sent it and falls back
+    // to the first stage it DID send otherwise, so a caller asking for a stage
+    // they have lost lands somewhere real instead of on a blank body.
+    _stage = (named != null && named.isNotEmpty && _stageAllowed(named))
+        ? named
+        : _stageForLegacyTab(want);
     WidgetsBinding.instance.addObserver(this);
     AdminDateScope.instance.addListener(_onDateScopeChanged);
     // CHANGE #531: one fetch per session for fw_error_messages()+fw_issue_options(),
@@ -8662,6 +8973,9 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     FulfillLookups.instance.addListener(_onLookupsChanged);
     FulfillLookups.instance.ensureLoaded();
     _subscribeRealtime();
+    // CHANGE #537 — the tab bar arrives from the backend, so it is fetched
+    // like any other payload. Until it lands there are no tabs and no body.
+    _loadPipeline();
     // C358 B1: the Fulfill area subscribes to realtime ONLY (event-driven). There is
     // NO periodic/interval refetch timer scheduled here or in any tab — refetches fire
     // solely on a real Postgres change event (debounced 400ms) or an explicit action.
@@ -8706,6 +9020,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     WidgetsBinding.instance.removeObserver(this);
     _collectDebounce?.cancel();
     _disputeDebounce?.cancel();
+    _pipelineDebounce?.cancel();
     FulfillRealtime.instance.removeListener(_onRealtimeChange);
     AdminDateScope.instance.removeListener(_onDateScopeChanged);
     FulfillLookups.instance.removeListener(_onLookupsChanged);
@@ -8716,10 +9031,193 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
 
   // #137: switch to Collect tab and pre-select supplier so staff can use the voice feature.
   void _openVoiceInCollect(String supplier) {
-    setState(() => _tab = 0);
+    _selectStage('supplier_shop');
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _collectKey.currentState?.selectSupplierForVoice(supplier);
     });
+  }
+
+  // ── CHANGE #537: the pipeline payload ─────────────────────────────────────
+
+  /// One call: the stages this user may see, in the backend's order, with the
+  /// badge for each already counted from the very queries the tabs render.
+  ///
+  /// No date and no zone are sent. `fulfill_tabs()` reads the ONE admin date
+  /// (#545) and the ONE zone (#609) itself — and for a region partner
+  /// admin_active_zone() returns their own zone before anything else, which is
+  /// what makes the partner view zone-scoped without a single parameter here.
+  Future<void> _loadPipeline() async {
+    try {
+      final res = await Supabase.instance.client
+          .rpc('fulfill_tabs')
+          .timeout(const Duration(seconds: 20));
+      if (!mounted) return;
+      var payload = FulfillPipelinePayload.fromJson(
+          res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{});
+      // CHANGE #528 row 142 still applies on top of the payload: an
+      // index-bounded caller is never widened by a stage the backend sent.
+      if (widget.allowedTabs != null) {
+        payload = payload.copyWithTabs(
+            payload.tabs.where((t) => _stageAllowed(t.stageKey)).toList());
+      }
+      setState(() {
+        _pipeline = payload;
+        _pipelineLoading = false;
+        // CHANGE #754 — the whole landing decision is one pure function now
+        // (lib/fulfill/fulfill_landing_stage.dart), because #688 and #690 have
+        // fought over it twice: #690 applied the deep link's stage and cleared
+        // `_pendingStage`, and #688's guard then read that just-cleared field
+        // and landed on the first tab anyway. It is pinned by a protected test
+        // rather than by the order of statements in this setState.
+        final landing = resolveLandingStage(
+          stages: [for (final t in payload.tabs) t.stageKey],
+          current: _stage,
+          pending: _pendingStage,
+          landed: _landed,
+          picked: _stagePicked,
+          initialStage: widget.initialStage,
+          initialTab: widget.initialTab,
+          bounded: widget.allowedTabs != null,
+        );
+        _stage = landing.stage;
+        _stagePicked = landing.picked;
+        _pendingStage = '';
+        _landed = true;
+        if (_stage.isNotEmpty) _visited.add(_stage);
+      });
+      RenderLog.write('c537_pipeline_loaded',
+          'n=${payload.tabs.length};stage=$_stage;partner=${payload.isPartner}');
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _pipelineLoading = false);
+    }
+  }
+
+  /// Badges follow the pipeline, so a mutation anywhere re-reads them — once,
+  /// after the dust settles, never per row.
+  void _schedulePipelineReload() {
+    _pipelineDebounce?.cancel();
+    _pipelineDebounce = Timer(const Duration(milliseconds: 900), () {
+      if (mounted) _loadPipeline();
+    });
+  }
+
+  /// A stage request from OUTSIDE this screen (a deep link, a notification).
+  /// If the bar is already loaded it is just a selection; if it is not, the
+  /// request waits for the payload rather than being dropped.
+  void _requestStage(String stageKey) {
+    if (!mounted || stageKey.isEmpty) return;
+    if (_pipeline.indexOfStage(stageKey) >= 0) {
+      _selectStage(stageKey);
+      return;
+    }
+    _pendingStage = stageKey;
+    RenderLog.write('c690_stage_pending', stageKey);
+  }
+
+  /// Select a stage by the BACKEND's key. A key that is not in the payload —
+  /// unknown to this build, or one this user has no permission for — is
+  /// ignored in silence: the current tab stays, nothing throws.
+  void _selectStage(String stageKey) {
+    if (!mounted) return;
+    if (_pipeline.indexOfStage(stageKey) < 0) {
+      RenderLog.write('c537_stage_unknown', stageKey);
+      return;
+    }
+    if (_stage != stageKey) {
+      setState(() {
+        _stage = stageKey;
+        _stagePicked = true;
+        _visited.add(stageKey);
+      });
+    } else {
+      _visited.add(stageKey);
+    }
+    RenderLog.write('c537_stage_open', stageKey);
+    // Each stage refetches on open exactly as it did when it was tab N.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      switch (stageKey) {
+        case 'supplier_shop':
+          _scheduleCollectReload();
+          break;
+        case 'warehouse':
+          _arrivalsKey.currentState?.refresh();
+          break;
+        case 'bag':
+          _bagTabKey.currentState?._load();
+          break;
+        case 'pack':
+          _packTabKey.currentState?._load();
+          break;
+        case 'dispute':
+          _disputesKey.currentState?._load();
+          break;
+        case 'delivery':
+          _deliveryKey.currentState?.reload();
+          break;
+        case 'exceptions':
+          _exceptionsKey.currentState?.reload();
+          break;
+        case 'ops_board':
+          _opsBoardKey.currentState?.reload();
+          break;
+      }
+    });
+  }
+
+  /// The body behind one stage. Every one of these is the screen that ALREADY
+  /// served that stage — this change moved them under one bar, it did not
+  /// rebuild any of them. A stage key this build does not know renders
+  /// nothing, so the backend can add a tenth stage before the app ships one.
+  Widget _bodyForStage(String stageKey) {
+    switch (stageKey) {
+      case 'customer_order':
+        return AdminCustomerScreen(
+            key: _customerOrderKey,
+            initialFilter: 'customerOrders',
+            embedded: true);
+      case 'supplier_inquiry':
+        return AdminSupplierScreen(
+            key: _supplierInquiryKey, initialFilter: 'inquiry', embedded: true);
+      case 'supplier_order':
+        return AdminSupplierScreen(
+            key: _supplierOrderKey, initialFilter: 'orders', embedded: true);
+      case 'supplier_shop':
+        return _PickToLightScreen(
+            key: _collectKey, onSupplierCountChanged: _setShopCount);
+      case 'warehouse':
+        return _ArrivalsScreen(
+          key: _arrivalsKey,
+          onVoiceCount: _openVoiceInCollect,
+          onSupplierCountChanged: _setWarehouseCount,
+        );
+      case 'bag':
+        return _BagTab(key: _bagTabKey);
+      case 'pack':
+        return _PackTab(key: _packTabKey);
+      case 'ops_board':
+        // CHANGE #688 — the SLA board. First stage in the bar because a
+        // breach nobody sees is the gap this closed.
+        return OpsBoardTab(key: _opsBoardKey);
+      case 'delivery':
+        return AdminDeliveryTab(key: _deliveryKey);
+      case 'dispute':
+        return _DisputesScreen(
+          key: _disputesKey,
+          onCountChanged: _setDisputeCount,
+          onRefreshCollect: _refreshCollect,
+          onRefreshArrivals: _refreshArrivals,
+          onRefreshPack: _refreshPack,
+        );
+      case 'exceptions':
+        return ExceptionsScreen(
+          key: _exceptionsKey,
+          onNavigate: _openExceptionRoute,
+          onChanged: _schedulePipelineReload,
+        );
+      default:
+        return const SizedBox.shrink();
+    }
   }
 
   @override
@@ -8735,141 +9233,80 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     RenderLog.write('c334_build', '334');
     RenderLog.write('c335_build', '335');
     RenderLog.write('c113_fulfillment_tabs_top', viewport);
+    final tabs = _pipeline.tabs;
+    final selected = _pipeline.indexOfStage(_stage);
+
     return Column(children: [
       Container(
         color: _kCard,
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // CHANGE #545 — the Fulfill header date chip is DELETED. All five
-          // tabs (Supplier Shop, Warehouse, Bag, Pack, Disputes) follow the ONE
-          // admin date picker on the Dashboard, above the ORDER HOURS card.
+          // CHANGE #545 — the Fulfill header date chip is DELETED. Every stage
+          // follows the ONE admin date picker on the Dashboard, above the
+          // ORDER HOURS card.
+          //
+          // CHANGE #537 — and the bar itself is now fulfill_tabs(): nine
+          // stages in the order an order physically travels, each with the
+          // backend's own label and the backend's own badge, and a partner
+          // simply not sent the stages they hold no permission for.
           const SizedBox(height: 8),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(children: [
-              // CHANGE #473: count badges — 'count' (shop) / 'warehouse_count'
-              // (warehouse) from fw_list_arrivals, muted/neutral (not an alert).
-              Stack(clipBehavior: Clip.none, children: [
-                _TabBtn('Supplier Shop', _tab == 0, () {
-                  setState(() => _tab = 0);
-                  _scheduleCollectReload();
-                }),
-                if (_shopCount > 0)
-                  Positioned(
-                    top: -4, right: -4,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: FulfillLookups.instance.color('c_ff6b7280'),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text('$_shopCount',
-                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
-                              color: Colors.white, height: 1.2)),
-                    ),
-                  ),
-              ]),
-              const SizedBox(width: 6),
-              Stack(clipBehavior: Clip.none, children: [
-                _TabBtn('Warehouse', _tab == 1, () {
-                  setState(() => _tab = 1);
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    _arrivalsKey.currentState?.refresh();
-                  });
-                }),
-                if (_warehouseCount > 0)
-                  Positioned(
-                    top: -4, right: -4,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: FulfillLookups.instance.color('c_ff6b7280'),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text('$_warehouseCount',
-                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
-                              color: Colors.white, height: 1.2)),
-                    ),
-                  ),
-              ]),
-              const SizedBox(width: 6),
-              // CHANGE #280: Bag tab (bag-wise) — index 2
-              _TabBtn('Bag', _tab == 2, () {
-                setState(() => _tab = 2);
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  _bagTabKey.currentState?._load();
-                });
-              }),
-              const SizedBox(width: 6),
-              // CHANGE #278: Pack tab (customer-wise) — index 3 (#280: shifted from 2)
-              _TabBtn('Pack', _tab == 3, () {
-                setState(() => _tab = 3);
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  _packTabKey.currentState?._load();
-                });
-              }),
-              const SizedBox(width: 6),
-              // #132C: Disputes tab with open-count badge (#280: now index 4)
-              Stack(clipBehavior: Clip.none, children: [
-                _TabBtn('Disputes', _tab == 4, () {
-                  setState(() => _tab = 4);
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    _disputesKey.currentState?._load();
-                  });
-                }),
-                if (_disputeCount > 0)
-                  Positioned(
-                    top: -4, right: -4,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: FulfillLookups.instance.color('c_ff7c3aed'),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text('$_disputeCount',
-                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
-                              color: Colors.white, height: 1.2)),
-                    ),
-                  ),
-              ]),
-              const SizedBox(width: 6),
-              // CHANGE #629: Delivery tab — index 5. Shares the ONE admin date
-              // picker and the ONE zone picker; the tab itself passes both to
-              // every call it makes.
-              _TabBtn(FulfillLookups.instance.ui('dlv_admin_tab'), _tab == 5, () {
-                setState(() => _tab = 5);
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  _deliveryKey.currentState?.reload();
-                });
-              }),
-            ]),
-          ),
+          if (tabs.isNotEmpty)
+            FulfillPipelineTabBar(
+              tabs: tabs,
+              selectedStage: _stage,
+              onSelect: _selectStage,
+              selectedColor: _kGreen,
+              unselectedColor: _kSub,
+              badgeColor: FulfillLookups.instance.color('c_ff6b7280'),
+              surfaceColor: _kCard,
+              // CHANGE #653 — the View-only word for a tab this login holds
+              // read but not write, straight off the same payload.
+              readonlyBadge: _pipeline.readonlyBadge,
+            )
+          else if (_pipelineLoading)
+            // The pipeline has a known shape, so show the shape rather than a
+            // spinner — and the header does not collapse and jump when the
+            // payload lands.
+            FulfillPipelineTabBarSkeleton(color: Ds.c.divider)
+          else
+            // A refusal and an empty matrix both print the backend's own
+            // words. There is no Dart fallback copy for either.
+            SizedBox(
+              height: Ds.touch.minTarget + Ds.space.x8,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  _pipeline.message.isNotEmpty
+                      ? _pipeline.message
+                      : _pipeline.emptyMessage,
+                  style: TextStyle(
+                      fontSize: Ds.t.captionSize,
+                      fontWeight: FontWeight.w500,
+                      color: _kSub),
+                ),
+              ),
+            ),
           const SizedBox(height: 1),
           Divider(height: 1, color: _kBorder),
         ]),
       ),
       Expanded(
         child: Builder(builder: (context) {
-          RenderLog.write('c280_fulfill_tabs_5', 5);
-          // CHANGE #629: six tabs — Delivery joined the five above.
-          RenderLog.write('c629_fulfill_tabs', 6);
+          RenderLog.write('c537_fulfill_tabs', tabs.length);
+          RenderLog.write('c537_fulfill_stage', _stage);
           // CHANGE #284: confirms Confirm-all gating removed; fires at boot for curl verify.
           RenderLog.write('c284_confirm_always_clickable', 'gating_removed=y;enabled=always');
+          if (tabs.isEmpty || selected < 0) return const SizedBox.shrink();
           return IndexedStack(
-            index: _tab,
+            index: selected,
             children: [
-              _PickToLightScreen(key: _collectKey, onSupplierCountChanged: _setShopCount),
-              _ArrivalsScreen(
-                key: _arrivalsKey,
-                onVoiceCount: _openVoiceInCollect,
-                onSupplierCountChanged: _setWarehouseCount,
-              ),
-              _BagTab(key: _bagTabKey),
-              _PackTab(key: _packTabKey),
-              _DisputesScreen(key: _disputesKey, onCountChanged: _setDisputeCount,
-                  onRefreshCollect: _refreshCollect, onRefreshArrivals: _refreshArrivals,
-                  onRefreshPack: _refreshPack),
-              AdminDeliveryTab(key: _deliveryKey),
+              // Built on FIRST VISIT and kept alive from then on. Three of the
+              // nine stages are whole consoles; mounting all nine up front
+              // would fire every one of their loads for tabs nobody opened.
+              for (final t in tabs)
+                _visited.contains(t.stageKey)
+                    ? _bodyForStage(t.stageKey)
+                    : const SizedBox.shrink(),
             ],
           );
         }),
@@ -13737,6 +14174,12 @@ class _DisputesScreenState extends State<_DisputesScreen> {
   // per-supplier header row reads this verbatim instead of aggregating
   // active/total counts from the flat disputes[] list client-side.
   Map<String, Map<String, dynamic>> _supplierGroups = {};
+  // CHANGE #534 (follow-up to #529 gaps 36/37): fw_get_disputes() ages every
+  // dispute server-side and hangs a `short_reminder` admin action off every
+  // ACTIVE one. DisputeItem carries neither, so the raw rows are parsed once
+  // here — keyed by dispute_id — and the header prints them verbatim.
+  Map<String, DisputeAgeView> _disputeAges = const {};
+  final Set<String> _reminding = {};
   // CHANGE #537: fw_get_disputes.total_rows — the number of product rows across
   // all supplier sections, summed server-side (was a client fold).
   int _supplierProductRows = 0;
@@ -13796,6 +14239,18 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       if (!mounted) return;
       _olderOpen = (res['older_open'] as num?)?.toInt() ?? 0;
       final items = DisputeItem.listFromResponse(res);
+      // CHANGE #534: the ageing block + short_reminder action, straight off the
+      // same rows, parsed by DisputeAgeView (models/c529_admin_gaps.dart).
+      final ages = <String, DisputeAgeView>{};
+      final rawDisputes = res['disputes'];
+      if (rawDisputes is List) {
+        for (final d in rawDisputes) {
+          if (d is! Map) continue;
+          final m = Map<String, dynamic>.from(d);
+          final id = m['dispute_id']?.toString();
+          if (id != null && id.isNotEmpty) ages[id] = DisputeAgeView.from(m);
+        }
+      }
       // CHANGE #531: backend-owned Disputes list structure, verbatim.
       final rawSprod = res['supplier_products'];
       final supplierProducts = <Map<String, dynamic>>[];
@@ -13848,6 +14303,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
           'change:182,uses_shared_reveal:true,duration_ms:280,curve:easeInOutCubic,chevron_animated:true');
       setState(() {
         _disputes = items;
+        _disputeAges = ages;
         _unfillable = unfillable;
         _supplierGroups = supplierGroups;
         _supplierProducts = supplierProducts;
@@ -14235,6 +14691,40 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     );
   }
 
+  // CHANGE #534 — GAP 36's action, finally wired. The label, the tone and the
+  // "reminded" copy are all the backend's; this only sends and reloads.
+  Future<void> _sendShortReminder(String supplier) async {
+    if (_reminding.contains(supplier)) return;
+    setState(() => _reminding.add(supplier));
+    try {
+      final res = await Supabase.instance.client.rpc(
+        'fw_send_supplier_short_reminder',
+        params: {'p_supplier_name': supplier},
+      ).timeout(const Duration(seconds: 15));
+      final err = res is Map ? res['error']?.toString() : null;
+      RenderLog.write('c534_short_reminder_sent',
+          'supplier=$supplier;err=${err ?? ''}');
+      if (!mounted) return;
+      if (err != null && err.isNotEmpty) {
+        final msg = FulfillLookups.instance.message(err);
+        if (msg != null && msg.isNotEmpty) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(msg)));
+        }
+      }
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      final msg = FulfillLookups.instance.errorText(e) ?? '';
+      if (msg.isNotEmpty) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(msg)));
+      }
+    } finally {
+      if (mounted) setState(() => _reminding.remove(supplier));
+    }
+  }
+
   // #349 relative time — CHANGE #548: the 'just now'/'Xm ago'/'Xh ago'/'Xd ago'
   // ladder is DELETED from Dart. ist_fmt('relative') owns it; this returns ''
   // until the label lands and the caller already renders nothing for ''.
@@ -14291,10 +14781,32 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                 final hasNudge = items.any((d) => d.nudgePending);
                 final reminderAt = items.map((d) => d.lastReminderAt).where((s) => s != null).firstOrNull;
                 final relTime = _relTime(reminderAt);
+                // CHANGE #534 — the ageing block for THIS supplier, in the
+                // backend's own order (fw_get_disputes sorts disputes[] by
+                // waited_hours desc), so "first" is the longest silence.
+                final ages = items
+                    .map((d) => _disputeAges[d.disputeId])
+                    .whereType<DisputeAgeView>()
+                    .toList();
+                final ageChip = ages
+                    .map((a) => a.ageChip)
+                    .whereType<Map<String, dynamic>>()
+                    .firstOrNull;
+                final reminderView =
+                    ages.where((a) => a.hasShortReminder).firstOrNull;
+                final reminderLabel = ages
+                    .map((a) => a.reminderLabel)
+                    .where((t) => t.isNotEmpty)
+                    .firstOrNull;
+                final sending = _reminding.contains(supplier);
                 return Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Row(children: [
+                    Wrap(
+                      spacing: Ds.space.x8,
+                      runSpacing: Ds.space.x8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
                       if (canonicalLink.isNotEmpty) ...[
                         OutlinedButton.icon(
                           key: sendKey,
@@ -14314,7 +14826,6 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                               style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                         ),
                         if (hasNudge) ...[
-                          const SizedBox(width: 8),
                           Builder(builder: (_) {
                             RenderLog.write('c349_nudge', 'pending=y');
                             RenderLog.write('c352_nudge', 'p=1');
@@ -14336,7 +14847,62 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                           }),
                         ],
                       ],
+                      // CHANGE #534 gap 37 — the age chip, beside the nudge
+                      // chip. Label and both colours are fw_get_disputes'
+                      // age_chip, verbatim; c529Hex only turns '#RRGGBB' into
+                      // a Color and falls back rather than inventing a hue.
+                      if (ageChip != null) Builder(builder: (_) {
+                        RenderLog.write('c534_age_chip', 'supplier=$supplier');
+                        return Container(
+                          padding: EdgeInsets.symmetric(
+                              horizontal: Ds.space.x8, vertical: Ds.space.x4),
+                          decoration: BoxDecoration(
+                            color: c529Hex(ageChip['bg'], Ds.c.infoSoft),
+                            borderRadius: Ds.r.rChip,
+                          ),
+                          child: Text(
+                            (ageChip['label'] ?? '').toString(),
+                            style: Ds.t.caption.copyWith(
+                                color: c529Hex(ageChip['fg'], Ds.c.info),
+                                fontWeight: FontWeight.w600),
+                          ),
+                        );
+                      }),
+                      // CHANGE #534 gap 36 — the short-supply reminder. It
+                      // exists ONLY because a dispute carried the backend's
+                      // `short_reminder` action, and its caption is that
+                      // action's own label.
+                      if (reminderView != null) Builder(builder: (_) {
+                        RenderLog.write('c534_short_reminder_btn',
+                            'supplier=$supplier');
+                        return OutlinedButton(
+                          onPressed:
+                              sending ? null : () => _sendShortReminder(supplier),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Ds.c.brand,
+                            side: BorderSide(color: Ds.c.brand),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: Ds.r.rButton),
+                            padding: EdgeInsets.symmetric(
+                                horizontal: Ds.space.x12, vertical: Ds.space.x8),
+                            minimumSize: Size(0, Ds.touch.minTarget),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          child: Text(
+                            reminderView.shortReminderLabel,
+                            style: Ds.t.caption.copyWith(
+                                color: Ds.c.brand, fontWeight: FontWeight.w600),
+                          ),
+                        );
+                      }),
                     ]),
+                    // CHANGE #534 — the backend's own reminder sentence
+                    // ("Not reminded yet" / "Reminded once, 3h ago"), printed
+                    // under the chip row verbatim.
+                    if (reminderLabel != null) ...[
+                      SizedBox(height: Ds.space.x4),
+                      Text(reminderLabel, style: Ds.t.caption),
+                    ],
                     if (relTime.isNotEmpty) ...[
                       const SizedBox(height: 4),
                       Text(FulfillLookups.instance.uiFill('reminded_rel', {'when': relTime}),

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../utils/render_log.dart';
+import 'live_feed.dart';
 
 /// #416: sentinel proving the Bags/Disputes tabs are driven by Supabase
 /// Realtime postgres_changes, not a polling timer.
@@ -22,6 +23,14 @@ class FulfillRealtime {
   FulfillRealtime._();
   static final FulfillRealtime instance = FulfillRealtime._();
 
+  // CHANGE #643: this list is now what the Fulfill area CARES about, not what
+  // it opens a channel on. LiveFeed asks realtime_plan() which of these the
+  // backend still publishes; the rest arrive on the backend's own poll
+  // interval. That removes the older hazard this list was written around —
+  // naming an unpublished table here used to risk a binding rejection that
+  // errored the WHOLE channel, so every table stopped delivering — because the
+  // plan, not this file, decides what is bound.
+  //
   // C356: ONLY tables that are actually in the `supabase_realtime` publication
   // (verified via pg_publication_tables). Subscribing to an UNPUBLISHED table
   // risks a server-side binding rejection that can error the WHOLE channel — after
@@ -57,10 +66,9 @@ class FulfillRealtime {
   ];
 
   final Set<void Function(Set<String> changedTables)> _listeners = {};
-  RealtimeChannel? _channel;
-  Timer? _debounce;
+  LiveFeedHandle? _handle;
+  bool _watchPending = false;
   Timer? _retry;
-  final Set<String> _pending = {};
   int _backoffIdx = 0;
   static const _backoffSecs = [1, 2, 5, 10, 30];
   bool _up = false;
@@ -81,7 +89,7 @@ class FulfillRealtime {
   void onAuthActive(String? token) {
     _sessionActive = true;
     _applyAuth(token);
-    if (_channel == null) _subscribe();
+    if (_handle == null) _subscribe();
   }
 
   /// C355: called on sign-out — drop the socket and stop keeping it warm.
@@ -113,7 +121,7 @@ class FulfillRealtime {
   /// Created when a Fulfill tab mounts…
   void addListener(void Function(Set<String>) l) {
     _listeners.add(l);
-    if (_channel == null) _subscribe();
+    if (_handle == null) _subscribe();
   }
 
   /// …torn down when none is mounted AND no app-level session is keeping it warm.
@@ -124,60 +132,53 @@ class FulfillRealtime {
 
   void _subscribe() {
     if (_listeners.isEmpty && !_sessionActive) return;
-    try {
-      var ch = Supabase.instance.client.channel('fulfill_rt_c353');
-      for (final t in tables) {
-        ch = ch.onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: t,
-          callback: (_) => _onEvent(t),
-        );
+    if (_watchPending) return;
+    _watchPending = true;
+    // CHANGE #643: the transport is the backend's call. LiveFeed opens a
+    // postgres_changes binding for the tables realtime_plan() still marks live
+    // and puts the rest on the interval the plan names — one code path, and the
+    // Fulfill screen cannot tell (or need to tell) which one delivered.
+    LiveFeed.instance
+        .watch(
+          channelPrefix: 'fulfill_rt_c353',
+          tables: tables,
+          onChange: (changed) {
+            // C355: a change ARRIVED (local OR from another device). This
+            // firing on device B is the proof cross-device delivery works — it
+            // is the exact key to grep after the manual two-device test.
+            RenderLog.write('c355_rt_remote', 'tbl=${changed.join("+")}');
+            RenderLog.write('c353_rt_event', 'tbl=${changed.join("+")}');
+            _notify(changed);
+          },
+        )
+        .then((h) {
+      _watchPending = false;
+      if (_listeners.isEmpty && !_sessionActive) {
+        h.dispose();
+        return;
       }
-      ch.subscribe((status, [error]) {
-        if (status == RealtimeSubscribeStatus.subscribed) {
-          _backoffIdx = 0;
-          final reconnect = _hadFirstUp && !_up;
-          _up = true;
-          if (!_readyLogged) {
-            _readyLogged = true;
-            RenderLog.write('c353_ready', 'rt=v1');
-          }
-          RenderLog.write('c353_rt_state', 's=up');
-          RenderLog.write('c355_rt_sub', 'tables=${tables.length}');
-          RenderLog.write(kC416, 'subscribed:tables=${tables.length}');
-          if (reconnect) {
-            // One full refetch after re-subscribe — events may have been missed.
-            _notify({...tables});
-          }
-          _hadFirstUp = true;
-        } else if (status == RealtimeSubscribeStatus.closed ||
-            status == RealtimeSubscribeStatus.channelError ||
-            status == RealtimeSubscribeStatus.timedOut) {
-          if (_up) RenderLog.write('c353_rt_state', 's=down');
-          _up = false;
-          _scheduleRetry();
-        }
-      });
-      _channel = ch;
-    } catch (_) {
+      _handle?.dispose();
+      _handle = h;
+      _backoffIdx = 0;
+      final reconnect = _hadFirstUp && !_up;
+      _up = true;
+      if (!_readyLogged) {
+        _readyLogged = true;
+        RenderLog.write('c353_ready', 'rt=v1');
+      }
+      RenderLog.write('c353_rt_state', 's=up');
+      RenderLog.write('c355_rt_sub', 'tables=${tables.length}');
+      RenderLog.write(kC416, 'subscribed:tables=${tables.length}');
+      if (reconnect) {
+        // One full refetch after re-subscribe — events may have been missed.
+        _notify({...tables});
+      }
+      _hadFirstUp = true;
+    }).catchError((Object _) {
+      _watchPending = false;
+      if (_up) RenderLog.write('c353_rt_state', 's=down');
+      _up = false;
       _scheduleRetry();
-    }
-  }
-
-  void _onEvent(String table) {
-    // C355: a change event ARRIVED (local OR from another device). This firing on
-    // device B is the proof that cross-device delivery works — it is the exact key
-    // to grep after the manual two-device test.
-    RenderLog.write('c355_rt_remote', 'tbl=$table');
-    _pending.add(table);
-    _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 400), () {
-      final changed = {..._pending};
-      _pending.clear();
-      // Throttled: max 1 log per debounce window.
-      RenderLog.write('c353_rt_event', 'tbl=${changed.join("+")}');
-      _notify(changed);
     });
   }
 
@@ -201,20 +202,14 @@ class FulfillRealtime {
   }
 
   void _removeChannel() {
-    final ch = _channel;
-    _channel = null;
-    if (ch != null) {
-      try { ch.unsubscribe(); } catch (_) {}
-      try { Supabase.instance.client.removeChannel(ch); } catch (_) {}
-    }
+    final h = _handle;
+    _handle = null;
+    h?.dispose();
   }
 
   void _teardown() {
-    _debounce?.cancel();
-    _debounce = null;
     _retry?.cancel();
     _retry = null;
-    _pending.clear();
     _up = false;
     _removeChannel();
   }

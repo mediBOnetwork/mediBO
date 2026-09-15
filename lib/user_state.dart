@@ -10,8 +10,11 @@ import 'services/delivery_role_state.dart'; // C629: is this login a delivery ac
 import 'services/force_logout_guard.dart'; // WhatsApp "Log Out" -> instant local sign-out
 import 'services/force_logout_realtime.dart'; // WhatsApp "Log Out" -> live INSERT -> instant sign-out
 import 'services/fulfill_realtime.dart'; // C355: app-level realtime auth + subscription
+import 'services/access.dart';
 import 'services/map_config.dart'; // C634: one backend-owned map config, session-cached
+import 'services/customer_surfaces.dart'; // C745: the customer menu's device cache
 import 'utils/render_log.dart';
+import 'services/registration_payload.dart';
 
 /// CHANGE #571 — ONE question, ONE answer.
 ///
@@ -54,6 +57,14 @@ class AuthNotifier extends ChangeNotifier {
   bool get isAdmin => _session.isAdmin;
   bool get isSuperAdmin => _session.isSuperAdmin;
   bool get isSupplier => _session.isSupplier;
+
+  /// CHANGE #326 — a zone-locked fulfilment partner. `get_my_role()` says
+  /// 'admin' for a partner (so the fulfilment RPCs authorise); `my_partner_id()`
+  /// being non-null is what my_session() turns into this boolean, and it is the
+  /// ONLY thing that separates a partner from a real admin in the UI.
+  bool get isPartner => _session.isPartner;
+  String get partnerId => _session.partnerId;
+  String get partnerZoneLabel => _session.partnerZoneLabel;
   String get supplierName => _session.supplierName;
   String get supplierId => _session.supplierId;
   String get supplierStatus => _session.supplierStatus;
@@ -74,6 +85,10 @@ class AuthNotifier extends ChangeNotifier {
   /// Display name with the backend's own fallback ('My Account'), so no Dart
   /// string is invented when a name is missing.
   String get headerTitle => _session.headerTitle;
+
+  /// CMD #1947 — the backend's short staff name and the full login address.
+  String get headerShort => _session.headerShort;
+  String get headerEmail => _session.headerEmail;
   String get displayName => _session.displayName;
   String get statusLabel => _session.statusLabel;
 
@@ -485,6 +500,15 @@ class AuthNotifier extends ChangeNotifier {
     // it with the rest of the account state so the next login re-reads it
     // rather than rendering on the previous session's provider/key.
     MapConfigService.clear();
+    // CHANGE #653: the per-feature View/Write matrix belongs to the credential
+    // that just went away. The next login must never render through the
+    // previous login's toggles.
+    Access.instance.clear();
+    // CHANGE #745 (QA round 2): the customer's menu is cached ON THE DEVICE so
+    // a failed refresh cannot empty the Account group. That cache is account
+    // data — a code, a payment term, a points balance, a referral code — so it
+    // goes out with everything else here, not on the next successful fetch.
+    unawaited(CustomerSurfaces.clear());
     RenderLog.write('auth_email', 'signed_out');
     RenderLog.write('auth_role', 'none');
   }
@@ -511,6 +535,12 @@ class AuthNotifier extends ChangeNotifier {
 
       _session = next;
       RenderLog.write('auth_role', next.role);
+
+      // CMD #2059 — the registration surface is cached PER ROLE, and this is
+      // the one place a role is known. Warming it here (never awaited) is what
+      // lets /complete-registration open already rendered.
+      RegistrationSurface.role = next.role.isEmpty ? 'customer' : next.role;
+      RegistrationSurface.warm().ignore();
       RenderLog.write('c571_surface', next.surfaceName);
       RenderLog.write('c571_can_order', next.canPlaceOrder.toString());
       RenderLog.write('c571_gate_reason', next.orderGate.reason);
@@ -525,6 +555,13 @@ class AuthNotifier extends ChangeNotifier {
       // it by the time a user can tap. NOT awaited and never allowed to throw:
       // a map config must never sit in front of first paint (BOOT RESILIENCE).
       MapConfigService.load().ignore();
+
+      // CHANGE #653 — ONE interface for super admin, admin and partner. The
+      // per-feature View/Write matrix is fetched here, in the one place a
+      // session is resolved, so nav, routes, deep links and action buttons all
+      // read the same answer. Not awaited and never allowed to throw: the
+      // backend enforces every RPC itself, so a slow matrix delays nothing.
+      unawaited(Access.instance.load());
 
       // CHANGE #629 — "is this login a delivery account?" is asked here, in the
       // ONE place a session is fetched, so every path that resolves a session
@@ -550,6 +587,46 @@ class AuthNotifier extends ChangeNotifier {
   /// stuck showing "couldn't load" with no way forward.
   Future<void> retryLoadProfile() async {
     await _loadSession();
+    notifyListeners();
+  }
+
+  /// CHANGE #326 — re-ask the ONE question on foreground resume.
+  ///
+  /// my_session() was fetched exactly once per auth event, so a role granted or
+  /// revoked server-side while the app was open never reached the device: an
+  /// account made a partner mid-session kept rendering the customer storefront
+  /// until it was reinstalled. The realtime refetch next to this one is keyed to
+  /// `pharmacy_profiles` by ACCOUNT id, and a partner has no account row — so it
+  /// never fires for exactly the login that needs it most.
+  ///
+  /// Debounced to one cheap call per 20 s, the same budget [checkForcedLogout]
+  /// runs on, and it never blocks paint: on failure `_loadSession` keeps the
+  /// session it already had.
+  /// CMD #2059 — an immediate re-read, with no debounce in front of it.
+  ///
+  /// Used when the app KNOWS the answer just changed (the registration sheet
+  /// was submitted from the cart): the order gate must reopen on this frame,
+  /// not on the next 20-second tick.
+  Future<void> refreshSession() async {
+    if (!isAuthenticated) return;
+    _lastSessionRefresh = DateTime.now();
+    await _loadSession();
+    notifyListeners();
+  }
+
+  DateTime _lastSessionRefresh = DateTime.fromMillisecondsSinceEpoch(0);
+  Future<void> refreshSessionIfStale() async {
+    if (!isAuthenticated) return;
+    final now = DateTime.now();
+    if (now.difference(_lastSessionRefresh) < const Duration(seconds: 20)) {
+      return;
+    }
+    _lastSessionRefresh = now;
+    final before = _session.surfaceName;
+    await _loadSession();
+    if (_session.surfaceName != before) {
+      RenderLog.write('c326_surface_changed', '$before>${_session.surfaceName}');
+    }
     notifyListeners();
   }
 

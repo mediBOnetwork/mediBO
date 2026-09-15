@@ -2,14 +2,12 @@
 // Loads supplier_my_disputes RPC; renders DisputeCard list; responds via supplier_respond_dispute.
 
 import 'package:flutter/material.dart';
+import '../design_tokens.dart';
 import '../screens/admin/dispute/dispute_models.dart';
 import '../services/ui_copy.dart';
 import '../utils/render_log.dart';
 import '../utils/toast.dart';
 import '../widgets/dispute_card.dart';
-
-const _kGreen = Color(0xFF1B7A43);
-const _kSub   = Color(0xFF6B7280);
 
 class SupplierDisputesPage extends StatefulWidget {
   // View-As support: supply non-null to act as that supplier name.
@@ -111,32 +109,33 @@ class _SupplierDisputesPageState extends State<SupplierDisputesPage> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
+      return Center(
+          child: CircularProgressIndicator(color: Ds.c.brand, strokeWidth: 2));
     }
     if (_error != null) {
       final noSup = _error == 'no_supplier';
       return Center(
         child: Padding(
-          padding: const EdgeInsets.all(32),
+          padding: EdgeInsets.all(Ds.space.x32),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Icon(noSup ? Icons.store_outlined : Icons.wifi_off_rounded, size: 48, color: _kSub),
-            const SizedBox(height: 12),
+            Icon(noSup ? Icons.store_outlined : Icons.wifi_off_rounded,
+                size: 48, color: Ds.c.textSecondary),
+            SizedBox(height: Ds.space.x12),
             Text(
               noSup
                   ? c('supplier_disputes_page.no_supplier')
                   : c('supplier_disputes_page.load_failed'),
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _kSub),
+              style: Ds.t.subtitle.copyWith(color: Ds.c.textSecondary),
             ),
             if (!noSup) ...[
-              const SizedBox(height: 8),
-              Text(_error!, style: const TextStyle(fontSize: 12, color: _kSub),
-                  textAlign: TextAlign.center),
-              const SizedBox(height: 16),
+              SizedBox(height: Ds.space.x8),
+              Text(_error!, style: Ds.t.caption, textAlign: TextAlign.center),
+              SizedBox(height: Ds.space.x16),
               FilledButton.icon(
                 onPressed: _load,
                 style: FilledButton.styleFrom(
-                  backgroundColor: _kGreen,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  backgroundColor: Ds.c.brand,
+                  shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
                 ),
                 icon: const Icon(Icons.refresh_rounded, size: 16),
                 label: Text(c('supplier_disputes_page.retry')),
@@ -149,11 +148,11 @@ class _SupplierDisputesPageState extends State<SupplierDisputesPage> {
     if (_disputes.isEmpty) {
       return Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.check_circle_outline_rounded, size: 48, color: _kGreen),
-          const SizedBox(height: 12),
+          Icon(Icons.check_circle_outline_rounded, size: 48, color: Ds.c.brand),
+          SizedBox(height: Ds.space.x12),
           Text(c('supplier_disputes_page.empty'),
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _kSub)),
-          const SizedBox(height: 16),
+              style: Ds.t.subtitle.copyWith(color: Ds.c.textSecondary)),
+          SizedBox(height: Ds.space.x16),
           TextButton.icon(
             onPressed: _load,
             icon: const Icon(Icons.refresh_rounded, size: 16),
@@ -174,31 +173,34 @@ class _SupplierDisputesPageState extends State<SupplierDisputesPage> {
 
     return RefreshIndicator(
       onRefresh: _load,
-      color: _kGreen,
+      color: Ds.c.brand,
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 640),
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+            padding: EdgeInsets.fromLTRB(
+                Ds.space.x16, Ds.space.x16, Ds.space.x16, Ds.space.x32),
             children: [
               // View-As banner
               if (_acting) ...[
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: EdgeInsets.symmetric(
+                      horizontal: Ds.space.x12, vertical: Ds.space.x8),
+                  margin: EdgeInsets.only(bottom: Ds.space.x12),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFEF3C7),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xFFFBBF24)),
+                    color: Ds.c.warningSoft,
+                    borderRadius: Ds.r.rButton,
+                    border: Border.all(color: Ds.c.warning),
                   ),
                   child: Row(children: [
-                    const Icon(Icons.admin_panel_settings_outlined,
-                        size: 16, color: Color(0xFF92400E)),
-                    const SizedBox(width: 8),
+                    Icon(Icons.admin_panel_settings_outlined,
+                        size: 16, color: Ds.c.warning),
+                    SizedBox(width: Ds.space.x8),
                     Expanded(
                       child: Text(cf('supplier_disputes_page.viewing_as_admin', {'a': _supplierName}),
-                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
-                              color: Color(0xFF92400E))),
+                          style: Ds.t.caption.copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: Ds.c.warning)),
                     ),
                   ]),
                 ),
@@ -208,7 +210,7 @@ class _SupplierDisputesPageState extends State<SupplierDisputesPage> {
               ...rows.map((agg) {
                 final busy = agg.allActiveDisputeIds.any((id) => _responding[id] == true);
                 return Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
+                  padding: EdgeInsets.only(bottom: Ds.space.x8),
                   child: DisputeCard(
                     item: agg.representative,
                     agg: agg,

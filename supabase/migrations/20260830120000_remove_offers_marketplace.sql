@@ -1,0 +1,137 @@
+-- dev-queue #308 — REMOVE THE OFFERS MARKETPLACE ENTIRELY.
+--
+-- The supplier-self-list Offers marketplace (#177/#178/#179/#223) never sold
+-- anything and its machinery had grown into the core purchase flow. All six
+-- listing tables were empty and cart_items/order_items.offer_listing_id had
+-- zero non-null values, so nothing live depended on it.
+--
+-- Everything this migration removes is archived, verbatim and reversible, at
+--   backup/offers-removal-308/offer_tables_schema_and_data.sql   (schema + data)
+--   backup/offers-removal-308/offer_functions_dropped.sql        (32 defs)
+--   backup/offers-removal-308/offer_rows_removed.sql             (copy rows)
+--   backup/offers-removal-308/core_functions_before.sql          (pre-edit core)
+--
+-- Idempotent throughout: every statement is IF EXISTS / IF NOT EXISTS.
+
+begin;
+set local lock_timeout = '20s';
+
+-- ── 1. triggers that hang off core tables ───────────────────────────────────
+-- _vcm_short_dated_check sat on voice_clip_mentions, i.e. on the voice counting
+-- path; trg_c305_offer_expiry_wake woke a cron task for a table with no rows.
+-- Guarded rather than a bare DROP TRIGGER IF EXISTS, for two reasons a replay
+-- hits immediately: (a) two of these hang off tables this same migration drops
+-- below, so on a second run the relation is gone and the bare form errors; and
+-- (b) DROP TRIGGER takes ACCESS EXCLUSIVE, so on voice_clip_mentions — a hot
+-- table on the voice counting path — a no-op replay would queue behind live
+-- traffic and deadlock inside this transaction (observed 2026-08-30). Checking
+-- pg_trigger first means a replay takes no lock at all.
+do $$
+declare r record;
+begin
+  for r in
+    select c.relname as tbl, t.tgname as trg
+      from pg_trigger t
+      join pg_class c on c.oid = t.tgrelid
+      join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public'
+       and not t.tgisinternal
+       and t.tgname in ('vcm_short_dated_check',
+                        'trg_c305_offer_expiry_wake',
+                        'sdo_updated_at')
+  loop
+    execute format('drop trigger %I on public.%I', r.trg, r.tbl);
+  end loop;
+end $$;
+
+-- ── 2. the scheduled work (cron_task dispatcher rows, CHANGE #273) ──────────
+delete from public.cron_signal
+ where task in ('offer-reservation-sweep','offer-expiry-cron','offer-waitlist-notify');
+delete from public.cron_task
+ where name in ('offer-reservation-sweep','offer-expiry-cron','offer-waitlist-notify');
+
+-- ── 3. every offers function (31 named + the short_dated_offers touch trigger)
+drop function if exists public._offer_confirm_qty(p_listing_id bigint, p_qty numeric) cascade;
+drop function if exists public._offer_copy(p_key text, p_vars jsonb) cascade;
+drop function if exists public._offer_display_block(p_row supplier_offer_listings, p_customer uuid, p_matched boolean) cascade;
+drop function if exists public._offer_expiry_cron() cascade;
+drop function if exists public._offer_held_qty(p_listing_id bigint, p_exclude_customer uuid) cascade;
+drop function if exists public._offer_hold_minutes() cascade;
+drop function if exists public._offer_reservation_sweep() cascade;
+drop function if exists public._offer_waitlist_notify_cron() cascade;
+drop function if exists public._sdo_set_updated_at() cascade;
+drop function if exists public._vcm_short_dated_check() cascade;
+drop function if exists public.admin_offer_margin_set(p_margin_pct numeric) cascade;
+drop function if exists public.admin_offer_moderate(p_listing_id bigint, p_action text, p_note text, p_margin_pct numeric) cascade;
+drop function if exists public.admin_offers_list(p_status text, p_offset integer, p_limit integer) cascade;
+drop function if exists public.offer_add_to_cart(p_listing_id bigint, p_qty numeric, p_disclosure_seen boolean) cascade;
+drop function if exists public.offer_match_customers(p_listing_id bigint) cascade;
+drop function if exists public.offer_push_matched(p_listing_id bigint) cascade;
+drop function if exists public.offer_waitlist_join(p_listing_id bigint) cascade;
+drop function if exists public.offers_feed(p_zone_id smallint, p_offset integer, p_limit integer) cascade;
+drop function if exists public.short_dated_add_to_cart(p_offer_id uuid, p_qty numeric, p_disclosure_seen boolean) cascade;
+drop function if exists public.short_dated_config_get() cascade;
+drop function if exists public.short_dated_config_save(p_bands jsonb) cascade;
+drop function if exists public.short_dated_feed(p_zone_id integer) cascade;
+drop function if exists public.short_dated_offer_confirm(p_id uuid, p_discount_pct numeric, p_bulk_clear_extra_pct numeric, p_bulk_clear_min_qty numeric, p_admin_notes text) cascade;
+drop function if exists public.short_dated_offer_disable(p_id uuid) cascade;
+drop function if exists public.short_dated_offer_edit(p_id uuid, p_available_qty numeric, p_discount_pct numeric, p_bulk_clear_extra_pct numeric, p_bulk_clear_min_qty numeric, p_admin_notes text, p_zone_ids integer[]) cascade;
+drop function if exists public.short_dated_offer_list(p_status text, p_limit integer, p_offset integer) cascade;
+drop function if exists public.short_dated_push_wa(p_id uuid) cascade;
+drop function if exists public.short_dated_sweep() cascade;
+drop function if exists public.supplier_offer_create(p_product_id bigint, p_listing_type text, p_available_qty numeric, p_offer_ptr numeric, p_discount_pct numeric, p_net_price numeric, p_scheme_buy_qty numeric, p_scheme_free_qty numeric, p_batch_expiry_date date, p_min_order_qty numeric, p_end_date date) cascade;
+drop function if exists public.supplier_offer_update(p_id bigint, p_available_qty numeric, p_offer_ptr numeric, p_discount_pct numeric, p_net_price numeric, p_min_order_qty numeric, p_end_date date, p_status text) cascade;
+drop function if exists public.supplier_offers_mine(p_status text, p_offset integer, p_limit integer) cascade;
+drop function if exists public.trg_cron_wake_offer_expiry() cascade;
+
+-- ── 4. the offer columns on the core cart/order tables (both all-NULL) ──────
+alter table public.cart_items  drop column if exists offer_listing_id;
+alter table public.order_items drop column if exists offer_listing_id;
+
+-- ── 5. the tables ───────────────────────────────────────────────────────────
+drop table if exists public.offer_near_expiry_disclosures cascade;
+drop table if exists public.offer_push_log                cascade;
+drop table if exists public.offer_reservations            cascade;
+drop table if exists public.offer_waitlist                cascade;
+drop table if exists public.short_dated_offers            cascade;
+drop table if exists public.supplier_offer_listings       cascade;
+-- short_dated_config held only the three seeded discount bands of the removed
+-- feature (no business data); its only readers were short_dated_config_get/save.
+drop table if exists public.short_dated_config            cascade;
+
+-- ── 6. the home-feed section the marketplace fed (already inactive) ─────────
+delete from public.storefront_home_section where id = 'short_dated_deals';
+
+-- ── 7. the copy. offer_chip_label is KEPT on purpose: it names the generic
+--      "Scheme available" badge that _sf_cards still emits from MEDICINE
+--      .has_scheme, which has nothing to do with the marketplace.
+delete from public.ui_copy
+ where (key ~* 'offer|short_dated') and key <> 'offer_chip_label';
+delete from public.storefront_ui_label
+ where (key ~* 'offer|short_dated') and key <> 'offer_chip_label';
+
+
+-- ── 8. re-assert the offers-free _oa_release_and_cancel (idempotent) ────────
+-- Guard against a concurrent worker CREATE OR REPLACEing the offer branch back
+-- in: on 2026-08-30 another command re-added it wrapped in a to_regclass check.
+-- The table is gone for good, so the branch is dead code either way.
+create or replace function public._oa_release_and_cancel(p_order_id uuid, p_reason text, p_by text)
+ returns void
+ language plpgsql
+ security definer
+ set search_path to 'public'
+as $function$
+begin
+  -- #308: the reservation-release step that used to sit here died with the
+  -- Offers marketplace. Do not re-add it, guarded or otherwise — the table it
+  -- touched no longer exists and cancelling an order is a pure orders write.
+  update public.orders
+     set status        = 'cancelled',
+         closed_at     = coalesce(closed_at, now()),
+         closed_by     = coalesce(closed_by, p_by),
+         closed_reason = coalesce(closed_reason, p_reason),
+         close_mode    = coalesce(close_mode, 'order_alert')
+   where id = p_order_id;
+end $function$;
+
+commit;

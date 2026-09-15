@@ -67,9 +67,57 @@ class RenderLog {
     // Don't flush to Supabase on reset — wait for new writes
   }
 
+  /// CHANGE #638 — the one hook a session recording needs. A screen that
+  /// reports itself here is a screen a recorded walkthrough can replay, so the
+  /// recorder listens instead of guessing at route names. Null in every build
+  /// where nothing is recording, which is every build until Om taps Record.
+  static void Function(String key, dynamic value)? onWrite;
+
   static void write(String key, dynamic value) {
     if (_log[key] == value) return; // skip if unchanged
     _log[key] = value;
+    final hook = onWrite;
+    if (hook != null) {
+      try {
+        hook(key, value);
+      } catch (_) {
+        // A recorder must never be able to break the screen it is watching.
+      }
+    }
+    _writeToDOM();
+    _scheduleSupabaseFlush(_log['build'] as String?);
+  }
+
+  /// CMD #1950 — MOBILE-FIRST: the app reports its own overflow.
+  ///
+  /// Flutter web paints to canvas, so no browser tool can measure a clipped
+  /// row or a RenderFlex that ran off the right edge — but the framework
+  /// already knows, and says so through FlutterError. main.dart routes those
+  /// here, so the post-deploy responsive sweep can load every top screen at
+  /// 320/360/412/480 px and read a NUMBER out of the render log instead of
+  /// guessing from pixels.
+  ///
+  /// `overflow_errors` is the count the sweep asserts is 0. `overflow_first`
+  /// keeps the first message (trimmed) so a red sweep names the widget, and
+  /// `overflow_at_w` the viewport width it happened at.
+  static void noteOverflow(String message, {int? viewportWidth}) {
+    final n = ((_log['overflow_errors'] as int?) ?? 0) + 1;
+    _log['overflow_errors'] = n;
+    if (_log['overflow_first'] == null) {
+      _log['overflow_first'] =
+          message.length > 160 ? message.substring(0, 160) : message;
+      if (viewportWidth != null) _log['overflow_at_w'] = viewportWidth;
+    }
+    _writeToDOM();
+    _scheduleSupabaseFlush(_log['build'] as String?);
+  }
+
+  /// The viewport the sweep is currently looking at, so a red count can be
+  /// attributed to a width. Written by the app on every metrics change.
+  static void noteViewport(int width, int height) {
+    if (_log['viewport_w'] == width && _log['viewport_h'] == height) return;
+    _log['viewport_w'] = width;
+    _log['viewport_h'] = height;
     _writeToDOM();
     _scheduleSupabaseFlush(_log['build'] as String?);
   }
@@ -147,6 +195,12 @@ class RenderLog {
   // it is given rather than replacing the row, so a signed-out writer can never
   // wipe what a signed-in one recorded.
   static void _flushToSupabase(String? buildHash) {
+    // CHANGE #536 — the seam has to hold here too, not only on the debounced
+    // path. writeNow() calls this DIRECTLY, so a widget test rendering a
+    // writeNow caller reached Supabase from the VM even with flushEnabled
+    // false. It was survivable only because the throw lands in the catch
+    // below; in a test where Supabase IS initialised it would be a real write.
+    if (!flushEnabled) return;
     try {
       final data = Map<String, dynamic>.from(_log)..remove('build');
       Supabase.instance.client.rpc('render_log_note', params: {

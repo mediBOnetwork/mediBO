@@ -1,23 +1,36 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 
 import '../app_state.dart';
+import '../design_tokens.dart';
 import '../order_hours_state.dart';
 import '../inquiry_lock_state.dart';
 import '../utils/order_code.dart';
 import 'bulk_upload_screen.dart';
+import 'product_detail_screen.dart';
 import '../utils/render_log.dart';
 import '../models/cart_model.dart';
 import '../models/product.dart';
+import '../models/product_detail.dart' show PdCompanion;
+import '../design_tokens.dart';
 import '../theme.dart';
 import '../user_state.dart';
 import '../util.dart';
 import '../services/ui_copy.dart';
 import '../view_as_state.dart';
 import '../widgets/animations.dart';
+import '../widgets/cart_bill_summary.dart';
+import '../widgets/cart_wishlist_rail.dart';
+import '../widgets/checkout_pay_sheet.dart';
+import '../widgets/companion_rail.dart';
 import 'auth/login_screen.dart';
 import 'profile_screen.dart';
+import 'customer/my_account_screen.dart'; // CMD #1815 — the notice's action
+import '../services/idempotency.dart';
+import '../widgets/registration_sheet.dart';
 
 class CartScreen extends StatefulWidget {
   final VoidCallback? onOrderPlaced;
@@ -30,6 +43,12 @@ class CartScreen extends StatefulWidget {
 
 class _CartScreenState extends State<CartScreen> {
   bool _orderInProgress = false;
+
+  /// CHANGE #472 — the key for the order the buyer is currently committing to.
+  /// It is minted on the first attempt and REUSED by every retry, so the
+  /// server can tell a retry from a second order. `done()` is called only once
+  /// an order actually came back, which is what makes the next tap a new one.
+  final ActionSlot _placeKey = ActionSlot();
 
   // ── CHANGE #553 — cart availability, straight from cart_availability() ─────
   // Every string and colour below is rendered by the backend. The client
@@ -48,9 +67,17 @@ class _CartScreenState extends State<CartScreen> {
   String? _unresolvedNote;
   bool _stripping = false;
 
-  /// Product-id signature of the cart the last availability fetch covered —
-  /// a change means the cart moved and the verdicts need re-reading.
+  // CHANGE #175 — scheme data: free lines + savings + nudges
+  List<Map<String, dynamic>> _freeLines = [];
+  String _totalSavingsDisplay = '';
+  List<Map<String, dynamic>> _schemeNudges = [];
+
+  /// Product-id signature of the cart the last availability fetch covered.
   String? _availSignature;
+
+  /// CMD #2025 — cart_availability() is an OPEN-time read (and a Place-order
+  /// read). This flips on the first build so it fires exactly once per visit.
+  bool _availOpened = false;
 
   static String _signatureOf(List<CartLine> lines) {
     final ids = lines.map((l) => l.product.id).toList()..sort();
@@ -99,6 +126,28 @@ class _CartScreenState extends State<CartScreen> {
         _unresolvedNote = null;
       });
     }
+    _refreshSchemes();
+  }
+
+  Future<void> _refreshSchemes() async {
+    try {
+      final res = await Supabase.instance.client.rpc('cart_apply_schemes');
+      final nudgeRes = await Supabase.instance.client.rpc('cart_scheme_nudge');
+      if (!mounted) return;
+      final m = Map<String, dynamic>.from(res as Map);
+      final nm = Map<String, dynamic>.from(nudgeRes as Map);
+      setState(() {
+        _freeLines = ((m['free_lines'] as List?) ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+        _totalSavingsDisplay = (m['total_savings_display'] ?? '').toString();
+        _schemeNudges = ((nm['nudges'] as List?) ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+      });
+    } catch (_) {
+      // Scheme display is advisory — never block on failure.
+    }
   }
 
   /// Removes the unavailable lines server-side, then re-reads both the cart
@@ -136,6 +185,8 @@ class _CartScreenState extends State<CartScreen> {
     // CHANGE #456 D1 — call inquiry_lock_state() alongside order_hours_state()
     // on the cart/checkout screen.
     InquiryLockState.read(context).refresh();
+    // CHANGE #293 — the button word and the pay-at-checkout decision.
+    _fetchCheckoutAction();
   }
 
   // CHANGE #324/#435: ViewAs checkbox state — admin-added items checked, customer
@@ -147,6 +198,15 @@ class _CartScreenState extends State<CartScreen> {
   // those keep the user's choice across rebuilds; everything else re-derives from
   // added_by every time.
   final Set<String> _viewAsChecked = {};
+
+  // ── CMD #2014/#2047 — the bill summary card and the suggested rail ───────
+  // Both blocks arrive on the cart payload itself (cart_render().bill / .rail).
+  // #2014 fetched them with a second call, cart_bill_view(), and every one of
+  // that call's failure modes is silent — so the blocks were simply never on
+  // screen. There is no second request here any more, and therefore nothing
+  // left to swallow: if the cart rendered, the bill rendered with it.
+  //
+  // Nothing below is computed here — the screen holds no bill state at all.
 
   /// CHANGE #597 — the View As selected-line subtotal, computed AND formatted
   /// by cart_selected_total(). It used to be summed in build() from
@@ -210,8 +270,152 @@ class _CartScreenState extends State<CartScreen> {
     });
   }
 
+  // ── CHANGE #293 — which of the three placement paths am I on? ──────────
+  // checkout_action() answers it server-side: the collection mode, whether
+  // this session is an admin acting as a customer (never a client flag), and
+  // the button word itself. Empty until the backend has spoken — the old
+  // ui_copy label stands in until then, so a slow RPC never blanks the button.
+  Map<String, dynamic> _checkout = const <String, dynamic>{};
+
+  String get _placeOrderLabel =>
+      (_checkout['button_label'] ?? '').toString();
+
+  /// CHANGE #572 / CMD #1815 — the notice's (and now the chip's) inline action.
+  ///
+  /// `action` is a descriptor, not a route: the payload says there IS an
+  /// action, what it is called, and which screen, tab and section it is about.
+  /// Only the navigation is ours. An action kind this build has never heard of
+  /// opens nothing, in silence — the same forward-compat rule the home feed
+  /// follows for an unknown layout.
+  ///
+  /// #705 shipped '/account/kyc' as the route for this and no build ever had a
+  /// route by that name, so "Upload licence" opened nothing at all. The
+  /// descriptor names the registry key instead, and the customer lands on the
+  /// upload section itself.
+  Future<void> _openNoticeAction(Map<String, dynamic> action) async {
+    final kind = (action['kind'] ?? '').toString();
+    if (kind != 'customer_route' && kind != 'profile_edit') return;
+    final tab = (action['tab_key'] ?? 'profile').toString();
+    final section = (action['section'] ?? '').toString();
+    RenderLog.write('c1815_kyc_chip_action', '$tab/$section');
+    await Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) =>
+            MyAccountScreen(initialTab: tab, initialSection: section)));
+    if (!mounted) return;
+    // A document may now be on file, so the cart's chip has to be asked again.
+    await AppState.of(context).reloadFromServer();
+  }
+
+  Future<void> _fetchCheckoutAction() async {
+    try {
+      final raw = await Supabase.instance.client.rpc('checkout_action');
+      if (!mounted) return;
+      if (raw is Map) {
+        setState(() => _checkout = raw.cast<String, dynamic>());
+        RenderLog.write('c293_checkout_action',
+            'mode=${_checkout['collection_mode']};pay=${_checkout['pay_now']}');
+      }
+    } catch (_) {
+      // An absent payload is an absence: the button keeps its ui_copy label.
+    }
+  }
+
+  /// The gateway payment sheet for an order the CUSTOMER just placed for
+  /// themselves.
+  ///
+  /// CHANGE #304 — `razorpay-checkout-create` decides the branch server-side
+  /// (`rzp_pay_mode()`): a real customer paying on the phone in their hand gets
+  /// Razorpay Checkout, which opens PhonePe/GPay; a payer who is on a DIFFERENT
+  /// phone still gets the QR. Either way the call REUSES an open attempt, so
+  /// reopening this sheet never mints a second payable object for one order —
+  /// that is what "Resume payment" is.
+  Future<void> _showCheckoutQr(String orderId, String code, String amount) async {
+    final rzpCopy = await _fetchRazorpayCopy(orderId);
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (sheetCtx) => CheckoutPaySheet(
+        orderId: orderId,
+        checkout: _checkout,
+        razorpayCopy: rzpCopy,
+        orderCode: code,
+        amountDisplay: amount,
+        createPayment: (id) async {
+          final res = await Supabase.instance.client.functions.invoke(
+              'razorpay-checkout-create',
+              body: {'order_id': id, 'kind': 'advance'});
+          final d = res.data;
+          final m = d is Map ? d.cast<String, dynamic>() : <String, dynamic>{};
+          RenderLog.write('c304_checkout_create',
+              'mode=${m['pay_mode']};ok=${m['ok']};reused=${m['reused']}');
+          return m;
+        },
+        checkPaid: (id) async {
+          final d = await Supabase.instance.client.rpc('rzp_checkout_state',
+              params: {'p_order_id': id, 'p_kind': 'advance'});
+          return d is Map ? d.cast<String, dynamic>() : <String, dynamic>{};
+        },
+        openUrl: (url) async {
+          // externalApplication is what makes Android hand the UPI intent to
+          // PhonePe/GPay instead of burying checkout in a webview; on web it is
+          // a new tab. Never launched from inside the widget — see the sheet.
+          RenderLog.write('c304_checkout_open', 'launched');
+          return launchUrl(Uri.parse(url),
+              mode: LaunchMode.externalApplication, webOnlyWindowName: '_blank');
+        },
+        onDone: () => Navigator.of(sheetCtx).pop(),
+      ),
+    );
+  }
+
+  /// The sheet's loading / error / retry words, from the same block the My
+  /// Orders payment panel reads — one source, so the two sheets cannot drift.
+  Future<Map<String, dynamic>> _fetchRazorpayCopy(String orderId) async {
+    try {
+      final d = await Supabase.instance.client
+          .rpc('customer_order_payment_panel_v2', params: {'p_order_id': orderId});
+      if (d is Map) {
+        final upi = d['upi'];
+        if (upi is Map && upi['razorpay'] is Map) {
+          return (upi['razorpay'] as Map).cast<String, dynamic>();
+        }
+      }
+    } catch (_) {/* absence, not a default */}
+    return const <String, dynamic>{};
+  }
+
   Future<void> _placeOrder() async {
     if (_orderInProgress) return;
+
+    // CMD #2025 — the OTHER place cart_availability() runs. The taps no longer
+    // pay for it, so the verdicts are re-read once, here, immediately before
+    // the order is committed — which is the moment they actually decide
+    // something. A block found now stops the order and shows the backend's own
+    // blocking_label instead of placing an order that would be refused.
+    await _refreshAvailability(AppState.of(context).lines);
+    if (!mounted) return;
+    if (_blockingLabel != null) {
+      RenderLog.write('c2025_place_blocked', _blockingLabel!);
+      return;
+    }
+
+    // CHANGE #309 (5) — the backend already said this address is outside the
+    // delivery area. Refused here with the backend's own words, before the
+    // order exists, so nothing has to be cancelled afterwards.
+    if (_checkout['can_order'] == false) {
+      final srv = _checkout['serviceability'] is Map
+          ? Map<String, dynamic>.from(_checkout['serviceability'] as Map)
+          : const <String, dynamic>{};
+      RenderLog.write('c309_checkout_blocked', srv['pincode']?.toString() ?? '');
+      _showOrderGate(
+        title: srv['title']?.toString() ?? '',
+        message: srv['message']?.toString() ?? '',
+      );
+      return;
+    }
 
     final cart = AppState.of(context);
     final viewAs = ViewAsState.of(context);
@@ -378,6 +582,20 @@ class _CartScreenState extends State<CartScreen> {
     final gate = auth.orderGate;
     if (gate.hasBlocker) {
       RenderLog.write('order_blocked', gate.reason);
+      // CMD #2059 — ordering is the one thing registration gates, and the
+      // BACKEND says how that gate is answered. 'registration_sheet' opens the
+      // form over this cart; saving it closes the sheet and leaves the buyer
+      // exactly where they were, with the basket still on screen.
+      if (gate.actionKind == 'registration_sheet') {
+        final saved = await showRegistrationSheet(context);
+        if (!mounted) return;
+        if (saved) {
+          await auth.refreshSession();
+          if (!mounted) return;
+          setState(() {});
+        }
+        return;
+      }
       _showOrderGate(
         title: gate.title,
         message: gate.message,
@@ -435,7 +653,14 @@ class _CartScreenState extends State<CartScreen> {
       // Now the server reads its own cart, prices it, totals it, resolves the
       // account's address, stamps customer_id, and empties the cart itself.
       // The response is render-ready; nothing below formats anything.
-      final raw = await Supabase.instance.client.rpc('place_order_v2');
+      // CHANGE #472 — ONE key per order the buyer committed to. Placing used
+      // to be unkeyed: a double tap made two orders, and a retry after a
+      // timeout on a request that had actually committed found the cart empty
+      // and showed 'empty_cart' for an order that exists. The key is minted
+      // when the buyer confirms and reused for every retry, so the server
+      // hands back the first order instead of creating a second.
+      final raw = await Supabase.instance.client
+          .rpc('place_order_v2', params: {'p_client_action_id': _placeKey.key});
       final res = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
       if (res is! Map) throw StateError('place_order_v2 returned no payload');
       final placed = res.cast<String, dynamic>();
@@ -457,6 +682,19 @@ class _CartScreenState extends State<CartScreen> {
         return;
       }
 
+      // CHANGE #461/#170 — a basket holding prescription stock is refused when
+      // the pharmacy has no valid drug licence on file and the gate is set to
+      // 'block'. The backend's own title and message are shown verbatim; this
+      // file words nothing and never decides what "valid" means.
+      if (placed['error'] == 'rx_licence_required') {
+        RenderLog.write('c461_order_blocked_rx', '1');
+        await cart.refresh();
+        if (!mounted) return;
+        final rxMsg = (placed['message'] ?? '').toString();
+        if (rxMsg.isNotEmpty) showToast(context, rxMsg, isError: true);
+        return;
+      }
+
       final displayCode = (placed['order_code'] ?? '').toString();
       final amountDisplay = (placed['amount_display'] ?? '').toString();
 
@@ -467,6 +705,27 @@ class _CartScreenState extends State<CartScreen> {
       cart.refresh();
       cart.fetchOrders(); // refresh order list from Supabase (fire and forget)
 
+      // CHANGE #293 — "Pay & Place Order": in Payment Gateway mode a customer
+      // paying for their OWN order sees the QR immediately and the sheet flips
+      // itself when the webhook confirms. The decision is the backend's
+      // (checkout_action().pay_now), never a client guess about roles.
+      final orderId = (placed['id'] ?? '').toString();
+      // The order exists, so this intent is finished: the next Place Order is
+      // a genuinely different action and gets a key of its own.
+      _placeKey.done();
+      if (_checkout['pay_now'] == true && orderId.isNotEmpty) {
+        RenderLog.write('c293_checkout_pay_now', 1);
+        await _showCheckoutQr(orderId, displayCode, amountDisplay);
+        if (!mounted) return;
+        widget.onOrderPlaced?.call();
+        return;
+      }
+
+      // Acting-as in gateway mode: the server already pushed the QR to the
+      // customer on WhatsApp. Its sentence, printed verbatim.
+      final actingNote = (_checkout['actingas_note'] ?? '').toString();
+      if (actingNote.isNotEmpty) showToast(context, actingNote);
+
       showDialog(
         context: context,
         barrierDismissible: false,
@@ -474,6 +733,9 @@ class _CartScreenState extends State<CartScreen> {
           orderNumber: displayCode,
           // #571 — the backend formats the money. No rupees() in Dart here.
           amount: amountDisplay,
+          // CMD #1848 — both keys exist only on a test-session order.
+          testBadge: (placed['test_badge'] ?? '').toString(),
+          testNote: (placed['test_note'] ?? '').toString(),
           onDone: () {
             Navigator.of(context).pop();
             widget.onOrderPlaced?.call();
@@ -493,7 +755,16 @@ class _CartScreenState extends State<CartScreen> {
       // this normal-flow catch only ever needs to handle order_hours_closed.
       final isOrderHoursClosed =
           e.message.contains('order_hours_closed') || (e.code ?? '').contains('order_hours_closed');
-      if (isOrderHoursClosed) {
+      // CMD #1848 — a test order from a login that is not inside a live test
+      // session is refused by enforce_order_approval with its OWN reason
+      // (test_mode.needs_session), never account_pending_approval. The copy
+      // shown is that key's ui_copy sentence — this file words nothing.
+      final needsSession = e.message.contains('test_mode.needs_session') ||
+          (e.hint ?? '').isNotEmpty && e.message.contains('needs_session');
+      if (needsSession) {
+        RenderLog.write('c1848_needs_session', 'true');
+        showToast(context, c('test_mode.needs_session'), isError: true);
+      } else if (isOrderHoursClosed) {
         RenderLog.write('c444_cust_blocked', 'true');
         final oh = OrderHoursState.read(context);
         await oh.refresh();
@@ -575,15 +846,27 @@ class _CartScreenState extends State<CartScreen> {
   Widget build(BuildContext context) {
     final cart = AppState.of(context);
 
-    // CHANGE #553 — re-read cart_availability() whenever the set of products
-    // in the cart changes (first load, add, remove, strip). _refreshAvailability
-    // claims the signature immediately, so this fires once per real change.
-    if (_signatureOf(cart.lines) != _availSignature) {
+    // CMD #2025 — cart_availability() runs ON OPEN and before Place order, and
+    // nowhere else. It used to re-run on every change to the set of products,
+    // which put a second 0.9 s round trip behind a tap that had already paid
+    // for a full cart_render(). The verdicts it produces gate ORDERING, and
+    // ordering is exactly where they are re-read.
+    if (!_availOpened) {
+      _availOpened = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        final lines = cart.lines;
-        if (_signatureOf(lines) != _availSignature) _refreshAvailability(lines);
+        _refreshAvailability(cart.lines);
       });
+    }
+
+    // CMD #2039 — an unread cart is not an empty cart. Until the first payload
+    // lands, `lines` is empty for the same reason a page is blank before it is
+    // fetched, and drawing the empty state there told the customer their cart
+    // was empty while it was still being read. The skeleton holds the shape of
+    // the summary row and the first rows so the row the backend already sends
+    // ON OPEN has somewhere to land the moment it arrives.
+    if (!cart.hasLoaded && cart.lines.isEmpty) {
+      return const C2039CartSkeleton();
     }
 
     if (cart.lines.isEmpty) {
@@ -617,7 +900,30 @@ class _CartScreenState extends State<CartScreen> {
           );
     final unresolvedNote =
         _unresolvedNote == null ? null : _UnresolvedNote(note: _unresolvedNote!);
-    final blocked = blocking != null;
+
+    // CHANGE #309 (5) — pincode serviceability, answered by checkout_action()
+    // before an order exists. Three states, and the app distinguishes none of
+    // them itself: it prints the backend's title/message/tone and blocks only
+    // when the backend says can_order is false. A pincode we simply have not
+    // listed yet warns and still lets a licensed pharmacy order — refusing them
+    // outright would lose a real customer over a missing row.
+    final srv = _checkout['serviceability'] is Map
+        ? Map<String, dynamic>.from(_checkout['serviceability'] as Map)
+        : const <String, dynamic>{};
+    final srvMode = srv['mode']?.toString() ?? 'serviceable';
+    final srvBanner = (srv['checked'] == true && srvMode != 'serviceable')
+        ? _ServiceabilityBanner(
+            title: srv['title']?.toString() ?? '',
+            message: srv['message']?.toString() ?? '',
+            tone: srv['tone'] is Map
+                ? Map<String, dynamic>.from(srv['tone'] as Map)
+                : const <String, dynamic>{},
+          )
+        : null;
+
+    // A blocked pincode blocks placement exactly the way an unavailable line
+    // does, so there is ONE disabled-button rule rather than two.
+    final blocked = blocking != null || _checkout['can_order'] == false;
 
     // CHANGE #639 — the chip cart_render() worded for its flagged lines. It
     // appears only while the BACKEND reports a non-zero count, and its text is
@@ -629,6 +935,23 @@ class _CartScreenState extends State<CartScreen> {
             ? _UnavailableChip(text: cart.unavailableBadge)
             : null;
 
+    // CMD #2014/#2047 — both blocks live INSIDE the page scroll, below the
+    // items, and both are read straight off the cart payload:
+    // they are handed to _ItemList as trailing rows rather than stacked around
+    // it, so neither is sticky and neither sits under the header. Each returns
+    // null when the backend says it has nothing to draw.
+    final bill = CartBillSummary.fromPayload(cart.billBlock);
+    final rail = CartWishlistRail.fromPayload(
+      cart.railBlock,
+      (p) => Navigator.of(context).pushNamed('/product/${p.id}'),
+    );
+    if (bill != null) RenderLog.write('c2014_bill_rows', bill.rows.length);
+    if (rail != null) RenderLog.write('c2014_rail_cards', rail.items.length);
+    final scrollFooters = <Widget>[
+      if (bill != null) bill,
+      if (rail != null) rail,
+    ];
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final wide = constraints.maxWidth >= 600;
@@ -639,6 +962,7 @@ class _CartScreenState extends State<CartScreen> {
             children: [
               if (banner != null) banner,
               ?availBanner,
+              ?srvBanner,
               ?unresolvedNote,
               ?unavailableChip,
               Expanded(
@@ -652,6 +976,10 @@ class _CartScreenState extends State<CartScreen> {
                         children: [
                           Expanded(
                             flex: 3,
+                            // CMD #2013 — the header is a title and nothing
+                            // else. The item count and the advance used to be
+                            // repeated here, three centimetres above the list
+                            // that shows them and again above Place order.
                             child: _ItemList(
                               key: _itemListKey,
                               cart: cart,
@@ -659,6 +987,7 @@ class _CartScreenState extends State<CartScreen> {
                               viewAsChecked: cart.isViewAs ? _viewAsChecked : null,
                               onViewAsToggle: cart.isViewAs ? _toggleViewAsChecked : null,
                               lineAvailability: _lineAvailability,
+                              footers: scrollFooters,
                             ),
                           ),
                           const SizedBox(width: 16),
@@ -667,6 +996,8 @@ class _CartScreenState extends State<CartScreen> {
                             child: _OrderSummaryPanel(
                               cart: cart,
                               onPlaceOrder: _placeOrder,
+                              placeOrderLabel: _placeOrderLabel,
+                              onNoticeAction: _openNoticeAction,
                               selectedTotal: selectedTotal,
                               selectedSubtotalLine: _selectedSubtotalLine,
                               availabilityBlocked: blocked,
@@ -681,6 +1012,14 @@ class _CartScreenState extends State<CartScreen> {
             ],
           );
         }
+
+        final schemeSection = (_freeLines.isNotEmpty || _schemeNudges.isNotEmpty)
+            ? _SchemeSection(
+                freeLines: _freeLines,
+                totalSavingsDisplay: _totalSavingsDisplay,
+                nudges: _schemeNudges,
+              )
+            : null;
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -697,11 +1036,15 @@ class _CartScreenState extends State<CartScreen> {
                 viewAsChecked: cart.isViewAs ? _viewAsChecked : null,
                 onViewAsToggle: cart.isViewAs ? _toggleViewAsChecked : null,
                 lineAvailability: _lineAvailability,
+                footers: scrollFooters,
               ),
             ),
+            if (schemeSection != null) schemeSection,
             _CheckoutBar(
               cart: cart,
               onPlaceOrder: _placeOrder,
+              placeOrderLabel: _placeOrderLabel,
+              onNoticeAction: _openNoticeAction,
               selectedTotal: selectedTotal,
               selectedSubtotalLine: _selectedSubtotalLine,
               availabilityBlocked: blocked,
@@ -718,6 +1061,57 @@ class _CartScreenState extends State<CartScreen> {
 /// Shows `cart_availability().blocking_label` verbatim and offers the one
 /// action that clears it: `cart_strip_unavailable()`. While this is on screen
 /// Place Order is blocked. The wording is the backend's, not ours.
+// CHANGE #309 (5) — the serviceability notice. Colours arrive as the backend's
+// own tone pair, so 'warn' is amber and 'blocked' is red without this file
+// knowing which is which.
+class _ServiceabilityBanner extends StatelessWidget {
+  final String title;
+  final String message;
+  final Map<String, dynamic> tone;
+  const _ServiceabilityBanner({
+    required this.title,
+    required this.message,
+    required this.tone,
+  });
+
+  static Color? _hex(String? h) {
+    final v = (h ?? '').trim().replaceFirst('#', '');
+    if (v.length != 6) return null;
+    final n = int.tryParse('FF$v', radix: 16);
+    return n == null ? null : Color(n);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    RenderLog.write('c309_serviceability_banner', title);
+    // The tone pair is the BACKEND's; the token layer supplies the fallback,
+    // so an older payload with no tone still paints inside the design system.
+    final fg = _hex(tone['fg']?.toString()) ?? Ds.c.warning;
+    return Container(
+      width: double.infinity,
+      color: _hex(tone['bg']?.toString()) ?? Ds.c.warningSoft,
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x16, vertical: Ds.space.x12),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(Icons.local_shipping_outlined, size: 18, color: fg),
+        SizedBox(width: Ds.space.x8),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            if (title.isNotEmpty)
+              Text(title,
+                  style: Ds.t.body.copyWith(
+                      fontWeight: FontWeight.w700, color: fg)),
+            if (message.isNotEmpty) ...[
+              if (title.isNotEmpty) SizedBox(height: Ds.space.x4),
+              Text(message, style: Ds.t.caption.copyWith(color: fg)),
+            ],
+          ]),
+        ),
+      ]),
+    );
+  }
+}
+
 class _AvailabilityBanner extends StatelessWidget {
   final String label;
   final bool busy;
@@ -841,6 +1235,72 @@ class _UnavailableChip extends StatelessWidget {
   }
 }
 
+// CHANGE #175 — scheme section: free lines + savings banner + nudge cards
+class _SchemeSection extends StatelessWidget {
+  final List<Map<String, dynamic>> freeLines;
+  final String totalSavingsDisplay;
+  final List<Map<String, dynamic>> nudges;
+  const _SchemeSection({
+    required this.freeLines,
+    required this.totalSavingsDisplay,
+    required this.nudges,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final successBg = Ds.c.successSoft;
+    final successFg = Ds.c.success;
+    return Container(
+      color: successBg,
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x16, vertical: Ds.space.x8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (freeLines.isNotEmpty) ...[
+            for (final line in freeLines)
+              Padding(
+                padding: EdgeInsets.only(bottom: Ds.space.x4),
+                child: Row(
+                  children: [
+                    Icon(Icons.card_giftcard_outlined,
+                        size: 16, color: successFg),
+                    SizedBox(width: Ds.space.x8),
+                    Expanded(
+                      child: Text(
+                        (line['label'] ?? '').toString(),
+                        style: Ds.t.caption.copyWith(
+                            color: successFg,
+                            fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            if (totalSavingsDisplay.isNotEmpty)
+              Text(
+                totalSavingsDisplay,
+                style: Ds.t.caption.copyWith(
+                    color: successFg, fontWeight: FontWeight.w700),
+              ),
+          ],
+          if (nudges.isNotEmpty) ...[
+            if (freeLines.isNotEmpty) SizedBox(height: Ds.space.x8),
+            for (final nudge in nudges)
+              Padding(
+                padding: EdgeInsets.only(bottom: Ds.space.x4),
+                child: Text(
+                  (nudge['label'] ?? '').toString(),
+                  style: Ds.t.caption.copyWith(color: successFg),
+                ),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class _SampleBanner extends StatelessWidget {
   final CartModel cart;
   const _SampleBanner({required this.cart});
@@ -934,6 +1394,12 @@ class _ItemList extends StatefulWidget {
   /// CHANGE #553 — product_id → the backend's verdict for that cart line,
   /// from cart_availability(). Empty until the first fetch answers.
   final Map<String, Availability> lineAvailability;
+
+  /// CMD #2014 — blocks that belong BELOW the items and INSIDE this scroll
+  /// (the bill summary card, then the suggested rail). They are trailing rows
+  /// of this ListView rather than siblings of it, which is what keeps them
+  /// scrolling with the page instead of pinning to an edge.
+  final List<Widget> footers;
   const _ItemList({
     super.key,
     required this.cart,
@@ -941,6 +1407,7 @@ class _ItemList extends StatefulWidget {
     this.viewAsChecked,
     this.onViewAsToggle,
     this.lineAvailability = const {},
+    this.footers = const <Widget>[],
   });
 
   @override
@@ -1049,38 +1516,82 @@ class _ItemListState extends State<_ItemList> {
     final removed = widget.cart.adminRemovedLines;
     final hasRemoved = removed.isNotEmpty && !searchActive;
 
+    // CMD #791 — "Frequently bought together" for the whole basket, from
+    // cart_render().companions. `has` is the BACKEND's verdict, so an empty
+    // cart and a basket with no co-purchase evidence both draw nothing rather
+    // than an invented suggestion. Hidden while a search filter is active,
+    // because the list is then answering a different question.
+    final companions = widget.cart.companions;
+    final companionItems = ((companions['items'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => PdCompanion.fromMap(e.cast<String, dynamic>()))
+        .toList(growable: false);
+    final showCompanions =
+        !searchActive && companions['has'] == true && companionItems.isNotEmpty;
+
     int afterCount = 0;
     if (hasRemoved) {
       afterCount += 1;
       if (_showRemoved) afterCount += removed.length;
     }
+    if (showCompanions) afterCount += 1;
+    // CMD #2014 — the bill card and the suggested rail follow the companion
+    // rail, still inside this scroll. They only belong under the REAL list: a
+    // search that narrows the cart is not the moment to show a bill for the
+    // whole basket.
+    final footers = searchActive ? const <Widget>[] : widget.footers;
+    afterCount += footers.length;
 
     // CHANGE #639 — index of the first line the BACKEND flagged, so the
     // scroll-to target can be tagged as it is built.
     final firstUnavailable = filtered.indexWhere((l) => l.unavailable);
 
+    // CMD #2013 — the render-log proof for the compact list. A screenshot
+    // shows one cart; this says how many rows the list actually painted, how
+    // many carried a backend row payload at all, how many printed a price and
+    // how many of those printed a struck MRP + discount percent. Every number
+    // is read off the payload — the screen counts what it was handed.
+    RenderLog.write(
+        'c2013_cart_rows',
+        'rows=${filtered.length}'
+        ';payload=${filtered.where((l) => l.row.isNotEmpty).length}'
+        ';price=${filtered.where((l) => l.rowMap('price')['has'] == true).length}'
+        ';strike=${filtered.where((l) => l.rowMap('price')['has_strike'] == true).length}'
+        ';discount=${filtered.where((l) => l.rowMap('price')['has_discount'] == true).length}');
+
     return ListView.builder(
       physics: platformScrollPhysics(),
       controller: _scrollController,
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x16, vertical: Ds.space.x8),
       cacheExtent: 400,
       itemCount: filtered.length + afterCount,
       itemBuilder: (context, i) {
         if (i < filtered.length) {
           final line = filtered[i];
+          // CMD #2013 — no card, no border, no shadow: a hairline between
+          // rows and nothing else. The last row carries none, so the list
+          // ends on whitespace rather than a rule.
           return RepaintBoundary(
             key: ValueKey(line.product.id),
-            child: _CartItemCard(
-              key: i == firstUnavailable ? _firstUnavailableKey : null,
-              line: line,
-              cart: widget.cart,
-              viewAsChecked: widget.viewAsChecked != null
-                  ? widget.viewAsChecked!.contains(line.product.id)
-                  : null,
-              onViewAsToggle: widget.onViewAsToggle != null
-                  ? () => widget.onViewAsToggle!(line.product.id)
-                  : null,
-              availability: widget.lineAvailability[line.product.id],
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _CartItemCard(
+                  key: i == firstUnavailable ? _firstUnavailableKey : null,
+                  line: line,
+                  cart: widget.cart,
+                  viewAsChecked: widget.viewAsChecked != null
+                      ? widget.viewAsChecked!.contains(line.product.id)
+                      : null,
+                  onViewAsToggle: widget.onViewAsToggle != null
+                      ? () => widget.onViewAsToggle!(line.product.id)
+                      : null,
+                  availability: widget.lineAvailability[line.product.id],
+                ),
+                if (i < filtered.length - 1)
+                  Divider(height: Ds.space.hairline, color: Ds.c.divider),
+              ],
             ),
           );
         }
@@ -1099,7 +1610,35 @@ class _ItemListState extends State<_ItemList> {
           if (_showRemoved && extra < removed.length) {
             return _RemovedItemCard(line: removed[extra], cart: widget.cart);
           }
+          extra -= _showRemoved ? removed.length : 0;
         }
+
+        if (showCompanions) {
+          if (extra == 0) {
+            return Padding(
+              padding: EdgeInsets.only(top: Ds.space.x24, bottom: Ds.space.x8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    (companions['title'] ?? '').toString(),
+                    style: Ds.t.subtitle,
+                  ),
+                  SizedBox(height: Ds.space.x4),
+                  Text(
+                    (companions['note'] ?? '').toString(),
+                    style: Ds.t.caption,
+                  ),
+                  SizedBox(height: Ds.space.x12),
+                  CompanionRail(items: companionItems),
+                ],
+              ),
+            );
+          }
+          extra -= 1;
+        }
+
+        if (extra >= 0 && extra < footers.length) return footers[extra];
 
         return const SizedBox();
       },
@@ -1107,12 +1646,33 @@ class _ItemListState extends State<_ItemList> {
   }
 }
 
-// ─── Cart item card ───────────────────────────────────────────────────────────
-
+// ─── Cart item card — CMD #1912 ───────────────────────────────────────────────
+//
+// ONE COMPACT ROW PER ITEM, AND THE QUANTITY LEADS IT.
+//
+// The card used to be ~200px tall and said the same sentence on every line:
+// a 150px stepper sat over "MRP ₹944.80 · trade rate on confirmation", the
+// footer repeated it, and five items could not share a phone screen. The row
+// is now ~90px — image, name, pack, quantity, remove — and everything else
+// (company, the MRP line, the pack detail) is one tap away, expanded in place.
+//
+// Nothing on this row is worded here. `cart_render().items[].row` carries the
+// name, the pack caption, "4 Strip", the Rx chip, the price line and the
+// detail rows already formatted; this widget only lays them out.
+/// CMD #2013 — ONE compact row per item. No card, no border, no shadow, no
+/// expand: a square thumbnail, the name and pack under it, and on the right a
+/// solid quantity pill with the money directly beneath it.
+///
+/// Everything printed here is `items[].row`, assembled by cart_row_block():
+/// the struck MRP, the price, the discount percent and the Rx badge are all
+/// backend strings. This screen decides nothing about money — it does not
+/// multiply a quantity, does not derive a percent and does not choose when a
+/// ceiling is struck. `price.has_strike` is the backend's answer to "are there
+/// two numbers here?", and a locked ("PTR") value simply arrives as one line.
 class _CartItemCard extends StatelessWidget {
   final CartLine line;
   final CartModel cart;
-  // CHANGE #324: ViewAs checkbox — null = normal mode (show X remove button).
+  // CHANGE #324: ViewAs checkbox — null = normal mode (show the ✕).
   final bool? viewAsChecked;
   final VoidCallback? onViewAsToggle;
 
@@ -1134,333 +1694,415 @@ class _CartItemCard extends StatelessWidget {
     // CHANGE #553 — the line's availability is whatever cart_availability()
     // said about this product_id. Nothing here re-derives it.
     final av = availability;
+    final rx = line.rowMap('rx_chip');
+    final price = line.rowMap('price');
+    final stepper = line.rowMap('stepper');
 
-    // Parse scheme "X+Y" for free-qty calculation
-    final schemeParts = p.scheme.split('+');
-    final int buyX = schemeParts.length == 2 ? (int.tryParse(schemeParts[0]) ?? 0) : 0;
-    final int getY = schemeParts.length == 2 ? (int.tryParse(schemeParts[1]) ?? 0) : 0;
-    final int freeQty = (buyX > 0 && getY > 0) ? (line.quantity ~/ buyX) * getY : 0;
-    final String unit = _CartStepper._unit(p.packSize);
+    // The name and the pack caption are the payload's, with the product record
+    // standing in only while the first cart_render() is in flight.
+    final name = line.rows('name').isNotEmpty ? line.rows('name') : p.name;
+    // CMD #2025 — the pack caption is the SAME sf_pack_badge() string the
+    // storefront card and the product page print, carried on the line by
+    // cart_state(). It used to fall back to the cart's own unit word, which is
+    // how a row that is "Strip of 10 tablets" everywhere else read "1 Strip".
+    final pack = line.rows('pack_label');
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x06000000),
-            blurRadius: 4,
-            offset: Offset(0, 1),
+    // CMD #2025 — the row's own tap target. `open.has` is the BACKEND's answer
+    // to "does this line have a product page?"; the screen only navigates.
+    final open = line.rowMap('open');
+    final canOpen = open['has'] == true;
+    void openProduct() {
+      if (!canOpen) return;
+      RenderLog.write(kC2025RowOpen, open['product_id']?.toString() ?? p.id);
+      // A PUSH, so the cart stays mounted underneath: Android back and the
+      // page's own arrow both pop straight back to it, at the same scroll
+      // offset, with no re-read.
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ProductDetailScreen(
+              productId: open['product_id']?.toString() ?? p.id),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: Ds.space.x12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Left: the square tile, with the Rx badge on its corner ───────
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: canOpen ? openProduct : null,
+            child: C2013Thumb(product: p, rx: rx),
           ),
-        ],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // ── TOP ROW: image | name + pack size + manufacturer | remove ──
-            Row(
+          SizedBox(width: Ds.space.x12),
+          // ── Middle: name, then pack ─────────────────────────────────────
+          Expanded(
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                _ProductImage(product: p, size: 64),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Expanded(
-                            child: Text(
-                              p.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
-                                fontSize: 13,
-                                color: Color(0xFF111827),
-                                height: 1.3,
-                              ),
-                            ),
-                          ),
-                          if (p.scheme.isNotEmpty) ...[
-                            const SizedBox(width: 6),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFFEF08A),
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: Text(
-                                p.scheme,
-                                style: const TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  color: Color(0xFF92400E),
-                                ),
-                              ),
-                            ),
-                          ],
-                          const SizedBox(width: 6),
-                          // CHANGE #324: ViewAs → checkbox; normal → X remove.
-                          if (viewAsChecked != null)
-                            SizedBox(
-                              width: 24,
-                              height: 24,
-                              child: Checkbox(
-                                value: viewAsChecked,
-                                onChanged: (_) => onViewAsToggle?.call(),
-                                activeColor: const Color(0xFF1B7A43),
-                                materialTapTargetSize:
-                                    MaterialTapTargetSize.shrinkWrap,
-                                visualDensity: VisualDensity.compact,
-                              ),
-                            )
-                          // CHANGE #639 — a line cart_render() flagged gets a
-                          // prominent RED remove control instead of the quiet
-                          // grey one. Same remove flow, same RPC; only the
-                          // emphasis changes, because this is the one action
-                          // that clears the block.
-                          else if (line.unavailable)
-                            GestureDetector(
-                              key: const ValueKey('c639_remove_unavailable'),
-                              onTap: () => cart.remove(p),
-                              child: Container(
-                                width: 30,
-                                height: 30,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: const Color(0xFFFEE2E2),
-                                  border: Border.all(
-                                      color: const Color(0xFFDC2626),
-                                      width: 1.2),
-                                ),
-                                child: const Center(
-                                  child: Icon(Icons.close,
-                                      size: 17, color: Color(0xFFDC2626)),
-                                ),
-                              ),
-                            )
-                          else
-                            GestureDetector(
-                              onTap: () => cart.remove(p),
-                              child: Container(
-                                width: 22,
-                                height: 22,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                      color: const Color(0xFFD1D5DB)),
-                                  color: const Color(0xFFF9FAFB),
-                                ),
-                                child: const Center(
-                                  child: Icon(Icons.close,
-                                      size: 11, color: Color(0xFF6B7280)),
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        p.packSize.isNotEmpty ? p.packSize : '—',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF374151),
+                // CMD #2025 — name AND pack are one tap target, which keeps it
+                // over 44 px tall on a phone without padding the compact row
+                // out of its rhythm.
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: canOpen ? openProduct : null,
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(vertical: Ds.space.x4),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          name,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Ds.t.body.copyWith(
+                              color: Ds.c.text, fontWeight: FontWeight.w700),
                         ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        p.manufacturer,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF9CA3AF),
-                        ),
-                      ),
-                      // CHANGE #553 — the backend's verdict for this line,
-                      // printed in the backend's own label and colours. Shown
-                      // only when it says the line cannot be ordered.
-                      if (av != null && !av.canAdd) ...[
-                        const SizedBox(height: 4),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: av.bg == null ? null : Color(av.bg!),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            av.note ?? av.ctaLabel,
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              color: av.fg == null ? null : Color(av.fg!),
-                            ),
-                          ),
+                        SizedBox(height: Ds.space.x4),
+                        Text(
+                          pack.isNotEmpty ? pack : p.packSize,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Ds.t.caption,
                         ),
                       ],
-                      if (line.isSample) ...[
-                        const SizedBox(height: 3),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 5, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFFF7ED),
-                            borderRadius: BorderRadius.circular(4),
-                            border:
-                                Border.all(color: const Color(0xFFFED7AA)),
-                          ),
-                          child: Text(c('cart.badge_sample'),
-                              style: const TextStyle(
-                                  fontSize: 9, color: Color(0xFFEA580C))),
-                        ),
-                      ],
-                      // CHANGE #325 label rules:
-                      // "Added by Admin"   → both customer's own cart AND ViewAs.
-                      // "Added by customer"→ ViewAs only (never shown to the customer).
-                      if (line.addedByAdmin) ...[
-                        const SizedBox(height: 3),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 5, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFD1FAE5),
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(color: const Color(0xFF6EE7B7)),
-                          ),
-                          child: Text(
-                            c('cart.badge_added_by_admin'),
-                            style: const TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFF065F46),
-                            ),
-                          ),
-                        ),
-                      ] else if (viewAsChecked != null) ...[
-                        const SizedBox(height: 3),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 5, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFEF3C7),
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(color: const Color(0xFFFDE68A)),
-                          ),
-                          child: Text(
-                            c('cart.badge_added_by_customer'),
-                            style: const TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFF92400E),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ],
+                    ),
                   ),
                 ),
+                // CHANGE #553 — the backend's verdict for this line, in the
+                // backend's own label and colours, shown only when it says the
+                // line cannot be ordered. It is the one thing that may still
+                // add a line to a row, because it blocks the order.
+                if (av != null && !av.canAdd) ...[
+                  SizedBox(height: Ds.space.x4),
+                  _C1912Chip(
+                    label: av.note ?? av.ctaLabel,
+                    tone: {'bg': av.bg, 'fg': av.fg},
+                  ),
+                ],
+                if (line.addedByAdmin) ...[
+                  SizedBox(height: Ds.space.x4),
+                  _C1912Chip(
+                    label: c('cart.badge_added_by_admin'),
+                    tone: const {'bg': '#D1FAE5', 'fg': '#065F46'},
+                  ),
+                ],
               ],
             ),
-
-            const SizedBox(height: 10),
-
-            // ── BOTTOM ROW: line price (left) | qty selector (right) ──
-            //
-            // CHANGE #615 — one price, one source. The struck-through MRP, the
-            // black sale price beneath it and the "N% GST (₹x input credit)"
-            // badge are all gone: there is no sale price, no discount and no
-            // GST in the cart any more, so a second number here could only
-            // ever be a number the backend never sent.
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                // Left: the line total and how it was reached — both printed
-                // verbatim from cart_render(). Nothing multiplied in Dart.
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      line.ds('line_mrp_display'),
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFF111827),
-                        height: 1.1,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      // "4 × ₹153.30" — the backend's own wording.
-                      line.ds('qty_label'),
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: Color(0xFF6B7280),
-                        height: 1.1,
-                      ),
-                    ),
-                  ],
+          ),
+          SizedBox(width: Ds.space.x8),
+          // ── Right: the pill, the money under it, and the ✕ ──────────────
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // CHANGE #324: ViewAs → checkbox; normal → the stepper.
+              if (viewAsChecked != null)
+                SizedBox(
+                  width: Ds.touch.minTarget,
+                  height: Ds.touch.minTarget,
+                  child: Checkbox(
+                    value: viewAsChecked,
+                    onChanged: (_) => onViewAsToggle?.call(),
+                    activeColor: Ds.c.brand,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                )
+              else
+                // CHANGE #615 — the stepper shows cart.quantityOf(), the
+                // user's own unsent tap when there is one and the server's
+                // number otherwise, so a tap lands in this frame.
+                // CHANGE #639 — qty_locked comes from cart_render(); the
+                // stepper is dead and tinted danger on the strength of the
+                // backend's flag, never on a local stock check.
+                // CMD #2039 — `qty_text` is the SERVER's number, and between
+                // the tap and the 46 ms reply it is one tap stale. Handing it
+                // to the stepper while the user has an unsent tap outstanding
+                // is what froze the digit: the control re-rendered with the
+                // OLD string every frame until the round trip returned. With a
+                // local tap outstanding the stepper prints that tap — the
+                // customer's own input echoed back, not a backend string
+                // reworded here.
+                _CartStepper(
+                  product: p,
+                  quantity: cart.quantityOf(p.id),
+                  cart: cart,
+                  locked: line.qtyLocked,
+                  qtyText: cart.hasLocalIntent(p.id)
+                      ? ''
+                      : (stepper['qty_text'] ?? '').toString(),
                 ),
-                const Spacer(),
-                // Right: free-qty label (when earned) + qty stepper
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (freeQty > 0) ...[
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFDCFCE7),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          cf(
-                              freeQty == 1
-                                  ? 'cart.free_qty_one'
-                                  : 'cart.free_qty_many',
-                              {'qty': '$freeQty', 'unit': unit}),
-                          style: const TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFF15803D),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                    ],
-                    // CHANGE #615 — the stepper shows cart.quantityOf(), which
-                    // is the user's own unsent tap when there is one and the
-                    // server's number otherwise. This used to pass
-                    // line.quantity — the SERVER quantity — so #610's
-                    // optimistic echo and 300ms debounce were built but never
-                    // seen HERE: every tap on the cart screen sat unchanged
-                    // until the RPC came back, which is the lag being
-                    // reported. The product card already read quantityOf(),
-                    // which is why the catalog stepper felt instant and this
-                    // one did not.
-                    // CHANGE #639 — qty_locked comes from cart_render(); the
-                    // stepper is disabled and tinted red on the strength of
-                    // the backend's flag, never on a local stock check.
-                    _CartStepper(
-                      product: p,
-                      quantity: cart.quantityOf(p.id),
-                      cart: cart,
-                      locked: line.qtyLocked,
-                    ),
-                  ],
+              SizedBox(height: Ds.space.x8),
+              C2013RowPrice(price: price),
+            ],
+          ),
+          // CHANGE #639 — a line cart_render() flagged gets the prominent
+          // remove control: same RPC, more emphasis, because this is the one
+          // action that clears the block.
+          _C1912Remove(onTap: () => cart.remove(p), danger: line.unavailable),
+        ],
+      ),
+      // CMD #2025 — a save that did not land is THIS row's problem. It gets
+      // the full row width (a phone has no room for it beside the pill), the
+      // sentence and the retry word are the backend's, and the rest of the
+      // cart stays usable: nothing blocks the screen.
+      if (cart.hasRowError(p.id)) ...[
+        SizedBox(height: Ds.space.x4),
+        C2025RowRetry(
+          message: cart.rowErrorMessage(p.id),
+          label: cart.rowRetryLabel(p.id),
+          onRetry: () => cart.retryRow(p.id),
+        ),
+      ],
+        ],
+      ),
+    );
+  }
+}
+
+/// CMD #2025 — the one thing a failed save is allowed to do: say so on its own
+/// row, and offer to send it again.
+///
+/// Both strings are the payload's — `message` is the backend's refusal (or its
+/// stored "Not saved" note when the network never reached it) and `label` is
+/// the backend's word for the control. Nothing here is worded, and nothing
+/// here blocks: the rest of the cart keeps working while this row is red.
+const String kC2025RowOpen = 'c2025_cart_row_open';
+const String kC2025RowRetry = 'c2025_cart_row_retry';
+
+class C2025RowRetry extends StatelessWidget {
+  final String message;
+  final String label;
+  final VoidCallback onRetry;
+
+  const C2025RowRetry({
+    super.key,
+    required this.message,
+    required this.label,
+    required this.onRetry,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    RenderLog.write(kC2025RowRetry, message);
+    return Row(
+      children: [
+        Flexible(
+          child: Text(
+            message,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: Ds.t.caption.copyWith(color: Ds.c.danger),
+          ),
+        ),
+        if (label.isNotEmpty) ...[
+          SizedBox(width: Ds.space.x8),
+          SizedBox(
+            height: Ds.touch.minTarget,
+            child: TextButton(
+              onPressed: onRetry,
+              style: TextButton.styleFrom(
+                foregroundColor: Ds.c.brand,
+                padding: EdgeInsets.symmetric(horizontal: Ds.space.x8),
+                minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget),
+                tapTargetSize: MaterialTapTargetSize.padded,
+              ),
+              child: Text(label,
+                  style: Ds.t.caption.copyWith(fontWeight: FontWeight.w700)),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// CMD #2013 — the square product tile, with the Rx badge sitting on its
+/// top-right corner. `rx.has` is the per-line flag cart_render() sends; the
+/// badge's two colours are the payload's own.
+class C2013Thumb extends StatelessWidget {
+  final Product product;
+  final Map<String, dynamic> rx;
+  const C2013Thumb({super.key, required this.product, this.rx = const {}});
+
+  @override
+  Widget build(BuildContext context) {
+    final size = Ds.space.x48 + Ds.space.x24;
+    final tile = Container(
+      width: size,
+      height: size,
+      padding: EdgeInsets.all(Ds.space.x4),
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        borderRadius: BorderRadius.circular(Ds.r.button),
+        border: Border.all(color: Ds.c.divider),
+      ),
+      child: _ProductImage(product: product, size: size - Ds.space.x12),
+    );
+    final label = (rx['label'] ?? '').toString();
+    if (rx['has'] != true || label.isEmpty) return tile;
+
+    final tone = (rx['tone'] as Map?)?.cast<String, dynamic>();
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        tile,
+        Positioned(
+          top: -Ds.space.x4,
+          right: -Ds.space.x4,
+          child: Container(
+            padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x4 + Ds.space.hairline,
+                vertical: Ds.space.hairline),
+            decoration: BoxDecoration(
+              color: _C1912Chip._colour(tone?['bg'], Ds.c.info),
+              borderRadius: BorderRadius.circular(Ds.r.chip),
+            ),
+            child: Text(
+              label,
+              style: Ds.t.caption.copyWith(
+                color: _C1912Chip._colour(tone?['fg'], Ds.c.surface),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// CMD #2013 — the money, right-aligned under the quantity pill.
+///
+/// Two lines when there is a discount to show — the struck MRP above, the
+/// price with its percent beside it below — and ONE plain line when there is
+/// not. Which of those it is comes from `price.has_strike` and
+/// `price.has_discount`: this widget never compares two numbers, and the
+/// percent it prints is the backend's sentence, not a division done here.
+class C2013RowPrice extends StatelessWidget {
+  final Map<String, dynamic> price;
+  const C2013RowPrice({super.key, required this.price});
+
+  @override
+  Widget build(BuildContext context) {
+    final value = (price['value'] ?? '').toString();
+    if (price['has'] != true || value.isEmpty) return const SizedBox.shrink();
+    final mrp = (price['mrp_display'] ?? '').toString();
+    final strike = price['has_strike'] == true && mrp.isNotEmpty;
+    final discount = (price['discount_label'] ?? '').toString();
+    final hasDiscount = price['has_discount'] == true && discount.isNotEmpty;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (strike)
+          Text(
+            mrp,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Ds.t.caption
+                .copyWith(decoration: TextDecoration.lineThrough),
+          ),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: [
+            if (hasDiscount) ...[
+              Text(
+                discount,
+                maxLines: 1,
+                style: Ds.t.caption.copyWith(
+                  color: _C1912Chip._colour(price['discount_fg'], Ds.c.brand),
+                  fontWeight: FontWeight.w700,
                 ),
-              ],
+              ),
+              SizedBox(width: Ds.space.x4),
+            ],
+            Text(
+              value,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Ds.t.body
+                  .copyWith(color: Ds.c.text, fontWeight: FontWeight.w700),
             ),
           ],
+        ),
+      ],
+    );
+  }
+}
+
+/// CMD #1912 — one badge shape for the whole cart row.
+///
+/// The label and both colours are the payload's; `tone` absent means the
+/// neutral info tint, never a colour this widget picked for a meaning it
+/// guessed at.
+class _C1912Chip extends StatelessWidget {
+  final String label;
+  final Map<String, dynamic>? tone;
+  const _C1912Chip({required this.label, this.tone});
+
+  /// cart_render() sends tones as '#RRGGBB'; cart_availability() has always
+  /// sent them as packed ints. Both are the backend's colour — read either
+  /// rather than making one of the two callers convert on the way in.
+  static Color _colour(Object? raw, Color fallback) {
+    if (raw is int) return Color(raw);
+    if (raw is num) return Color(raw.toInt());
+    return Ds.hex(raw, fallback);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (label.isEmpty) return const SizedBox.shrink();
+    final t = tone ?? const {};
+    return Container(
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x8, vertical: Ds.space.x4 / 2),
+      decoration: BoxDecoration(
+        color: _colour(t['bg'], Ds.c.infoSoft),
+        borderRadius: BorderRadius.circular(Ds.r.chip),
+      ),
+      child: Text(
+        label,
+        style: Ds.t.caption.copyWith(color: _colour(t['fg'], Ds.c.info)),
+      ),
+    );
+  }
+}
+
+/// CMD #1912 — the ✕ at the far right of a cart row. A 24px mark inside a
+/// full-size tap target, so a compact row never costs the customer accuracy.
+class _C1912Remove extends StatelessWidget {
+  final VoidCallback onTap;
+  final bool danger;
+  const _C1912Remove({required this.onTap, this.danger = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: Ds.touch.minTarget * 0.8,
+      height: Ds.touch.minTarget,
+      child: GestureDetector(
+        key: danger ? const ValueKey('c639_remove_unavailable') : null,
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Center(
+          child: Icon(
+            Icons.close,
+            size: Ds.space.x16,
+            color: danger ? Ds.c.danger : Ds.c.textSecondary,
+          ),
         ),
       ),
     );
@@ -1517,37 +2159,36 @@ class _ProductImage extends StatelessWidget {
   }
 }
 
-// ─── Cart quantity stepper ────────────────────────────────────────────────────
-
+// ─── Cart quantity stepper — CMD #1912 ───────────────────────────────────────
+//
+// Compact: 132×44 instead of 150×56, so it fits a 90px row next to the name,
+// the pack and the ✕. The quantity is still the largest thing on the row —
+// it is the only bold number a collapsed row carries.
+//
+// The word beside the number ("Strip") is `row.qty_label`, formatted by
+// cart_row_block(). It used to be _CartStepper._unit(): nine `contains()`
+// tests over the pack string, in Dart, deciding a display word. The only
+// motion left is the roll when that label changes.
 class _CartStepper extends StatefulWidget {
   final Product product;
   final int quantity;
   final CartModel cart;
 
   /// CHANGE #639 — `qty_locked` from cart_render(). When true both tap zones
-  /// are dead and the control is tinted red. This is the backend's answer,
+  /// are dead and the control is tinted danger. This is the backend's answer,
   /// carried through; the stepper never decides it.
   final bool locked;
+
+  /// The NUMBER, from `items[].row.stepper.qty_text`.
+  final String qtyText;
 
   const _CartStepper({
     required this.product,
     required this.quantity,
     required this.cart,
     this.locked = false,
+    this.qtyText = '',
   });
-
-  static String _unit(String packSize) {
-    final s = packSize.toLowerCase();
-    if (s.contains('strip')) return c('cart.unit_strip');
-    if (s.contains('bottle')) return c('cart.unit_bottle');
-    if (s.contains('vial')) return c('cart.unit_vial');
-    if (s.contains('tube')) return c('cart.unit_tube');
-    if (s.contains('sachet')) return c('cart.unit_sachet');
-    if (s.contains('box')) return c('cart.unit_box');
-    if (s.contains('ampoule') || s.contains('ampule')) return c('cart.unit_ampoule');
-    if (s.contains('pack')) return c('cart.unit_pack');
-    return c('cart.unit_default');
-  }
 
   @override
   State<_CartStepper> createState() => _CartStepperState();
@@ -1566,136 +2207,93 @@ class _CartStepperState extends State<_CartStepper> {
 
   @override
   Widget build(BuildContext context) {
-    final unit = _CartStepper._unit(widget.product.packSize);
     final qty = widget.quantity;
     final increasing = _increasing;
-
-    // CHANGE #639 — the red state for a locked line.
     final locked = widget.locked;
-    const lockedBg = Color(0xFFFEE2E2);
-    const lockedEdge = Color(0xFFDC2626);
-    const lockedInk = Color(0xFF991B1B);
-    final ink = locked ? lockedInk : const Color(0xFF1a1a1a);
+    final zone = Ds.touch.minTarget;
+    // CMD #2013 — ONE solid filled pill: brand green, white minus, white
+    // number, white plus. The cart list carries no other filled surface, so
+    // the pill and Place order are the only two solid greens on the screen.
+    final fill = locked ? Ds.c.danger : Ds.c.brand;
+    final ink = Ds.c.surface;
 
     return SizedBox(
-      width: 150,
-      height: 56,
+      width: zone * 2 + Ds.space.x24,
+      height: zone,
       child: Stack(
         children: [
-          // Visual layer
           Positioned.fill(
             child: Container(
               decoration: BoxDecoration(
-                color: locked ? lockedBg : Colors.white,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                    color: locked ? lockedEdge : const Color(0xFFE5E7EB)),
+                color: fill,
+                borderRadius: BorderRadius.circular(Ds.r.chip),
               ),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Minus visual
                   SizedBox(
-                    width: 44,
+                    width: zone,
                     child: Center(
-                      child: Text(
-                        '−',
-                        style: TextStyle(
-                          color: ink,
-                          fontSize: 22,
-                          fontWeight: FontWeight.w600,
-                          height: 1,
-                        ),
-                      ),
+                      child: Icon(Icons.remove, size: Ds.space.x16, color: ink),
                     ),
                   ),
-                  // Center: qty + unit with slide animation
+                  // Centre: the quantity, rolling.
                   Expanded(
                     child: Center(
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          ClipRect(
-                            child: AnimatedSwitcher(
-                              duration: const Duration(milliseconds: 200),
-                              transitionBuilder: (child, anim) {
-                                final isNew =
-                                    (child.key as ValueKey<int>).value == qty;
-                                final begin = isNew
-                                    ? (increasing
-                                        ? const Offset(0, -1)
-                                        : const Offset(0, 1))
-                                    : (increasing
-                                        ? const Offset(0, 1)
-                                        : const Offset(0, -1));
-                                return SlideTransition(
-                                  position: Tween<Offset>(
-                                          begin: begin, end: Offset.zero)
+                      child: ClipRect(
+                        child: AnimatedSwitcher(
+                          duration:
+                              Duration(milliseconds: Ds.motion.standardMs),
+                          transitionBuilder: (child, anim) {
+                            final isNew =
+                                (child.key as ValueKey<String>).value ==
+                                    '$qty|${widget.qtyText}';
+                            final begin = isNew
+                                ? (increasing
+                                    ? const Offset(0, -1)
+                                    : const Offset(0, 1))
+                                : (increasing
+                                    ? const Offset(0, 1)
+                                    : const Offset(0, -1));
+                            return SlideTransition(
+                              position:
+                                  Tween<Offset>(begin: begin, end: Offset.zero)
                                       .animate(anim),
-                                  child: child,
-                                );
-                              },
-                              child: Text(
-                                '$qty',
-                                key: ValueKey<int>(qty),
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                  color: ink,
-                                  fontSize: 15,
-                                  height: 1,
-                                ),
-                              ),
-                            ),
+                              child: child,
+                            );
+                          },
+                          child: Text(
+                            widget.qtyText.isNotEmpty
+                                ? widget.qtyText
+                                : '$qty',
+                            key: ValueKey<String>('$qty|${widget.qtyText}'),
+                            maxLines: 1,
+                            overflow: TextOverflow.clip,
+                            softWrap: false,
+                            style: Ds.t.bodyStrong
+                                .copyWith(color: ink, fontWeight: FontWeight.w700),
                           ),
-                          const SizedBox(width: 4),
-                          Text(
-                            unit,
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: ink,
-                              fontWeight: FontWeight.w600,
-                              height: 1,
-                            ),
-                          ),
-                        ],
+                        ),
                       ),
                     ),
                   ),
-                  // Plus visual — green right side, RED when the line is locked
-                  Container(
-                    width: 44,
-                    decoration: BoxDecoration(
-                      color: locked ? lockedEdge : Brand.green,
-                      borderRadius: const BorderRadius.only(
-                        topRight: Radius.circular(7),
-                        bottomRight: Radius.circular(7),
-                      ),
-                    ),
-                    child: const Center(
-                      child: Text(
-                        '+',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 22,
-                          fontWeight: FontWeight.w600,
-                          height: 1,
-                        ),
-                      ),
+                  SizedBox(
+                    width: zone,
+                    child: Center(
+                      child: Icon(Icons.add, size: Ds.space.x16, color: ink),
                     ),
                   ),
                 ],
               ),
             ),
           ),
-          // Invisible 3-zone tap overlay
+          // Invisible tap zones — both dead while the backend says locked.
           Positioned.fill(
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Zone 1: minus (44px) — dead while the backend says locked
                 SizedBox(
-                  width: 44,
+                  width: zone,
                   child: MouseRegion(
                     cursor: locked
                         ? SystemMouseCursors.basic
@@ -1708,11 +2306,9 @@ class _CartStepperState extends State<_CartStepper> {
                     ),
                   ),
                 ),
-                // Zone 2: center display (no action)
                 const Expanded(child: SizedBox()),
-                // Zone 3: plus (44px) — dead while the backend says locked
                 SizedBox(
-                  width: 44,
+                  width: zone,
                   child: MouseRegion(
                     cursor: locked
                         ? SystemMouseCursors.basic
@@ -1869,11 +2465,38 @@ String? _orderGateMessage(AuthNotifier auth, [ViewAsNotifier? viewAs, String? or
   return gate.hasBlocker ? gate.shortLabel : null;
 }
 
+
+// ─── CHANGE #572 — the button's word and its enabled state are the payload's ──
+//
+// "Pay & Place Order" is a promise about money, and the cart made it on a
+// basket where nothing was payable. `cart_render().render.cta` answers both
+// questions in one place: the label ("Place order" until an amount exists,
+// "Pay & place order" once one does) and whether the button may be pressed at
+// all. checkout_action()'s label is the fallback for the moment before the
+// cart payload has arrived, and ui_copy is the fallback for that.
+Map<String, dynamic> _cta(Map<String, dynamic> render) =>
+    (render['cta'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+String c572CtaLabel(Map<String, dynamic> render, String checkoutActionLabel) {
+  final fromCart = (_cta(render)['label'] ?? '').toString();
+  if (fromCart.isNotEmpty) return fromCart;
+  if (checkoutActionLabel.isNotEmpty) return checkoutActionLabel;
+  return c('cart.btn_place_order');
+}
+
+/// Absent is NOT disabled: a payload that never mentioned `enabled` leaves the
+/// button exactly as the other gates found it.
+bool c572CtaEnabled(Map<String, dynamic> render) => _cta(render)['enabled'] != false;
+
 // ─── Fixed checkout bar (narrow layout) ──────────────────────────────────────
 
 class _CheckoutBar extends StatelessWidget {
   final CartModel cart;
   final VoidCallback onPlaceOrder;
+
+  /// CHANGE #293 — checkout_action().button_label. Empty until the backend has
+  /// answered, in which case the ui_copy label stands in.
+  final String placeOrderLabel;
   // CHANGE #324: when ViewAs, show selected-items total instead of full cart total.
   final String? selectedTotal;
 
@@ -1883,12 +2506,19 @@ class _CheckoutBar extends StatelessWidget {
 
   /// CHANGE #553 — true while cart_availability() reports a blocking_label.
   final bool availabilityBlocked;
+
+  /// CHANGE #572 — what the ONE notice's inline action opens. The payload
+  /// says whether there is an action and what it is called; the screen
+  /// owns the navigation.
+  final void Function(Map<String, dynamic> action)? onNoticeAction;
   const _CheckoutBar({
     required this.cart,
     required this.onPlaceOrder,
+    this.placeOrderLabel = '',
     this.selectedTotal,
     this.selectedSubtotalLine = '',
     this.availabilityBlocked = false,
+    this.onNoticeAction,
   });
 
   @override
@@ -1915,43 +2545,25 @@ class _CheckoutBar extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // CHANGE #615 — the whole footer is two backend strings: the
-                // subtotal and the line that explains it ("8 items • MRP worth
-                // ₹6,685.25"). Both arrive formatted from cart_render(); the
-                // label, the counts and the amount are never assembled here.
-                // In View As the same two strings come from
-                // cart_selected_total() for the ticked lines only.
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        selectedTotal != null
-                            ? selectedSubtotalLine
-                            : cart.rs('subtotal_line'),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                          color: Color(0xFF6B7280),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Text(
-                      selectedTotal != null
-                          ? selectedTotal!
-                          : cart.rs('subtotal_display'),
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFF111827),
-                      ),
-                    ),
-                  ],
-                ),
+                // CMD #2013 — EXACTLY ONE summary row above the button:
+                // "Total items N" on the left, "Advance to pay ₹x" on the
+                // right, both from `summary.bottom`. The tax breakup, the
+                // sale/PTR line, the MRP total, Delivery FREE and the
+                // rate-confirmed note all stacked here and answered questions
+                // the customer was not asking at the moment of committing.
+                // In View As the one row is cart_selected_total()'s own line
+                // and amount for the ticked lines — still one row, still the
+                // backend's two strings.
+                if (selectedTotal == null)
+                  C2013SummaryRow(render: cart.render)
+                else
+                  C572TotalsBlock(
+                    render: cart.render,
+                    selectedTotal: selectedTotal,
+                    selectedLine: selectedSubtotalLine,
+                  ),
+                if (selectedTotal == null)
+                  C572CartNotice(render: cart.render, onAction: onNoticeAction),
                 const SizedBox(height: 12),
                 // Place Order (auth-gated)
                 Builder(builder: (ctx) {
@@ -1970,7 +2582,8 @@ class _CheckoutBar extends StatelessWidget {
                   // CHANGE #553 — an availability block greys Place Order
                   // exactly like the existing order gates; the tap then
                   // surfaces the backend's blocking_label.
-                  final blocked = gateMsg != null || inquiryLocked || availabilityBlocked;
+                  final blocked = gateMsg != null || inquiryLocked || availabilityBlocked ||
+                        !c572CtaEnabled(cart.render);
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -1986,10 +2599,9 @@ class _CheckoutBar extends StatelessWidget {
                                 padding:
                                     const EdgeInsets.symmetric(vertical: 15),
                                 decoration: BoxDecoration(
-                                  color: blocked
-                                      ? const Color(0xFF9CA3AF)
-                                      : const Color(0xFF1B5E20),
-                                  borderRadius: BorderRadius.circular(12),
+                                  color: blocked ? Ds.c.textSecondary : Ds.c.brand,
+                                  borderRadius:
+                                      BorderRadius.circular(Ds.r.button),
                                 ),
                                 child: Row(
                                   mainAxisAlignment:
@@ -2004,7 +2616,7 @@ class _CheckoutBar extends StatelessWidget {
                                           : (orderHoursClosed
                                               ? (orderHours.buttonLabel ?? '')
                                               : (auth.isAuthenticated
-                                                  ? c('cart.btn_place_order')
+                                                  ? c572CtaLabel(cart.render, placeOrderLabel)
                                                   : c('cart.btn_login_to_order'))),
                                       style: const TextStyle(
                                         color: Colors.white,
@@ -2038,6 +2650,9 @@ class _CheckoutBar extends StatelessWidget {
 class _OrderSummaryPanel extends StatelessWidget {
   final CartModel cart;
   final VoidCallback onPlaceOrder;
+
+  /// CHANGE #293 — checkout_action().button_label, rendered verbatim.
+  final String placeOrderLabel;
   // CHANGE #324: when ViewAs, show selected-items total instead of full cart total.
   final String? selectedTotal;
 
@@ -2047,12 +2662,19 @@ class _OrderSummaryPanel extends StatelessWidget {
 
   /// CHANGE #553 — true while cart_availability() reports a blocking_label.
   final bool availabilityBlocked;
+
+  /// CHANGE #572 — what the ONE notice's inline action opens. The payload
+  /// says whether there is an action and what it is called; the screen
+  /// owns the navigation.
+  final void Function(Map<String, dynamic> action)? onNoticeAction;
   const _OrderSummaryPanel({
     required this.cart,
     required this.onPlaceOrder,
+    this.placeOrderLabel = '',
     this.selectedTotal,
     this.selectedSubtotalLine = '',
     this.availabilityBlocked = false,
+    this.onNoticeAction,
   });
 
   @override
@@ -2081,28 +2703,19 @@ class _OrderSummaryPanel extends StatelessWidget {
           // gone: none of those figures exist in the payload any more, and the
           // "Items" row was the app counting SKUs and packs and wording the
           // plural itself.
-          Text(
-            selectedTotal != null
-                ? selectedSubtotalLine
-                : cart.rs('subtotal_line'),
-            style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-              color: Color(0xFF6B7280),
+          // CMD #2013 — the sidebar is the phone bar: ONE summary row, one
+          // notice, one button. The phone layout is where this screen is
+          // designed, and the wide one must not say more than it does.
+          if (selectedTotal == null)
+            C2013SummaryRow(render: cart.render)
+          else
+            C572TotalsBlock(
+              render: cart.render,
+              selectedTotal: selectedTotal,
+              selectedLine: selectedSubtotalLine,
             ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            selectedTotal != null
-                ? selectedTotal!
-                : cart.rs('subtotal_display'),
-            style: const TextStyle(
-              fontSize: 26,
-              fontWeight: FontWeight.w800,
-              color: Color(0xFF111827),
-              height: 1.1,
-            ),
-          ),
+          if (selectedTotal == null)
+            C572CartNotice(render: cart.render, onAction: onNoticeAction),
           const SizedBox(height: 16),
           Builder(builder: (ctx) {
             final auth = UserState.of(ctx);
@@ -2114,7 +2727,8 @@ class _OrderSummaryPanel extends StatelessWidget {
             final gateMsg = _orderGateMessage(
                 auth, ViewAsState.of(ctx), orderHoursClosed ? orderHours.buttonLabel : null);
             // CHANGE #553 — availability block greys Place Order too.
-            final blocked = gateMsg != null || inquiryLocked || availabilityBlocked;
+            final blocked = gateMsg != null || inquiryLocked || availabilityBlocked ||
+                        !c572CtaEnabled(cart.render);
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -2123,10 +2737,8 @@ class _OrderSummaryPanel extends StatelessWidget {
                   child: Container(
                     padding: const EdgeInsets.symmetric(vertical: 15),
                     decoration: BoxDecoration(
-                      color: blocked
-                          ? const Color(0xFF9CA3AF)
-                          : const Color(0xFF1B5E20),
-                      borderRadius: BorderRadius.circular(12),
+                      color: blocked ? Ds.c.textSecondary : Ds.c.brand,
+                      borderRadius: BorderRadius.circular(Ds.r.button),
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -2140,7 +2752,7 @@ class _OrderSummaryPanel extends StatelessWidget {
                               : (orderHoursClosed
                                   ? (orderHours.buttonLabel ?? '')
                                   : (auth.isAuthenticated
-                                      ? c('cart.btn_place_order')
+                                      ? c572CtaLabel(cart.render, placeOrderLabel)
                                       : c('cart.btn_login_to_order'))),
                           style: const TextStyle(
                             color: Colors.white,
@@ -2179,10 +2791,18 @@ class _OrderPlacedDialog extends StatelessWidget {
   final String amount;
   final VoidCallback onDone;
 
+  /// CMD #1848 — present ONLY on a test-session order (`test_badge` /
+  /// `test_note` from place_order_v2). Empty on a real order, so the ordinary
+  /// dialog is byte-identical to before.
+  final String testBadge;
+  final String testNote;
+
   const _OrderPlacedDialog({
     required this.orderNumber,
     required this.amount,
     required this.onDone,
+    this.testBadge = '',
+    this.testNote = '',
   });
 
   @override
@@ -2213,6 +2833,21 @@ class _OrderPlacedDialog extends StatelessWidget {
                     color: Color(0xFF16A34A), size: 44),
               ),
               const SizedBox(height: 20),
+              if (testBadge.isNotEmpty) ...[
+                Container(
+                  key: const ValueKey('placed_test_badge'),
+                  padding: EdgeInsets.symmetric(
+                      horizontal: Ds.space.x12, vertical: Ds.space.x4),
+                  decoration: BoxDecoration(
+                    color: Ds.c.dangerSoft,
+                    borderRadius: Ds.r.rChip,
+                  ),
+                  child: Text(testBadge,
+                      style: Ds.t.caption.copyWith(
+                          color: Ds.c.danger, fontWeight: FontWeight.w700)),
+                ),
+                SizedBox(height: Ds.space.x12),
+              ],
               Text(
                 c('cart.placed_title'),
                 style: const TextStyle(
@@ -2234,6 +2869,14 @@ class _OrderPlacedDialog extends StatelessWidget {
                 style: const TextStyle(
                     fontSize: 12, color: Color(0xFF6B7280), height: 1.5),
               ),
+              if (testNote.isNotEmpty) ...[
+                SizedBox(height: Ds.space.x8),
+                Text(
+                  testNote,
+                  textAlign: TextAlign.center,
+                  style: Ds.t.caption.copyWith(color: Ds.c.danger),
+                ),
+              ],
               const SizedBox(height: 24),
               SizedBox(
                 width: double.infinity,
@@ -2293,6 +2936,595 @@ class _EmptyCart extends StatelessWidget {
             AppState.of(context).emptyNote,
             style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
           ),
+        ],
+      ),
+    );
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// CHANGE #461 — three blocks the cart never showed, all of them printed
+// verbatim from cart_render().
+//
+// #167 the delivery line: the charge, its GST and the grand total that
+//      includes it are computed by delivery_charge_block() and stamped on the
+//      order by the SAME function, so the amount here is the amount billed.
+// #170 the Rx / drug-licence notice: how many prescription lines are in the
+//      basket and whether this pharmacy's licence covers them.
+// #168 the tier benefit note: whether the margin benefit can bite on THIS
+//      cart, which for a cart with no trade-priced line it cannot.
+//
+// None of the three computes anything. Every string, every count, every plural
+// and both tone colours arrive in the payload.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// One `label · amount` row in the totals ladder.
+class _C461TotalRow extends StatelessWidget {
+  final String label;
+  final String amount;
+  final bool strong;
+  /// CMD #1912 — animate the amount when it can change under the customer's
+  /// own tap (the cart's own totals). Every other caller prints it still.
+  final bool animate;
+  const _C461TotalRow(
+      {required this.label,
+      required this.amount,
+      this.strong = false,
+      this.animate = false});
+
+  @override
+  Widget build(BuildContext context) {
+    final style = strong ? Ds.t.subtitle : Ds.t.bodySecondary;
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: Ds.space.x4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
+        children: [
+          Expanded(child: Text(label, style: style, maxLines: 1, overflow: TextOverflow.ellipsis)),
+          SizedBox(width: Ds.space.x8),
+          // CMD #1912 — the total re-counts when the stepper moves. It is the
+          // only motion on this screen besides the rolling quantity, and it is
+          // the same roll: a changed string slides the old one out.
+          if (animate)
+            ClipRect(
+              child: AnimatedSwitcher(
+                duration: Duration(milliseconds: Ds.motion.standardMs),
+                transitionBuilder: (child, anim) => SlideTransition(
+                  position: Tween<Offset>(
+                          begin: const Offset(0, 0.6), end: Offset.zero)
+                      .animate(anim),
+                  child: FadeTransition(opacity: anim, child: child),
+                ),
+                child: Text(amount,
+                    key: ValueKey<String>(amount),
+                    style: strong ? Ds.t.subtitle : Ds.t.body,
+                    textAlign: TextAlign.right),
+              ),
+            )
+          else
+            Text(amount, style: strong ? Ds.t.subtitle : Ds.t.body, textAlign: TextAlign.right),
+        ],
+      ),
+    );
+  }
+}
+
+/// The delivery ladder: delivery, its GST when there is one, then the grand
+/// total. Absent from the payload → absent from the screen.
+///
+/// CHANGE #572 — the cart no longer draws this block. It is kept for the
+/// surfaces that still print a raw delivery ladder; the cart's totals are
+/// `render.summary.rows`, which the BACKEND assembles (see [C572TotalsBlock]).
+class C461DeliveryLines extends StatelessWidget {
+  final Map<String, dynamic> render;
+  const C461DeliveryLines({super.key, required this.render});
+
+  @override
+  Widget build(BuildContext context) {
+    final d = (render['delivery'] as Map?)?.cast<String, dynamic>();
+    if (d == null || d['has'] != true) return const SizedBox.shrink();
+
+    final note = (d['note'] ?? '').toString();
+    final grand = (render['grand_total_display'] ?? '').toString();
+    final itemsTotal = (render['items_total_display'] ?? '').toString();
+    final labels = (render['labels'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final totalLabel = (labels['total'] ?? '').toString();
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (itemsTotal.isNotEmpty && totalLabel.isNotEmpty)
+          _C461TotalRow(label: totalLabel, amount: itemsTotal),
+        _C461TotalRow(
+          label: (d['label'] ?? '').toString(),
+          amount: (d['amount_display'] ?? '').toString(),
+        ),
+        if (d['has_gst'] == true)
+          _C461TotalRow(
+            label: (d['gst_label'] ?? '').toString(),
+            amount: (d['gst_display'] ?? '').toString(),
+          ),
+        if (grand.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(top: Ds.space.x4),
+            child: _C461TotalRow(
+              label: (labels['grand'] ?? totalLabel).toString(),
+              amount: grand,
+              strong: true,
+            ),
+          ),
+        if (note.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(top: Ds.space.x4),
+            child: Text(note, style: Ds.t.caption),
+          ),
+      ],
+    );
+  }
+}
+
+/// A backend notice: title, message and the tone the payload chose.
+class C461Notice extends StatelessWidget {
+  final String title;
+  final String message;
+  final Map<String, dynamic>? tone;
+
+  /// CHANGE #572 — the notice's own inline action, when the payload sent one
+  /// ("Add licence"). Label and existence are the backend's; this widget only
+  /// prints the label and calls back.
+  final String actionLabel;
+  final VoidCallback? onAction;
+  const C461Notice({
+    super.key,
+    required this.title,
+    required this.message,
+    this.tone,
+    this.actionLabel = '',
+    this.onAction,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (message.isEmpty && title.isEmpty) return const SizedBox.shrink();
+    final bg = Ds.hex(tone?['bg'], Ds.c.infoSoft);
+    final fg = Ds.hex(tone?['fg'], Ds.c.text);
+    return Container(
+      width: double.infinity,
+      margin: EdgeInsets.only(top: Ds.space.x12),
+      padding: EdgeInsets.all(Ds.space.x12),
+      decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rCard),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (title.isNotEmpty)
+            Text(title, style: Ds.t.subtitle.copyWith(color: fg)),
+          if (title.isNotEmpty && message.isNotEmpty) SizedBox(height: Ds.space.x4),
+          if (message.isNotEmpty)
+            Text(message, style: Ds.t.body.copyWith(color: fg)),
+          // The action the backend attached to this notice. It is the way OUT
+          // of the block, so it sits inside the block that raised it.
+          if (actionLabel.isNotEmpty && onAction != null) ...[
+            SizedBox(height: Ds.space.x8),
+            SizedBox(
+              height: Ds.space.x48,
+              child: OutlinedButton(
+                onPressed: onAction,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: fg,
+                  side: BorderSide(color: fg),
+                  shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+                ),
+                child: Text(actionLabel, style: Ds.t.body.copyWith(color: fg)),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// CHANGE #572 — the cart's totals, exactly as `cart_render().render.summary`
+/// assembled them.
+///
+/// The cart used to say "Awaiting supplier rates" four times over: once in the
+/// summary line, once as the big amount, once against "Net payable" and once
+/// against "Total payable". Which rows exist is now a BACKEND decision:
+/// `summary.rows` carries the ladder, and while nothing is payable it carries
+/// only Delivery — the one true number on an unpriced basket. Nothing here
+/// decides, formats or pluralises; `has_amount` is the payload's answer to
+/// "is there an amount?", never a `> 0` computed on this side.
+class C572TotalsBlock extends StatelessWidget {
+  final Map<String, dynamic> render;
+
+  /// View As substitutes cart_selected_total()'s own two strings for the
+  /// ticked lines. Null outside View As.
+  final String? selectedTotal;
+  final String selectedLine;
+  const C572TotalsBlock({
+    super.key,
+    required this.render,
+    this.selectedTotal,
+    this.selectedLine = '',
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final s = (render['summary'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final line = selectedTotal != null ? selectedLine : (s['line'] ?? '').toString();
+    final amount =
+        selectedTotal ?? (s['has_amount'] == true ? (s['amount_display'] ?? '').toString() : '');
+    // CMD #1912 — the line only earns its place next to an amount. The BACKEND
+    // answers that (`show_line`): on a basket with nothing payable yet the
+    // rows below already say the item count, and the line said it again.
+    // ABSENCE IS NOT A NO: a payload that never heard of `show_line` (an older
+    // cached cart_render, a caller that builds the block itself) keeps the
+    // #572 behaviour and prints the line. Only an explicit false suppresses it.
+    final showLine = selectedTotal != null || s['show_line'] != false;
+    final rows = selectedTotal != null
+        ? const <Map<String, dynamic>>[]
+        : ((s['rows'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((e) => e.cast<String, dynamic>())
+            .toList(growable: false);
+    final deliveryNote =
+        selectedTotal != null ? '' : (s['delivery_note'] ?? '').toString();
+    // CMD #1912 — "Rate confirmed after supplier quote." Once, here, above the
+    // total — instead of once per row plus once in the footer.
+    final rateNote =
+        selectedTotal != null ? '' : (s['rate_note'] ?? '').toString();
+
+    if ((!showLine || line.isEmpty) &&
+        amount.isEmpty &&
+        rows.isEmpty &&
+        rateNote.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    // ONE divider: it sits above the strong row when the payload sent one,
+    // and closes the ladder when it did not.
+    final strongAt = rows.indexWhere((r) => r['strong'] == true);
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (showLine && (line.isNotEmpty || amount.isNotEmpty))
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: Text(line,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Ds.t.bodySecondary),
+              ),
+              if (amount.isNotEmpty) ...[
+                SizedBox(width: Ds.space.x8),
+                Text(amount, style: Ds.t.display),
+              ],
+            ],
+          ),
+        for (var i = 0; i < rows.length; i++) ...[
+          if (i == strongAt)
+            Padding(
+              padding: EdgeInsets.symmetric(vertical: Ds.space.x4),
+              child: Divider(height: Ds.space.hairline, color: Ds.c.divider),
+            ),
+          _C461TotalRow(
+            label: (rows[i]['label'] ?? '').toString(),
+            amount: (rows[i]['amount'] ?? '').toString(),
+            strong: rows[i]['strong'] == true,
+            animate: true,
+          ),
+        ],
+        if (strongAt < 0 && rows.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(top: Ds.space.x4),
+            child: Divider(height: Ds.space.hairline, color: Ds.c.divider),
+          ),
+        if (rateNote.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(top: Ds.space.x4),
+            child: Text(rateNote, style: Ds.t.caption),
+          ),
+        if (deliveryNote.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(top: Ds.space.x4),
+            child: Text(deliveryNote, style: Ds.t.caption),
+          ),
+      ],
+    );
+  }
+}
+
+/// CHANGE #572 — THE cart notice. One, not two.
+///
+/// `render.notice` is the backend's choice of which single thing the customer
+/// has to deal with before ordering — today the drug-licence gate. The tier
+/// benefit note is deliberately NOT offered here any more: on a basket that is
+/// simply awaiting quotes it read as a defect ("Nothing in the catalogue is
+/// trade-priced for you yet"), and it belongs where the benefit applies.
+///
+/// `note` is the record line ("2 prescription items in this order"), which is
+/// a caption and not a second notice.
+class C572CartNotice extends StatelessWidget {
+  final Map<String, dynamic> render;
+
+  /// What the notice's inline action opens. The screen owns navigation; the
+  /// payload owns whether there is an action and what it is called.
+  final void Function(Map<String, dynamic> action)? onAction;
+  const C572CartNotice({super.key, required this.render, this.onAction});
+
+  @override
+  Widget build(BuildContext context) {
+    final n = (render['notice'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final note = (n['note'] ?? '').toString();
+    final chip = (n['chip'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+    if (n['has'] != true) {
+      // CMD #1815 — a licence that is not on file WARNS. It is a small chip
+      // with a View action and nothing else: no full-width card, no countdown,
+      // and no sentence about ordering stopping, because ordering does not
+      // stop. Approval decided that, by hand, before the account existed.
+      final chipRow =
+          chip['has'] == true ? C1815KycChip(chip: chip, onAction: onAction) : null;
+      if (chipRow == null && note.isEmpty) return const SizedBox.shrink();
+      return Padding(
+        padding: EdgeInsets.only(top: Ds.space.x8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (chipRow != null) chipRow,
+            if (chipRow != null && note.isNotEmpty)
+              SizedBox(height: Ds.space.x8),
+            if (note.isNotEmpty) Text(note, style: Ds.t.caption),
+          ],
+        ),
+      );
+    }
+
+    final action = (n['action'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final actionLabel =
+        action['has'] == true ? (action['label'] ?? '').toString() : '';
+
+    return C461Notice(
+      title: (n['title'] ?? '').toString(),
+      message: (n['message'] ?? '').toString(),
+      tone: (n['tone'] as Map?)?.cast<String, dynamic>(),
+      actionLabel: actionLabel,
+      onAction: (actionLabel.isEmpty || onAction == null)
+          ? null
+          : () => onAction!(action),
+    );
+  }
+}
+
+
+/// CMD #1815 — the smallest thing that can say "we still need a document".
+///
+/// Every word, colour and destination is `cart_render().render.notice.chip`,
+/// which is `kyc_chip_block()`'s answer: the label, the three tone colours and
+/// the action's own label and route descriptor. Nothing here knows what KYC
+/// is, which state the account is in, or where Licence & documents lives — a
+/// chip with no action draws no button, and a chip the backend did not send
+/// draws nothing at all.
+class C1815KycChip extends StatelessWidget {
+  final Map<String, dynamic> chip;
+  final void Function(Map<String, dynamic> action)? onAction;
+
+  const C1815KycChip({super.key, required this.chip, this.onAction});
+
+  @override
+  Widget build(BuildContext context) {
+    if (chip['has'] != true) return const SizedBox.shrink();
+    final label = (chip['label'] ?? '').toString();
+    if (label.isEmpty) return const SizedBox.shrink();
+    final tone = (chip['tone'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final action = (chip['action'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final actionLabel =
+        action['has'] == true ? (action['label'] ?? '').toString() : '';
+    final fg = Ds.hex(tone['fg'], Ds.c.warning);
+    RenderLog.write('c1815_kyc_chip', (chip['state'] ?? '').toString());
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: EdgeInsets.symmetric(
+              horizontal: Ds.space.x8, vertical: Ds.space.x4),
+          decoration: BoxDecoration(
+            color: Ds.hex(tone['bg'], Ds.c.warningSoft),
+            borderRadius: BorderRadius.circular(Ds.r.chip),
+            border: Border.all(color: Ds.hex(tone['border'], Ds.c.divider)),
+          ),
+          child: Text(label, style: Ds.t.caption.copyWith(color: fg)),
+        ),
+        if (actionLabel.isNotEmpty && onAction != null) ...[
+          SizedBox(width: Ds.space.x4),
+          // 44x44 of tappable area around a deliberately small label.
+          SizedBox(
+            height: Ds.touch.minTarget,
+            child: TextButton(
+              onPressed: () => onAction!(action),
+              style: TextButton.styleFrom(
+                padding: EdgeInsets.symmetric(horizontal: Ds.space.x8),
+                minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget),
+                foregroundColor: Ds.c.brand,
+              ),
+              child: Text(actionLabel, style: Ds.t.caption),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// CMD #2039 — the cart while it is still being READ.
+///
+/// The summary row ("Total items / Advance to pay") arrives in the SAME
+/// payload as the items, so the screen must already have a place for it when
+/// that payload lands. This holds the shape — the row across the bottom of the
+/// header block, then a few item rows — so the values drop straight in instead
+/// of the whole page appearing at once after the round trip. It draws no words
+/// at all: a skeleton that guessed at labels would be the app writing copy.
+class C2039CartSkeleton extends StatelessWidget {
+  const C2039CartSkeleton({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    RenderLog.write('c2039_cart_skeleton', '1');
+    return Shimmer(
+      child: ListView(
+        padding: EdgeInsets.fromLTRB(
+            Ds.space.x12, Ds.space.x12, Ds.space.x12, Ds.space.x24),
+        children: [
+          // The summary row's own shape: a label+value pair on each side.
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Flexible(
+                flex: 3,
+                child: SkeletonBox(height: Ds.space.x16, radius: Ds.r.chip),
+              ),
+              SizedBox(width: Ds.space.x24),
+              Flexible(
+                flex: 4,
+                child: SkeletonBox(height: Ds.space.x16, radius: Ds.r.chip),
+              ),
+            ],
+          ),
+          SizedBox(height: Ds.space.x24),
+          for (var i = 0; i < 4; i++) ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SkeletonBox(
+                    width: Ds.space.x48,
+                    height: Ds.space.x48,
+                    radius: Ds.r.card),
+                SizedBox(width: Ds.space.x12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SkeletonBox(height: Ds.space.x12, radius: Ds.r.chip),
+                      SizedBox(height: Ds.space.x8),
+                      FractionallySizedBox(
+                        widthFactor: 0.55,
+                        alignment: Alignment.centerLeft,
+                        child: SkeletonBox(
+                            height: Ds.space.x12, radius: Ds.r.chip),
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(width: Ds.space.x12),
+                SkeletonBox(
+                    width: Ds.touch.minTarget * 2 + Ds.space.x24,
+                    height: Ds.touch.minTarget,
+                    radius: Ds.r.chip),
+              ],
+            ),
+            SizedBox(height: Ds.space.x24),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// CMD #2013 — the ONE summary row above Place order.
+///
+/// Left: "Total items" and the count. Right: "Advance to pay" and the amount.
+/// The four lines that used to stack here — Sale price (PTR), MRP total,
+/// Delivery FREE and "Rate confirmed after supplier quote." — said four things
+/// about a basket whose one live question is what has to be paid now.
+///
+/// Both halves are `render.summary.bottom`, which resolves the advance from
+/// the ladder (`advance_pct_for`) server-side. This widget counts nothing and
+/// multiplies nothing; `has_advance` is the backend's answer to "is there an
+/// advance?", so an amount it did not send is never invented.
+class C2013SummaryRow extends StatelessWidget {
+  final Map<String, dynamic> render;
+  const C2013SummaryRow({super.key, required this.render});
+
+  @override
+  Widget build(BuildContext context) {
+    final s = (render['summary'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final b = (s['bottom'] as Map?)?.cast<String, dynamic>() ?? const {};
+    if (b['has'] != true) return const SizedBox.shrink();
+    final itemsLabel = (b['items_label'] ?? '').toString();
+    final itemsValue = (b['items_value'] ?? '').toString();
+    final advanceLabel = (b['advance_label'] ?? '').toString();
+    final advance = (b['advance_display'] ?? '').toString();
+    final hasAdvance = b['has_advance'] == true && advance.isNotEmpty;
+    if (itemsLabel.isEmpty && !hasAdvance) return const SizedBox.shrink();
+
+    RenderLog.write('c2013_cart_summary',
+        'items=$itemsValue;advance=${hasAdvance ? advance : ''}');
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        // spaceBetween, not a Spacer: a Spacer is a flex child and takes its
+        // share of the free width in the same pass as the two halves, so the
+        // labels lost the space it took. mainAxisAlignment spends the free
+        // width AFTER the halves are sized, which keeps "Advance to pay" on
+        // the right edge without ever taking a pixel the labels need.
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          // Both halves are Flexible and neither is a Spacer: a Spacer here
+          // claimed the free width first and then squeezed "Advance to pay"
+          // into an ellipsis at 360px while 65px sat unused beside it. The
+          // amounts never shrink — only the two labels do, and the left one
+          // goes first because it is the shorter sentence.
+          Flexible(
+            flex: 3,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: Text(
+                    itemsLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Ds.t.bodySecondary,
+                  ),
+                ),
+                SizedBox(width: Ds.space.x4),
+                Text(itemsValue, style: Ds.t.bodyStrong),
+              ],
+            ),
+          ),
+          if (hasAdvance) ...[
+            SizedBox(width: Ds.space.x12),
+            Flexible(
+              flex: 4,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  Flexible(
+                    child: Text(
+                      advanceLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.right,
+                      style: Ds.t.bodySecondary,
+                    ),
+                  ),
+                  SizedBox(width: Ds.space.x4),
+                  Text(advance,
+                      style: Ds.t.bodyStrong.copyWith(color: Ds.c.brand)),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );

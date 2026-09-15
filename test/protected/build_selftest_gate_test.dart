@@ -1,0 +1,333 @@
+// CHANGE #222 — the gate that guards the gate.
+//
+// #222 folded testing INTO the build: scripts/deploy.sh now refuses to build
+// unless scripts/selftest.sh (protected suite + focused test) is green.
+//
+// CHANGE #273 moved the third phase, rg_check(), OFF the build path. It is a
+// heavy read against production, and firing it from the pre-build gate is how a
+// 13,573 ms guard query landed on top of the per-minute cron burst at 10:01:24
+// UTC on 2026-08-18, 33 seconds before Postgres went silent for two hours. It
+// now runs once, after the live alias is confirmed, from
+// scripts/rg_after_deploy.sh. The guard itself is NOT weakened: dev_cmd_complete()
+// still raises on a red rg_check, so no command completes with a schema
+// regression outstanding. This file pins BOTH halves — the build gate stays,
+// and the guard keeps running after every deploy. That fix is only worth anything if it cannot be quietly undone — a
+// future edit that drops the gate line from deploy.sh would restore exactly the
+// old failure mode (ship red, fail QA, pay for a "Debug pass — verify & fix #N"
+// twin) and nothing would notice.
+//
+// So the gate is pinned here, in the suite that runs before every deploy. Delete
+// the gate and this test goes red, which stops the deploy that removed it.
+//
+// This file reads the shipped scripts as text on purpose. It asserts the
+// CONTRACT (the gate exists, runs before the build, has no escape hatch), not
+// the wording of any log line, so ordinary edits to those scripts stay free.
+
+import 'dart:io';
+
+import 'package:flutter_test/flutter_test.dart';
+
+/// Strips shell comments so a rule is never "satisfied" by a line that merely
+/// mentions it in prose. Only executable shell counts as enforcement.
+String _code(String source) => source
+    .split('\n')
+    .map((line) {
+      final trimmed = line.trimLeft();
+      if (trimmed.startsWith('#')) return '';
+      return line;
+    })
+    .join('\n');
+
+void main() {
+  final repoRoot = Directory.current.path;
+  final deployFile = File('$repoRoot/scripts/deploy.sh');
+  final selftestFile = File('$repoRoot/scripts/selftest.sh');
+
+  group('the fold-in self-test gate is wired into the build', () {
+    test('both scripts exist and are executable shell', () {
+      expect(deployFile.existsSync(), isTrue,
+          reason: 'scripts/deploy.sh is THE deploy path and must exist');
+      expect(selftestFile.existsSync(), isTrue,
+          reason: 'scripts/selftest.sh is the fold-in test gate (CHANGE #222); '
+              'without it deploy.sh runs no tests at all');
+    });
+
+    test('deploy.sh calls the gate, and calls it BEFORE building', () {
+      final code = _code(deployFile.readAsStringSync());
+
+      final gateIndex = code.indexOf('scripts/selftest.sh');
+      expect(gateIndex, greaterThan(-1),
+          reason: 'deploy.sh must invoke scripts/selftest.sh. Removing this '
+              'call restores the pre-#222 hole: deploys with a red suite.');
+
+      // The gate is worthless after the fact — a bundle built from red code has
+      // already cost the build. It must gate `flutter build`.
+      final buildIndex = code.indexOf('flutter build web');
+      expect(buildIndex, greaterThan(-1),
+          reason: 'deploy.sh should still build the web bundle');
+      expect(gateIndex, lessThan(buildIndex),
+          reason: 'the self-test must run BEFORE `flutter build web`, so red '
+              'tests mean no bundle is ever produced');
+    });
+
+    test('a red gate aborts the deploy instead of warning', () {
+      final code = _code(deployFile.readAsStringSync());
+
+      // Under `set -e` the status must be captured, or the abort branch is dead
+      // code that never prints. Both halves of the contract are asserted.
+      expect(code.contains('|| SELFTEST_STATUS=\$?'), isTrue,
+          reason: 'deploy.sh runs under set -e; the gate exit code must be '
+              'captured with `|| SELFTEST_STATUS=\$?`');
+      expect(RegExp(r'SELFTEST_STATUS"?\s*-ne\s*0').hasMatch(code), isTrue,
+          reason: 'deploy.sh must branch on a non-zero gate status');
+      expect(RegExp(r'-ne 0[\s\S]{0,900}exit 1').hasMatch(code), isTrue,
+          reason: 'a red gate must `exit 1`, not merely print a warning');
+    });
+
+    test('the gate has no skip flag — an opt-out is not a gate', () {
+      final code = _code(deployFile.readAsStringSync());
+      final gateLine = code
+          .split('\n')
+          .firstWhere((l) => l.contains('scripts/selftest.sh'), orElse: () => '');
+
+      for (final escape in const [
+        'SELFTEST_SKIP',
+        'SKIP_TESTS',
+        'NO_TESTS',
+        '--skip',
+      ]) {
+        expect(code.contains(escape), isFalse,
+            reason: 'deploy.sh must not offer "$escape": an escape hatch is how '
+                'a gate quietly stops being a gate');
+      }
+      expect(gateLine.contains('|| true'), isFalse,
+          reason: 'the gate call must never be swallowed with `|| true`');
+    });
+  });
+
+  // ── CMD #1973 — the gate got FASTER, and must not have got weaker ────────
+  // The protected suite used to run twice per ship (direct_deploy.sh's own prep
+  // phase, then deploy.sh's gate on the same bytes) and the second six minutes
+  // were spent inside the deploy lock. The fix is a CONTENT-ADDRESSED receipt,
+  // not a skip flag: it records that one exact tree was green, and only a run
+  // that really executed the suite may write one. And `flutter clean` is now
+  // conditional on the toolchain fingerprint, which is only safe while the
+  // build-output guard and the boot gate stay unconditional.
+  group('CMD #1973 — the fast path cannot become an escape hatch', () {
+    test('the green receipt is written only by a run that really ran', () {
+      final code = _code(selftestFile.readAsStringSync());
+      expect(code.contains('RECEIPT_DIR'), isTrue,
+          reason: 'the receipt is how the suite runs once per tree');
+      expect(RegExp(r'PROTECTED_OK"?\s*=\s*"?passed').hasMatch(code), isTrue,
+          reason: 'a receipt may only be banked when phase 1 actually PASSED — '
+              'a reused run refreshing its own receipt turns a bounded TTL '
+              'into an unbounded one, one deploy at a time');
+    });
+
+    test('the receipt is keyed by the tree, never by a command or a caller', () {
+      final code = _code(selftestFile.readAsStringSync());
+      expect(code.contains('_tree_id'), isTrue);
+      expect(code.contains('rev-parse'), isTrue,
+          reason: 'the key must be derived from the git tree being tested');
+      expect(code.contains('git diff HEAD'), isTrue,
+          reason: 'uncommitted work is part of the tree being certified');
+      for (final escape in const [
+        'SELFTEST_SKIP',
+        'SKIP_SELFTEST',
+        'SELFTEST_ASSUME_GREEN',
+        'SKIP_PROTECTED',
+      ]) {
+        expect(code.contains(escape), isFalse,
+            reason: 'selftest.sh must not offer "$escape" — the receipt is an '
+                'assertion about bytes, an env flag is an opt-out');
+      }
+    });
+
+    test('the incremental build is opt-in and the guards stay unconditional', () {
+      final code = _code(deployFile.readAsStringSync());
+      expect(code.contains('MEDIBO_SKIP_CLEAN'), isTrue,
+          reason: 'CMD #1973 takes the clean off the lock for an unchanged '
+              'toolchain');
+      expect(RegExp(r'MEDIBO_SKIP_CLEAN:-0').hasMatch(code), isTrue,
+          reason: 'unset must mean CLEAN — the 2026-07-03 corrupt-dart2js trap '
+              'is the default, never the exception');
+      expect(code.contains('flutter clean'), isTrue,
+          reason: 'the clean must still be there for every other case');
+      // the two things that catch a corrupt bundle before a byte is uploaded
+      expect(code.contains('guard_bundle_small'), isTrue);
+      expect(code.contains('boot_gate'), isTrue);
+      for (final line in code.split('\n')) {
+        if (line.contains('guard_bundle_small') || line.contains('boot_gate')) {
+          expect(line.contains('MEDIBO_SKIP_CLEAN'), isFalse,
+              reason: 'no guard may be conditional on the fast path');
+        }
+      }
+    });
+
+    // The second half of the same measurement. CHANGE #1333 shipped with the
+    // prep split working — 586s of tests and build ran with the lane free —
+    // and STILL held the deploy lock 890s, because the tail of deploy.sh's
+    // upload phase (disk prune, a second verify_live.sh, the regression guard,
+    // the mobile-first check and a `timeout 900` responsive sweep) ran inside
+    // it. Every one of those only reads production, on a bundle already past
+    // the live-assert. They belong to scripts/post_deploy_checks.sh, which the
+    // deployer runs once the lock is back.
+    test('the post-deploy checks are a separate, lock-free script', () {
+      final postFile = File('$repoRoot/scripts/post_deploy_checks.sh');
+      expect(postFile.existsSync(), isTrue,
+          reason: 'the lock must not pay for checks that only read production');
+      final post = _code(postFile.readAsStringSync());
+      final deploy = _code(deployFile.readAsStringSync());
+
+      for (final step in [
+        'scripts/verify_live.sh',
+        'scripts/rg_after_deploy.sh',
+        'scripts/mobile_first_check.sh',
+        'scripts/responsive_sweep.js',
+      ]) {
+        expect(post.contains(step), isTrue,
+            reason: '$step is post-deploy work, so it lives here');
+      }
+
+      expect(deploy.contains('scripts/post_deploy_checks.sh'), isTrue,
+          reason: 'a plain deploy.sh run still owes every one of these');
+      expect(deploy.contains('MEDIBO_DEFER_POST'), isTrue,
+          reason: 'the deployer holding the lock says it will run them itself');
+      expect(deploy.contains('scripts/responsive_sweep.js'), isFalse,
+          reason: 'the sweep may not also stay inline — that is the 12 minutes');
+    });
+
+    test('nothing in the post-deploy script can take or extend the lock', () {
+      final post =
+          _code(File('$repoRoot/scripts/post_deploy_checks.sh').readAsStringSync());
+      for (final forbidden in [
+        'deploy_lock_try',
+        'deploy_lock_touch',
+        'deploy_lock_release',
+        'wrangler',
+      ]) {
+        expect(post.contains(forbidden), isFalse,
+            reason: 'post-deploy runs with the lane free and publishes nothing; '
+                'found $forbidden');
+      }
+    });
+
+    // Dropping .dart_tool after every deploy is what made the NEXT build a full
+    // one, which is the cost this command just removed. It stays as a disk
+    // valve, gated on the disk actually being short.
+    test('the incremental state survives a healthy deploy', () {
+      final post =
+          _code(File('$repoRoot/scripts/post_deploy_checks.sh').readAsStringSync());
+      expect(post.contains('.dart_tool'), isTrue,
+          reason: 'the disk valve is still needed');
+      final drop = post
+          .split('\n')
+          .firstWhere((l) => l.contains('rm -rf') && l.contains('.dart_tool'),
+              orElse: () => '');
+      expect(drop, isNot(''), reason: 'the drop must still exist');
+      expect(post.contains('PRUNE_BELOW_MB'), isTrue,
+          reason: 'and it must be gated on free disk, not run every deploy');
+    });
+  });
+
+  group('selftest.sh gates the build on tests', () {
+    test('it runs the protected suite and the change\'s own focused test', () {
+      final code = _code(selftestFile.readAsStringSync());
+
+      expect(code.contains('flutter test test/protected/'), isTrue,
+          reason: 'phase 1 is the protected regression suite');
+      expect(code.contains('_test.dart'), isTrue,
+          reason: 'phase 2 must discover the change\'s own focused test(s)');
+    });
+
+    test('it exits non-zero when a phase is red', () {
+      final code = _code(selftestFile.readAsStringSync());
+      expect(RegExp(r'exit 1').hasMatch(code), isTrue,
+          reason: 'a red phase must exit non-zero, or deploy.sh cannot gate');
+      expect(code.contains('exit 0'), isTrue,
+          reason: 'an all-green run must exit 0 so the deploy proceeds');
+    });
+
+    test('it caps in-session retries instead of looping forever', () {
+      final code = _code(selftestFile.readAsStringSync());
+      expect(code.contains('ATTEMPT_CAP'), isTrue,
+          reason: 'CHANGE #222 caps in-session fix attempts (default 3)');
+      expect(code.contains('qa_report'), isTrue,
+          reason: 'on hitting the cap the gate files qa_report(failed) and '
+              'stops — it must never silently deploy or spin');
+      expect(RegExp(r'exit 2').hasMatch(code), isTrue,
+          reason: 'the cap path exits 2 so deploy.sh can report it distinctly');
+    });
+  });
+
+  group('rg_check runs AFTER the deploy, never on the build path (#273)', () {
+    final rgFile = File('$repoRoot/scripts/rg_after_deploy.sh');
+
+    test('the post-deploy guard script exists', () {
+      expect(rgFile.existsSync(), isTrue,
+          reason: 'scripts/rg_after_deploy.sh is where rg_check() lives since '
+              '#273. Without it the guard stops running at all — which is a '
+              'bigger regression than the latency it was moved to avoid.');
+    });
+
+    test('deploy.sh does not ask the pre-build gate to run rg_check', () {
+      final code = _code(deployFile.readAsStringSync());
+      final gateLine = code
+          .split('\n')
+          .firstWhere((l) => l.contains('scripts/selftest.sh'), orElse: () => '');
+
+      expect(gateLine.contains('--rg'), isFalse,
+          reason: 'the pre-build gate must not run rg_check: a heavy read '
+              'against production has no business standing between a green '
+              'suite and a bundle (see the 2026-08-18 10:01 UTC outage)');
+      expect(gateLine.contains('--no-rg'), isTrue,
+          reason: 'deploy.sh must pass --no-rg explicitly, so a future change '
+              'to selftest.sh defaults cannot silently put it back');
+    });
+
+    // CMD #1973 moved the body of the post-deploy block into
+    // scripts/post_deploy_checks.sh so it can run with the deploy lock back in
+    // the register. #273's invariant is unchanged and still asserted here: the
+    // guard runs after the upload and can never abort a deploy that is live.
+    // Only the file it is written in moved.
+    test('the guard runs after the upload, and it cannot abort it', () {
+      final code = _code(deployFile.readAsStringSync());
+      final postFile = File('$repoRoot/scripts/post_deploy_checks.sh');
+      final post =
+          postFile.existsSync() ? _code(postFile.readAsStringSync()) : '';
+
+      final delegates = code.indexOf('scripts/post_deploy_checks.sh');
+      final inline = code.indexOf('scripts/rg_after_deploy.sh');
+      expect(delegates > -1 || inline > -1, isTrue,
+          reason: 'deploy.sh must still run rg_check somewhere — after the '
+              'deploy, not before the build');
+
+      final uploadIndex = code.indexOf('wrangler pages deploy');
+      expect(uploadIndex, greaterThan(-1),
+          reason: 'deploy.sh should still upload the bundle');
+      expect(delegates > -1 ? delegates : inline, greaterThan(uploadIndex),
+          reason: 'the guard must run AFTER the upload — that is the whole '
+              'point of #273');
+
+      final host = delegates > -1 ? post : code;
+      expect(host.contains('scripts/rg_after_deploy.sh'), isTrue,
+          reason: 'wherever the post-deploy block lives, rg_check is in it');
+      final rgLine = host
+          .split('\n')
+          .firstWhere((l) => l.contains('scripts/rg_after_deploy.sh'),
+              orElse: () => '');
+      expect(rgLine.contains('|| true'), isTrue,
+          reason: 'a red guard must not fail a deploy that is already live; '
+              'dev_cmd_complete() is what refuses to complete on red');
+    });
+
+    test('the guard script itself never exits non-zero', () {
+      final code = _code(rgFile.readAsStringSync());
+      expect(code.contains('rgcheck') || code.contains('rg_check'), isTrue,
+          reason: 'rg_after_deploy.sh must actually call the guard');
+      expect(RegExp(r'^\s*exit [1-9]', multiLine: true).hasMatch(code), isFalse,
+          reason: 'by the time this runs the bundle is live — exiting non-zero '
+              'would make a healthy deploy look broken');
+    });
+  });
+}

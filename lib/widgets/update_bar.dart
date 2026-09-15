@@ -1,0 +1,425 @@
+// CHANGE #286 → CMD #2028 — the floating update pill.
+//
+// WHAT THIS IS
+// One white pill that floats clear of the bottom nav AND of the floating cart
+// pill, on every screen, until the app is updated:
+//
+//   ┌─────────────────────────────────────────────────┐
+//   │  (⚙)   App update available      [ Update Now ] │
+//   └─────────────────────────────────────────────────┘
+//
+//   • gear glyph in a white, shadowed circle on the left
+//   • one dark line of copy in the middle
+//   • one solid brand-green pill button on the right
+//   • no Later, no dismiss, no version text — it stays until the update lands
+//
+// It is an OVERLAY, installed once from `MaterialApp.builder`: it reflows
+// nothing, it covers only its own rectangle, and every pixel outside that
+// rectangle keeps taking taps. Both platforms raise the SAME bar — the web
+// watcher (version.json) and the Android driver (Play in-app updates) differ
+// only in what `Update Now` does.
+//
+// ZERO STYLE LITERALS AND ZERO DART COPY. Every colour, size, radius, gap,
+// shadow and duration is read from the `Ds` token layer (backend `ui_design`),
+// and the sentence, the button word, the two progress words and the float
+// height all arrive in the `app_update_bar()` payload. Restyling, rewording or
+// re-positioning this bar is an UPDATE, never a deploy.
+
+import 'package:flutter/material.dart';
+
+import '../design_tokens.dart';
+import '../services/ui_copy.dart';
+import '../utils/render_log.dart';
+
+/// Render-log key proving the bar actually painted in the live build.
+const String kUpdateBarRenderKey = 'c286_update_bar';
+
+/// CMD #2028 — proof key for the floating variant, so the live render-log can
+/// tell the #286 strip from this pill.
+const String kUpdatePillRenderKey = 'c2028_update_pill';
+
+/// The one piece of state the bar needs, held outside the widget tree so the
+/// web watcher and the Android driver (both plain services) can raise the pill
+/// from anywhere without a BuildContext.
+class UpdateBarController extends ChangeNotifier {
+  bool _visible = false;
+  bool _updating = false;
+  bool _downloaded = false;
+  VoidCallback? _onUpdate;
+  Map<String, dynamic> _payload = const {};
+
+  bool get visible => _visible;
+
+  /// True from the moment the user taps until the app actually swaps builds.
+  /// The pill shows the updating label and stops accepting taps — one update,
+  /// never three.
+  bool get updating => _updating;
+
+  /// Android flexible flow only: the bytes are on the device and Play is
+  /// restarting the app. A separate word from "updating" because the wait is a
+  /// different one, and both words come from the backend.
+  bool get downloaded => _downloaded;
+
+  VoidCallback? get onUpdate => _onUpdate;
+
+  /// The last `app_update_bar()` payload. Every string the pill prints and the
+  /// height it floats at are read out of here.
+  Map<String, dynamic> get payload => _payload;
+
+  /// Raise the pill with the payload that decided it.
+  void show({required VoidCallback onUpdate, Map<String, dynamic>? payload}) {
+    _onUpdate = onUpdate;
+    if (payload != null) _payload = payload;
+    if (_visible) {
+      notifyListeners();
+      return;
+    }
+    _visible = true;
+    notifyListeners();
+  }
+
+  /// Latch into the updating state. Idempotent, so a second tap changes
+  /// nothing.
+  void markUpdating() {
+    if (_updating) return;
+    _updating = true;
+    notifyListeners();
+  }
+
+  /// Android: Play finished downloading and is about to restart the app.
+  void markDownloaded() {
+    if (_downloaded) return;
+    _downloaded = true;
+    _updating = true;
+    notifyListeners();
+  }
+
+  /// Play reported the download failed or the customer backed out. The pill
+  /// goes back to offering the button — it never disappears, because the
+  /// update is still pending.
+  void markIdle() {
+    if (!_updating && !_downloaded) return;
+    _updating = false;
+    _downloaded = false;
+    notifyListeners();
+  }
+
+  // ── CMD #2051 — the copy, resolved ONCE ────────────────────────────────
+  //
+  // The payload is the source and ui_copy is the fallback for an unreachable
+  // backend. That rule used to live inside the host, which meant the bottom
+  // stack would have had to repeat it — two places deciding one sentence is
+  // how a fallback starts showing on one surface only. It lives here, next to
+  // the payload it resolves, and both renderers ask.
+
+  String _s(String key, String copyKey) {
+    final v = _payload[key];
+    if (v is String && v.isNotEmpty) return v;
+    return c(copyKey);
+  }
+
+  /// The one line of copy in the middle of the bar.
+  String get label => _s('label', 'update_bar.title');
+
+  /// The word on the green button.
+  String get actionLabel => _s('button_label', 'update_bar.action');
+
+  /// What the button says once the update is running.
+  String get updatingLabel => _s('updating_label', 'update_bar.updating');
+
+  /// Android flexible flow: what it says while Play restarts the app.
+  String get downloadedLabel => _s('downloaded_label', 'update_bar.updating');
+
+  /// How far off the bottom of the SCREEN the bar floats when it is drawn on
+  /// its own (the app-level host, on a surface with no bottom stack). Null
+  /// falls back to the design token. Inside the stack it is 0 — the stack is
+  /// already sitting on the nav.
+  double? get bottomGap => (_payload['bottom_gap'] as num?)?.toDouble();
+
+  /// Test seam — the controller is a long-lived singleton in production.
+  @visibleForTesting
+  void reset() {
+    _visible = false;
+    _updating = false;
+    _downloaded = false;
+    _onUpdate = null;
+    _payload = const {};
+    notifyListeners();
+  }
+}
+
+/// CMD #2037 — how much of the bottom of the screen the update card is
+/// currently covering, in logical pixels, or 0 when it is not showing.
+///
+/// The card is an OVERLAY installed from `MaterialApp.builder`, so nothing
+/// inside the app can see it by looking at its own layout. Anything that has to
+/// stay clear of it — the floating cart pill, a page's bottom padding — listens
+/// to this instead of being told the number twice. It is MEASURED, not
+/// computed: the sentence is allowed a second line at 360 px, so the card's
+/// height is not a constant anyone may assume.
+final ValueNotifier<double> appUpdateBarHeight = ValueNotifier<double>(0);
+
+/// CMD #2051 — how many storefront bottom stacks are mounted right now.
+///
+/// The bar has TWO renderers and must never have two at once: the app-level
+/// [UpdateBarHost] (which is what every non-storefront screen gets) and the
+/// storefront's own bottom stack, where the bar is one row of a column instead
+/// of a free-floating overlay. While a stack is up it owns the bar and the
+/// host stands down. It lives here rather than in the stack's own file so the
+/// dependency runs one way: the stack knows about the bar, the bar knows only
+/// that somebody has taken it over.
+final ValueNotifier<int> bottomStackMounted = ValueNotifier<int>(0);
+
+/// The ONE controller the app-level host renders. Both the web watcher and the
+/// Android driver raise this same instance, which is what makes "same bar, same
+/// look" true rather than a coincidence of two widgets.
+final UpdateBarController appUpdateBar = UpdateBarController();
+
+/// Wraps the whole app (from `MaterialApp.builder`) and parks the pill at the
+/// bottom of the screen on top of everything else — above the bottom nav, above
+/// the floating cart pill, above any sheet backdrop.
+class UpdateBarHost extends StatelessWidget {
+  const UpdateBarHost({super.key, required this.controller, required this.child});
+
+  final UpdateBarController controller;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: Listenable.merge([controller, bottomStackMounted]),
+      builder: (context, _) {
+        // CMD #2051 — a storefront bottom stack is up, so the bar is one row
+        // of THAT column and this host draws nothing. One bar, never two, and
+        // never one covering the other.
+        final takenOver = bottomStackMounted.value > 0;
+        if (!controller.visible || takenOver) {
+          // CMD #2037 — nothing is covered while the card is down, and the
+          // pill that lifts for it has to hear that too.
+          if (appUpdateBarHeight.value != 0) {
+            WidgetsBinding.instance.addPostFrameCallback(
+                (_) => appUpdateBarHeight.value = 0);
+          }
+          return child;
+        }
+
+        // The Stack's only extra child is the bar itself, so nothing outside
+        // the bar's own rectangle can swallow a tap.
+        return Stack(
+          children: [
+            child,
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: UpdateBar(
+                title: controller.label,
+                actionLabel: controller.actionLabel,
+                updatingLabel: controller.updatingLabel,
+                downloadedLabel: controller.downloadedLabel,
+                updating: controller.updating,
+                downloaded: controller.downloaded,
+                bottomGap: controller.bottomGap,
+                onUpdate: controller.onUpdate ?? () {},
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// The pill itself — pure presentation, so a widget test can mount it with
+/// fixture copy and no network, no timers and no service singleton.
+class UpdateBar extends StatefulWidget {
+  const UpdateBar({
+    super.key,
+    required this.title,
+    required this.actionLabel,
+    required this.updatingLabel,
+    required this.updating,
+    required this.onUpdate,
+    this.downloadedLabel,
+    this.downloaded = false,
+    this.bottomGap,
+  });
+
+  final String title;
+  final String actionLabel;
+  final String updatingLabel;
+
+  /// Android flexible flow: shown while Play applies the download and restarts.
+  final String? downloadedLabel;
+
+  final bool updating;
+  final bool downloaded;
+
+  /// How far off the bottom of the screen the pill floats, from the backend, so
+  /// clearing a taller bottom nav is an UPDATE. Null falls back to the design
+  /// token (bottom nav height) plus one step of the spacing scale.
+  final double? bottomGap;
+
+  final VoidCallback onUpdate;
+
+  @override
+  State<UpdateBar> createState() => _UpdateBarState();
+}
+
+class _UpdateBarState extends State<UpdateBar> with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl =
+      AnimationController(vsync: this, duration: Ds.motion.sheet)..forward();
+
+  /// CMD #2037 — the card's own box, so its height is MEASURED rather than
+  /// assumed. At 360 px the sentence takes a second line and the card grows;
+  /// anything clearing it has to clear what it actually is.
+  final GlobalKey _cardKey = GlobalKey();
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  /// Publish how much of the bottom of the screen the card covers, measured
+  /// from the top of the bottom nav upwards: the card itself plus the step of
+  /// air above it.
+  void _publishHeight() {
+    if (!mounted) return;
+    final box = _cardKey.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return;
+    final v = box.size.height;
+    if ((appUpdateBarHeight.value - v).abs() > 0.5) {
+      appUpdateBarHeight.value = v;
+    }
+  }
+
+  String get _label {
+    if (widget.downloaded) {
+      final d = widget.downloadedLabel;
+      if (d != null && d.isNotEmpty) return d;
+    }
+    return widget.updating ? widget.updatingLabel : widget.actionLabel;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    try {
+      RenderLog.write(kUpdateBarRenderKey,
+          'variant:floating_pill;updating:${widget.updating}');
+      RenderLog.write(kUpdatePillRenderKey, 1);
+    } catch (_) {}
+    WidgetsBinding.instance.addPostFrameCallback((_) => _publishHeight());
+
+    // CMD #2051 — FLUSH, and full width.
+    //
+    // `bottomGap` is still the backend's number and still means "how far off
+    // the bottom of the SCREEN does this bar float", which is what the
+    // app-level host (every non-storefront surface) needs to clear a bottom
+    // nav it is painted over. Zero means flush: the bar is a row of the
+    // storefront bottom stack, the stack is already sitting on the nav, and
+    // whatever safe-area there is below has been dealt with by the thing that
+    // owns that edge. Adding a system inset here as well would show as a white
+    // seam between the bar and the nav.
+    final gap = widget.bottomGap ?? Ds.touch.bottomBarGap;
+    final bottomInset =
+        gap <= 0 ? 0.0 : MediaQuery.of(context).viewPadding.bottom + gap;
+
+    // One data row tall — the same 56 the pill above it is, so the two read as
+    // one stack rather than two unrelated bits of chrome.
+    final minHeight = Ds.touch.listRowMinHeight;
+
+    return SlideTransition(
+      position: Tween<Offset>(begin: const Offset(0, 1), end: Offset.zero)
+          .animate(CurvedAnimation(parent: _ctrl, curve: Ds.motion.curve)),
+      child: Padding(
+        // CMD #2051 — edge to edge. The bar is not a floating card any more:
+        // it is the top surface of the bottom chrome, so it spans the screen
+        // and only its TOP corners are rounded.
+        padding: EdgeInsets.only(bottom: bottomInset),
+        child: DecoratedBox(
+          key: _cardKey,
+          decoration: BoxDecoration(
+            color: Ds.c.surface,
+            borderRadius:
+                BorderRadius.vertical(top: Radius.circular(Ds.r.card)),
+            // CMD #2037 — a SOFT TOP shadow. Sitting on the nav, the card has
+            // only one edge anything can see; e2 falls downwards, behind the
+            // nav, which is why the card used to read as a flat white block.
+            boxShadow: Ds.elevation.eUp,
+          ),
+          child: Material(
+            type: MaterialType.transparency,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: minHeight),
+              child: Padding(
+                padding: EdgeInsets.symmetric(
+                    horizontal: Ds.space.x16, vertical: Ds.space.x8),
+                // MOBILE FIRST: at 360 px the sentence, the circle and the
+                // button cannot all have their ideal width, so the CHROME
+                // gives way and the sentence is allowed a second line — it is
+                // never clipped to "App u…".
+                child: Row(
+                  children: [
+                    _gear(),
+                    SizedBox(width: Ds.space.x8),
+                    Expanded(
+                      child: Text(
+                        widget.title,
+                        style: Ds.t.bodyStrong.copyWith(color: Ds.c.text),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    SizedBox(width: Ds.space.x8),
+                    _action(),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The gear, in its own white shadowed circle.
+  Widget _gear() => Container(
+        width: Ds.touch.minTarget,
+        height: Ds.touch.minTarget,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          shape: BoxShape.circle,
+          boxShadow: Ds.elevation.e1,
+        ),
+        // CMD #2037 — the OUTLINE gear. The filled glyph read as a heavy dot
+        // next to one line of text.
+        child: Icon(Icons.settings_outlined,
+            color: Ds.c.text, size: Ds.t.subtitleSize),
+      );
+
+  Widget _action() => FilledButton(
+        onPressed: (widget.updating || widget.downloaded) ? null : widget.onUpdate,
+        style: FilledButton.styleFrom(
+          backgroundColor: Ds.c.brand,
+          foregroundColor: Ds.c.surface,
+          disabledBackgroundColor: Ds.c.brandDark,
+          disabledForegroundColor: Ds.c.surface,
+          minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget),
+          // NOT x16: at 360 px the eight extra pixels come straight out of the
+          // sentence's share of the row, and #2028's mobile-first rule is that
+          // the CHROME gives way before the line does.
+          padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
+          // CMD #2037 — a rounded RECTANGLE, not a stadium: the same corner
+          // every primary button in the app wears.
+          shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+          visualDensity: VisualDensity.standard,
+        ),
+        child: Text(
+          _label,
+          style: Ds.t.bodyStrong.copyWith(color: Ds.c.surface),
+          maxLines: 1,
+        ),
+      );
+}

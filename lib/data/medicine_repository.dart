@@ -7,8 +7,12 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/home_sections.dart';
 import '../models/product.dart';
 import '../models/product_detail.dart';
+import '../models/product_reviews.dart';
+import '../models/product_compare.dart';
+import '../models/search_page.dart';
 import '../models/storefront_p3.dart';
 import 'storefront_labels.dart';
+import '../services/registration_payload.dart';
 
 /// A therapeutic_class plus how many medicines it holds — powers the
 /// dynamic category tiles and their count badges.
@@ -60,6 +64,23 @@ typedef FetchPageResult = ({
   // under a seconds'); rewording them is now an UPDATE.
   String? moreLabel,
   String? endLabel,
+  // CHANGE #174 — the sort chips, exactly as the backend sent them:
+  // [{key, label, active}]. Empty means "this viewer gets no sort control",
+  // which is the normal state until a product has trade pricing. The grid
+  // never builds this list itself and never decides which sort is active.
+  List<Map<String, dynamic>> sortOptions,
+  // CMD #434 — true when this page came from an OUTAGE FALLBACK rather than
+  // from the storefront envelope. A degraded page carries no showing_label,
+  // no total, no paging plan and no sort chips, so it must never be written
+  // into the session cache: one transient RPC hiccup used to leave that
+  // category serving a label-less page for the rest of the session (an EMPTY
+  // c553_count_label while storefront_page itself was perfectly healthy), and
+  // Retry re-read the poisoned entry, so the grid could never recover without
+  // a full reload. Callers read it; nothing else in the app branches on it.
+  // CMD #1903 — and nothing else. CHANGE #790's `blocks` (the brand-family
+  // fold) is gone from the envelope and from here: a search page is `items`,
+  // one entry per product, in the backend's own rank order.
+  bool degraded,
 });
 
 /// CHANGE #553 — one product plus the backend's availability verdict, as
@@ -69,8 +90,15 @@ typedef StorefrontProduct = ({String status, bool gated, Product? item});
 // ─── Session-scoped in-memory caches (cleared on app restart) ────────────────
 // Keyed by "$term|$category|$offset[|buyable]". Cap at 50 entries per cache.
 final Map<String, FetchPageResult> _resultCache = {};
-final Map<String, List<String>> _suggestCache = {};
 const int _kMaxCacheEntries = 50;
+
+/// CMD #434 — one short, log-safe line for an exception. The render log is a
+/// single DOM node read by `render_verify.js`, so a full Postgrest stack would
+/// drown every other key in it.
+String _short(Object e) {
+  final s = e.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
+  return s.length <= 120 ? s : '${s.substring(0, 120)}…';
+}
 
 void _cacheSet<V>(Map<String, V> cache, String key, V value) {
   if (cache.length >= _kMaxCacheEntries) {
@@ -119,7 +147,14 @@ Future<T?> retryWithBackoff<T>(
 /// Reads are paginated: the storefront pulls [pageSize] rows at a time and
 /// keeps requesting the next page as the user scrolls.
 class MedicineRepository {
-  final SupabaseClient _client;
+  /// The client this repository was HANDED, or null for "ask Supabase when you
+  /// actually need one". CMD #1906 — the search header is constructed by two
+  /// screens whose widget tests never boot Supabase, and a repository that
+  /// resolves the client in its constructor makes merely BUILDING those screens
+  /// throw. Resolution moved to first use; nothing else changed.
+  final SupabaseClient? _handedClient;
+
+  SupabaseClient get _client => _handedClient ?? Supabase.instance.client;
 
   /// Hook every [fetchPage] RPC call goes through. Production code always
   /// forwards to the real client's `.rpc()`; tests substitute a fake so
@@ -130,7 +165,7 @@ class MedicineRepository {
   MedicineRepository([
     SupabaseClient? client,
     Future<dynamic> Function(String fn, {Map<String, dynamic>? params})? rpc,
-  ]) : _client = client ?? Supabase.instance.client {
+  ]) : _handedClient = client {
     _rpc = rpc ?? (fn, {params}) => _client.rpc(fn, params: params);
   }
 
@@ -230,29 +265,12 @@ class MedicineRepository {
     }
   }
 
-  /// #401: cart_items stores a point-in-time price/name snapshot with no
-  /// `buyable` column, so cart lines must re-fetch current buyability by id
-  /// to know if a line is still orderable. Returns id -> buyable (missing
-  /// ids, e.g. a deleted product, are simply absent from the map).
-  Future<Map<String, bool>> fetchBuyableFlags(List<String> ids) async {
-    if (ids.isEmpty) return {};
-    try {
-      final raw = await _client
-          .rpc('medicine_buyable_flags', params: {'p_ids': ids});
-      final flags = ((raw is List ? raw.first : raw) as Map)['flags'] as Map;
-      final rows = flags.entries
-          .map((e) => <String, dynamic>{'id': e.key, 'buyable': e.value})
-          .toList();
-      final out = <String, bool>{};
-      for (final r in rows as List) {
-        final row = r as Map<String, dynamic>;
-        out[row['id'].toString()] = row['buyable'] == true;
-      }
-      return out;
-    } catch (_) {
-      return {};
-    }
-  }
+  // CHANGE #640 — `fetchBuyableFlags()` (an extra `medicine_buyable_flags`
+  // round trip that answered "is this line still orderable?" from the raw
+  // `buyable` column) is GONE. #610 already stopped calling it — cart_state()
+  // returns the flag itself — so all it did was leave a SECOND availability
+  // door open in Dart for the next caller to walk through. Availability has
+  // one door now: the backend's `availability` verdict on the payload.
 
   /// Estimated total row count from Postgres planner stats — instant,
   /// no sequential scan. Accuracy: within ~1-2% after autovacuum.
@@ -367,6 +385,12 @@ class MedicineRepository {
       hasMore: env['has_more'] == true,
       moreLabel: env['more_label']?.toString(),
       endLabel: env['end_label']?.toString(),
+      // #174 — absent on the search envelope, which has no sort control.
+      sortOptions: ((env['sort_options'] as List?) ?? const [])
+          .map((o) => Map<String, dynamic>.from(o as Map))
+          .toList(growable: false),
+      // A real envelope. Cacheable.
+      degraded: false,
     );
   }
 
@@ -409,6 +433,20 @@ class MedicineRepository {
     }
   }
 
+  /// CHANGE #799 — the company header's salt cloud, asked for AFTER the first
+  /// page of products is on screen. It is a group-by over everything the
+  /// marketer makes (a second on the biggest of them), and a header must never
+  /// hold the grid behind it. A failure is an absent cloud, never an error.
+  Future<CompanySaltCloud> fetchCompanySaltCloud(String key) async {
+    try {
+      final res = await _rpc('company_salt_cloud', params: {'p_key': key});
+      if (res is! Map) return CompanySaltCloud.none;
+      return CompanySaltCloud.fromMap(Map<String, dynamic>.from(res));
+    } catch (_) {
+      return CompanySaltCloud.none;
+    }
+  }
+
   /// CHANGE #160 — toggle a product in/out of the customer's wishlist.
   Future<WishlistResult> wishlistToggle(String productId) async {
     final id = int.tryParse(productId);
@@ -420,6 +458,134 @@ class MedicineRepository {
       return WishlistResult.fromMap(Map<String, dynamic>.from(res));
     } catch (_) {
       return WishlistResult.failed;
+    }
+  }
+
+  // ── CMD #410 — reviews, Q&A and compare ────────────────────────────────
+  //
+  // Five calls, all the same shape as everything above: send the ids, parse
+  // the payload, and let a refusal come back as a MODEL carrying the
+  // backend's sentence. Nothing here decides whether a write is allowed —
+  // `product_reviews().can_write` and each write RPC's own gate do that, and
+  // re-deciding it here would be the second copy of a rule that is only
+  // enforced once.
+
+  /// The reviews + Q&A block for one product. Paged by the BACKEND's
+  /// `next_offset`, never by a page size guessed here.
+  Future<ProductReviews> fetchProductReviews(String productId,
+      {int offset = 0}) async {
+    final id = int.tryParse(productId);
+    if (id == null) return ProductReviews.empty_;
+    try {
+      final res = await _rpc('product_reviews',
+          params: {'p_product_id': id, 'p_offset': offset});
+      if (res is! Map) return ProductReviews.empty_;
+      return ProductReviews.fromMap(Map<String, dynamic>.from(res));
+    } catch (_) {
+      return ProductReviews.empty_;
+    }
+  }
+
+  Future<ReviewWriteResult> reviewSubmit(
+      String productId, int stars, String body) async {
+    final id = int.tryParse(productId);
+    if (id == null) return ReviewWriteResult.failed;
+    try {
+      final res = await _rpc('review_submit',
+          params: {'p_product_id': id, 'p_stars': stars, 'p_body': body});
+      if (res is! Map) return ReviewWriteResult.failed;
+      return ReviewWriteResult.fromMap(Map<String, dynamic>.from(res));
+    } catch (_) {
+      return ReviewWriteResult.failed;
+    }
+  }
+
+  Future<ReviewWriteResult> questionSubmit(String productId, String body) async {
+    final id = int.tryParse(productId);
+    if (id == null) return ReviewWriteResult.failed;
+    try {
+      final res = await _rpc('question_submit',
+          params: {'p_product_id': id, 'p_body': body});
+      if (res is! Map) return ReviewWriteResult.failed;
+      return ReviewWriteResult.fromMap(Map<String, dynamic>.from(res));
+    } catch (_) {
+      return ReviewWriteResult.failed;
+    }
+  }
+
+  Future<ReviewWriteResult> answerSubmit(String questionId, String body) async {
+    final id = int.tryParse(questionId);
+    if (id == null) return ReviewWriteResult.failed;
+    try {
+      final res = await _rpc('answer_submit',
+          params: {'p_question_id': id, 'p_body': body});
+      if (res is! Map) return ReviewWriteResult.failed;
+      return ReviewWriteResult.fromMap(Map<String, dynamic>.from(res));
+    } catch (_) {
+      return ReviewWriteResult.failed;
+    }
+  }
+
+  Future<ReviewWriteResult> contentFlag(String kind, String targetId,
+      {String reason = ''}) async {
+    final id = int.tryParse(targetId);
+    if (id == null) return ReviewWriteResult.failed;
+    try {
+      final res = await _rpc('content_flag_raise',
+          params: {'p_kind': kind, 'p_target_id': id, 'p_reason': reason});
+      if (res is! Map) return ReviewWriteResult.failed;
+      return ReviewWriteResult.fromMap(Map<String, dynamic>.from(res));
+    } catch (_) {
+      return ReviewWriteResult.failed;
+    }
+  }
+
+  /// The compare table. The ids are the ONLY thing the app contributes; every
+  /// row, label, cell and dash in the reply is composed server-side.
+  Future<ProductCompare> fetchCompare(List<String> productIds) async {
+    final ids = productIds
+        .map(int.tryParse)
+        .whereType<int>()
+        .toList(growable: false);
+    if (ids.isEmpty) return ProductCompare.failed;
+    try {
+      final res = await _rpc('product_compare', params: {'p_ids': ids});
+      if (res is! Map) return ProductCompare.failed;
+      return ProductCompare.fromMap(Map<String, dynamic>.from(res));
+    } catch (_) {
+      return ProductCompare.failed;
+    }
+  }
+
+  /// CMD #2040 — the product page's compare table.
+  ///
+  /// One id in, the whole table out: `pdp_salt_compare()` picks the same-salt
+  /// set itself (this pack first), composes every row and every cell, and
+  /// carries the ADD verdict per column. The app contributes the product it is
+  /// standing on and nothing else.
+  Future<ProductCompare> fetchSaltCompare(String productId) async {
+    final id = int.tryParse(productId);
+    if (id == null) return ProductCompare.failed;
+    try {
+      final res =
+          await _rpc('pdp_salt_compare', params: {'p_product_id': id});
+      if (res is! Map) return ProductCompare.failed;
+      return ProductCompare.fromMap(Map<String, dynamic>.from(res));
+    } catch (_) {
+      return ProductCompare.failed;
+    }
+  }
+
+  /// CMD #410 — the wishlist's price/stock alert block. The digest that
+  /// generated these rows is sent by the dispatcher; this is the in-app
+  /// record of the same events.
+  Future<Map<String, dynamic>> fetchWishlistAlerts() async {
+    try {
+      final res = await _rpc('wishlist_alerts');
+      if (res is! Map) return const {'ok': false, 'has': false, 'items': []};
+      return Map<String, dynamic>.from(res);
+    } catch (_) {
+      return const {'ok': false, 'has': false, 'items': []};
     }
   }
 
@@ -508,12 +674,32 @@ class MedicineRepository {
   /// more than the config allows.
   Future<HomeSections> fetchHomeSections({int? items}) async {
     try {
-      final res = await _rpc('storefront_home_v2', params: {'p_items': items});
-      if (res is! Map) return HomeSections.failed;
-      return HomeSections.fromMap(Map<String, dynamic>.from(res));
+      final raw = await fetchHomeSectionsRaw(items: items);
+      if (raw == null) return HomeSections.failed;
+      return HomeSections.fromMap(raw);
     } catch (_) {
       return HomeSections.failed;
     }
+  }
+
+  /// CMD #1813 — the same call, handed back as the raw payload so the feed can
+  /// be kept on the device and repainted on a cold start.
+  ///
+  /// THROWS instead of swallowing: [PayloadController] needs to tell "the
+  /// backend answered" from "the backend did not", because only the second one
+  /// may leave the last good feed on screen. A null return means the backend
+  /// answered with something that is not a feed.
+  Future<Map<String, dynamic>?> fetchHomeSectionsRaw({int? items}) async {
+    final res = await _rpc('storefront_home_v2', params: {'p_items': items});
+    if (res is! Map) return null;
+    final m = Map<String, dynamic>.from(res);
+    if (m['ok'] == false) return null;
+    // CMD #2059 — the home feed carries the registration surface for a
+    // signed-in account that still owes something. Keeping it here, where the
+    // payload lands, is what makes Continue open a rendered form instead of a
+    // spinner. An anonymous feed carries no block and nothing is touched.
+    RegistrationSurface.adopt(m['registration']);
+    return m;
   }
 
   /// CHANGE #677 — one more page of a home-feed section.
@@ -557,6 +743,118 @@ class MedicineRepository {
     }
   }
 
+  /// CMD #1906 — SEARCH is ONE RPC, for Home and for the Catalogue.
+  ///
+  /// `search_page(q, filters, page)` ranks with the same matcher Home has
+  /// always used, applies the Catalogue's filter vocabulary on top and returns
+  /// every string either screen prints: the placeholder, the header line, the
+  /// filter groups in the order they are drawn, the empty state with its
+  /// buttons, the paging labels and the recent-search strip.
+  ///
+  /// THROWS on a dead call rather than swallowing it: the two screens tell an
+  /// empty result from an unreachable backend, and only the second one keeps
+  /// the last good list on screen.
+  Future<SearchPagePayload> searchPage(
+    SearchQueryState state, {
+    int? pageSize,
+  }) async {
+    final res = await _rpc('search_page', params: {
+      'p_q': state.query,
+      'p_filters': state.toFilters(),
+      'p_page': state.page,
+      'p_page_size': pageSize,
+    });
+    if (res is! Map) return SearchPagePayload.failed;
+    final m = Map<String, dynamic>.from(res);
+    // CHANGE #497's instant chip row, kept: the header's chrome — the filter
+    // set and the empty state, with no rows in it — is the same on every cold
+    // start, so the last one is written to the device and repainted before the
+    // network answers. The cache is a render fallback, never an authority.
+    if (!state.hasQuery) unawaited(_persistSearchChrome(m));
+    return SearchPagePayload.fromMap(m);
+  }
+
+  /// CMD #2044 — everything the FOCUSED, empty search box shows: this
+  /// shopper's own recent searches, the catalogue's popular searches and the
+  /// product rail, as ordered blocks. One RPC, rendered verbatim.
+  ///
+  /// A dead call answers [SearchIdlePayload.empty] rather than throwing: the
+  /// idle screen is an offer, and a shopper who is about to type must never be
+  /// shown an error for a panel they did not ask for.
+  Future<SearchIdlePayload> searchIdle() async {
+    try {
+      final res = await _rpc('search_idle');
+      if (res is! Map) return SearchIdlePayload.empty;
+      return SearchIdlePayload.fromMap(Map<String, dynamic>.from(res));
+    } catch (_) {
+      return SearchIdlePayload.empty;
+    }
+  }
+
+  /// Records a search the shopper ACTED on — Enter, or a product opened from
+  /// the results. Not every keystroke: the box searches as you type, and the
+  /// history must be a list of searches, not a log of typing. The retention
+  /// (`search_recent_config.keep_n`) and the normalisation are the backend's.
+  Future<void> searchRecentAdd(String q) async {
+    try {
+      await _rpc('search_recent_add', params: {'p_q': q});
+    } catch (_) {
+      // History is a convenience; a failed write never reaches the shopper.
+    }
+  }
+
+  /// The 'clear_recent' control the recent block carries. Returns the
+  /// backend's own toast, or '' when it said nothing.
+  Future<String> searchRecentClear() async {
+    try {
+      final res = await _rpc('search_recent_clear');
+      if (res is Map) return (res['toast'] ?? '').toString();
+    } catch (_) {}
+    return '';
+  }
+
+  static const _kSearchChromeKey = 'search_chrome_v1';
+
+  Future<void> _persistSearchChrome(Map<String, dynamic> payload) async {
+    try {
+      final sp = await SharedPreferences.getInstance();
+      await sp.setString(
+          _kSearchChromeKey, jsonEncode({...payload, 'items': const []}));
+    } catch (_) {
+      // A device that refuses storage still gets a live header.
+    }
+  }
+
+  /// The last header chrome this device saw, or null when there is none.
+  Future<SearchPagePayload?> cachedSearchChrome() async {
+    try {
+      final sp = await SharedPreferences.getInstance();
+      final raw = sp.getString(_kSearchChromeKey);
+      if (raw == null || raw.isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return null;
+      return SearchPagePayload.fromMap(Map<String, dynamic>.from(decoded));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// CMD #1906 — the catalogue's extras block, which carries the "Request this
+  /// product" form the empty state offers. Home's search opens the SAME sheet,
+  /// so the empty state is one behaviour rather than two.
+  ///
+  /// Best-effort: a dead call returns an empty map and the sheet simply is not
+  /// offered, exactly as it behaves on the Catalogue.
+  Future<Map<String, dynamic>> catalogueExtras() async {
+    try {
+      final res = await _rpc('catalogue_extras');
+      if (res is! Map) return const {};
+      return Map<String, dynamic>.from(res);
+    } catch (_) {
+      return const {};
+    }
+  }
+
   /// CHANGE #636 — the product page is ONE RPC.
   ///
   /// `product_detail()` returns the whole page render-ready: header, images,
@@ -570,7 +868,12 @@ class MedicineRepository {
   Future<ProductDetail> fetchProductDetail(String productId) async {
     final id = int.tryParse(productId);
     if (id == null) return ProductDetail.notFound(const {});
-    final res = await _rpc('product_detail', params: {'p_product_id': id});
+    // CMD #366 — product_detail_v2 IS product_detail plus the two blocks rows
+    // 171 and 175 added (priced substitutes, delivery promise from actuals).
+    // It delegates, so the page is still ONE round trip and still one payload
+    // that cannot disagree with itself.
+    final res = await _rpc('product_detail_v2',
+        params: {'p_product_id': id, 'p_pincode': null});
     if (res is! Map) return ProductDetail.notFound(const {});
     return ProductDetail.fromMap(Map<String, dynamic>.from(res));
   }
@@ -613,6 +916,11 @@ class MedicineRepository {
     String? afterId,
     int? limit,
     bool onlyBuyable = false,
+    // CHANGE #174 — the key of the sort chip the user tapped, echoed back to
+    // the backend exactly as it was received. 'default' is not a client
+    // preference: it is what the backend calls its own ranked feed, and any
+    // key it did not send us can never get here because the chips are its own.
+    String sort = 'default',
   }) async {
     // Strip characters that break PostgREST's or()/ilike syntax.
     final term = query.replaceAll(RegExp(r'[,()*%_]'), ' ').trim();
@@ -626,9 +934,12 @@ class MedicineRepository {
     // with different page sizes are different pages, and merging them was how
     // a 250-row first page could be served a cached 20-row one.
     final lim = limit?.toString() ?? 'plan';
+    // #174 — the sort is part of the key. The margin lane and the ranked feed
+    // are different pages at the same offset; sharing a key served one for the
+    // other on every chip tap.
     final cacheKey = onlyBuyable && term.isEmpty
-        ? '$viewer|${term.toLowerCase()}|$category|$offset|$lim|buyable'
-        : '$viewer|${term.toLowerCase()}|$category|$offset|$lim';
+        ? '$viewer|${term.toLowerCase()}|$category|$offset|$lim|$sort|buyable'
+        : '$viewer|${term.toLowerCase()}|$category|$offset|$lim|$sort';
     final cached = _resultCache[cacheKey];
     if (cached != null) {
       lastCallWasCacheHit = true;
@@ -672,9 +983,15 @@ class MedicineRepository {
           hasMore: items.isNotEmpty,
           moreLabel: null,
           endLabel: null,
+          sortOptions: const <Map<String, dynamic>>[],
+          // Outage fallback — see [FetchPageResult.degraded].
+          degraded: true,
         );
       }
-      _cacheSet(_resultCache, cacheKey, result);
+      // CMD #434 — a degraded page is NEVER cached. Caching it under the key
+      // the healthy envelope uses is what turned one transient RPC failure
+      // into a session-long label-less page.
+      if (!result.degraded) _cacheSet(_resultCache, cacheKey, result);
       return result;
     }
 
@@ -684,27 +1001,58 @@ class MedicineRepository {
     // and category pages.
     if (onlyBuyable) {
       try {
-        final env = await _rpc('storefront_page', params: {
-          'category_filter': category,
-          'page_offset': offset,
-          // #677 — null on purpose. The backend picks the size from
-          // app_settings; this is the one call site that must NOT substitute
-          // a client default.
-          'page_limit': limit,
-        });
+        // #174 — the margin lane is its own RPC, returning the same envelope
+        // and the same item shape. Which lane to use is decided by the key the
+        // backend put on the chip, not by anything the grid knows about margin.
+        // CMD #366 row 172 — the margin chips now carry a threshold in their
+        // own key ('margin', 'margin:15'), so the filter arrives through the
+        // control that already existed. This still decides nothing about
+        // margin: it reads the number the BACKEND put on the chip and hands it
+        // straight back. An item without a real imported trade rate is never in
+        // the margin lane's set at all, so no threshold can conjure one.
+        final env = sort.startsWith('margin')
+            ? await _rpc('storefront_margin_page', params: {
+                'p_offset': offset,
+                'p_limit': limit,
+                'p_min_margin': sort.contains(':')
+                    ? num.tryParse(sort.split(':').last)
+                    : null,
+              })
+            : await _rpc('storefront_page', params: {
+                'category_filter': category,
+                'page_offset': offset,
+                // #677 — null on purpose. The backend picks the size from
+                // app_settings; this is the one call site that must NOT
+                // substitute a client default.
+                'page_limit': limit,
+              });
         final result = _parseEnvelope(env);
         _cacheSet(_resultCache, cacheKey, result);
         return result;
       } catch (e) {
         // storefront_page failed — fall back to the keyset RPC. It carries
         // neither a counter label nor an availability verdict.
-        _browseRpcError = '${category}:${e.toString().substring(0, e.toString().length.clamp(0, 80))}';
-        final items = await _fetchKeysetFallback(
-          category: category,
-          afterId: afterId,
-          limit: limit ?? pageSize,
-          buyable: true,
-        );
+        _browseRpcError = '$category:${_short(e)}';
+        final List<Product> items;
+        try {
+          items = await _fetchKeysetFallback(
+            category: category,
+            afterId: afterId,
+            limit: limit ?? pageSize,
+            buyable: true,
+          );
+        } catch (fallbackError) {
+          // CMD #434 — BOTH lanes are down, so this call has no page to
+          // return and the grid will render its error state. Rethrowing the
+          // FALLBACK's error is what made that state undiagnosable: the
+          // caller was shown medicine_page_v2's message while the thing that
+          // actually broke was storefront_page. Report both, primary first.
+          _browseRpcError =
+              '$category:primary=${_short(e)};fallback=${_short(fallbackError)}';
+          // The PRIMARY error is the one worth surfacing — the fallback only
+          // ever runs because it already failed.
+          throw e;
+        }
         final result = (
           items: items,
           exactCount: null,
@@ -719,8 +1067,11 @@ class MedicineRepository {
           hasMore: items.isNotEmpty,
           moreLabel: null,
           endLabel: null,
+          sortOptions: const <Map<String, dynamic>>[],
+          // Outage fallback — see [FetchPageResult.degraded].
+          degraded: true,
         );
-        _cacheSet(_resultCache, cacheKey, result);
+        // CMD #434 — NOT cached. See [FetchPageResult.degraded].
         return result;
       }
     }
@@ -756,37 +1107,32 @@ class MedicineRepository {
       hasMore: items.isNotEmpty,
       moreLabel: null,
       endLabel: null,
+      // #174 — no envelope on the outage path, so no sort control is offered.
+      sortOptions: const <Map<String, dynamic>>[],
+      // The non-buyable priority lane never had an envelope to begin with, so
+      // it is not a fallback and stays cacheable.
+      degraded: false,
     );
     _cacheSet(_resultCache, cacheKey, result);
     return result;
   }
 
-  /// Returns up to 3 product names similar to [query] for "Did you mean?"
-  /// suggestions. Never throws — returns empty list on any error.
-  Future<List<String>> fetchSuggestions(String query) async {
-    final term = query.replaceAll(RegExp(r'[,()*%_]'), ' ').trim();
-    if (term.isEmpty) return const [];
-    final key = term.toLowerCase();
-    final cached = _suggestCache[key];
-    if (cached != null) return cached;
-    try {
-      final rows = await _client.rpc('suggest_medicines', params: {'search_term': term});
-      final result = (rows as List)
-          .map((r) => (r as Map<String, dynamic>)['product_name'] as String? ?? '')
-          .where((s) => s.isNotEmpty)
-          .toList();
-      _cacheSet(_suggestCache, key, result);
-      return result;
-    } catch (_) {
-      return const [];
-    }
-  }
-
   /// Fire-and-forget: increments sales_count by 1 each time a product is
   /// added to cart, so the popularity sort improves over time.
+  ///
+  /// CMD #1906 — it swallows its OWN failures. The card calls this from a tap
+  /// handler inside a `try`, which only ever caught the constructor resolving
+  /// `Supabase.instance`; now that the client is resolved on first use
+  /// (see [_client]) the throw happens after the first `await`, where no
+  /// caller's `try` can reach it. A popularity ping must never be able to
+  /// break an add-to-cart, so the guard lives here.
   Future<void> incrementSalesCount(String medicineId) async {
     final id = int.tryParse(medicineId);
     if (id == null) return;
-    await _client.rpc('increment_sales', params: {'medicine_id': id});
+    try {
+      await _client.rpc('increment_sales', params: {'medicine_id': id});
+    } catch (_) {
+      // The cart write is the real work and has already been sent.
+    }
   }
 }

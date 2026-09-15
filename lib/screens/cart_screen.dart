@@ -3178,6 +3178,12 @@ class C2013SummaryRow extends StatelessWidget {
       padding: EdgeInsets.only(bottom: Ds.space.x12),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
+        // spaceBetween, not a Spacer: a Spacer is a flex child and takes its
+        // share of the free width in the same pass as the two halves, so the
+        // labels lost the space it took. mainAxisAlignment spends the free
+        // width AFTER the halves are sized, which keeps "Advance to pay" on
+        // the right edge without ever taking a pixel the labels need.
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           // Both halves are Flexible and neither is a Spacer: a Spacer here
           // claimed the free width first and then squeezed "Advance to pay"

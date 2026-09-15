@@ -290,6 +290,9 @@ class CartModel extends ChangeNotifier {
     _debounce.clear();
     _localQty.clear();
     _queued.clear();
+    // CMD #2025 — a row failure belongs to the account that caused it.
+    _rowError.clear();
+    _rowRetryQty.clear();
   }
 
   /// Verbatim `message` from the last `ok:false` response, for the UI to show.
@@ -562,38 +565,44 @@ class CartModel extends ChangeNotifier {
 
   /// Rebuilds `_serverLines` from the payload. Pure — no network, no mutation
   /// of the payload, and no line that is not in `cart['items']`.
+  /// CMD #2025 — ONE payload item becomes ONE [CartLine]. Extracted so the
+  /// full render and the single-row answer from `cart_update_item()` build a
+  /// line the same way; two constructions could disagree about one row.
+  static CartLine lineFromPayload(Map row) {
+    final pid = row['product_id'].toString();
+    // #582 — carry the render strings the payload attached to this item.
+    final disp = row.cast<String, dynamic>();
+    return CartLine(
+      Product.fromCartData(
+        id: pid,
+        name: (row['product_name'] as String?) ?? '',
+        // CHANGE #615 — the cart is ONE number: qty × MRP. cart_state() no
+        // longer returns `price` or `gst_percent`, because there is no sale
+        // price and no GST in the cart any more. Reading a key that is gone
+        // would silently price every line at 0.
+        b2bPrice: (row['mrp'] as num?)?.toDouble() ?? 0.0,
+        mrp: (row['mrp'] as num?)?.toDouble() ?? 0.0,
+        imageUrl: (row['image_url'] as String?) ?? '',
+        manufacturer: (row['manufacturer'] as String?) ?? '',
+        packSize: (row['pack_size'] as String?) ?? '',
+        // CHANGE #610: category, buyable, added_by and the row id all come
+        // from the one payload now — no second read to merge them in.
+        category: (row['category'] as String?) ?? 'Other',
+        buyable: row['buyable'] as bool?,
+      ),
+      (row['quantity'] as num?)?.toInt() ?? 0,
+      addedByAdmin: row['added_by_admin'] == true,
+      cartItemId: (row['id'] as num?)?.toInt(),
+      display: disp,
+    );
+  }
+
   void _adoptCart(Map<String, dynamic> cart) {
     _cart = cart;
     final items = (cart['items'] as List?) ?? const [];
     final lines = <CartLine>[];
     for (final raw in items) {
-      final row = raw as Map;
-      final pid = row['product_id'].toString();
-      // #582 — carry the render strings cart_render() attached to this item.
-      final disp = row.cast<String, dynamic>();
-      lines.add(CartLine(
-        Product.fromCartData(
-          id: pid,
-          name: (row['product_name'] as String?) ?? '',
-          // CHANGE #615 — the cart is ONE number: qty × MRP. cart_state() no
-          // longer returns `price` or `gst_percent`, because there is no sale
-          // price and no GST in the cart any more. Reading a key that is gone
-          // would silently price every line at 0.
-          b2bPrice: (row['mrp'] as num?)?.toDouble() ?? 0.0,
-          mrp: (row['mrp'] as num?)?.toDouble() ?? 0.0,
-          imageUrl: (row['image_url'] as String?) ?? '',
-          manufacturer: (row['manufacturer'] as String?) ?? '',
-          packSize: (row['pack_size'] as String?) ?? '',
-          // CHANGE #610: category, buyable, added_by and the row id all come
-          // from the one payload now — no second read to merge them in.
-          category: (row['category'] as String?) ?? 'Other',
-          buyable: row['buyable'] as bool?,
-        ),
-        (row['quantity'] as num?)?.toInt() ?? 0,
-        addedByAdmin: row['added_by_admin'] == true,
-        cartItemId: (row['id'] as num?)?.toInt(),
-        display: disp,
-      ));
+      lines.add(lineFromPayload(raw as Map));
     }
     // CHANGE #375 / #610: stable add-order. cart_state() used to order by
     // (updated_at, id) — which moved a line to the bottom on every qty edit —
@@ -744,16 +753,21 @@ class CartModel extends ChangeNotifier {
       // A logged-out add needs a guest id to file the row under; mint one on
       // first write rather than for every idle visitor.
       final guest = _isSignedIn ? null : await _ensureGuestUid();
-      final res = await _rpc('cart_set_item', {
+      // CMD #2025 — the FAST door. `cart_update_item()` writes the line and
+      // answers with that one row plus the summary the bar prints. The old
+      // `cart_set_item()` ran a whole cart_render() per tap (avg 1 s, peak
+      // 6.8 s) and the screen then re-read cart_availability() on top of it.
+      final res = await _rpc('cart_update_item', {
         'p_product_id': productId,
         'p_quantity': quantity,
         'p_guest_uid': guest,
       });
       _lastSelfWriteAt = DateTime.now();
-      accepted = await _applyWriteResult(res);
+      accepted = _applyRowResult(productId, quantity, res);
     } catch (e) {
-      // Network threw — the server may never have seen this at all.
-      cartError.value = 'Could not update the cart. Please try again.';
+      // Network threw — the server may never have seen this at all. The row
+      // says so on itself and offers the backend's Retry; no blocking toast.
+      _markRowFailed(productId, quantity, null);
     } finally {
       _inFlight.remove(productId);
       _pending.remove(productId);
@@ -769,6 +783,138 @@ class CartModel extends ChangeNotifier {
       }
       notifyListeners();
     }
+  }
+
+  // ── CMD #2025 — per-row failure, per-row retry ────────────────────────────
+  //
+  // A tap that does not land is that ROW's problem, not the screen's. The old
+  // path raised a banner across the whole cart ("Could not update the cart")
+  // and left every other line looking broken. Now the failing row keeps the
+  // server's quantity, prints the backend's own refusal under itself and
+  // offers the backend's retry word; everything else on the screen is
+  // untouched and still usable.
+  final Map<String, Map<String, String>> _rowError = {};
+
+  /// The quantity a failed row was trying to reach, so Retry can resend it.
+  final Map<String, int> _rowRetryQty = {};
+
+  /// True while this row's last write did not land.
+  bool hasRowError(String productId) => _rowError.containsKey(productId);
+
+  /// The backend's own sentence for why this row did not save ('' when fine).
+  String rowErrorMessage(String productId) =>
+      _rowError[productId]?['message'] ?? '';
+
+  /// The backend's word for the retry control ('' when fine).
+  String rowRetryLabel(String productId) =>
+      _rowError[productId]?['retry_label'] ?? '';
+
+  /// Re-sends the quantity this row was trying to reach.
+  void retryRow(String productId) {
+    final q = _rowRetryQty[productId];
+    if (q == null) return;
+    _rowError.remove(productId);
+    notifyListeners();
+    _requestQty(productId, q);
+  }
+
+  void _clearRowError(String productId) {
+    if (_rowError.remove(productId) != null) _rowRetryQty.remove(productId);
+  }
+
+  void _markRowFailed(String productId, int quantity, Map<String, dynamic>? res) {
+    // Every word here is the payload's. A transport failure carries no payload,
+    // so the row shows the backend's stored retry copy and nothing invented.
+    final retry = (res?['retry'] as Map?)?.cast<String, dynamic>() ?? const {};
+    _rowError[productId] = {
+      'message': (res?['message'] ?? retry['note'] ?? '').toString(),
+      'retry_label': (retry['label'] ?? '').toString(),
+    };
+    _rowRetryQty[productId] = quantity;
+    RenderLog.write(kC2025RowFailed, '$productId:${_rowError[productId]!['message']}');
+  }
+
+  static const kC2025RowFailed = 'c2025_cart_row_failed';
+  static const kC2025FastWrite = 'c2025_cart_fast_write';
+
+  /// Adopts `cart_update_item()`'s answer: ONE row and the summary totals.
+  ///
+  /// Nothing is re-read afterwards — no cart_render(), no cart_availability().
+  /// The row that came back replaces the row that was there (or disappears),
+  /// and the bar's two numbers are the payload's own.
+  bool _applyRowResult(String productId, int quantity, dynamic res) {
+    if (res is! Map) {
+      _markRowFailed(productId, quantity, null);
+      return false;
+    }
+    final m = Map<String, dynamic>.from(res);
+    if (m['ok'] != true) {
+      _markRowFailed(productId, quantity, m);
+      RenderLog.write('c559_cart_write_rejected', '${m['message']}');
+      return false;
+    }
+    _clearRowError(productId);
+
+    final item = m['item'];
+    final items = [...((_cart['items'] as List?) ?? const [])];
+    final at = items.indexWhere(
+        (e) => e is Map && e['product_id'].toString() == productId);
+    if (item is Map) {
+      if (at >= 0) {
+        items[at] = item;
+      } else {
+        items.add(item);
+      }
+    } else if (at >= 0) {
+      items.removeAt(at);
+    }
+    _cart = {..._cart, 'items': items};
+
+    // The summary the bar prints, patched into the render block the screen
+    // already reads. Only the keys the backend just re-answered move; every
+    // other total stays exactly as the last full render reported it.
+    final summary = (m['summary'] as Map?)?.cast<String, dynamic>();
+    if (summary != null) {
+      final render = Map<String, dynamic>.from(
+          (_cart['render'] as Map?)?.cast<String, dynamic>() ?? const {});
+      final block = Map<String, dynamic>.from(
+          (render['summary'] as Map?)?.cast<String, dynamic>() ?? const {});
+      if (summary['bottom'] is Map) block['bottom'] = summary['bottom'];
+      render['summary'] = block;
+      if (summary['item_count'] != null) {
+        render['item_count'] = summary['item_count'];
+      }
+      if (summary['unit_count'] != null) {
+        render['unit_count'] = summary['unit_count'];
+      }
+      if (summary['items_label'] != null) {
+        render['items_label'] = summary['items_label'];
+        final pill = Map<String, dynamic>.from(
+            (render['pill'] as Map?)?.cast<String, dynamic>() ?? const {});
+        if (pill.isNotEmpty) {
+          pill['items_label'] = summary['items_label'];
+          pill['show'] = ((summary['item_count'] as num?)?.toInt() ?? 0) > 0;
+          render['pill'] = pill;
+        }
+      }
+      _cart = {
+        ..._cart,
+        'render': render,
+        if (summary['item_count'] != null) 'item_count': summary['item_count'],
+        if (summary['unit_count'] != null) 'unit_count': summary['unit_count'],
+        if (summary['badge'] != null) 'badge': summary['badge'],
+      };
+    }
+
+    final lines = <CartLine>[];
+    for (final raw in (_cart['items'] as List)) {
+      lines.add(lineFromPayload(raw as Map));
+    }
+    _serverLines = lines;
+    RenderLog.write(kC2025FastWrite,
+        'row:$productId;qty:$quantity;items:${lines.length};'
+        'advance:${(summary?['bottom'] as Map?)?['advance_display'] ?? ''}');
+    return true;
   }
 
   /// Adopts the `cart` a write RPC returned. On `ok:false` the server's own

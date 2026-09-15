@@ -1114,6 +1114,22 @@ class CartModel extends ChangeNotifier {
   String get mrpWorthDisplay => (pricing['mrp_worth_display'] ?? '').toString();
   String get mrpWorthLabel => (pricing['mrp_worth_label'] ?? '').toString();
 
+  /// CMD #2047 — the bill summary card and the suggested rail, both straight
+  /// off the ONE cart payload.
+  ///
+  /// #2014 built these blocks and they worked; they were invisible because the
+  /// screen fetched them with a SECOND call whose failures were all silent — a
+  /// customer resolved differently from the cart being described, a rail that
+  /// threw on real catalogue data, a response that lost the race with a
+  /// quantity tap. cart_render() now returns them itself, so the blocks
+  /// describe exactly the basket that is on screen and there is no second
+  /// request left to fail.
+  Map<String, dynamic> get billBlock =>
+      (_cart['bill'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  Map<String, dynamic> get railBlock =>
+      (_cart['rail'] as Map?)?.cast<String, dynamic>() ?? const {};
+
   /// CHANGE #636 — the floating cart pill, rendered entirely by cart_render().
   ///
   /// `show` is the BACKEND's answer to "is there a pill right now?". The app

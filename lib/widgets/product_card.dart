@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../data/medicine_repository.dart';
 import '../utils/render_log.dart';
-import '../utils/toast.dart';
 import '../models/product.dart';
 import '../screens/auth/login_screen.dart';
 import '../services/ui_copy.dart';
@@ -421,25 +420,18 @@ class AvailabilityButton extends StatelessWidget {
       );
     }
 
-    // Disabled: the button does nothing, but tapping it surfaces the backend's
-    // own explanation. IgnorePointer keeps the FilledButton inert so the tap
-    // reaches the GestureDetector wrapping it.
-    return GestureDetector(
+    // CMD #2023 — the button alone carries the state. Unavailable is grey and
+    // NON-TAPPABLE: there is no second opinion to surface any more, because
+    // there is no second answer — public.zone_available() decided this, and the
+    // "Available · <zone>" / "Not in your zone" text line it used to argue with
+    // no longer exists in any payload. IgnorePointer is the whole widget now.
+    return IgnorePointer(
       key: const ValueKey('cta-disabled'),
-      behavior: HitTestBehavior.opaque,
-      onTap: av.note == null
-          ? null
-          : () {
-              RenderLog.write('c553_note_shown', av.note!);
-              showToast(context, av.note!, isError: true);
-            },
-      child: IgnorePointer(
-        child: SizedBox.expand(
-          child: FilledButton(
-            style: style,
-            onPressed: null,
-            child: Text(av.ctaLabel),
-          ),
+      child: SizedBox.expand(
+        child: FilledButton(
+          style: style,
+          onPressed: null,
+          child: Text(av.ctaLabel),
         ),
       ),
     );

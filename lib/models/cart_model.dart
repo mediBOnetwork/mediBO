@@ -1136,6 +1136,16 @@ class CartModel extends ChangeNotifier {
   String get pillCta => (pill['cta'] ?? '').toString();
   String get pillImage => (pill['image'] ?? '').toString();
 
+  /// CMD #2029 — the pill's thumbnail stack, in the BACKEND's draw order:
+  /// index 0 sits behind, the last entry is the most recently added item and
+  /// is drawn on top. The app never picks which images these are, how many
+  /// there are, or what order they stack in.
+  List<Map<String, dynamic>> get pillThumbs =>
+      ((pill['thumbs'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((m) => m.cast<String, dynamic>())
+          .toList(growable: false);
+
   /// #355 — the one figure the customer pays, as the SERVER computed it: the
   /// trade payable (taxable + GST) over the lines that have a trade rate.
   /// `grand_total` in the render block and `net_payable` at the top level are

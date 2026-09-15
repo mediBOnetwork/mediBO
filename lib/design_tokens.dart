@@ -372,6 +372,13 @@ class DsTouch {
   /// the header is one `ui_design_set` away, with no deploy.
   final double headerBand;
 
+  /// CMD #2038 — how far the finger has to travel in the NEW direction before
+  /// the scroll-linked header is allowed to turn around, in logical pixels.
+  /// Anything smaller is jitter, a bounce or a snap-back, and the band ignores
+  /// it. A token, not a constant, so the flicker guard is retunable with one
+  /// `ui_design_set` and no deploy.
+  final double headerHysteresis;
+
   /// CHANGE #286 — how far above the bottom of the screen a pinned bar floats,
   /// so it clears the bottom nav (and any floating cart pill) instead of
   /// covering it. Backend token, so the offset is retunable with zero deploy.
@@ -382,6 +389,7 @@ class DsTouch {
     required this.listRowMinHeight,
     required this.bottomBarGap,
     required this.headerBand,
+    required this.headerHysteresis,
   });
   factory DsTouch._defaults() => const DsTouch(
       minTarget: 44,
@@ -393,11 +401,16 @@ class DsTouch {
       // which shortened the header as a side effect of making it move; this
       // puts the height back without touching the 1:1 travel, because the
       // travel is still the same token.
-      headerBand: 64);
+      headerBand: 64,
+      // CMD #2038 — 8 px: under a finger's own tremor and under the pixel or
+      // two an edge snap-back reports, well inside a deliberate reversal.
+      headerHysteresis: 8);
   factory DsTouch._from(Map m, DsTouch f) => DsTouch(
         minTarget: Ds._num(m['minTarget'], f.minTarget),
         listRowMinHeight: Ds._num(m['listRowMinHeight'], f.listRowMinHeight),
         bottomBarGap: Ds._num(m['bottomBarGap'], f.bottomBarGap),
         headerBand: Ds._num(m['headerBand'], f.headerBand),
+        headerHysteresis:
+            Ds._num(m['headerHysteresis'], f.headerHysteresis),
       );
 }

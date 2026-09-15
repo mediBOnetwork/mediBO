@@ -733,3 +733,48 @@ begin
     'actions', public._c1886_actions(),
     'rows', v_rows);
 end $function$;
+
+-- ── 10. Regression-guard repair: the three Routes doors from CMD #2056 ──────
+-- rg_check() went red the moment those tiles landed and stayed red, which
+-- blocks EVERY later completion. Two behaviours were failing, both for the
+-- same three features:
+--   c570_surface_map                        — route_key not declared anywhere
+--   c634_every_feature_declares_a_test_contract — no happy path recorded
+-- The tiles DO open: their `tab_screen` ('routes:all_plans' / 'routes:
+-- past_plans' / 'routes:today') is resolved by kRoutesSectionModes in
+-- lib/screens/admin/customer_tab_target.dart and opened inside the customer
+-- tab. So the declaration below records what the app already does — it is not
+-- a baseline blessing a gap.
+insert into public.surface_route(route_key, feature_key, kind, handled_by, note, is_active)
+values
+  ('cust_routes_builder', 'admin.cust_tab.routes_builder', 'feature', 'customer_tab',
+   'CMD #2056 tile; opened as tab_screen routes:all_plans via kRoutesSectionModes.', true),
+  ('cust_routes_assign',  'admin.cust_tab.routes_assign',  'feature', 'customer_tab',
+   'CMD #2056 tile; opened as tab_screen routes:past_plans via kRoutesSectionModes.', true),
+  ('cust_routes_today',   'admin.cust_tab.routes_today',   'feature', 'customer_tab',
+   'CMD #2056 tile; opened as tab_screen routes:today via kRoutesSectionModes.', true)
+on conflict (route_key, feature_key) do update
+  set kind       = excluded.kind,
+      handled_by = excluded.handled_by,
+      note       = excluded.note,
+      is_active  = true;
+
+update public.feature_registry
+   set test_automatable = true,
+       test_entry       = '/admin/go/cust_routes',
+       test_roles       = array['super_admin']::text[],
+       test_steps       = '[{"kind":"auth","role":"{role}"},
+                            {"kind":"goto","path":"/admin/go/cust_routes"},
+                            {"kind":"settle","ms":6000}]'::jsonb,
+       test_expect      = '{"kind":"visible","source":"render_log","key":"c452_routes"}'::jsonb
+ where feature_key in ('admin.cust_tab.routes_builder', 'admin.cust_tab.routes_assign');
+
+update public.feature_registry
+   set test_automatable = true,
+       test_entry       = '/admin/go/cust_routes',
+       test_roles       = array['super_admin']::text[],
+       test_steps       = '[{"kind":"auth","role":"{role}"},
+                            {"kind":"goto","path":"/admin/go/cust_routes"},
+                            {"kind":"settle","ms":6000}]'::jsonb,
+       test_expect      = '{"kind":"visible","source":"render_log","key":"c1872_today_routes"}'::jsonb
+ where feature_key = 'admin.cust_tab.routes_today';

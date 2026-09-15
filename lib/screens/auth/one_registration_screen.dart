@@ -23,7 +23,19 @@ import '../../widgets/registration_documents_section.dart';
 import '../customer_documents_screen.dart' show CustomerDocumentsTransport;
 
 class OneRegistrationScreen extends StatefulWidget {
-  const OneRegistrationScreen({super.key});
+  const OneRegistrationScreen({
+    super.key,
+    this.onSaved,
+    this.embedded = false,
+  });
+
+  /// Told once the profile has been saved. The cart sheet uses it to close
+  /// onto the basket the person came back for.
+  final VoidCallback? onSaved;
+
+  /// True when a surface around this one already draws the title bar — the
+  /// cart sheet does. It changes the chrome, never the form.
+  final bool embedded;
 
   /// Test seam — the same shape every screen in this app uses.
   @visibleForTesting
@@ -192,6 +204,7 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
       });
       RenderLog.write('c2061_submit',
           res['docs_pending'] == true ? 'docs_pending' : 'complete');
+      widget.onSaved?.call();
       await _load();
     } catch (_) {
       if (!mounted) return;
@@ -235,6 +248,7 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.embedded) return _body();
     return Scaffold(
       backgroundColor: Ds.c.bg,
       appBar: AppBar(title: Text(_s(_p, 'title'))),

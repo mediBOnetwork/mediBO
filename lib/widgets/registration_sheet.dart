@@ -10,10 +10,9 @@
 // close label, the confirmation — comes from
 // `customer_registration_payload().sheet`.
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../design_tokens.dart';
-import '../screens/auth/business_details_screen.dart';
+import '../screens/auth/one_registration_screen.dart';
 import '../services/registration_payload.dart';
 import '../utils/render_log.dart';
 import 'customer_surface_widgets.dart';
@@ -24,15 +23,7 @@ Future<bool> showRegistrationSheet(BuildContext context) async {
   unawaitedRefresh();
   if (!context.mounted) return false;
 
-  String uid = '';
-  try {
-    uid = Supabase.instance.client.auth.currentUser?.id ?? '';
-  } catch (_) {
-    uid = '';
-  }
-
   final sheet = RegistrationSurface.sheet;
-  final pre = RegistrationSurface.prefill;
   RenderLog.write('c2059_reg_sheet', 1);
 
   final saved = await showModalBottomSheet<bool>(
@@ -54,14 +45,15 @@ Future<bool> showRegistrationSheet(BuildContext context) async {
             closeLabel: (sheet['close_label'] ?? '').toString(),
             onClose: () => Navigator.of(ctx).pop(false),
           ),
+          // CMD #2061 — the cart sheet is the SAME form as /complete-registration,
+          // documents included. Three doors, one screen: a shop that registers
+          // from its basket is asked for its papers in the same breath, and a
+          // paper it does not have is a skip, not a second trip.
           Expanded(
-            child: BusinessDetailsScreen(
-              userId: uid,
-              phone: (pre['whatsapp_no'] ?? '').toString(),
-              email: (pre['email'] ?? '').toString(),
+            child: OneRegistrationScreen(
+              embedded: true,
               // Saved from the cart: the basket is what they came back for,
-              // so the sheet closes onto it rather than advancing to step 2.
-              // The banner on Home still carries the documents step.
+              // so the sheet closes onto it.
               onSaved: () {
                 RegistrationSurface.submitted();
                 Navigator.of(ctx).pop(true);

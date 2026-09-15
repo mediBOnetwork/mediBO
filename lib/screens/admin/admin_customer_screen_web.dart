@@ -20,6 +20,7 @@ import '../../utils/file_pick_io.dart' as filepick;
 
 import '../../utils/download_bytes.dart'; // CHANGE #463
 import '../../utils/render_log.dart';
+import 'customer_tab_target.dart'; // CMD #2056
 import 'customer_pipeline_screen.dart';
 import '../../user_state.dart'; // CMD #633 — the session gate below
 import '../../design_tokens.dart'; // CHANGE #238 — Ds tokens for the new panel chrome
@@ -452,8 +453,21 @@ class AdminCustomerScreen extends StatefulWidget {
     openTab('routes');
   }
 
+  /// CMD #2056 — a Dashboard tile may name a SECTION of the tab it opens, as
+  /// `<tab>:<section>` in the registry's own `tab_screen`. Routes has three
+  /// doors on the Dashboard (build, assign, today) and one screen; the part
+  /// after the colon says which of its sections that screen lands on. Splitting
+  /// the pair is all Dart does with it — which sections exist, and what each is
+  /// called, stays in the registry.
   static void openTab(String? filterName, {int tries = 60}) {
-    if (filterName == null || filterName.isEmpty) return;
+    final target = CustomerTabTarget.parse(filterName);
+    if (target.tab.isEmpty) return;
+    if (target.hasSection) {
+      // Park FIRST: switching the filter may mount the sub-tab synchronously,
+      // and its initState is what collects the parked section.
+      _RoutesTab.openSection(target.section);
+    }
+    filterName = target.tab;
     final st = _screenKey.currentState;
     if (st != null) {
       st._openTabByName(filterName);
@@ -706,11 +720,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   /// exactly like the list. Null until the tab has loaded once, at which point
   /// it OUTRANKS the locally composed fallback below.
   String? _sLeadsCountChip;
-  // CHANGE #445 — "Routes" tab badge count (zones.length from
-  // lead_routes_screen). Kept in sync via _RoutesTab.onZonesChanged; only
-  // populated once the tab has been opened (no independent bootstrap fetch,
-  // unlike S Leads — zones list is heavier and city-scoped).
-  int _routesZones = 0;
+  // CHANGE #445 / CMD #2056 — the "Routes" zone count was this chip row's
+  // badge. The chip is gone (Routes lives on the Dashboard now), so the count
+  // is no longer shown here; the sub-tab still reports it, and the report is
+  // still the backend's — see `c452_routes` in _RoutesTab.
   /// CHANGE #1867 — the two chip CAPTIONS, whole, from customers_tab_counts().
   /// Two cheap count(*)s; neither is a list length, so the chip can no longer
   /// disagree with a page of 50. Absent (not yet loaded, or the call failed)
@@ -2283,9 +2296,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       RenderLog.write('c445_tab_present', 1);
       return _RoutesTab(
         isDesktop: isDesktop,
-        onZonesChanged: (n) {
-          if (mounted) setState(() => _routesZones = n);
-        },
+        onZonesChanged: (_) {},
         onOpenWarehouseCard: () => setState(() => _filter = _CustFilter.sLeads),
       );
     }
@@ -2562,10 +2573,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                       _CustFilter.sLeads,
                       _sLeadsCountChip ??
                           _countedTabLabel('sleads', 'S Leads ($_sLeadsTotal)')),
-                const SizedBox(width: 4),
-                if (_tabOn('routes'))
-                  _tab(_CustFilter.routes,
-                      _countedTabLabel('routes', 'Routes ($_routesZones)')),
+                // CMD #2056 — Routes left this chip row. Its three doors
+                // (Route builder / Assign route / Today's visits) are tiles in
+                // the Dashboard's FIELD & GROWTH section now; the sub-tab
+                // itself is unchanged and still opens here, from those tiles.
                 // CMD #1886 — the funnel. Each caption and count is
                 // customer_pipeline_home()'s; an undescribed tab draws nothing.
                 if (_tabOn('signed_up') && _pipeLabel('signed_up').isNotEmpty) ...[
@@ -12547,6 +12558,29 @@ class _RoutesTab extends StatefulWidget {
     return id;
   }
 
+  /// CMD #2056 — the section of this tab a Dashboard tile asked for, parked
+  /// for exactly the same reason a deep-linked route is: the tile switches the
+  /// Customers filter, and this sub-tab is built a frame (or a cold start)
+  /// later. Already mounted -> apply it now.
+  static String? _pendingSection;
+
+  static bool openSection(String section) {
+    final state = _routesKey.currentState;
+    if (state == null) {
+      _pendingSection = section;
+      return false;
+    }
+    state.applySection(section);
+    return true;
+  }
+
+  /// Consumed once, by the state that mounts next.
+  static String? takePendingSection() {
+    final s = _pendingSection;
+    _pendingSection = null;
+    return s;
+  }
+
   final bool isDesktop;
   final ValueChanged<int> onZonesChanged;
   final VoidCallback onOpenWarehouseCard;
@@ -12768,6 +12802,14 @@ class _RoutesTabState extends State<_RoutesTab> {
     if (pending != null) {
       WidgetsBinding.instance
           .addPostFrameCallback((_) => openRouteById(pending));
+    }
+    // CMD #2056 — the section a Dashboard tile asked for, collected the same
+    // way the deep link's route is. Applied after the first frame so the
+    // panel it scrolls to exists.
+    final section = _RoutesTab.takePendingSection();
+    if (section != null) {
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => applySection(section));
     }
   }
 
@@ -14415,6 +14457,34 @@ class _RoutesTabState extends State<_RoutesTab> {
     'my_route': 'myRoute',
   };
 
+  /// The anchor "Assign route" scrolls to.
+  final GlobalKey _pastPlansAnchor = GlobalKey();
+
+  /// Land this tab on [section]. A key this build has never heard of is
+  /// ignored, so adding a fourth door is an INSERT plus one line above.
+  void applySection(String section) {
+    final mode = kRoutesSectionModes[section];
+    if (mode == null || !mounted) return;
+    setState(() {
+      _openingRouteId = null;
+      _topMode = mode;
+    });
+    if (mode == 'myRoute' && _myRoute == null) _refreshMyRoute();
+    if (mode == 'today') _refreshToday();
+    RenderLog.write('c2056_routes_section', section);
+    if (section != 'past_plans') return;
+    if (!_pastPlansExpanded) _togglePastPlans();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _pastPlansAnchor.currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(ctx,
+            duration: const Duration(milliseconds: 250),
+            alignment: 0.05,
+            curve: Curves.easeOut);
+      }
+    });
+  }
+
   Widget _buildTopModeToggle() {
     final links = ((_today?['links'] as List?) ?? const [])
         .whereType<Map>()
@@ -14960,6 +15030,7 @@ class _RoutesTabState extends State<_RoutesTab> {
 
   Widget _buildPastPlansPanel() {
     return Container(
+      key: _pastPlansAnchor,
       width: double.infinity,
       decoration: BoxDecoration(
         color: Colors.white,

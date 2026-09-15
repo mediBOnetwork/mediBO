@@ -1870,7 +1870,7 @@ class _HomeShellState extends State<HomeShell> {
           // (`render.pill.show`) — and because it read AppState at the shell
           // level, every cart write rebuilt the entire HomeShell subtree.
           // CartPill reads the cart itself, so a write now repaints one pill.
-          if (!isAdmin && _index == 0) shellFloatingCartPill(_openCart),
+          if (!isAdmin) shellFloatingCartPill(_openCart, _index),
           if (!isAdmin)
             RepaintBoundary(
               child: CartPanel(
@@ -1953,7 +1953,7 @@ class _HomeShellState extends State<HomeShell> {
             ],
           ),
           // CHANGE #636 — same pill on desktop, same reasoning as mobile above.
-          if (!isAdmin && _index == 0) shellFloatingCartPill(_openCart),
+          if (!isAdmin) shellFloatingCartPill(_openCart, _index),
           if (!isAdmin) ...[
             LoginPanel(
               open: _loginOpen,

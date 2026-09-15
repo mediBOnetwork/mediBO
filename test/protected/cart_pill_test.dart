@@ -23,8 +23,17 @@
 //   5. A thumb with no image renders the placeholder icon INSIDE the square —
 //      never a blank white box.
 //
-//   6. The pill is 60% of the viewport, clamped, and never wider than the
-//      viewport at 320 / 360 / 412 / 480 px. No overflow on any phone.
+//   6. The pill is ONE 56px line whose width HUGS its content (CMD #2043):
+//      never wider than the viewport at 320 / 360 / 412 / 480 px, never a
+//      fraction OF the viewport, and a one-item pill is narrower than a
+//      thirteen-item one at the same width. Count and CTA share one baseline —
+//      there is no second line to fall onto.
+//
+//   7. WHICH page floats the pill is the nav registry's answer
+//      (`customer_nav().slots[].cart_pill`), never a page number in Dart. The
+//      Catalogue was page 12 and the shell asked `_index == 0`, so the pill
+//      was missing on every catalogue surface. An unknown page floats nothing;
+//      an unanswered registry falls back to Home alone.
 //
 // No network, no Supabase, no goldens: every thumb url in the pumped tests is
 // empty, so ProductImage paints its offline fallback.
@@ -221,21 +230,134 @@ void main() {
     expect(cart.pillThumbs.last['has_image'], isTrue);
   });
 
-  testWidgets('6. never wider than the phone, at every phone', (tester) async {
+  // NOTE on widths: the test font paints every glyph as a square of the font
+  // size, so a label is roughly twice as wide here as it is on a device. The
+  // widths below are therefore pessimistic on purpose — a pill that fits with
+  // this font fits with any real one.
+
+  testWidgets('6. one 56px line, never wider than the phone, at every phone',
+      (tester) async {
     for (final w in <double>[320, 360, 412, 480]) {
       final cart = await _loaded(_payload(
         show: true,
-        itemsLabel: '13 items',
-        thumbs: [_thumb('1'), _thumb('2')],
+        itemsLabel: '1 item',
+        cta: 'Cart',
+        thumbs: [_thumb('1')],
       ));
       await _pump(tester, cart, width: w);
       final size = tester.getSize(find.byKey(const Key('c2029_pill')));
       expect(size.width, lessThanOrEqualTo(w),
           reason: 'the pill overflowed at ${w}px');
-      expect(size.height, CartPill.kHeight);
+      expect(size.height, CartPill.kHeight,
+          reason: 'one line, ${CartPill.kHeight}px, at every width');
       expect(tester.takeException(), isNull,
           reason: 'no overflow exception at ${w}px');
     }
+  });
+
+  testWidgets('6b. a label too long for the phone scales — it never overflows',
+      (tester) async {
+    final cart = await _loaded(_payload(
+      show: true,
+      itemsLabel: '13 items in your basket right now',
+      thumbs: [_thumb('1'), _thumb('2')],
+    ));
+    await _pump(tester, cart, width: 320);
+    final size = tester.getSize(find.byKey(const Key('c2029_pill')));
+    expect(size.width, lessThanOrEqualTo(320),
+        reason: 'no word may be clipped and no pixel may leave the screen');
+    expect(size.height, lessThanOrEqualTo(CartPill.kHeight));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('6c. the width HUGS the content — it is not a slice of the screen',
+      (tester) async {
+    // CMD #2043 — #2029 sized the pill at 60% of the viewport with a 248px
+    // floor, which is how it ended up lying across two rows of product cards.
+    // Two carts at the SAME width must produce two different pills, and the
+    // same cart must produce the same pill on a bigger phone.
+    final short = await _loaded(_payload(
+      show: true, itemsLabel: '1 item', cta: 'Cart', thumbs: [_thumb('a')]));
+    await _pump(tester, short, width: 480);
+    final shortW = tester.getSize(find.byKey(const Key('c2029_pill'))).width;
+
+    final long = await _loaded(_payload(
+      show: true,
+      itemsLabel: '13 items',
+      cta: 'Cart',
+      thumbs: [_thumb('a'), _thumb('b')],
+    ));
+    await _pump(tester, long, width: 480);
+    final longW = tester.getSize(find.byKey(const Key('c2029_pill'))).width;
+
+    expect(shortW, lessThan(longW),
+        reason: 'one item and one thumbnail need less room than thirteen');
+    expect(longW, lessThan(480),
+        reason: 'the pill must not span the screen — cards sit under it');
+
+    await _pump(tester, long, width: 600);
+    final wideW = tester.getSize(find.byKey(const Key('c2029_pill'))).width;
+    expect(wideW, closeTo(longW, 0.5),
+        reason: 'the same cart is the same pill on a bigger phone');
+  });
+
+  testWidgets('6d. count and CTA are on ONE line', (tester) async {
+    final cart = await _loaded(_payload(
+      show: true,
+      itemsLabel: '13 items',
+      thumbs: [_thumb('a'), _thumb('b')],
+    ));
+    await _pump(tester, cart, width: 480);
+    final count = tester.getCenter(find.text('13 items'));
+    final cta = tester.getCenter(find.text('View cart'));
+    expect(count.dy, closeTo(cta.dy, 1.0),
+        reason: 'a second text line is the shape #2043 removed');
+    expect(cta.dx, greaterThan(count.dx),
+        reason: 'left to right: thumbs, count, divider, CTA, chevron');
+  });
+
+  testWidgets('8. which page floats the pill is the registry, not a number',
+      (tester) async {
+    // customer_nav().slots, verbatim: Home and the Catalogue carry the flag,
+    // Orders / Bulk / My Shop do not.
+    const slots = <Map<String, dynamic>>[
+      {'key': 'home', 'page_index': 0, 'cart_pill': true},
+      {'key': 'catalogue', 'page_index': 12, 'cart_pill': true},
+      {'key': 'bulk', 'page_index': 2, 'cart_pill': false},
+      {'key': 'orders', 'page_index': 1, 'cart_pill': false},
+      {'key': 'my_shop', 'page_index': 11, 'cart_pill': false},
+    ];
+    expect(CartPill.floatsOnPage(slots, 0), isTrue);
+    expect(CartPill.floatsOnPage(slots, 12), isTrue,
+        reason: 'the Catalogue is page 12 — this is the bug #2043 fixes');
+    expect(CartPill.floatsOnPage(slots, 1), isFalse);
+    expect(CartPill.floatsOnPage(slots, 2), isFalse);
+    expect(CartPill.floatsOnPage(slots, 11), isFalse);
+    expect(CartPill.floatsOnPage(slots, 7), isFalse,
+        reason: 'a page with no slot floats nothing');
+
+    // Turning a surface on is an UPDATE, and the app follows it with no deploy.
+    const flipped = <Map<String, dynamic>>[
+      {'key': 'home', 'page_index': 0, 'cart_pill': false},
+      {'key': 'orders', 'page_index': 1, 'cart_pill': true},
+    ];
+    expect(CartPill.floatsOnPage(flipped, 0), isFalse);
+    expect(CartPill.floatsOnPage(flipped, 1), isTrue);
+
+    // Before the registry answers, Home alone — never nothing, never
+    // everything.
+    expect(CartPill.floatsOnPage(const [], 0), isTrue);
+    expect(CartPill.floatsOnPage(const [], 12), isFalse);
+  });
+
+  test('9. the pill reserves its own room at the end of a list', () {
+    // One constant: what the shell floats the pill by, and what the lists put
+    // between their last card and the bottom of the page.
+    expect(CartPill.bottomInset,
+        CartPill.kHeight + CartPill.bottomGap * 2,
+        reason: 'the gap above the nav is the gap below the last card');
+    expect(CartPill.bottomInset, greaterThan(CartPill.kHeight),
+        reason: 'a card must not sit underneath the pill');
   });
 
   testWidgets('7. the whole pill opens the cart', (tester) async {

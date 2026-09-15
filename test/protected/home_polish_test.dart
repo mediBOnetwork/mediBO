@@ -381,9 +381,14 @@ void main() {
     });
 
     test('the cart pill and the home feed both clear the published height', () {
+      // CMD #2043 — the pill's own margin is a named constant now
+      // (`CartPill.bottomGap`), because the LISTS reserve the same number at
+      // their end so no card is left underneath it. What this holds down is
+      // unchanged: whatever that margin is, the published update-bar height is
+      // still added to it.
       expect(
           _src('lib/screens/shell/shell_bottom_bars.dart')
-              .contains('bottom: Ds.space.x16 + barH'),
+              .contains('bottom: CartPill.bottomGap + barH'),
           isTrue);
       expect(
           _src('lib/widgets/home_sections_view.dart')

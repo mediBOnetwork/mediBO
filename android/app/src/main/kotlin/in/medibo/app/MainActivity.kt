@@ -109,6 +109,13 @@ class MainActivity : FlutterActivity() {
                             "granted" to PaymentListener.isEnabled(applicationContext),
                             "queued" to PaymentListener.queueCount(applicationContext),
                             "device_id" to deviceId(),
+                            // CMD #2050 — the phone's own name, so a paired
+                            // device is recognisable in the Devices list. It is
+                            // data Android reports, never a label Dart invents.
+                            "model" to listOf(
+                                android.os.Build.MANUFACTURER.orEmpty(),
+                                android.os.Build.MODEL.orEmpty(),
+                            ).filter { it.isNotBlank() }.joinToString(" "),
                             "sdk" to android.os.Build.VERSION.SDK_INT,
                         ),
                     )

@@ -29,12 +29,14 @@ class PaymentListenerState {
     this.granted = false,
     this.queued = 0,
     this.deviceId = '',
+    this.model = '',
   });
 
   final bool available;
   final bool granted;
   final int queued;
   final String deviceId;
+  final String model;
 }
 
 /// One per app. Started from the Money screen, kept alive for the session so a
@@ -54,6 +56,10 @@ class PaymentListenerService {
   /// What the phone calls itself, the way the backend's per-device row keys it.
   String get deviceId => _deviceId;
   String _deviceId = '';
+
+  /// What Android calls this handset. Reported, never composed here.
+  String get model => _model;
+  String _model = '';
 
   /// The platform string the backend switches the card on.
   static String get platform => kIsWeb
@@ -94,11 +100,13 @@ class PaymentListenerService {
     try {
       final res = await _ch.invokeMapMethod<String, dynamic>('state');
       _deviceId = (res?['device_id'] ?? '').toString();
+      _model = (res?['model'] ?? '').toString();
       return PaymentListenerState(
         available: true,
         granted: res?['granted'] == true,
         queued: (res?['queued'] as num?)?.toInt() ?? 0,
         deviceId: _deviceId,
+        model: _model,
       );
     } catch (_) {
       return const PaymentListenerState(available: true);
@@ -122,6 +130,11 @@ class PaymentListenerService {
     _booted = true;
     try {
       await _refreshAllowList();
+      // CMD #2050 — FIRST LAUNCH PAIRS THE PHONE. Before this, a device row
+      // existed only if payment_listener_report happened to run, which is why
+      // live had none at all: the registry is now written on boot, once, and
+      // the rest of the chain (report, card, speak_pull) has a row to find.
+      await register();
       await reportState();
       await drain();
       await _subscribeSpeak();
@@ -153,6 +166,24 @@ class PaymentListenerService {
       'queue_max': (boot['queue_max'] as num?)?.toInt() ?? 500,
     });
     RenderLog.write('c1931_listener_packages', packages.length);
+  }
+
+  /// Pair this phone with the backend's device registry. Idempotent: the RPC
+  /// upserts, so every launch simply refreshes last-seen and the zone.
+  Future<Map<String, dynamic>> register() async {
+    if (!supported) return const <String, dynamic>{'ok': false};
+    final st = await readState();
+    if (st.deviceId.isEmpty) return const <String, dynamic>{'ok': false};
+    try {
+      final res = await _rpc('payment_alert_device_register', <String, dynamic>{
+        'p_device': st.deviceId,
+        if (st.model.isNotEmpty) 'p_label': st.model,
+      });
+      RenderLog.write('c2050_device_registered', res['ok'] == true ? 1 : 0);
+      return res;
+    } catch (_) {
+      return const <String, dynamic>{'ok': false};
+    }
   }
 
   /// Tell the backend what Android granted, and get the card back.

@@ -62,6 +62,10 @@ insert into public.ui_copy (key, value) values
   ('custreg.err_not_signed_in', '"Sign in first."'::jsonb),
   ('custreg.err_no_values',     '"Fill the form before submitting."'::jsonb),
   ('custreg.err_save',          '"We could not save that. Try once more."'::jsonb),
+  ('custreg.retry',             '"Try again"'::jsonb),
+  ('custreg.close_label',       '"Close"'::jsonb),
+  ('custreg.done_title',        '"You are registered"'::jsonb),
+  ('custreg.done_line',         '"Nothing else is pending."'::jsonb),
   ('custdoc.status.not_available', '"Not available"'::jsonb),
   ('cust_pipeline.col_docs',    '"Documents"'::jsonb),
   ('cust_pipeline.docs_ok',     '"All in"'::jsonb),
@@ -142,10 +146,14 @@ begin
         'state_tone',     case when j.has_file then 'success'
                                when j.skipped  then 'neutral'
                                else 'neutral' end,
+        -- Both words for both buttons, always. The card flips between them
+        -- on what the person just tapped, and never composes one itself.
         'upload_label',   case when j.has_file then public._c('custreg.doc_replace')
                                else public._c('custreg.doc_upload') end,
-        'skip_label',     case when j.skipped then public._c('custreg.doc_undo_skip')
-                               else public._c('custreg.doc_skip') end,
+        'add_label',      public._c('custreg.doc_upload'),
+        'replace_label',  public._c('custreg.doc_replace'),
+        'skip_label',     public._c('custreg.doc_skip'),
+        'undo_label',     public._c('custreg.doc_undo_skip'),
         'bucket',         'kyc-docs'
       ) as r
     from joined j
@@ -332,6 +340,11 @@ begin
     'subtitle',    public._c('custreg.form_subtitle'),
     'submit_label',     public._c('custreg.submit_label'),
     'submitting_label', public._c('custreg.submitting_label'),
+    'error_label',      public._c('custreg.err_save'),
+    'retry_label',      public._c('custreg.retry'),
+    'close_label',      public._c('custreg.close_label'),
+    'done_title',       public._c('custreg.done_title'),
+    'done_line',        public._c('custreg.done_line'),
     'imported',    jsonb_build_object(
                      'is',   v_imported,
                      'note', case when v_imported then public._c('custreg.imported_note') else '' end),

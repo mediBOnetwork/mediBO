@@ -1,43 +1,44 @@
-// CMD #2030 — the storefront header band FOLLOWS THE FINGER, 1:1.
+// CMD #2052 — the storefront header band moves on the FINGER, and nothing else.
 //
-// CMD #2019 put the band on a verdict: 12 px of travel flipped a bool and a
-// 180 ms curve played the remaining 44. A 20 px drag therefore bumped the whole
-// header away and a flick popped it back — it moved further than the finger and
-// at its own speed. This file holds down the arithmetic that replaced it, and
-// every guard that keeps a 1:1 header honest:
+// #2019 put the band on a verdict; #2030 made it a distance that follows the
+// list 1:1; #2038 filtered the deltas no finger produced. All three read the
+// SCROLL OFFSET, and the offset is the thing that lies: a page of products
+// arriving re-measures the list, a grid re-lays out, the keyboard opens, a
+// `jumpTo` fires, a collapsing band hands its own height to the viewport. Each
+// reports pixels running backwards, and every backward pixel read as "the
+// finger came up" — the header flashing back mid-scroll with no reversal of
+// Om's own. That is not a filter problem: once you are looking at an offset, a
+// re-measure and a drag are the same event.
 //
-//   · one pixel of scroll is one pixel of band, both directions, no threshold;
-//   · no snap and no auto-complete — a half-hidden band STAYS half hidden;
-//   · never more hidden than the list has travelled from the top, so the top of
-//     the page always wears the whole header;
-//   · the band's own height is the travel, and it is the same token the header
-//     is drawn with;
-//   · the last band-height of the list is frozen in the hiding direction (the
-//     collapse hands its height to the viewport, and at the end of the list that
-//     correction comes back as a delta — the two used to chase each other);
-//   · a short page, a horizontal rail and a disabled tab never move it;
-//   · the band RISES (its bottom slice is what stays) rather than shortening;
-//   · and the header subtree is LAID OUT, never rebuilt, as it moves.
+// So this file holds down a different contract, and it is the whole of it:
 //
-// CMD #2038 added the three filters that stand between "a delta arrived" and
-// "the finger asked for it", because 1:1 obeyed deltas no finger produced and
-// the header popped in and back out mid-scroll:
-//
-//   · overscroll, bounce and edge snap-back drive the band by NOTHING — only
-//     the stretch of a delta inside [min, max] is scrolling at all;
-//   · a reversal must travel `Ds.touch.headerHysteresis` before it is believed,
-//     and when it is, it is paid in FULL, so 1:1 survives the threshold;
-//   · a ballistic phase is locked to the direction of its first delta until the
-//     list stops or a finger lands, so a fling never turns around mid-flight;
-//   · and the wrapper builds nothing either — the band is a render object that
-//     reads the notifier itself.
+//   · ONLY A FINGER MOVES IT. The driver reads `dragDetails.delta` — the
+//     pointer's own travel — and a ScrollUpdate without a drag moves the band
+//     by exactly zero, whatever its scrollDelta says. Inserted content, a
+//     re-measure, a keyboard, a programmatic jump and a fling are all that.
+//   · IT FOLLOWS THE POINTER, NOT THE LIST. When the two disagree — and they
+//     disagree exactly when the list re-measures — the pointer wins.
+//   · MOMENTUM FOLLOWS THE DRAG THAT STARTED IT. A downward fling can only end
+//     with the header away; it can never reveal it on the way.
+//   · A DIRECTION EARNS ITSELF over `Ds.touch.headerHysteresis` (40 px) of
+//     deliberate travel, first direction and reversal alike, and when it is
+//     earned it is paid in FULL rather than docked the threshold.
+//   · OVERSCROLL AND BOUNCE DRIVE IT BY NOTHING, both the notification and any
+//     drag reported while the list is outside its own ends.
+//   · IT IS NEVER LEFT HALF OPEN. The gesture ends, the band finishes itself
+//     off at the end the drag was heading for, on an animation value.
+//   · NOTHING REBUILDS. Not the header, not the wrapper — dragging or settling.
+//   · ONE BAND FOR HOME AND CATALOGUE (#2052(8)), and one driver, and one
+//     notifier — never a second controller to keep in step.
 //
 // The other half is the promise the spec makes about the chrome that must NOT
-// move: the search bar and the category chip row are pinned by sitting outside
-// the scroll view, so what is protected is that the shell never moves them in.
+// move: the search bar, the breadcrumb and the A–Z rail are pinned by sitting
+// outside the scroll view, so what is protected is that the shell never moves
+// them in.
 
 import 'dart:io';
 
+import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pharma_b2b/design_tokens.dart';
@@ -45,6 +46,7 @@ import 'package:pharma_b2b/screens/home_shell.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 
 final double _h = Ds.touch.headerBand;
+final double _t = Ds.touch.headerHysteresis;
 
 FixedScrollMetrics _metrics({
   double pixels = 500,
@@ -62,34 +64,43 @@ FixedScrollMetrics _metrics({
       devicePixelRatio: 1,
     );
 
-/// CMD #2038 — a notification now says WHO moved the list, because the driver
-/// treats a finger and a fling differently. [drag] true is a finger on the
-/// glass (`dragDetails` present, which is exactly how Flutter marks a drag
-/// update); false is ballistic — a fling coasting, or the physics settling.
+/// A scroll update. [drag] true is a finger on the glass (`dragDetails`
+/// present, which is exactly how Flutter marks a drag update); false is
+/// everything else the list reports on its own — a fling coasting, the physics
+/// settling, a re-measure after a page is inserted, a programmatic jump.
+///
+/// [pointer] is the FINGER's travel in band-sign (positive hides), and it is
+/// deliberately a separate number from [delta], the list's own. They agree in
+/// every ordinary frame and disagree exactly when the list moves by itself,
+/// which is what several of these tests are about.
 ScrollUpdateNotification _update({
   required double delta,
+  double? pointer,
   double pixels = 500,
   double max = 4000,
   double min = 0,
   Axis axis = Axis.vertical,
   bool drag = true,
   required BuildContext context,
-}) =>
-    ScrollUpdateNotification(
-      metrics: _metrics(pixels: pixels, max: max, min: min, axis: axis),
-      context: context,
-      scrollDelta: delta,
-      dragDetails: drag
-          ? DragUpdateDetails(
-              globalPosition: Offset.zero,
-              delta: Offset(0, -delta),
-              primaryDelta: -delta,
-            )
-          : null,
-    );
+}) {
+  final double p = pointer ?? delta;
+  return ScrollUpdateNotification(
+    metrics: _metrics(pixels: pixels, max: max, min: min, axis: axis),
+    context: context,
+    scrollDelta: delta,
+    dragDetails: drag
+        ? DragUpdateDetails(
+            globalPosition: Offset.zero,
+            delta: Offset(0, -p),
+            primaryDelta: -p,
+          )
+        : null,
+  );
+}
 
 void _scroll(
   double delta, {
+  double? pointer,
   double pixels = 500,
   double max = 4000,
   double min = 0,
@@ -101,6 +112,7 @@ void _scroll(
     shellHeaderScroll(
         _update(
             delta: delta,
+            pointer: pointer,
             pixels: pixels,
             max: max,
             min: min,
@@ -109,7 +121,15 @@ void _scroll(
             context: context),
         enabled);
 
-/// The list coming to rest. It ends a fling's direction lock.
+/// The finger leaving the glass. Flutter reports it as `idle` BEFORE the
+/// ballistic phase starts, which is why the band can settle without waiting for
+/// the fling to run out.
+void _lift(BuildContext context) => shellHeaderScroll(
+    UserScrollNotification(
+        metrics: _metrics(), context: context, direction: ScrollDirection.idle),
+    true);
+
+/// The list coming to rest.
 void _end(BuildContext context) => shellHeaderScroll(
     ScrollEndNotification(metrics: _metrics(), context: context), true);
 
@@ -128,41 +148,82 @@ void main() {
   setUpAll(() => RenderLog.flushEnabled = false);
   setUp(shellHeaderBandShow);
 
-  group('one pixel of scroll is one pixel of band', () {
-    testWidgets('down 20 hides exactly 20, up 20 hands exactly 20 back',
+  group('CMD #2052 · only a finger moves the band', () {
+    testWidgets('a drag moves it 1:1 once the direction is earned',
         (tester) async {
       final context = await _ctx(tester);
-      _scroll(20, context: context);
-      expect(shellHeaderCollapse.value, 20,
+      _scroll(_t, context: context);
+      expect(shellHeaderCollapse.value, _t,
           reason: 'the band did not move with the finger, 1:1');
-      _scroll(-20, context: context);
+      _scroll(10, context: context);
+      expect(shellHeaderCollapse.value, _t + 10,
+          reason: 'going on the way it was already going needs no threshold');
+    });
+
+    testWidgets('an update with NO drag moves it by nothing at all',
+        (tester) async {
+      final context = await _ctx(tester);
+      // Nothing has been dragged yet. A page of products lands and the list
+      // re-measures; a grid re-lays out; the keyboard opens; something calls
+      // jumpTo. Every one of them reports a delta with no finger behind it.
+      _scroll(_h * 4, drag: false, context: context);
+      _scroll(-_h * 4, drag: false, pixels: 0, context: context);
       expect(shellHeaderCollapse.value, 0,
-          reason: 'scrolling back up did not hand the same 20 px back');
+          reason: 'the list moved the header without a finger');
+
+      // And once a drag HAS sent the header away, the same deltas cannot bring
+      // it back — this is the flash-back #2052 is filed for.
+      _scroll(_t + 10, context: context);
+      _end(context);
+      expect(shellHeaderCollapse.value, _h);
+      _scroll(-200, drag: false, context: context);
+      _scroll(-40, drag: false, pixels: 60, context: context);
+      _scroll(-4000, drag: false, pixels: 0, context: context);
+      expect(shellHeaderCollapse.value, _h,
+          reason: 'the header flashed back on a delta no finger produced — '
+              'this IS the bug');
     });
 
-    testWidgets('there is no threshold — 4 px of scroll is 4 px of band',
+    testWidgets('it follows the POINTER when the list disagrees',
         (tester) async {
       final context = await _ctx(tester);
-      _scroll(4, context: context);
-      expect(shellHeaderCollapse.value, 4,
-          reason: 'a small delta was swallowed by a threshold');
+      // The finger is still going down the page by 20 px, but the list reports
+      // itself running 300 px backwards because it just re-measured. The band
+      // must obey the finger.
+      _scroll(-300, pointer: _t, context: context);
+      expect(shellHeaderCollapse.value, _t,
+          reason: 'the band read the list\'s own delta instead of the finger');
     });
 
-    testWidgets('a half-hidden band STAYS half hidden — no snap, no complete',
+    testWidgets('a short page can never lose its header', (tester) async {
+      final context = await _ctx(tester);
+      _scroll(_h * 4, max: _h - 1, context: context);
+      expect(shellHeaderCollapse.value, 0);
+    });
+
+    testWidgets('horizontal rails are ignored entirely', (tester) async {
+      final context = await _ctx(tester);
+      _scroll(_h * 4, axis: Axis.horizontal, context: context);
+      expect(shellHeaderCollapse.value, 0,
+          reason: 'a sideways rail moved the header band');
+    });
+
+    testWidgets('disabled means shown — every tab the band does not own',
         (tester) async {
       final context = await _ctx(tester);
-      _scroll(_h / 2, context: context);
-      expect(shellHeaderCollapse.value, _h / 2);
-      // Everything that is not a delta: an end notification, a zero delta, a
-      // notification of another kind. None of them may finish the movement.
-      _scroll(0, context: context);
-      shellHeaderScroll(
-          ScrollEndNotification(
-              metrics: _update(delta: 0, context: context).metrics,
-              context: context),
-          true);
-      expect(shellHeaderCollapse.value, _h / 2,
-          reason: 'something completed the collapse the finger left half done');
+      _scroll(_h * 2, context: context);
+      expect(shellHeaderCollapse.value, _h);
+      _scroll(_h, enabled: false, context: context);
+      expect(shellHeaderCollapse.value, 0);
+    });
+
+    testWidgets('the listener never swallows the notification it read',
+        (tester) async {
+      final context = await _ctx(tester);
+      expect(shellHeaderScroll(_update(delta: _h, context: context), true),
+          isFalse);
+      expect(shellHeaderScroll(_update(delta: _h, context: context), false),
+          isFalse);
     });
 
     testWidgets('it never hides more of the band than the band is tall',
@@ -174,91 +235,188 @@ void main() {
       expect(shellHeaderCollapse.value, _h,
           reason: 'the band collapsed past its own height');
     });
+  });
 
-    testWidgets('a direction change is not a reset — it is 1:1 the other way',
+  group('CMD #2052 · a direction has to earn itself', () {
+    testWidgets('jitter under the threshold changes nothing, from cold',
         (tester) async {
       final context = await _ctx(tester);
-      _scroll(30, context: context);
-      _scroll(-10, context: context);
-      expect(shellHeaderCollapse.value, 20,
-          reason: 'reversing threw the position away instead of moving it back');
+      for (var i = 0; i < 6; i++) {
+        _scroll(3, context: context);
+        _scroll(-3, context: context);
+      }
+      expect(shellHeaderCollapse.value, 0,
+          reason: 'a shaking finger walked the header off a page nobody '
+              'had scrolled');
+    });
+
+    testWidgets('a wobble mid-scroll does not turn it around', (tester) async {
+      final context = await _ctx(tester);
+      _scroll(_t + 20, context: context);
+      final double at = shellHeaderCollapse.value;
+      _scroll(-6, context: context);
+      expect(shellHeaderCollapse.value, at,
+          reason: 'finger tremor turned the header around — this is the '
+              'pop-in/pop-out the band keeps being filed for');
+      // …and carrying on down is obeyed at once: the guard is on TURNING, not
+      // on moving. The 6 px held are netted off, so the band is exactly where
+      // the finger is.
+      _scroll(10, context: context);
+      expect(shellHeaderCollapse.value, at + 4,
+          reason: 'the held wobble was either lost or paid twice');
+    });
+
+    testWidgets('a reversal is DELAYED by the threshold, never shortened',
+        (tester) async {
+      final context = await _ctx(tester);
+      _scroll(_h, context: context);
+      final double at = shellHeaderCollapse.value;
+      _scroll(-(_t - 1), context: context);
+      expect(shellHeaderCollapse.value, at,
+          reason: 'a reversal one pixel short of the token was believed');
+      _scroll(-1, context: context);
+      expect(shellHeaderCollapse.value, at - _t,
+          reason: 'the threshold SHORTENED the reversal instead of delaying '
+              'it — the first 40 px of every scroll-up would be eaten');
+    });
+
+    testWidgets('the threshold is the backend token, and it is 40',
+        (tester) async {
+      expect(_t, 40,
+          reason: 'the spec asks for a deliberate 40 px drag');
+      expect(Ds.touch.headerSettleMs, greaterThan(0),
+          reason: 'the settle has no duration to animate over');
     });
   });
 
-  group('the guards that keep a 1:1 header honest', () {
-    testWidgets('never more hidden than the list has travelled from the top',
+  group('CMD #2052 · overscroll and bounce drive it by nothing', () {
+    testWidgets('a drag reported outside the list moves nothing',
         (tester) async {
       final context = await _ctx(tester);
-      // 40 px of delta reported at offset 10 can only mean 10 px of band: the
-      // first band-height of the page scrolls the header off exactly as if it
-      // were the first row of content.
-      _scroll(40, pixels: 10, context: context);
-      expect(shellHeaderCollapse.value, 10);
+      _scroll(_h, context: context);
+      // A bouncing list reports pixels BEYOND its own end and then reports them
+      // back. Neither half is scrolling, and a finger stretching a bounce is
+      // not scrolling either.
+      _scroll(-_h, pixels: -30, context: context);
+      _scroll(_h, pixels: 4030, max: 4000, context: context);
+      expect(shellHeaderCollapse.value, _h,
+          reason: 'the bounce at the end of the list moved the header');
     });
 
-    testWidgets('the top of the page always wears the whole header',
+    testWidgets('an OverscrollNotification never drives the band',
         (tester) async {
       final context = await _ctx(tester);
-      _scroll(_h * 2, context: context);
+      _scroll(_t, context: context);
+      shellHeaderScroll(
+          OverscrollNotification(
+              metrics: _metrics(pixels: 4000), context: context, overscroll: 60),
+          true);
+      expect(shellHeaderCollapse.value, _t,
+          reason: 'the glow at the end of the list moved the header');
+    });
+
+    testWidgets('a finger at the very top always wears the whole header',
+        (tester) async {
+      final context = await _ctx(tester);
+      _scroll(_h, context: context);
       expect(shellHeaderCollapse.value, _h);
-      _scroll(20, pixels: 0, context: context);
+      // There is no list left to drag back, so the band cannot be earned back
+      // a pixel at a time. It is simply worn.
+      _scroll(-1, pixels: 0, context: context);
       expect(shellHeaderCollapse.value, 0,
-          reason: 'the band stayed hidden at offset 0');
+          reason: 'the band stayed hidden with the list at its own top');
+    });
+  });
+
+  group('CMD #2052 · momentum follows the drag that started it', () {
+    testWidgets('a downward fling never reveals the header', (tester) async {
+      final context = await _ctx(tester);
+      _scroll(_t, context: context);
+      // The finger lifts and the list coasts — including the snap-back at the
+      // end of the fling, which used to be the reveal.
+      _lift(context);
+      _scroll(-300, drag: false, context: context);
+      _scroll(-80, drag: false, context: context);
+      _end(context);
+      expect(shellHeaderCollapse.value, _h,
+          reason: 'a fling revealed the header the drag had sent away');
     });
 
-    testWidgets('a page too short to scroll can never lose its header',
+    testWidgets('an upward drag gets the header back on the lift',
         (tester) async {
       final context = await _ctx(tester);
-      _scroll(_h * 4, max: _h - 1, context: context);
-      expect(shellHeaderCollapse.value, 0);
-    });
-
-    testWidgets('the end of the list is frozen in the hiding direction only',
-        (tester) async {
-      final context = await _ctx(tester);
-      _scroll(20, context: context);
-      // Collapsing hands the band's height to the viewport; over the last
-      // band-height of the list that shortens maxScrollExtent and the
-      // correction returns as a delta. Freezing there is what stops the strobe.
-      _scroll(30, pixels: 4000 - (_h / 2), context: context);
-      expect(shellHeaderCollapse.value, 20,
-          reason: 'the band moved at the end of the list, where its own '
-              'collapse feeds the next delta');
-      // Coming back up from there still works — the freeze is one-directional.
-      _scroll(-10, pixels: 4000 - (_h / 2), context: context);
-      expect(shellHeaderCollapse.value, 10);
-    });
-
-    testWidgets('horizontal rails are ignored entirely', (tester) async {
-      final context = await _ctx(tester);
-      _scroll(40, axis: Axis.horizontal, context: context);
-      expect(shellHeaderCollapse.value, 0,
-          reason: 'a sideways rail moved the header band');
-    });
-
-    testWidgets('disabled means shown — admin and every other tab keep it',
-        (tester) async {
-      final context = await _ctx(tester);
-      _scroll(_h * 2, context: context);
+      _scroll(_h, context: context);
       expect(shellHeaderCollapse.value, _h);
-      _scroll(40, enabled: false, context: context);
-      expect(shellHeaderCollapse.value, 0);
+      _scroll(-_t, context: context);
+      _lift(context);
+      expect(shellHeaderCollapse.value, 0,
+          reason: 'an upward drag did not hand the whole header back');
     });
+  });
 
-    testWidgets('the listener never swallows the notification it read',
+  group('CMD #2052 · it is never left half open', () {
+    testWidgets('a half-hidden band finishes the way the drag was going',
         (tester) async {
       final context = await _ctx(tester);
-      expect(shellHeaderScroll(_update(delta: 40, context: context), true),
-          isFalse);
-      expect(shellHeaderScroll(_update(delta: 40, context: context), false),
-          isFalse);
+      _scroll(_t, context: context); // less than the band is tall
+      expect(shellHeaderCollapse.value, lessThan(_h));
+      _lift(context);
+      expect(shellHeaderCollapse.value, _h,
+          reason: 'the band was left standing half open');
+    });
+
+    testWidgets('an end notification finishes it too', (tester) async {
+      final context = await _ctx(tester);
+      _scroll(_t, context: context);
+      _end(context);
+      expect(shellHeaderCollapse.value, _h);
+    });
+
+    testWidgets('a gesture that earned no direction settles nowhere',
+        (tester) async {
+      final context = await _ctx(tester);
+      _scroll(4, context: context);
+      _lift(context);
+      expect(shellHeaderCollapse.value, 0,
+          reason: 'four pixels of jitter took the whole header away');
+    });
+
+    testWidgets('the settle is ANIMATED when a band is on screen',
+        (tester) async {
+      await tester.pumpWidget(Directionality(
+        textDirection: TextDirection.ltr,
+        child: Align(
+          alignment: Alignment.topLeft,
+          child: SizedBox(
+            width: 360,
+            child: shellCollapsibleBand(
+                true, SizedBox(height: _h, key: const Key('band'))),
+          ),
+        ),
+      ));
+      final BuildContext context = tester.element(find.byKey(const Key('band')));
+      _scroll(_t, context: context);
+      expect(shellHeaderCollapse.value, _t);
+      _lift(context);
+      // Mid-flight: on its way, not there yet, and not still where it was.
+      await tester.pump();
+      await tester.pump(Duration(
+          milliseconds: (Ds.touch.headerSettleMs / 3).round()));
+      expect(shellHeaderCollapse.value, greaterThan(_t),
+          reason: 'the settle jumped instead of animating');
+      expect(shellHeaderCollapse.value, lessThan(_h),
+          reason: 'the settle finished in one frame — it is not animating');
+      await tester.pump(Duration(
+          milliseconds: Ds.touch.headerSettleMs.round() + 50));
+      expect(shellHeaderCollapse.value, _h,
+          reason: 'the settle never arrived');
     });
   });
 
   group('the band wrapper draws the position it is given', () {
     /// The band under test, with a build counter on the child so a rebuild
     /// during a flick is visible.
-    Widget _band(ValueNotifier<int> builds) => Directionality(
+    Widget band(ValueNotifier<int> builds) => Directionality(
           textDirection: TextDirection.ltr,
           child: Align(
             alignment: Alignment.topLeft,
@@ -280,7 +438,7 @@ void main() {
     testWidgets('its height is the band less exactly what has been scrolled',
         (tester) async {
       final builds = ValueNotifier<int>(0);
-      await tester.pumpWidget(_band(builds));
+      await tester.pumpWidget(band(builds));
       expect(tester.getSize(find.byKey(const Key('wrap'))).height, _h);
 
       shellHeaderCollapse.value = 20;
@@ -302,7 +460,7 @@ void main() {
     testWidgets('the band RISES — its bottom slice is what stays on screen',
         (tester) async {
       final builds = ValueNotifier<int>(0);
-      await tester.pumpWidget(_band(builds));
+      await tester.pumpWidget(band(builds));
       final top = tester.getTopLeft(find.byKey(const Key('band'))).dy;
 
       shellHeaderCollapse.value = 20;
@@ -311,24 +469,10 @@ void main() {
           reason: 'the header shortened in place instead of rising 20 px');
     });
 
-    testWidgets('a flick lays the header out, it never rebuilds it',
-        (tester) async {
-      final builds = ValueNotifier<int>(0);
-      await tester.pumpWidget(_band(builds));
-      final after = builds.value;
-      for (var px = 1.0; px <= _h; px++) {
-        shellHeaderCollapse.value = px;
-        await tester.pump();
-      }
-      expect(builds.value, after,
-          reason: 'the header subtree rebuilt on scroll — a whole band of '
-              'widgets per frame is what drops the frames');
-    });
-
     testWidgets('disabled returns the child untouched — no wrapper at all',
         (tester) async {
-      // CMD #2038 — `identical`, not a widget-type search: the band is a render
-      // object now, so "no wrapper" is literally "the same Widget back".
+      // `identical`, not a widget-type search: the band is a render object, so
+      // "no wrapper" is literally "the same Widget back".
       const Widget child = SizedBox(height: 56, key: Key('band'));
       expect(identical(shellCollapsibleBand(false, child), child), isTrue,
           reason: 'a disabled tab was still wrapped in the collapsing band');
@@ -339,13 +483,14 @@ void main() {
       expect(tester.getSize(find.byKey(const Key('band'))).height, 56);
     });
 
-    testWidgets('CMD #2038 — the WRAPPER does not rebuild either', (tester) async {
+    testWidgets('neither the header NOR the wrapper rebuilds as it moves',
+        (tester) async {
       // #2030 handed the header through untouched, but the wrapper itself was a
       // ValueListenableBuilder: one new Align per frame of every flick, to
-      // change one number. The band is a render object now, so a whole band of
-      // travel builds nothing at all — not the header, and not its wrapper.
+      // change one number. The band is a render object, so a whole band of
+      // travel — dragged or settling — builds nothing at all.
       final builds = ValueNotifier<int>(0);
-      await tester.pumpWidget(_band(builds));
+      await tester.pumpWidget(band(builds));
       expect(find.byType(ValueListenableBuilder<double>), findsNothing,
           reason: 'the band went back to rebuilding a wrapper every frame');
       expect(find.byType(AnimatedBuilder), findsNothing);
@@ -356,184 +501,73 @@ void main() {
         shellHeaderCollapse.value = px;
         await tester.pump();
       }
-      expect(builds.value, builtBefore);
-      expect(identical(tester.renderObject(find.byKey(const Key('band'))),
-              before),
+      expect(builds.value, builtBefore,
+          reason: 'the header subtree rebuilt on scroll — a whole band of '
+              'widgets per frame is what drops the frames');
+      expect(
+          identical(tester.renderObject(find.byKey(const Key('band'))), before),
           isTrue,
           reason: 'the band rebuilt its own subtree while scrolling');
     });
   });
 
-  // ── CMD #2038 — the band moves on INTENT, never on a delta alone ──────────
-  group('CMD #2038 · overscroll, bounce and snap-back drive it by nothing', () {
-    testWidgets('a bounce past the top and back moves the band by zero',
-        (tester) async {
-      final context = await _ctx(tester);
-      _scroll(_h, context: context);
-      expect(shellHeaderCollapse.value, _h);
-      // A bouncing list reports pixels BEYOND its own end and then reports
-      // them back. Both halves live outside [min, max]; neither is scrolling.
-      _scroll(-30, pixels: -30, context: context);
-      _scroll(30, pixels: 0, context: context);
-      expect(shellHeaderCollapse.value, 0,
-          reason: 'arriving at the top wears the whole header — and the '
-              'bounce that followed must not take it away again');
-    });
+  group('CMD #2052 · one band for Home AND the Catalogue', () {
+    final shell = File('lib/screens/home_shell.dart').readAsStringSync();
+    // CMD #2052 — the band is its own shard now (shell_header_band.dart): one
+    // driver, one notifier, one settle, one render object, on its own leasable
+    // path. The mobile chrome keeps the header it DRAWS.
+    final chrome =
+        File('lib/screens/shell/shell_header_band.dart').readAsStringSync();
+    final catalogue = File('lib/screens/catalogue_screen.dart').readAsStringSync();
 
-    testWidgets('only the stretch INSIDE the list counts', (tester) async {
-      final context = await _ctx(tester);
-      _scroll(40, context: context);
-      expect(shellHeaderCollapse.value, 40);
-      // The list bounced 30 px past its own end and is springing back: 50 px
-      // reported, running 4030 -> 3980. Thirty of those pixels are outside the
-      // list and did not happen; twenty did. The cap is wide open here (the
-      // list is 3980 px from its top), so the arithmetic is what is on trial.
-      _scroll(-50, pixels: 3980, max: 4000, context: context);
-      expect(shellHeaderCollapse.value, 20,
-          reason: 'the band was driven by pixels the list does not have');
-    });
-
-    testWidgets('an OverscrollNotification never drives the band',
-        (tester) async {
-      final context = await _ctx(tester);
-      _scroll(20, context: context);
-      shellHeaderScroll(
-          OverscrollNotification(
-              metrics: _metrics(pixels: 4000),
-              context: context,
-              overscroll: 60),
-          true);
-      expect(shellHeaderCollapse.value, 20,
-          reason: 'the glow at the end of the list moved the header');
-    });
-  });
-
-  group('CMD #2038 · a reversal has to earn its turn', () {
-    testWidgets('a 6 px wobble mid-scroll does not move the header',
-        (tester) async {
-      final context = await _ctx(tester);
-      _scroll(30, context: context);
-      _scroll(-6, context: context);
-      expect(shellHeaderCollapse.value, 30,
-          reason: 'finger tremor turned the header around — this IS the '
-              'pop-in/pop-out #2038 was filed for');
-      // …and carrying on down is obeyed at once: the guard is on TURNING, not
-      // on moving. The 6 px that were held are netted off, so the band is
-      // exactly where the FINGER is — down 30, up 6, down 10 is 34.
-      _scroll(10, context: context);
-      expect(shellHeaderCollapse.value, 34,
-          reason: 'the held wobble was either lost or paid twice');
-    });
-
-    testWidgets('jitter under the threshold NEVER accumulates into a turn',
-        (tester) async {
-      final context = await _ctx(tester);
-      _scroll(40, context: context);
-      final double at = shellHeaderCollapse.value;
-      // Down-up-down-up, all under 8 px: a finger shaking on the glass.
-      for (var i = 0; i < 6; i++) {
-        _scroll(-3, context: context);
-        _scroll(3, context: context);
+    test('the Catalogue tab owns the band, and so does Home', () {
+      expect(shellHeaderBandTab(0), isTrue, reason: 'Home lost the band');
+      expect(shellHeaderBandTab(12), isTrue,
+          reason: 'the Catalogue header still never hides — #2052(8)');
+      for (final int other in const [1, 2, 3, 11, 13, 14]) {
+        expect(shellHeaderBandTab(other), isFalse,
+            reason: 'tab $other started collapsing a header it should keep');
       }
-      expect(shellHeaderCollapse.value, at,
-          reason: 'six wobbles walked the header somewhere');
     });
 
-    testWidgets('a real reversal is paid in FULL — 1:1 survives the threshold',
-        (tester) async {
-      final context = await _ctx(tester);
-      _scroll(40, context: context);
-      final double at = shellHeaderCollapse.value;
-      // Three 3 px steps: the first two are held, the third crosses 8 and pays
-      // all nine. The finger asked for 9 px back and gets 9 px back.
-      _scroll(-3, context: context);
-      _scroll(-3, context: context);
-      expect(shellHeaderCollapse.value, at,
-          reason: 'the band turned before the reversal was believed');
-      _scroll(-3, context: context);
-      expect(shellHeaderCollapse.value, at - 9,
-          reason: 'the hysteresis SHORTENED the reversal instead of delaying '
-              'it — the first 8 px of every scroll-up would be eaten');
+    test('there is ONE driver and ONE notifier, not a second controller', () {
+      expect('final ValueNotifier<double> shellHeaderCollapse'
+              .allMatches(chrome)
+              .length,
+          1,
+          reason: 'a second band notifier appeared — the two would drift');
+      expect('bool shellHeaderScroll('.allMatches(chrome).length, 1,
+          reason: 'a second driver appeared');
+      expect(catalogue, isNot(contains('shellHeaderCollapse')),
+          reason: 'the Catalogue grew its own header controller instead of '
+              'riding the shell it already lives in');
+      expect(shell,
+          contains('shellHeaderScroll(n, !isAdmin && shellHeaderBandTab(_index))'),
+          reason: 'the shell stopped feeding the one band from the page '
+              'scroll, or wrapped it in something that can rebuild the '
+              'IndexedStack');
     });
 
-    testWidgets('the threshold is the backend token, not a number in Dart',
-        (tester) async {
-      final context = await _ctx(tester);
-      final double t = Ds.touch.headerHysteresis;
-      expect(t, greaterThan(0));
-      _scroll(_h, context: context);
-      final double at = shellHeaderCollapse.value;
-      _scroll(-(t - 1), context: context);
-      expect(shellHeaderCollapse.value, at,
-          reason: 'a reversal one pixel short of the token was believed');
-      _scroll(-1, context: context);
-      expect(shellHeaderCollapse.value, at - t,
-          reason: 'the reversal did not commit exactly at the token');
-    });
-
-    testWidgets('going WITH the grain needs no threshold at all',
-        (tester) async {
-      final context = await _ctx(tester);
-      _scroll(2, context: context);
-      _scroll(2, context: context);
-      expect(shellHeaderCollapse.value, 4,
-          reason: '#2030 promised no threshold on the way the band is already '
-              'going, and that promise is untouched');
-    });
-  });
-
-  group('CMD #2038 · a fling is one direction until it stops', () {
-    testWidgets('a snap-back inside a fling cannot turn the header',
-        (tester) async {
-      final context = await _ctx(tester);
-      // The finger lifts; the list coasts. Ballistic deltas carry no drag.
-      _scroll(20, drag: false, context: context);
-      _scroll(20, drag: false, context: context);
-      final double at = shellHeaderCollapse.value;
-      _scroll(-20, drag: false, context: context);
-      expect(shellHeaderCollapse.value, at,
-          reason: 'the header re-evaluated its direction mid-fling — a long '
-              'fling down would flash the header on the way');
-    });
-
-    testWidgets('the fling still follows the list 1:1 in its own direction',
-        (tester) async {
-      final context = await _ctx(tester);
-      _scroll(10, drag: false, context: context);
-      _scroll(10, drag: false, context: context);
-      expect(shellHeaderCollapse.value, 20,
-          reason: '#2030 1:1 was lost during a fling');
-    });
-
-    testWidgets('the list coming to rest releases the lock', (tester) async {
-      final context = await _ctx(tester);
-      _scroll(30, drag: false, context: context);
-      _end(context);
-      _scroll(-30, drag: false, context: context);
-      expect(shellHeaderCollapse.value, 0,
-          reason: 'the fling lock outlived the fling');
-    });
-
-    testWidgets('a finger landing mid-fling outranks the lock', (tester) async {
-      final context = await _ctx(tester);
-      _scroll(40, drag: false, context: context);
-      final double at = shellHeaderCollapse.value;
-      // Om catches the coasting list and drags it back up. Intent wins, and it
-      // still has to clear the hysteresis like any other reversal.
-      _scroll(-4, context: context);
-      expect(shellHeaderCollapse.value, at);
-      _scroll(-6, context: context);
-      expect(shellHeaderCollapse.value, at - 10,
-          reason: 'a real drag could not overrule a fling that had already '
-              'ended in everything but name');
+    test('the Catalogue keeps its own rows OUTSIDE the scroll view', () {
+      // The breadcrumb and the A–Z rail are Column children of the page, above
+      // the Expanded body. That is what pins them while the band above travels.
+      final int trail = catalogue.indexOf('_TrailBar(');
+      final int rail = catalogue.indexOf('CatalogueAlphabetRail(');
+      final int body = catalogue.indexOf('Expanded(');
+      expect(trail, greaterThan(0), reason: 'the breadcrumb row is gone');
+      expect(rail, greaterThan(0), reason: 'the A–Z rail is gone');
+      expect(trail, lessThan(body),
+          reason: 'the breadcrumb moved inside the scrolling body and will '
+              'now scroll away with the products');
+      expect(rail, lessThan(body),
+          reason: 'the A–Z rail moved inside the scrolling body');
+      expect(catalogue, isNot(contains('SliverPersistentHeader')),
+          reason: 'the Catalogue chrome was moved into a scroll view — it can '
+              'no longer stay pinned');
     });
   });
 
   group('the pinned chrome stays outside the scroll view', () {
-    // The search bar and the category chip row are one widget
-    // (`_shellSearchHeader`). It is pinned because it is a sibling of the page,
-    // not a sliver inside it — the moment it moves into the scroll view it
-    // scrolls away with the products and the spec is broken.
     final shell = File('lib/screens/home_shell.dart').readAsStringSync();
     final chrome =
         File('lib/screens/shell/shell_mobile_chrome.dart').readAsStringSync();
@@ -552,12 +586,6 @@ void main() {
           reason: 'the band wrapper left the header');
       expect('shellCollapsibleBand('.allMatches(shell).length, 1,
           reason: 'something other than the header band is being collapsed');
-    });
-
-    test('the scroll path never calls setState on the shell', () {
-      expect(shell, contains('onNotification: (n) => shellHeaderScroll(n,'),
-          reason: 'the shell stopped feeding the band from the page scroll, or '
-              'wrapped it in something that can rebuild the IndexedStack');
     });
 
     test('the pinned chrome sits below the system bar even when collapsed', () {

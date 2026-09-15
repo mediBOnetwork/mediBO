@@ -146,6 +146,7 @@ import '../widgets/customer_surface_widgets.dart';
 // What is left here is the shell itself: boot, routing and the two layouts.
 // Every other concern is a part below, with its own path and its own lease.
 part 'shell/shell_mobile_chrome.dart';
+part 'shell/shell_header_band.dart'; // CMD #2052 — the collapsing band
 part 'shell/shell_cart_panel.dart';
 part 'shell/shell_login_panel.dart';
 part 'shell/shell_bottom_bars.dart';

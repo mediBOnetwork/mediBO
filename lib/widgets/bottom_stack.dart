@@ -97,27 +97,69 @@ class _StorefrontBottomStackState extends State<StorefrontBottomStack> {
   /// thing actually has on this phone, with this payload.
   final GlobalKey _boxKey = GlobalKey();
 
+  /// Is this stack currently the bar's owner? Registered at most once, so a
+  /// rebuild can never count the same stack twice.
+  bool _owning = false;
+
+  /// The route this stack lives on, and how covered it is. A route pushed on
+  /// top drives `secondaryAnimation` from 0 to 1, which is Flutter's own
+  /// answer to "is something else in front of me" — and the answer this needs.
+  Animation<double>? _covered;
+
   @override
-  void initState() {
-    super.initState();
-    _countMounted(1);
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    final anim = route?.secondaryAnimation;
+    if (!identical(anim, _covered)) {
+      _covered?.removeListener(_syncOwnership);
+      _covered = anim;
+      _covered?.addListener(_syncOwnership);
+    }
+    _syncOwnership();
   }
 
   @override
   void dispose() {
-    _countMounted(-1);
+    _covered?.removeListener(_syncOwnership);
+    _own(false);
     super.dispose();
   }
 
-  /// Register (or un-register) this stack as the bar's owner — AFTER the
-  /// frame.
+  /// CMD #2051 QA round 1 — THE TAKEOVER IS THE TOPMOST ROUTE'S, NOT A COUNT.
   ///
-  /// The app-level host listens to that count so it can stand down, and a
-  /// stack mounts and unmounts DURING a build: touching the notifier there is
-  /// `markNeedsBuild()` called during build, which is an assertion in debug
-  /// and a frame skipped in release. One frame late is the right kind of late
-  /// — the bar animates in over a sheet duration, so nothing is visible.
-  static void _countMounted(int delta) {
+  /// The first shape of this was a global mount count: any stack alive meant
+  /// the app-level host stood down. The shell's stack is alive for as long as
+  /// the shell is — including while an opaque route (a company page, an order,
+  /// the wishlist) is drawn ON TOP of it. So on every pushed route that mounts
+  /// no stack of its own, the host had stood down for a stack nobody could
+  /// see: one renderer became zero, and the update bar disappeared from a
+  /// dozen screens it had always been on.
+  ///
+  /// A stack owns the bar only while its own route is in front. Handing the
+  /// ownership back the moment something covers it is what makes "exactly one
+  /// renderer" true on a Navigator stack rather than only on one screen.
+  void _syncOwnership() {
+    final anim = _covered;
+    // No ModalRoute at all (a widget test, or a stack mounted outside a
+    // Navigator) means nothing can be covering it.
+    final covered = anim != null && anim.value > _coveredThreshold;
+    _own(!covered);
+  }
+
+  /// Half-way through the incoming route's transition is when it is fair to
+  /// call the new screen "the one in front".
+  static const double _coveredThreshold = 0.5;
+
+  void _own(bool want) {
+    if (_owning == want) return;
+    _owning = want;
+    // The app-level host listens to this, and ownership changes DURING a build
+    // (mount, dispose, a route transition tick): touching the notifier there
+    // is `markNeedsBuild()` called during build, which is an assertion in
+    // debug and a skipped frame in release. One frame late is the right kind
+    // of late — the bar animates in over a sheet duration.
+    final delta = want ? 1 : -1;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final n = bottomStackMounted.value + delta;
       bottomStackMounted.value = n < 0 ? 0 : n;

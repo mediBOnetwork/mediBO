@@ -310,6 +310,64 @@ void main() {
       expect(find.text('Update Now'), findsOneWidget);
     });
 
+    testWidgets('a stack COVERED by a pushed route hands the bar back',
+        (t) async {
+      // CMD #2051 QA round 1. The first shape of the takeover was a global
+      // mount count, and the shell's stack is alive for as long as the shell
+      // is — including behind an opaque pushed route. So on every pushed
+      // customer route that mounts no stack of its own (a company page, an
+      // order, the wishlist) the host had stood down for a stack nobody could
+      // see, and the update bar vanished from a dozen screens.
+      final cart = await _cart(show: true);
+      final nav = GlobalKey<NavigatorState>();
+      await _pump(
+        t,
+        MaterialApp(
+          navigatorKey: nav,
+          // The host is installed from `builder`, ABOVE the Navigator, exactly
+          // as main.dart installs it — that is why it can still draw the bar
+          // over a route pushed on top of the shell.
+          builder: (_, child) =>
+              UpdateBarHost(controller: appUpdateBar, child: child!),
+          home: Scaffold(
+            body: AppState(
+              cart: cart,
+              child: Stack(
+                children: [
+                  const Center(child: Text('shell')),
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: StorefrontBottomStack(onCartTap: () {}),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
+      await t.pumpAndSettle();
+      expect(find.byType(UpdateBar), findsOneWidget,
+          reason: 'the shell owns the bar while it is in front');
+
+      // A pushed route that draws no stack of its own — the case that broke.
+      nav.currentState!.push(MaterialPageRoute<void>(
+          builder: (_) => const Scaffold(body: Center(child: Text('pushed')))));
+      await t.pumpAndSettle();
+
+      expect(find.text('pushed'), findsOneWidget);
+      expect(find.byType(UpdateBar), findsOneWidget,
+          reason: 'the host takes the bar back — one renderer, never zero');
+      expect(find.text('App update available'), findsOneWidget);
+
+      // And back: the shell owns it again, exactly once.
+      nav.currentState!.pop();
+      await t.pumpAndSettle();
+      expect(find.byType(UpdateBar), findsOneWidget);
+    });
+
     testWidgets('with no stack mounted the host still raises it', (t) async {
       await _pump(
         t,

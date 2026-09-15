@@ -532,33 +532,46 @@ class _RegistrationBannerState extends State<RegistrationBanner> {
     final line = (_b['line'] ?? '').toString();
     final cta = (_b['cta'] ?? '').toString();
     final route = (_b['route'] ?? '').toString();
+    final step = Map<String, dynamic>.from((_b['step'] as Map?) ?? const {});
+    final steps = ((_b['steps'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    // CMD #2059 — a phone column, not a row: the two step chips and a
+    // full-width button never squeeze the sentence at 360px.
     return Container(
       width: double.infinity,
       margin: EdgeInsets.fromLTRB(
           Ds.space.x16, Ds.space.x8, Ds.space.x16, Ds.space.x4),
-      padding: EdgeInsets.all(Ds.space.x12),
+      padding: EdgeInsets.all(Ds.space.x16),
       decoration: BoxDecoration(
         color: Ds.c.warningSoft,
         borderRadius: Ds.r.rCard,
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (title.isNotEmpty) Text(title, style: Ds.t.bodyStrong),
-                if (line.isNotEmpty) ...[
-                  SizedBox(height: Ds.space.x4),
-                  Text(line, style: Ds.t.caption),
-                ],
-              ],
+          if (title.isNotEmpty) Text(title, style: Ds.t.bodyStrong),
+          if (line.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(line, style: Ds.t.caption),
+          ],
+          if (steps.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x12),
+            RegistrationStepStrip(
+              step: step,
+              steps: steps,
+              onOpen: (r) async {
+                await Navigator.of(context).pushNamed(r);
+                if (mounted) await _load();
+              },
             ),
-          ),
-          SizedBox(width: Ds.space.x12),
-          if (cta.isNotEmpty && route.isNotEmpty)
+          ],
+          if (cta.isNotEmpty && route.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x12),
             SizedBox(
+              width: double.infinity,
               height: Ds.touch.minTarget,
               child: FilledButton(
                 onPressed: () async {
@@ -568,7 +581,124 @@ class _RegistrationBannerState extends State<RegistrationBanner> {
                 child: Text(cta),
               ),
             ),
+          ],
         ],
+      ),
+    );
+  }
+}
+
+/// CMD #2059 — where the account is in registration, printed the same way on
+/// the Home banner, on the details form and on the document checklist.
+///
+/// Every word is the backend's: the "Step 1 of 2" line, each step's name, its
+/// state word and the progress sentence all arrive in
+/// `customer_registration_payload().step / .steps`. Both steps are tappable
+/// wherever this strip appears, so the checklist is never behind the form.
+class RegistrationStepStrip extends StatelessWidget {
+  const RegistrationStepStrip({
+    super.key,
+    required this.step,
+    required this.steps,
+    this.onOpen,
+  });
+
+  final Map<String, dynamic> step;
+  final List<Map<String, dynamic>> steps;
+  final void Function(String route)? onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = (step['label'] ?? '').toString();
+    final progress = (step['progress_label'] ?? '').toString();
+    final ratio = (step['ratio'] is num) ? (step['ratio'] as num).toDouble() : 0.0;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (label.isNotEmpty || progress.isNotEmpty)
+          Row(
+            children: [
+              if (label.isNotEmpty)
+                Flexible(child: Text(label, style: Ds.t.bodyStrong)),
+              if (label.isNotEmpty && progress.isNotEmpty)
+                SizedBox(width: Ds.space.x8),
+              if (progress.isNotEmpty)
+                Flexible(
+                    child: Text(progress,
+                        style: Ds.t.caption, overflow: TextOverflow.ellipsis)),
+            ],
+          ),
+        SizedBox(height: Ds.space.x8),
+        ClipRRect(
+          borderRadius: Ds.r.rButton,
+          child: LinearProgressIndicator(
+            value: ratio.clamp(0.0, 1.0),
+            minHeight: Ds.space.x8,
+            backgroundColor: Ds.c.divider,
+            valueColor: AlwaysStoppedAnimation<Color>(Ds.c.brand),
+          ),
+        ),
+        if (steps.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x12),
+          Wrap(
+            spacing: Ds.space.x8,
+            runSpacing: Ds.space.x8,
+            children: [for (final st in steps) _chip(context, st)],
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _chip(BuildContext context, Map<String, dynamic> st) {
+    final done = st['done'] == true;
+    final state = (st['state'] ?? '').toString();
+    final name = (st['label'] ?? '').toString();
+    final stepLabel = (st['step_label'] ?? '').toString();
+    final stateLabel = (st['state_label'] ?? '').toString();
+    final route = (st['route'] ?? '').toString();
+    final bg = done
+        ? Ds.c.successSoft
+        : (state == 'current' ? Ds.c.brandSoft : Ds.c.surface);
+    final open = onOpen;
+    return ConstrainedBox(
+      constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+      child: Material(
+        color: bg,
+        borderRadius: Ds.r.rChip,
+        child: InkWell(
+          borderRadius: Ds.r.rChip,
+          onTap: (open == null || route.isEmpty) ? null : () => open(route),
+          child: Padding(
+            padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x12, vertical: Ds.space.x8),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  done ? Icons.check_circle : Icons.radio_button_unchecked,
+                  size: Ds.space.x16,
+                  color: done ? Ds.c.success : Ds.c.textSecondary,
+                ),
+                SizedBox(width: Ds.space.x8),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (stepLabel.isNotEmpty)
+                      Text(stepLabel, style: Ds.t.caption),
+                    if (name.isNotEmpty) Text(name, style: Ds.t.body),
+                  ],
+                ),
+                if (stateLabel.isNotEmpty) ...[
+                  SizedBox(width: Ds.space.x8),
+                  Text(stateLabel, style: Ds.t.caption),
+                ],
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

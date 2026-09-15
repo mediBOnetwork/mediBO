@@ -2,11 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../design_tokens.dart';
+import '../../services/registration_payload.dart';
 import '../../services/ui_copy.dart';
 import '../../user_state.dart';
 import '../../utils/render_log.dart';
 import '../../widgets/code_field.dart';
 import '../../widgets/customer_registration_form.dart';
+import '../../widgets/customer_surface_widgets.dart';
 
 // ─── Role enum ───────────────────────────────────────────────────────────────
 
@@ -174,6 +177,12 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
       _dpEmailCtrl.text = widget.email;
       _pharmacyForm.setValue('email', widget.email);
     }
+    // CMD #2059 — the schema, the login prefill and the saved draft arrived
+    // with the home feed, so the form is filled in before its first frame.
+    // What was typed last time outranks the prefill, and from here on every
+    // change is written back as a draft.
+    _pharmacyForm.seedFromSurface();
+    _pharmacyForm.enableAutosave();
   }
 
   @override
@@ -459,7 +468,26 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
 
   // ── Pharmacy form — THE registration form (CHANGE #1887) ───────────────
   List<Widget> _buildPharmacyForm() => [
+        // CMD #2059 — step 1 of 2, and step 2 reachable from here too.
+        if (RegistrationSurface.steps.isNotEmpty) ...[
+          RegistrationStepStrip(
+            step: RegistrationSurface.step,
+            steps: RegistrationSurface.steps,
+            onOpen: (r) => Navigator.of(context).pushNamed(r),
+          ),
+          SizedBox(height: Ds.space.x16),
+        ],
         CustomerRegistrationForm(controller: _pharmacyForm),
+        // The draft's own state, in the backend's words.
+        ValueListenableBuilder<String>(
+          valueListenable: _pharmacyForm.draftLabel,
+          builder: (_, label, __) => label.isEmpty
+              ? const SizedBox.shrink()
+              : Padding(
+                  padding: EdgeInsets.only(top: Ds.space.x8),
+                  child: Text(label, style: Ds.t.caption),
+                ),
+        ),
       ];
 
   // ── Supplier form ──────────────────────────────────────────────────────

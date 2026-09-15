@@ -12,6 +12,7 @@ import '../models/product_compare.dart';
 import '../models/search_page.dart';
 import '../models/storefront_p3.dart';
 import 'storefront_labels.dart';
+import '../services/registration_payload.dart';
 
 /// A therapeutic_class plus how many medicines it holds — powers the
 /// dynamic category tiles and their count badges.
@@ -693,6 +694,11 @@ class MedicineRepository {
     if (res is! Map) return null;
     final m = Map<String, dynamic>.from(res);
     if (m['ok'] == false) return null;
+    // CMD #2059 — the home feed carries the registration surface for a
+    // signed-in account that still owes something. Keeping it here, where the
+    // payload lands, is what makes Continue open a rendered form instead of a
+    // spinner. An anonymous feed carries no block and nothing is touched.
+    RegistrationSurface.adopt(m['registration']);
     return m;
   }
 

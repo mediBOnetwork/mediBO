@@ -30,6 +30,7 @@ import 'auth/login_screen.dart';
 import 'profile_screen.dart';
 import 'customer/my_account_screen.dart'; // CMD #1815 — the notice's action
 import '../services/idempotency.dart';
+import '../widgets/registration_sheet.dart';
 
 class CartScreen extends StatefulWidget {
   final VoidCallback? onOrderPlaced;
@@ -581,6 +582,20 @@ class _CartScreenState extends State<CartScreen> {
     final gate = auth.orderGate;
     if (gate.hasBlocker) {
       RenderLog.write('order_blocked', gate.reason);
+      // CMD #2059 — ordering is the one thing registration gates, and the
+      // BACKEND says how that gate is answered. 'registration_sheet' opens the
+      // form over this cart; saving it closes the sheet and leaves the buyer
+      // exactly where they were, with the basket still on screen.
+      if (gate.actionKind == 'registration_sheet') {
+        final saved = await showRegistrationSheet(context);
+        if (!mounted) return;
+        if (saved) {
+          await auth.refreshSession();
+          if (!mounted) return;
+          setState(() {});
+        }
+        return;
+      }
       _showOrderGate(
         title: gate.title,
         message: gate.message,

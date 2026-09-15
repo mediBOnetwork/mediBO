@@ -18,6 +18,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../design_tokens.dart';
 import '../../utils/render_log.dart';
+import '../../services/registration_payload.dart';
+import '../../widgets/customer_surface_widgets.dart';
 
 class CustomerDocsScreen extends StatefulWidget {
   const CustomerDocsScreen({super.key});
@@ -209,6 +211,16 @@ class _CustomerDocsScreenState extends State<CustomerDocsScreen> {
         step: _s(_payload, 'step_label'),
         line: _s(_payload, 'subtitle'),
       ),
+      // CMD #2059 — the same strip the banner and the details form print, so
+      // the checklist says where it sits and step 1 stays one tap away.
+      if (RegistrationSurface.steps.isNotEmpty) ...[
+        SizedBox(height: Ds.space.x12),
+        RegistrationStepStrip(
+          step: RegistrationSurface.step,
+          steps: RegistrationSurface.steps,
+          onOpen: (r) => Navigator.of(context).pushNamed(r),
+        ),
+      ],
       SizedBox(height: Ds.space.x16),
       _Summary(
         title: _s(_payload, 'summary_title'),

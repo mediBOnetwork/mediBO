@@ -594,3 +594,101 @@ class SearchQueryState {
         Uri.splitQueryString(location.substring(qm + 1)));
   }
 }
+
+// ───────────────────────── the focused-and-empty payload ───────────────────
+
+/// CMD #2044 — one block of the focused search screen.
+///
+/// The BACKEND decides which blocks exist, their order, their titles and
+/// whether a block carries chips (a query to run) or cards (products to open).
+/// Nothing here filters, sorts or renames a block: a `kind` this build does
+/// not draw is skipped, which is how a fourth block ships as an INSERT.
+class SearchIdleBlock {
+  final String kind;
+  final String title;
+
+  /// The block's own control, when it sent one — 'clear_recent' today.
+  final String actionLabel;
+  final String actionKind;
+
+  /// Tappable queries: label + the exact `q` to search for.
+  final List<SearchIdleChip> chips;
+
+  /// Home-card maps, the same shape every product surface renders.
+  final List<Map<String, dynamic>> items;
+
+  const SearchIdleBlock({
+    required this.kind,
+    required this.title,
+    required this.actionLabel,
+    required this.actionKind,
+    required this.chips,
+    required this.items,
+  });
+
+  factory SearchIdleBlock.fromMap(Map<String, dynamic> m) => SearchIdleBlock(
+        kind: (m['kind'] ?? '').toString(),
+        title: (m['title'] ?? '').toString(),
+        actionLabel: (m['action_label'] ?? '').toString(),
+        actionKind: (m['action_kind'] ?? '').toString(),
+        chips: ((m['chips'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((e) => SearchIdleChip.fromMap(Map<String, dynamic>.from(e)))
+            .toList(growable: false),
+        items: ((m['items'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList(growable: false),
+      );
+}
+
+/// One tappable query. `label` is what is printed; `q` is what is searched —
+/// they are two fields because the backend may print a brand and search a
+/// longer phrase.
+class SearchIdleChip {
+  final String label;
+  final String subLabel;
+  final String q;
+
+  const SearchIdleChip(
+      {required this.label, required this.subLabel, required this.q});
+
+  factory SearchIdleChip.fromMap(Map<String, dynamic> m) => SearchIdleChip(
+        label: (m['label'] ?? '').toString(),
+        subLabel: (m['sub_label'] ?? '').toString(),
+        q: (m['q'] ?? m['label'] ?? '').toString(),
+      );
+}
+
+/// CMD #2044 — `search_idle()`: everything the screen shows with the box
+/// focused and nothing typed. Om's bug was that this state drew NOTHING.
+class SearchIdlePayload {
+  final bool ok;
+  final bool has;
+  final List<SearchIdleBlock> blocks;
+
+  /// The one line printed when the backend sent no blocks at all — never a
+  /// blank page, and never a sentence Dart invented.
+  final String emptyLabel;
+
+  const SearchIdlePayload({
+    required this.ok,
+    required this.has,
+    required this.blocks,
+    required this.emptyLabel,
+  });
+
+  static const empty = SearchIdlePayload(
+      ok: false, has: false, blocks: <SearchIdleBlock>[], emptyLabel: '');
+
+  factory SearchIdlePayload.fromMap(Map<String, dynamic> m) =>
+      SearchIdlePayload(
+        ok: m['ok'] == true,
+        has: m['has'] == true,
+        blocks: ((m['blocks'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((e) => SearchIdleBlock.fromMap(Map<String, dynamic>.from(e)))
+            .toList(growable: false),
+        emptyLabel: (m['empty_label'] ?? '').toString(),
+      );
+}

@@ -75,6 +75,12 @@ class CompactProductCard extends StatelessWidget {
   /// product page's own wishlist button already uses.
   final Future<WishlistResult> Function(String productId)? wishlistToggle;
 
+  /// CMD #2044 — the catalogue's long-press peek, carried over from the row
+  /// card this widget replaced. Null on every surface that does not offer it,
+  /// so a long press there does nothing rather than opening a sheet the screen
+  /// never built.
+  final VoidCallback? onPeek;
+
   const CompactProductCard({
     super.key,
     required this.product,
@@ -82,6 +88,7 @@ class CompactProductCard extends StatelessWidget {
     this.compareLabel = '',
     this.onCompare,
     this.wishlistToggle,
+    this.onPeek,
   });
 
   bool get _showsCompare => compareLabel.isNotEmpty && onCompare != null;
@@ -197,6 +204,7 @@ class CompactProductCard extends StatelessWidget {
     return RepaintBoundary(
       child: InkWell(
         onTap: onTap,
+        onLongPress: onPeek,
         borderRadius: BorderRadius.circular(Rad.card),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,

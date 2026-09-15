@@ -57,7 +57,7 @@ import 'package:pharma_b2b/app_state.dart';
 import 'package:pharma_b2b/models/cart_model.dart';
 import 'package:pharma_b2b/models/search_page.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
-import 'package:pharma_b2b/widgets/product_row_card.dart';
+import 'package:pharma_b2b/widgets/compact_product_card.dart';
 import 'package:pharma_b2b/widgets/search_surface.dart';
 
 /// One `search_page().items[]` row — the `_search_cards()` shape, which is
@@ -378,7 +378,7 @@ void main() {
             onEmptyAction: (_) {},
           ));
       expect(find.text('4 products for “monticope”'), findsOneWidget);
-      expect(find.byType(ProductRowCard), findsNWidgets(2));
+      expect(find.byType(CompactProductCard), findsNWidgets(2));
       expect(find.text('Monticope Tablet'), findsOneWidget);
       expect(find.text('MANKIND PHARMA LTD'), findsNWidgets(2));
       // The count line is ONE field: nothing here builds "4 results".

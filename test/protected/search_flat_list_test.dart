@@ -20,7 +20,7 @@
 //      that state the row offers no enabled control.
 //
 //   4. **NO CHIPS IN A LIST.** The brand family is not on this widget in any
-//      state: `ProductRowCard` has no variants parameter to give it one. The
+//      state: `CompactProductCard` has no variants parameter to give it one. The
 //      family arrives only through `product_detail().other_packs`.
 //
 //   5. **The "Other packs" block is the backend's, and it lists the OTHER
@@ -43,7 +43,8 @@ import 'package:pharma_b2b/models/cart_model.dart';
 import 'package:pharma_b2b/models/product.dart';
 import 'package:pharma_b2b/models/product_detail.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
-import 'package:pharma_b2b/widgets/product_row_card.dart';
+import 'package:pharma_b2b/widgets/compact_product_card.dart';
+import 'package:pharma_b2b/widgets/product_card_grid.dart';
 
 /// One storefront_search_page() item — the exact shape Product.fromMap reads.
 Map<String, dynamic> _row({
@@ -112,8 +113,8 @@ Future<CartModel> _pumpRow(WidgetTester tester, Map<String, dynamic> row) async 
         home: Scaffold(
           body: SizedBox(
             width: 390,
-            height: ProductRowCard.extent,
-            child: ProductRowCard(
+            height: CompactProductCard.extent,
+            child: CompactProductCard(
               product: Product.fromMap(row),
               onTap: () {},
             ),
@@ -128,6 +129,10 @@ Future<CartModel> _pumpRow(WidgetTester tester, Map<String, dynamic> row) async 
 /// A list of rows, in the order the payload sent them — deliberately NOT
 /// alphabetical, and deliberately with the out-of-stock exact match first,
 /// which is the whole point of the backend's rank order.
+/// CMD #2044 — results are a GRID of the one card, never a stack of rows, so
+/// this pumps the widget the app actually mounts. The surface is deliberately
+/// tall enough for every fixture row: a card scrolled out of view would make
+/// an order assertion pass for the wrong reason.
 Future<void> _pumpList(WidgetTester tester, List<Map<String, dynamic>> rows) async {
   final cart = CartModel.forTest();
   await tester.pumpWidget(
@@ -135,12 +140,12 @@ Future<void> _pumpList(WidgetTester tester, List<Map<String, dynamic>> rows) asy
       cart: cart,
       child: MaterialApp(
         home: Scaffold(
-          body: ListView.separated(
-            itemCount: rows.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 12),
-            itemBuilder: (context, i) => ProductRowCard(
-              product: Product.fromMap(rows[i]),
-              onTap: () {},
+          body: SizedBox(
+            width: 390,
+            height: CompactProductCard.extent * rows.length,
+            child: ProductCardGrid(
+              items: [for (final r in rows) Product.fromMap(r)],
+              onOpen: (_) {},
             ),
           ),
         ),
@@ -173,15 +178,25 @@ void main() {
       await _pumpRow(tester, _row());
       expect(find.text('Monticope Tablet'), findsOneWidget);
       expect(find.text('MANKIND PHARMA LTD'), findsOneWidget);
-      // The pack line joins the two decided labels — and neither raw column
-      // ('10 tablets', 'Strip of 10 tablets') may appear anywhere.
-      expect(find.text('Strip · 10.0 Tablets in 1 strip'), findsOneWidget);
+      // CMD #2044 — the row card that joined the two decided labels into one
+      // "Strip · 10.0 Tablets in 1 strip" line is deleted; the card Om asked
+      // for carries the same two strings in its own two places (the pack badge
+      // lying on the artwork, the pack-type chip beside ADD). BOTH still
+      // arrive verbatim, and neither raw column ('10 tablets',
+      // 'Strip of 10 tablets') may appear anywhere.
+      expect(find.text('10.0 Tablets in 1 strip'), findsOneWidget);
+      expect(find.text('Strip'), findsOneWidget);
       expect(find.text('Strip of 10 tablets'), findsNothing);
+      expect(find.text('10 tablets'), findsNothing);
     });
 
     testWidgets('the MRP is the backend string, struck', (tester) async {
       await _pumpRow(tester, _row());
-      final t = tester.widget<Text>(find.text('MRP ₹174.38'));
+      // CMD #2044 — `mrp_label` and `mrp_display` are printed as they arrive,
+      // in two Texts, and the STRIKE is `strike_mrp` — never a decision made
+      // by comparing the two numbers here.
+      expect(find.text('MRP'), findsOneWidget);
+      final t = tester.widget<Text>(find.text('₹174.38'));
       expect(t.style?.decoration, TextDecoration.lineThrough);
     });
 

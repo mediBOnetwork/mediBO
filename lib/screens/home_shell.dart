@@ -1854,10 +1854,10 @@ class _HomeShellState extends State<HomeShell> {
                 // it; this is the Catalogue's header, verbatim.
                 if (_index == 0) _shellSearchHeader(this),
                 Expanded(
-                  child: IndexedStack(
+                  child: _shellSearchIdleWrap(this, IndexedStack(
                     index: _index,
                     children: pages,
-                  ),
+                  )),
                 ),
               ],
             )),
@@ -1944,10 +1944,10 @@ class _HomeShellState extends State<HomeShell> {
                     }
                     return false;
                   },
-                  child: IndexedStack(
+                  child: _shellSearchIdleWrap(this, IndexedStack(
                     index: _index,
                     children: pages,
-                  ),
+                  )),
                 ),
               ),
             ],

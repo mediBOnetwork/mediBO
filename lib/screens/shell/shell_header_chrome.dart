@@ -628,6 +628,10 @@ void _shellFilterPick(_HomeShellState st, SearchFilterGroup g, SearchOption o) {
 
 Widget _shellSearchHeader(_HomeShellState s, {Widget? trailing}) => SearchChrome(
       surface: 'home',
+      // CMD #2044 — the focused-and-empty state is the whole BODY now
+      // ([SearchIdleOverlay] below the header), so the header stops drawing
+      // the rail on its own and the screen under the box is never blank.
+      idleInBody: true,
       controller: s._searchCtrl,
       focusNode: s._searchFocus,
       payload: s._searchPayload,
@@ -639,3 +643,34 @@ Widget _shellSearchHeader(_HomeShellState s, {Widget? trailing}) => SearchChrome
       onFilterPick: (g, o) => _shellFilterPick(s, g, o),
       onClear: () => s._applySearch(SearchQueryState.blank),
     );
+
+/// CMD #2044 — the focused, empty search box FILLS the screen instead of
+/// blanking it.
+///
+/// Om: "on tapping search, the screen below goes blank — no Top sellers rail,
+/// no suggestions, no history — until the user types." This wraps the shell's
+/// page stack in [SearchIdleOverlay], which draws `search_idle()`'s own blocks
+/// — this shopper's recent searches, the catalogue's popular searches and the
+/// product cards — OVER the page, so the feed underneath keeps its scroll and
+/// its state and dismissing the keyboard puts the shopper back where they were.
+///
+/// It lives beside [_shellSearchHeader] because it is the same chrome: only
+/// the storefront tab has a search box, so only that tab is wrapped.
+Widget _shellSearchIdleWrap(_HomeShellState s, Widget child) {
+  if (s._index != 0) return child;
+  return SearchIdleOverlay(
+    surface: 'home',
+    focusNode: s._searchFocus,
+    hasQuery: s._search.hasQuery,
+    repo: s._repo,
+    onPickQuery: (q) {
+      s._searchCtrl.text = q;
+      s._searchCtrl.selection =
+          TextSelection.fromPosition(TextPosition(offset: q.length));
+      s._handleSearchSubmit(q);
+      // A tapped chip IS an acted-on search, so it is worth remembering.
+      unawaited(s._repo.searchRecentAdd(q));
+    },
+    child: child,
+  );
+}

@@ -47,7 +47,7 @@ import 'package:pharma_b2b/models/cart_model.dart';
 import 'package:pharma_b2b/models/catalogue.dart';
 import 'package:pharma_b2b/screens/catalogue_screen.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
-import 'package:pharma_b2b/widgets/product_row_card.dart';
+import 'package:pharma_b2b/widgets/compact_product_card.dart';
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
@@ -432,7 +432,7 @@ void main() {
       expect(find.text('15 products'), findsNothing,
           reason: 'the duplicate count line was removed by CMD #2020');
 
-      expect(find.byType(ProductRowCard), findsOneWidget);
+      expect(find.byType(CompactProductCard), findsOneWidget);
     });
 
     testWidgets('an empty list prints the backend empty state, never a Dart one',
@@ -443,7 +443,7 @@ void main() {
       }, route: const CatalogueRoute(
           tab: 'cold_chain', listKind: 'tab', listKey: 'cold_chain'));
       expect(find.text('Nothing here in this view.'), findsOneWidget);
-      expect(find.byType(ProductRowCard), findsNothing);
+      expect(find.byType(CompactProductCard), findsNothing);
     });
 
     testWidgets('the end label is the backend\'s, and only when it says so',

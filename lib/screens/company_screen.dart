@@ -7,6 +7,7 @@ import '../models/shell_nav.dart';
 import '../models/storefront_p3.dart';
 import '../widgets/animations.dart';
 import '../widgets/compact_product_card.dart';
+import '../widgets/product_card_grid.dart';
 import 'catalogue_screen.dart';
 
 typedef CompanyPageLoader = Future<CompanyPage> Function(String key, int offset);
@@ -313,7 +314,8 @@ class _Body extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, c) {
-        final cross = c.maxWidth >= 900 ? 4 : c.maxWidth >= 600 ? 3 : 2;
+        // CMD #2044 — the column count is ProductCardGrid's, measured from the
+        // card, so this page cannot drift from Home, search or the catalogue.
         return CustomScrollView(
           controller: scroll,
           slivers: [
@@ -321,13 +323,7 @@ class _Body extends StatelessWidget {
             SliverPadding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               sliver: SliverGrid(
-                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: cross,
-                  // Same fixed extent as every other grid of these cards.
-                  mainAxisExtent: CompactProductCard.extent,
-                  crossAxisSpacing: 12,
-                  mainAxisSpacing: 14,
-                ),
+                gridDelegate: ProductCardGrid.delegateFor(c.maxWidth - 32),
                 delegate: SliverChildBuilderDelegate(
                   (context, i) => CompactProductCard(
                     product: items[i],
@@ -399,7 +395,7 @@ class _CompanySkeleton extends StatelessWidget {
   Widget build(BuildContext context) => Shimmer(
         child: LayoutBuilder(
           builder: (context, c) {
-            final cross = c.maxWidth >= 900 ? 4 : c.maxWidth >= 600 ? 3 : 2;
+            final cross = ProductCardGrid.columnsFor(c.maxWidth - 32);
             return ListView(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
               physics: const NeverScrollableScrollPhysics(),
@@ -411,14 +407,9 @@ class _CompanySkeleton extends StatelessWidget {
                 GridView.builder(
                   shrinkWrap: true,
                   physics: const NeverScrollableScrollPhysics(),
-                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: cross,
-                    mainAxisExtent: CompactProductCard.extent,
-                    crossAxisSpacing: 12,
-                    mainAxisSpacing: 14,
-                  ),
+                  gridDelegate: ProductCardGrid.delegateFor(c.maxWidth - 32),
                   itemCount: cross * 2,
-                  itemBuilder: (_, __) => const CompactCardSkeleton(),
+                  itemBuilder: (_, _) => const CompactCardSkeleton(),
                 ),
               ],
             );

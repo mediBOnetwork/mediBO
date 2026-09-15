@@ -614,3 +614,28 @@ class _CartBadgePulseState extends State<_CartBadgePulse>
         child: widget.child,
       );
 }
+
+// ─────────────────── The floating cart pill (CMD #2037) ─────────────────────
+
+/// CHANGE #636's floating cart pill, positioned — and CMD #2037's lift.
+///
+/// The update card is an OVERLAY installed from `MaterialApp.builder`, so
+/// nothing inside the shell's own Stack can see it by measuring itself. The
+/// card publishes its MEASURED height ([appUpdateBarHeight], 0 while it is
+/// down) and the pill floats exactly that much higher, so the two never
+/// overlap and the pill sits flat on its usual margin the rest of the time.
+///
+/// Both breakpoints mount this one helper: the mobile Stack and the desktop
+/// Stack drew the same pill with the same reasoning, and a lift that is right
+/// on one of them and missing on the other is the bug this shape prevents.
+Widget shellFloatingCartPill(VoidCallback onTap) =>
+    ValueListenableBuilder<double>(
+      valueListenable: appUpdateBarHeight,
+      child: RepaintBoundary(child: CartPill(onTap: onTap)),
+      builder: (_, barH, pill) => Positioned(
+        left: 0,
+        right: 0,
+        bottom: Ds.space.x16 + barH,
+        child: pill!,
+      ),
+    );

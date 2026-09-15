@@ -52,6 +52,34 @@ enum ShellTabTap {
   showPage,
 }
 
+/// CMD #2037 — what a tap on the HOME tab means, given where the shopper is.
+///
+/// #2021 made every Home tap the same instruction (root + top), which is right
+/// for the logo and wrong for a tab: leaving the feed to look at Orders and
+/// coming back cost the shopper their whole scroll, and so did opening a
+/// category list. Home is a BACK button now, and only the last press is a
+/// reset:
+///
+///   Orders → Home  ............ the storefront exactly as it was left
+///   a category list → Home  ... back out to the feed, where it was left
+///   the feed itself → Home  ... scroll to the top
+///
+/// The logo and the system back button are untouched: both still mean the home
+/// ROOT, which is [ShellTabTap.homeRoot].
+enum ShellHomeTap {
+  /// Another tab: show the storefront again, with whatever it was showing —
+  /// category, search, scroll offset and all.
+  resumeStorefront,
+
+  /// The storefront, but inside something opened from home (a category list, a
+  /// search result, the whole-catalogue grid, the cart panel): step back out
+  /// to the feed, which keeps the offset it was left at.
+  backToFeed,
+
+  /// The feed itself, at the root: scroll it to the top.
+  scrollTop,
+}
+
 /// What the Android system back button does while the shell itself is on top.
 enum ShellBack {
   /// The cart panel is open over the shell: close that first.
@@ -111,15 +139,25 @@ class ShellNav {
 
   /// A tap on the bar, resolved from the page the tapped row named.
   ///
-  /// It deliberately does NOT look at where the shopper currently is: Home
-  /// from Orders, Home from a category grid and Home from the home feed itself
-  /// are all the same instruction, which is why item 2 of the spec (tapping
-  /// the already-active tab scrolls to the top) needs no separate branch.
+  /// CMD #2037 — [ShellTabTap.homeRoot] is now the NAME of the home slot, not
+  /// the whole instruction: what a Home tap does depends on where the shopper
+  /// is, and that second question is [homeTap]. Every other slot is unchanged.
   static ShellTabTap tapOn(int page) => switch (page) {
         ShellPage.storefront => ShellTabTap.homeRoot,
         ShellPage.catalogue => ShellTabTap.catalogueRoot,
         _ => ShellTabTap.showPage,
       };
+
+  /// CMD #2037 — the Home TAB's own ladder, one rung per tap.
+  ///
+  /// Pure, like [back], and for the same reason: Flutter web renders to
+  /// canvas, so the only proof of this rule available to us is a VM test over
+  /// the decision itself.
+  static ShellHomeTap homeTap(ShellNavState state) {
+    if (state.page != ShellPage.storefront) return ShellHomeTap.resumeStorefront;
+    if (!state.isHomeRoot) return ShellHomeTap.backToFeed;
+    return ShellHomeTap.scrollTop;
+  }
 
   /// The back ladder. One step per press, never two.
   static ShellBack back(ShellNavState state) {

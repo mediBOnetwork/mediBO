@@ -291,22 +291,33 @@ class DsType {
 class DsElevation {
   final double e1x, e1y, e1blur, e1alpha;
   final double e2x, e2y, e2blur, e2alpha;
+
+  /// CMD #2037 — the UPWARD shadow. A bar that sits ON something (the update
+  /// card on the bottom nav, a pinned footer on a list) needs its shadow cast
+  /// up out of its top edge; e1/e2 both fall downwards, where nothing can see
+  /// them. Same three numbers, negative y, so it is retunable from the backend
+  /// like every other elevation.
+  final double eUpx, eUpy, eUpblur, eUpalpha;
   const DsElevation({
     required this.e1x, required this.e1y, required this.e1blur, required this.e1alpha,
     required this.e2x, required this.e2y, required this.e2blur, required this.e2alpha,
+    required this.eUpx, required this.eUpy, required this.eUpblur, required this.eUpalpha,
   });
   factory DsElevation._defaults() => const DsElevation(
         e1x: 0, e1y: 1, e1blur: 3, e1alpha: 0.06,
         e2x: 0, e2y: 4, e2blur: 12, e2alpha: 0.08,
+        eUpx: 0, eUpy: -4, eUpblur: 16, eUpalpha: 0.08,
       );
   factory DsElevation._from(Map m, DsElevation f) {
     Map g(String k) => m[k] is Map ? m[k] as Map : const {};
-    final a = g('e1'), b = g('e2');
+    final a = g('e1'), b = g('e2'), u = g('eUp');
     return DsElevation(
       e1x: Ds._num(a['x'], f.e1x), e1y: Ds._num(a['y'], f.e1y),
       e1blur: Ds._num(a['blur'], f.e1blur), e1alpha: Ds._num(a['alpha'], f.e1alpha),
       e2x: Ds._num(b['x'], f.e2x), e2y: Ds._num(b['y'], f.e2y),
       e2blur: Ds._num(b['blur'], f.e2blur), e2alpha: Ds._num(b['alpha'], f.e2alpha),
+      eUpx: Ds._num(u['x'], f.eUpx), eUpy: Ds._num(u['y'], f.eUpy),
+      eUpblur: Ds._num(u['blur'], f.eUpblur), eUpalpha: Ds._num(u['alpha'], f.eUpalpha),
     );
   }
   List<BoxShadow> get e1 => [
@@ -314,6 +325,11 @@ class DsElevation {
       ];
   List<BoxShadow> get e2 => [
         BoxShadow(color: const Color(0xFF000000).withValues(alpha: e2alpha), offset: Offset(e2x, e2y), blurRadius: e2blur),
+      ];
+
+  /// A soft shadow cast UPWARDS out of the top edge.
+  List<BoxShadow> get eUp => [
+        BoxShadow(color: const Color(0xFF000000).withValues(alpha: eUpalpha), offset: Offset(eUpx, eUpy), blurRadius: eUpblur),
       ];
 }
 
@@ -371,7 +387,13 @@ class DsTouch {
       minTarget: 44,
       listRowMinHeight: 56,
       bottomBarGap: 56,
-      headerBand: 56);
+      // CMD #2037 — back to the height the header had before #2030 (a 40 px
+      // avatar in 12 px of padding, top and bottom). #2030 made the band's
+      // height and its scroll travel ONE number and set that number to 56,
+      // which shortened the header as a side effect of making it move; this
+      // puts the height back without touching the 1:1 travel, because the
+      // travel is still the same token.
+      headerBand: 64);
   factory DsTouch._from(Map m, DsTouch f) => DsTouch(
         minTarget: Ds._num(m['minTarget'], f.minTarget),
         listRowMinHeight: Ds._num(m['listRowMinHeight'], f.listRowMinHeight),

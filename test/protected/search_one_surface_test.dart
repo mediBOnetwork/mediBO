@@ -300,16 +300,24 @@ void main() {
     });
   });
 
-  group('2 — the chip row is the payload, in the payload\'s order', () {
-    testWidgets('the chip_row group is inline; every other group is ONE chip',
+  // CMD #2037 — the INLINE CATEGORY ROW IS DELETED. "All / OTHERS / ANTI
+  // INFECTIVES / CARDIAC" sat under the search bar on every home visit, ahead
+  // of the feed, duplicating the Shop-by-category tiles one screen below it
+  // and the Catalogue's Browse-by tiles. What this group held down — that the
+  // row was the payload, in the payload's order — is held down for the SHEET
+  // groups instead, which is all that draws here now.
+  group('2 — the chip row is gone; the sheet groups are the payload', () {
+    testWidgets('the chip_row group draws NOTHING, whatever the payload says',
         (tester) async {
       final p = SearchPagePayload.fromMap(_payload());
+      // The payload still MARKS one: the backend contract is unchanged.
+      expect(p.filters.chipRowGroup, isNotNull);
       await _pump(
           tester,
           SearchFilterChips(filters: p.filters, onPick: (_, __) {}));
-      // Category — the group the BACKEND marked chip_row — is expanded.
-      expect(find.text('All'), findsOneWidget);
-      expect(find.text('RESPIRATORY'), findsOneWidget);
+      // ...and not one of its options is on screen.
+      expect(find.text('All'), findsNothing);
+      expect(find.text('RESPIRATORY'), findsNothing);
       // The other three are one chip each, carrying the group's own label.
       expect(find.text('Pack type'), findsOneWidget);
       expect(find.text('Prescription'), findsOneWidget);
@@ -319,15 +327,18 @@ void main() {
       expect(find.text('Rx only'), findsNothing);
     });
 
-    testWidgets('a screen with no query yet shows the category row alone',
+    testWidgets('a screen with no query yet draws no row at all',
         (tester) async {
       final p = SearchPagePayload.fromMap(_payload());
       await _pump(
           tester,
           SearchFilterChips(
               filters: p.filters, showSheetGroups: false, onPick: (_, __) {}));
-      expect(find.text('All'), findsOneWidget);
+      // No sheet groups and no category row: the widget takes no height, so
+      // the feed starts directly under the search bar.
+      expect(find.text('All'), findsNothing);
       expect(find.text('Pack type'), findsNothing);
+      expect(tester.getSize(find.byType(SearchFilterChips)).height, 0);
     });
 
     testWidgets('a tap hands back the backend\'s group and option, untouched',
@@ -343,10 +354,14 @@ void main() {
                 g = gg;
                 o = oo;
               }));
-      await tester.tap(find.text('RESPIRATORY'));
-      await tester.pump();
-      expect(g!.key, 'category');
-      expect(o!.key, 'RESPIRATORY');
+      // The sheet route is the only way a filter is picked now: open Pack type
+      // and tap one of ITS options.
+      await tester.tap(find.text('Pack type'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Strip'));
+      await tester.pumpAndSettle();
+      expect(g!.key, 'pack_type');
+      expect(o!.key, 'Strip');
     });
   });
 

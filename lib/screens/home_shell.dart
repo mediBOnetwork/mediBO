@@ -25,6 +25,7 @@ import '../utils/responsive.dart';
 import '../widgets/animations.dart';
 import '../widgets/search_surface.dart';
 import '../widgets/cart_pill.dart'; // C636
+import '../widgets/update_bar.dart'; // CMD #2037 — appUpdateBarHeight
 import '../widgets/notification_bell.dart'; // CHANGE #298
 import '../widgets/scope_chip.dart'; // CMD #1947 — the header date·zone chip
 import '../widgets/test_mode_badge.dart'; // CMD #1964 — the header TEST badge
@@ -1868,15 +1869,7 @@ class _HomeShellState extends State<HomeShell> {
           // (`render.pill.show`) — and because it read AppState at the shell
           // level, every cart write rebuilt the entire HomeShell subtree.
           // CartPill reads the cart itself, so a write now repaints one pill.
-          if (!isAdmin && _index == 0)
-            Positioned(
-              bottom: 16,
-              left: 0,
-              right: 0,
-              child: RepaintBoundary(
-                child: CartPill(onTap: () => _openCart()),
-              ),
-            ),
+          if (!isAdmin && _index == 0) shellFloatingCartPill(_openCart),
           if (!isAdmin)
             RepaintBoundary(
               child: CartPanel(
@@ -1959,15 +1952,7 @@ class _HomeShellState extends State<HomeShell> {
             ],
           ),
           // CHANGE #636 — same pill on desktop, same reasoning as mobile above.
-          if (!isAdmin && _index == 0)
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 16,
-              child: RepaintBoundary(
-                child: CartPill(onTap: () => _openCart()),
-              ),
-            ),
+          if (!isAdmin && _index == 0) shellFloatingCartPill(_openCart),
           if (!isAdmin) ...[
             LoginPanel(
               open: _loginOpen,

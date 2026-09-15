@@ -167,8 +167,13 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
           Expanded(
             child: Container(
               height: SearchHeaderBar.fieldHeight,
+              // CMD #2037 — the field is the HEADER's white, not the page's
+              // grey, with the same hairline every card uses. The grey fill
+              // drew a second block under the header; on one white ground the
+              // header and the field read as one piece of chrome and the thin
+              // border is all that says "this is a box you can type in".
               decoration: BoxDecoration(
-                color: Ds.c.bg,
+                color: Ds.c.surface,
                 borderRadius: Ds.r.rButton,
                 border: Border.all(color: Ds.c.divider),
               ),
@@ -242,18 +247,22 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
 
 /// The filter set, in the BACKEND's order.
 ///
-/// The group the payload marked `chip_row` draws its options inline — that is
-/// the category row Home has always shown, restyled as outlined grey chips
-/// with the selected one in brand green. Every other group draws as ONE chip
-/// that opens its own sheet, so pack type, prescription, product flags and
-/// sort reach both screens without a second row of forty chips.
+/// CMD #2037 — the INLINE CATEGORY ROW IS GONE. "All / OTHERS / ANTI
+/// INFECTIVES / CARDIAC" sat under the search bar on every home visit, ahead
+/// of the feed, duplicating the Shop-by-category tiles a screen below it and
+/// the Catalogue's own Browse-by tiles. It is not drawn on any surface any
+/// more, and `search_chip_row_surfaces` is empty on the backend so an app
+/// running from an old cache does not draw it either.
+///
+/// What is left is the SHEET groups: each one draws as ONE chip that opens its
+/// own sheet, so pack type, prescription, product flags and sort reach both
+/// screens without a row of forty chips.
 class SearchFilterChips extends StatelessWidget {
   const SearchFilterChips({
     super.key,
     required this.filters,
     required this.onPick,
     this.showSheetGroups = true,
-    this.showChipRow = true,
   });
 
   final SearchFilters filters;
@@ -265,29 +274,18 @@ class SearchFilterChips extends StatelessWidget {
   /// passes false and shows the category row alone.
   final bool showSheetGroups;
 
-  /// CMD #2011 — does THIS surface draw the inline category row at all? The
-  /// answer is the backend's (`search_page().chip_row_surfaces`): on Home the
-  /// chips ARE the browse filter, while the Catalogue tab has the four
-  /// Browse-by tiles instead and drew the row twice over.
-  final bool showChipRow;
-
   static const double rowHeight = 52;
   static const double _chipHeight = 34;
 
   @override
   Widget build(BuildContext context) {
-    final row = showChipRow ? filters.chipRowGroup : null;
     final sheets = showSheetGroups ? filters.sheetGroups : const <SearchFilterGroup>[];
-    if (row == null && sheets.isEmpty) return const SizedBox.shrink();
+    // CMD #2037 — no inline category row, on any surface. `chipRowGroup` is
+    // still parsed (it is the backend's answer, and the model's test holds the
+    // contract) but nothing draws it.
+    if (sheets.isEmpty) return const SizedBox.shrink();
 
     final children = <Widget>[
-      if (row != null)
-        for (final o in row.options)
-          _chip(
-            label: o.label,
-            selected: o.selected,
-            onTap: () => onPick(row, o),
-          ),
       for (final g in sheets)
         _chip(
           label: _sheetChipLabel(g),
@@ -934,17 +932,10 @@ class _SearchChromeState extends State<SearchChrome> {
           // asks for the same on search. The rule is the payload's
           // (`search_bar.chip_row_on_results`), so putting a row back above
           // results is one app_settings UPDATE.
+          //
+          // CMD #2037 — and the inline CATEGORY row is gone from every
+          // surface, typed-in or not; see [SearchFilterChips].
           showSheetGroups: widget.hasQuery && _bar.chipRowOnResults,
-          // CMD #2011 — the surface list is the BACKEND's; a payload that
-          // names none (an old cache) draws the row the way every surface
-          // did before this change.
-          // CMD #2026 — and above RESULTS there is no row at all: the grid
-          // starts directly under the search bar. `hasQuery` is the screen's
-          // own state, the rule is the payload's.
-          showChipRow: p?.drawsChipRow(widget.surface,
-                  hasQuery: widget.hasQuery ||
-                      widget.controller.text.trim().isNotEmpty) ??
-              true,
           onPick: widget.onFilterPick,
         ),
         if (_railOpen)

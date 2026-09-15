@@ -33,7 +33,7 @@ extension _ShellNavRoots on _HomeShellState {
   /// text; clearing `_query` alone left `_search.hasQuery` true, so the
   /// storefront kept rendering the search result while the URL said `/`. That
   /// is the logo bug this command found on the way to the tab one.
-  void _goHome() {
+  void _goHome({bool toTop = true}) {
     _navSetState(() {
       _index = 0;
       _category = 'All';
@@ -42,11 +42,39 @@ extension _ShellNavRoots on _HomeShellState {
       _searchPayload = null;
       _browseAll = false;
       _cartOpen = false;
-      _scrollToTopTrigger++;
+      // CMD #2037 — the logo and the system back button still land at the TOP
+      // of the feed; the Home TAB stepping back out of a category list does
+      // not, because the whole point of that rung is the offset the shopper
+      // was left at. One flag, one definition of home.
+      if (toTop) _scrollToTopTrigger++;
       shellHeaderBandShow(); // CMD #2019 — home starts full-chrome.
     });
     _searchCtrl.clear();
     pushUrl('/');
+  }
+
+  /// CMD #2037 — the Home TAB. One rung per tap: another tab hands the
+  /// storefront back exactly as it was left, a list opened from home steps
+  /// back out to the feed, and the feed at its root scrolls to the top.
+  ///
+  /// The decision is [ShellNav.homeTap], which is pure and covered by
+  /// test/protected/shell_nav_test.dart; what is here is only the applying.
+  void _onHomeTabTap() {
+    switch (ShellNav.homeTap(_navState)) {
+      case ShellHomeTap.resumeStorefront:
+        // Nothing is cleared: category, search, the whole-catalogue grid and
+        // the feed's own scroll offset are what "where the user was" means.
+        _navSetState(() {
+          _index = ShellPage.storefront;
+          _cartOpen = false;
+          shellHeaderBandShow();
+        });
+        pushUrl(_urlForState());
+      case ShellHomeTap.backToFeed:
+        _goHome(toTop: false);
+      case ShellHomeTap.scrollTop:
+        _goHome();
+    }
   }
 
   /// CMD #2021 — the Catalogue's own root: the Browse-by tiles.
@@ -75,13 +103,15 @@ extension _ShellNavRoots on _HomeShellState {
   ///
   /// The bar hands back the PAGE its registry row named (CHANGE #630); what
   /// landing on that page MEANS is `ShellNav.tapOn`, which is pure and covered
-  /// by test/protected/shell_nav_test.dart. Tapping the already-selected Home
-  /// tab needs no branch of its own: `_goHome()` bumps the scroll trigger every
-  /// time, so re-tapping it scrolls the feed to the top.
+  /// by test/protected/shell_nav_test.dart.
+  ///
+  /// CMD #2037 — the home slot resolves one step further, through
+  /// [_onHomeTabTap]: Home is a back button until the shopper is already at
+  /// the root, and only then a scroll-to-top.
   void _onNavTap(int page) {
     switch (ShellNav.tapOn(page)) {
       case ShellTabTap.homeRoot:
-        _goHome();
+        _onHomeTabTap();
       case ShellTabTap.catalogueRoot:
         _goCatalogue();
       case ShellTabTap.showPage:

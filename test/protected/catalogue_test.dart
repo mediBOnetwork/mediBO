@@ -153,6 +153,10 @@ Map<String, dynamic> _card(String id, String name) => {
       'offer_chip': '',
     };
 
+/// CMD #2020 — a product list arrives with its own breadcrumb, and the LAST
+/// step of that breadcrumb is the scope's name. The screen prints the trail
+/// and nothing else: the `title` / `subtitle` / `count_label` the payload
+/// still carries are no longer drawn as a header block above the rows.
 Map<String, dynamic> _list({
   required List<Map<String, dynamic>> items,
   bool hasMore = false,
@@ -162,6 +166,32 @@ Map<String, dynamic> _list({
       'ok': true,
       'title': 'Paracetamol (500mg)',
       'subtitle': 'Every brand for this salt',
+      'trail': {
+        'label': 'You are here',
+        'separator': '\u203a',
+        'items': [
+          {
+            'label': 'Catalogue',
+            'current': false,
+            'route': {'tab': 'home', 'path': <String>[]},
+          },
+          {
+            'label': 'Salts',
+            'current': false,
+            'route': {'tab': 'salts', 'path': <String>[]},
+          },
+          {
+            'label': 'Paracetamol (500mg)',
+            'current': true,
+            'route': {
+              'tab': 'salts',
+              'path': <String>[],
+              'list_kind': 'salt',
+              'list_key': 'Paracetamol (500mg)',
+            },
+          },
+        ],
+      },
       'count_label': countLabel,
       'empty_label': 'Nothing here in this view.',
       'more_label': 'Load more',
@@ -375,15 +405,33 @@ void main() {
   });
 
   group('the product list', () {
-    testWidgets('renders the backend title, subtitle and count', (tester) async {
+    // CMD #2020 — the breadcrumb IS the title. "Catalogue \u203a Salts \u203a
+    // Paracetamol (500mg)" is already pinned above the rows, so the screen no
+    // longer reprints the same scope as a heading with a subtitle and a count
+    // under it: three sentences of the same fact stood between the tap and the
+    // first product. The payload still CARRIES title/subtitle/count_label —
+    // this asserts they are not drawn a second time, so a backend that keeps
+    // sending them (and every deep link that still works) is unaffected.
+    testWidgets('the breadcrumb is the title — the header block is gone',
+        (tester) async {
       await _pump(tester, queued: {
         'catalogue_home': [_home()],
         'catalogue_list': [_list(items: [_card('1', 'Dolo 650 Tablet')])],
       }, route: const CatalogueRoute(
           tab: 'salts', listKind: 'salt', listKey: 'Paracetamol (500mg)'));
-      expect(find.text('Paracetamol (500mg)'), findsOneWidget);
-      expect(find.text('Every brand for this salt'), findsOneWidget);
-      expect(find.text('15 products'), findsOneWidget);
+
+      // The scope is named ONCE, by the trail's own current step.
+      expect(find.text('Paracetamol (500mg)'), findsOneWidget,
+          reason: 'the crumb names the scope, and nothing else repeats it');
+      expect(find.text('Catalogue'), findsOneWidget);
+      expect(find.text('Salts'), findsOneWidget);
+
+      // The header block that used to sit above the rows is gone.
+      expect(find.text('Every brand for this salt'), findsNothing,
+          reason: 'the duplicate subtitle was removed by CMD #2020');
+      expect(find.text('15 products'), findsNothing,
+          reason: 'the duplicate count line was removed by CMD #2020');
+
       expect(find.byType(ProductRowCard), findsOneWidget);
     });
 

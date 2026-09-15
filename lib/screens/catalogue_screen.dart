@@ -34,11 +34,11 @@ import '../services/ui_copy.dart';
 import '../url_sync.dart';
 import '../utils/render_log.dart';
 import '../widgets/catalogue_alphabet_rail.dart';
+import '../widgets/catalogue_landing.dart';
 import '../widgets/catalogue_product_card.dart';
 import '../widgets/product_row_card.dart';
 import '../widgets/product_image.dart';
 import '../widgets/search_surface.dart';
-import 'admin/nav_registry_view.dart' show NavGlyph;
 import 'catalogue_extras.dart'; // CHANGE #748
 
 /// Test seam: production goes to Supabase, a test hands back a payload.
@@ -407,11 +407,23 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         _browse = null;
         _rows.clear();
         _rowsHaveMore = false;
-        if (!(_home?.trail.isEmpty ?? true)) _trail = _home!.trail;
+        // CMD #2020 — the landing's trail is taken WHOLE, empty included. The
+        // old guard kept the last list's crumb standing when the landing sent
+        // none, which is exactly "the breadcrumb did not go away when I came
+        // back". `catalogue_home()` now sends no steps at all, and that
+        // absence is the instruction.
+        _trail = _home?.trail ?? CatTrail.empty;
       });
       RenderLog.write('c2011_catalogue_landing',
           'doors=${_home?.doors.length ?? 0};tree=${_home?.showTree ?? false};'
           'rail=0');
+      RenderLog.write('c2020_catalogue_landing',
+          'tiles=${_home?.doors.length ?? 0};'
+          'previews=${_home?.doors.where((d) => !d.preview.isEmpty).length ?? 0};'
+          'top=${_home?.topSelling.items.length ?? 0};'
+          'promo=${(_home?.promo.has ?? false) ? 1 : 0};'
+          'chips=${_home?.chips.length ?? 0};'
+          'crumbs=${_home?.trail.items.length ?? 0}');
       return;
     }
     setState(() { _loading = true; _error = ''; });
@@ -423,6 +435,10 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
           'p_path': _route.path,
           'p_filters': _route.filters.toRpc(),
           'p_sort': _route.sort,
+          // CMD #2020 — the A–Z strip narrows a PRODUCT list too, and the
+          // letter is part of the route, so it round-trips through the URL and
+          // the back button the same way a company key does.
+          'p_letter': _route.letter,
           'p_cursor': null,
           'p_limit': _pageSize,
         });
@@ -432,7 +448,9 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
           _list = list;
           _cursor = list.nextCursor;
           if (!list.trail.isEmpty) _trail = list.trail;
-          _rail = CatRail.empty;
+          // CMD #2020 — the strip a product list sends is the strip it gets.
+          // A search sends none and still clears the last one.
+          _rail = list.rail;
           _loading = false;
         });
         RenderLog.write('c747_catalogue_list',
@@ -593,6 +611,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         'p_path': _route.path,
         'p_filters': _route.filters.toRpc(),
         'p_sort': _route.sort,
+        'p_letter': _route.letter,
         'p_cursor': _cursor,
         'p_limit': _pageSize,
       }));
@@ -608,6 +627,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
           filtersActive: cur.filtersActive, filtersActiveLabel: cur.filtersActiveLabel,
           zone: cur.zone, filters: cur.filters,
           empty: cur.empty, trail: cur.trail,
+          rail: cur.rail, letter: cur.letter,
           // The groups come back on every page — the counts are the SCOPE's,
           // not the page's, so the later payload is as good as the first and
           // taking it keeps a changed count honest.
@@ -665,6 +685,21 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
 
   /// A door opens ITS list — the tab the backend named on the door — with the
   /// A–Z strip and the breadcrumb that list sends. Nothing is decided here.
+  /// CMD #2020 — the promo banner opens the list the PAYLOAD named. The word
+  /// "schemes" is nowhere in this method: `list_kind` / `list_key` arrived as
+  /// data and are copied into the route, exactly as a crumb is.
+  void _tapPromo(CatPromo p) {
+    if (!p.has) return;
+    _go(_route.copy(
+      tab: p.key,
+      path: const [],
+      listKind: p.listKind,
+      listKey: p.listKey,
+      query: '',
+      letter: null,
+    ));
+  }
+
   void _tapDoor(CatDoor d) => _go(_route.copy(
         tab: d.tab,
         path: const [],
@@ -898,15 +933,35 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
               onTap: (p) => Navigator.of(context).pushNamed('/product/${p.id}'),
             ),
           ),
+        // CMD #2020 — four rounded gradient tiles, each carrying its own
+        // preview. The whole tile is a payload: colours, words, previews and
+        // the route it opens.
         if (home.doors.isNotEmpty)
           SliverToBoxAdapter(
-            child: _Doors(
+            child: CatalogueTiles(
               title: home.doorsTitle,
               doors: home.doors,
               onTap: _tapDoor,
             ),
           ),
-        if (home.showTabs) SliverToBoxAdapter(child: _tabStrip()),
+        // CMD #2020 — the top-selling rail, ranked by the zone's own 30-day
+        // order quantity. The card is the storefront's, unchanged.
+        SliverToBoxAdapter(
+          child: CatalogueTopSellingRail(
+            block: home.topSelling,
+            onTap: (p) => Navigator.of(context).pushNamed('/product/${p.id}'),
+          ),
+        ),
+        // CMD #2020 — Schemes, as the one promotional block this page has.
+        // `has` is the whole visibility rule.
+        SliverToBoxAdapter(
+          child: CataloguePromoBanner(
+            promo: home.promo,
+            onTap: () => _tapPromo(home.promo),
+          ),
+        ),
+        // Cold chain stays a chip, under the banner.
+        if (home.showTabs) SliverToBoxAdapter(child: _chipRow()),
         SliverToBoxAdapter(child: SizedBox(height: Ds.space.x24)),
       ],
     );
@@ -930,14 +985,14 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
           ),
         if (_isHome && (_home?.doors.isNotEmpty ?? false))
           SliverToBoxAdapter(
-            child: _Doors(
+            child: CatalogueTiles(
               title: _home!.doorsTitle,
               doors: _home!.doors,
               onTap: _tapDoor,
             ),
           ),
         if (_isHome && (_home?.showTabs ?? true))
-          SliverToBoxAdapter(child: _tabStrip()),
+          SliverToBoxAdapter(child: _chipRow()),
         // CMD #1909 — the zone SWITCH used to sit here. Nothing replaces it:
         // a catalogue list hides nothing any more, so there is no setting to
         // offer. What was a filter is now the order the list arrives in, and
@@ -999,13 +1054,20 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
     return list;
   }
 
-  /// The tabs #747/#748 shipped — Schemes, Cold chain, Recently added — now a
-  /// quiet chip row under the doors instead of the screen's main navigation.
-  Widget _tabStrip() {
+  /// CMD #2020 — the chip row under the promo banner.
+  ///
+  /// The BACKEND now names the chips (`catalogue_home().chips`): Schemes left
+  /// this row to become the banner above it, and Cold chain stayed. The old
+  /// behaviour — every `kind:'list'` tab drawn as a chip — is the fallback for
+  /// a payload from before this change, so an app that meets the old RPC still
+  /// draws exactly what it drew before.
+  Widget _chipRow() {
     final home = _home;
     if (home == null) return const SizedBox.shrink();
     const known = {'list', 'recent'};
-    final tabs = home.tabs.where((t) => known.contains(t.kind)).toList();
+    final tabs = home.chips.isNotEmpty
+        ? [...home.chips]
+        : home.tabs.where((t) => known.contains(t.kind)).toList();
     final recent = _extras['recent'];
     if (recent is Map && recent['show'] == true) {
       tabs.add(CatTab.fromMap(Map<String, dynamic>.from(recent)));
@@ -1056,23 +1118,11 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
     return CustomScrollView(
         controller: _scroll,
         slivers: [
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(l.title, style: Ds.t.title),
-                  if (l.subtitle.isNotEmpty) ...[
-                    SizedBox(height: Ds.space.x4),
-                    Text(l.subtitle, style: Ds.t.caption),
-                  ],
-                  SizedBox(height: Ds.space.x4),
-                  Text(l.countLabel, style: Ds.t.caption),
-                ],
-              ),
-            ),
-          ),
+          // CMD #2020 — the title / subtitle / count block that used to sit
+          // here is GONE. "Catalogue › Company › SUN PHARMA" is already
+          // pinned two rows above it, so printing "SUN PHARMA" again, with
+          // "Products from this company" under it, was the same scope said
+          // three times before a single product. The breadcrumb is the title.
           SliverPadding(
             padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
             sliver: SliverList(
@@ -1164,101 +1214,9 @@ class _GroupDivider extends StatelessWidget {
       );
 }
 
-/// CHANGE #799 — three doors, large and calm: a glyph, a name, a count in
-/// grey. Nothing else on the tile, which is the whole instruction.
-/// CHANGE #799, rebuilt by CMD #2011 — the four doors ARE the catalogue
-/// landing: Company · Salt · Use · Category, two across and two down.
-///
-/// One row of four fitted "18,563 comp…" into a 360 px phone, so the tile now
-/// gets half the width and as much height as its own words need. Nothing here
-/// is written or shortened: [CatDoor.label] and [CatDoor.countLabel] are
-/// `catalogue_home()`'s strings, printed in full, wrapping rather than
-/// ellipsising — a tile that hides the number it exists to show is the
-/// truncation the design contract forbids.
-class _Doors extends StatelessWidget {
-  final String title;
-  final List<CatDoor> doors;
-  final ValueChanged<CatDoor> onTap;
-  const _Doors({required this.title, required this.doors, required this.onTap});
-
-  /// The floor, not the height: IntrinsicHeight lets a tile grow past it for a
-  /// count that wraps, and both tiles in a row stay the same size either way.
-  static const double _tileMinH = 132;
-  static const double _glyphBox = 40;
-  static const double _glyph = 24;
-  static const int _perRow = 2;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-        padding: EdgeInsets.fromLTRB(
-            Ds.space.x16, Ds.space.x24, Ds.space.x16, 0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (title.isNotEmpty) ...[
-              Text(title, style: Ds.t.caption),
-              SizedBox(height: Ds.space.x12),
-            ],
-            for (var r = 0; r * _perRow < doors.length; r++) ...[
-              if (r > 0) SizedBox(height: Ds.space.x12),
-              IntrinsicHeight(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    for (var i = r * _perRow;
-                        i < (r + 1) * _perRow && i < doors.length;
-                        i++) ...[
-                      if (i > r * _perRow) SizedBox(width: Ds.space.x12),
-                      Expanded(child: _tile(doors[i])),
-                    ],
-                    // An odd last row keeps the grid: the missing tile is an
-                    // empty half, never a stretched one.
-                    if (doors.length - r * _perRow == 1) ...[
-                      SizedBox(width: Ds.space.x12),
-                      const Expanded(child: SizedBox.shrink()),
-                    ],
-                  ],
-                ),
-              ),
-            ],
-          ],
-        ),
-      );
-
-  Widget _tile(CatDoor d) => InkWell(
-        onTap: () => onTap(d),
-        borderRadius: Ds.r.rCard,
-        child: Ink(
-          decoration: BoxDecoration(
-            color: Ds.c.surface,
-            borderRadius: Ds.r.rCard,
-            border: Border.all(color: Ds.c.divider),
-            boxShadow: Ds.elevation.e1,
-          ),
-          padding: EdgeInsets.all(Ds.space.x16),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: _tileMinH),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                NavGlyph(
-                  row: d.glyphRow,
-                  box: _glyphBox,
-                  glyph: _glyph,
-                  color: Ds.c.brand,
-                ),
-                SizedBox(height: Ds.space.x12),
-                // No maxLines and no ellipsis anywhere in this tile: the
-                // backend's words are printed whole, and the tile grows.
-                Text(d.label, style: Ds.t.bodyStrong),
-                SizedBox(height: Ds.space.x4),
-                Text(d.countLabel, style: Ds.t.caption),
-              ],
-            ),
-          ),
-        ),
-      );
-}
+// CMD #2020 — the four Browse-by tiles moved to widgets/catalogue_landing.dart
+// (CatalogueTiles) when they became gradient cards with their own previews.
+// The screen keeps the state machine; the tile keeps the paint.
 
 /// CHANGE #799 — the horizontal strip above the doors. Present only when the
 /// BACKEND said this viewer has one (`recent_viewed.has`), so an anonymous

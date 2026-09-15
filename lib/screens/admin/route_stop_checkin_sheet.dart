@@ -160,13 +160,14 @@ class RouteStopCheckInPlan {
   static bool isUnskip(Map<String, dynamic> action) =>
       action['key']?.toString() == 'unskip';
 
-  /// The draggable stops, in the BACKEND's order. A skipped stop holds no
-  /// place in the day and cannot be dragged, so it is not in this list.
-  static List<Map<String, dynamic>> draggable(Map<String, dynamic>? payload) =>
+  /// CMD #2057 — the route order is the optimised order and is LOCKED. The
+  /// stops a rep can still act on are the ones the backend left on the day;
+  /// none of them can be moved, so there is no draggable set any more.
+  static List<Map<String, dynamic>> active(Map<String, dynamic>? payload) =>
       ((payload?['stops'] as List?) ?? const [])
           .whereType<Map>()
           .map((e) => Map<String, dynamic>.from(e))
-          .where((e) => e['can_drag'] == true)
+          .where((e) => e['skipped'] != true)
           .toList();
 
   /// The stops the backend left out of the day, in payload order.
@@ -177,34 +178,34 @@ class RouteStopCheckInPlan {
           .where((e) => e['can_drag'] != true)
           .toList();
 
-  /// True only when the backend says this route can be re-ordered at all.
-  static bool canReorder(Map<String, dynamic>? payload) =>
-      payload?['can_reorder'] == true;
+  /// CMD #2057 — stop 1 is first and stop 2 is second, always. The backend
+  /// says so once (`order_locked`), and nothing in the client ever re-orders
+  /// a route, so this is the only answer the list is allowed to read.
+  static bool canReorder(Map<String, dynamic>? payload) => false;
 
-  /// The pure list move behind a drag. ReorderableListView reports newIndex
-  /// as the slot BEFORE the removal is applied, which is the one thing about
-  /// a drag that is arithmetic rather than a decision.
-  static List<T> move<T>(List<T> items, int oldIndex, int newIndex) {
-    if (oldIndex < 0 || oldIndex >= items.length) return List<T>.from(items);
-    final out = List<T>.from(items);
-    var to = newIndex;
-    if (to > oldIndex) to -= 1;
-    if (to < 0) to = 0;
-    if (to > out.length - 1) to = out.length - 1;
-    out.insert(to, out.removeAt(oldIndex));
-    return out;
-  }
+  /// A menu entry the backend drew greyed instead of hiding.
+  static bool menuEnabled(Map<String, dynamic> entry) =>
+      entry['enabled'] != false;
 
-  /// route_reorder params for the order now on screen. Null when there is
-  /// nothing to send, so a no-op drag never posts.
-  static Map<String, dynamic>? reorderParams(
-      String routeId, List<Map<String, dynamic>> ordered) {
-    final ids = ordered
-        .map((e) => e['stop_id']?.toString() ?? '')
-        .where((e) => e.isNotEmpty)
-        .toList();
-    if (routeId.isEmpty || ids.isEmpty) return null;
-    return {'p_route_id': routeId, 'p_stop_ids': ids};
+  /// CMD #2057 — the whole call behind one long-press menu entry: WHICH rpc,
+  /// on WHICH stop, with WHICH arguments. All three come from the payload, so
+  /// a new stop action (remove, restore, anything later) is an entry the
+  /// backend adds — never a branch written here.
+  ///
+  /// `stop_id` on the entry wins over the row that was long-pressed: Restore
+  /// acts on the stop that was removed, which no longer has a card of its own.
+  static Map<String, dynamic>? menuCall(
+      String stopId, Map<String, dynamic> entry) {
+    if (!menuEnabled(entry)) return null;
+    final rpc = entry['rpc']?.toString() ?? '';
+    final target = entry['stop_id']?.toString().isNotEmpty == true
+        ? entry['stop_id'].toString()
+        : stopId;
+    if (rpc.isEmpty || target.isEmpty) return null;
+    final params = <String, dynamic>{'p_stop_id': target};
+    final skipped = entry['skipped'];
+    if (skipped is bool) params['p_skipped'] = skipped;
+    return {'rpc': rpc, 'params': params};
   }
 
   /// The follow-on the backend asked for after a check-in — today that is
@@ -672,12 +673,17 @@ class RouteStopMenuSheet {
                 Text(hint, style: Ds.t.caption),
               ],
               SizedBox(height: Ds.space.x24),
+              // CMD #2057 — an entry the backend disabled is drawn greyed with
+              // ITS reason under it, never hidden: the menu keeps the same
+              // shape on every stop, so nothing moves under a thumb.
               for (final e in entries) ...[
                 SizedBox(
                   width: double.infinity,
                   height: Ds.touch.minTarget,
                   child: OutlinedButton(
-                    onPressed: () => Navigator.of(ctx).pop(e),
+                    onPressed: RouteStopCheckInPlan.menuEnabled(e)
+                        ? () => Navigator.of(ctx).pop(e)
+                        : null,
                     style: OutlinedButton.styleFrom(
                       foregroundColor:
                           routeStopToneColor(e['tone']?.toString()),
@@ -685,6 +691,10 @@ class RouteStopMenuSheet {
                     child: Text(e['label']?.toString() ?? ''),
                   ),
                 ),
+                if ((e['reason']?.toString() ?? '').isNotEmpty) ...[
+                  SizedBox(height: Ds.space.x4),
+                  Text(e['reason'].toString(), style: Ds.t.caption),
+                ],
                 SizedBox(height: Ds.space.x12),
               ],
               SizedBox(

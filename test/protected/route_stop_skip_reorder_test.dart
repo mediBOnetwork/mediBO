@@ -1,14 +1,16 @@
-// CMD #1874 — what Skip, drag-to-reorder and a Converted check-in decide.
+// CMD #1874, amended by CMD #2057 — what Skip, the route ORDER and a
+// Converted check-in decide.
 //
 // The point of this file is that the answer to every one of those is "the
-// backend did". These tests hold down the four places a Dart default could
-// creep back in:
+// backend did". These tests hold down the places a Dart default could creep
+// back in:
 //
 //   • Skip and Restore are the SAME call, and the direction comes from the
 //     menu entry the backend sent — never from a toggle of the local flag.
-//   • which stops may be dragged is `can_drag`, not "has no outcome yet".
-//   • a drag posts the WHOLE new order of stop ids, in the order on screen,
-//     and ReorderableListView's off-by-one is the only arithmetic here.
+//   • CMD #2057: the route order is LOCKED. canReorder() is false for every
+//     payload — including one that still carries can_reorder:true — and the
+//     drag helpers are gone, so no drag can be posted from anywhere.
+//   • the active set is `skipped`, in payload order, with no client sort.
 //   • Converted opens Add customer because route_stop_checkin() said so
 //     (next_action), not because Dart recognises the word "converted".
 
@@ -34,8 +36,6 @@ Map<String, dynamic> stop(String id,
     };
 
 void main() {
-  const routeId = 'bbbbbbbb-0000-0000-0000-000000001872';
-
   test('Skip and Restore are one call — the ENTRY carries the direction', () {
     final active = stop('s1');
     final parked = stop('s2', canDrag: false, skipped: true);
@@ -57,7 +57,7 @@ void main() {
     expect(RouteStopCheckInPlan.isSkipped(active), isFalse);
   });
 
-  test('a stop already checked in is still draggable — can_drag decides', () {
+  test('the active set is `skipped`, in payload order, never re-sorted', () {
     final payload = {
       'can_reorder': true,
       'stops': [
@@ -67,65 +67,34 @@ void main() {
       ],
     };
 
+    // A stop already checked in still holds its place in the day; only a
+    // SKIPPED stop drops out of the active list.
     expect(
-        RouteStopCheckInPlan.draggable(payload)
-            .map((e) => e['stop_id'])
-            .toList(),
+        RouteStopCheckInPlan.active(payload).map((e) => e['stop_id']).toList(),
         ['s1', 's2']);
     expect(
         RouteStopCheckInPlan.skipped(payload)
             .map((e) => e['stop_id'])
             .toList(),
         ['s3']);
-    expect(RouteStopCheckInPlan.canReorder(payload), isTrue);
   });
 
-  test('one stop cannot be re-ordered — the backend says so, not a length', () {
+  test('CMD #2057 — the order is LOCKED, whatever the payload says', () {
+    // The optimised order is the order: stop 1 first, stop 2 second, always.
+    // Even a payload that still carries the old can_reorder:true cannot put a
+    // drag handle back on the list.
+    expect(
+        RouteStopCheckInPlan.canReorder({
+          'can_reorder': true,
+          'order_locked': true,
+          'stops': [stop('s1'), stop('s2'), stop('s3')],
+        }),
+        isFalse);
     expect(
         RouteStopCheckInPlan.canReorder(
             {'can_reorder': false, 'stops': [stop('s1')]}),
         isFalse);
     expect(RouteStopCheckInPlan.canReorder(null), isFalse);
-  });
-
-  test('a drag posts the whole new order, in payload order', () {
-    final payload = {
-      'can_reorder': true,
-      'stops': [stop('s1'), stop('s2'), stop('s3')],
-    };
-    final stops = RouteStopCheckInPlan.draggable(payload);
-
-    // Dragging the LAST stop to the top: ReorderableListView reports
-    // (oldIndex 2, newIndex 0).
-    final moved = RouteStopCheckInPlan.move(stops, 2, 0);
-    expect(RouteStopCheckInPlan.reorderParams(routeId, moved), {
-      'p_route_id': routeId,
-      'p_stop_ids': ['s3', 's1', 's2'],
-    });
-
-    // Dragging the FIRST stop down one: newIndex is the slot BEFORE the
-    // removal is applied, so 0 -> 2 is a single-place move, not two.
-    expect(
-        RouteStopCheckInPlan.move(stops, 0, 2).map((e) => e['stop_id']).toList(),
-        ['s2', 's1', 's3']);
-
-    // A drag onto its own slot changes nothing.
-    expect(
-        RouteStopCheckInPlan.move(stops, 1, 1).map((e) => e['stop_id']).toList(),
-        ['s1', 's2', 's3']);
-  });
-
-  test('nothing to send is never posted', () {
-    expect(RouteStopCheckInPlan.reorderParams(routeId, const []), isNull);
-    expect(RouteStopCheckInPlan.reorderParams('', [stop('s1')]), isNull);
-    // A payload whose stops are all skipped has no order to send.
-    expect(
-        RouteStopCheckInPlan.reorderParams(
-            routeId,
-            RouteStopCheckInPlan.draggable({
-              'stops': [stop('s1', canDrag: false, skipped: true)]
-            })),
-        isNull);
   });
 
   test('Converted opens Add customer because next_action said so', () {

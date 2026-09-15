@@ -14611,31 +14611,13 @@ class _RoutesTabState extends State<_RoutesTab> {
   /// same five actions do the same thing wherever the stop is tapped.
   RouteViewActions get _routeViewActions => RouteViewActions(
         onCheckIn: (routeId, stopId) => _openStopCheckIn(routeId, stopId),
-        onSkip: (routeId, stopId, entry) =>
-            _skipStopFromMenu(routeId, stopId, entry),
-        onReorder: (routeId, stopIds) => _reorderStopIds(routeId, stopIds),
+        onMenu: (routeId, stopId, entry) =>
+            _runStopMenuAction(routeId, stopId, entry),
         onImportCustomer: (routeId, leadId) =>
             _addCustomerFromLead(leadId, routeId: routeId),
         onAssign: (route) => _openAssignRouteSheet(route),
         onMessageStops: (route) => _openMessageStopsSheet(route),
       );
-
-  /// CMD #1917 — the panel has already worked out the new order, so this
-  /// posts the ids straight to route_reorder(). Nothing is renumbered here.
-  Future<void> _reorderStopIds(String routeId, List<String> stopIds) async {
-    if (routeId.isEmpty || stopIds.isEmpty) return;
-    try {
-      final res = await Supabase.instance.client.rpc('route_reorder',
-          params: {'p_route_id': routeId, 'p_stop_ids': stopIds});
-      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
-      if (!mounted) return;
-      showToast(context, m['message']?.toString() ?? '', isError: m['ok'] != true);
-      RenderLog.write('c1874_stop_reorder', stopIds.length);
-      await _refreshToday();
-    } catch (e) {
-      if (mounted) showToast(context, '$e', isError: true);
-    }
-  }
 
   // CMD #1917 — _loadRouteStops() DELETED: route_stops_today() has no caller.
   // The shared panel asks route_view() once per route and caches it for 24h.
@@ -14721,21 +14703,23 @@ class _RoutesTabState extends State<_RoutesTab> {
     }
   }
 
-  /// CMD #1874 — Skip / Restore one stop. The menu entry carries the new
-  /// state, so both directions are the same call and this method decides
-  /// neither. The backend re-sequences and returns the fresh stop list.
-  Future<void> _skipStopFromMenu(
+  /// CMD #2057 — Skip, Remove from route and Restore all arrive here, and
+  /// this method decides none of them: the menu entry names the RPC and the
+  /// stop it runs on, the backend re-sequences, and the panel simply re-reads
+  /// route_view(). Adding a fourth stop action needs no code here at all.
+  Future<void> _runStopMenuAction(
       String routeId, String stopId, Map<String, dynamic> entry) async {
-    final params = RouteStopCheckInPlan.skipStopParams(stopId, entry);
-    if (params == null) return;
+    final call = RouteStopCheckInPlan.menuCall(stopId, entry);
+    if (call == null) return;
     try {
-      final res =
-          await Supabase.instance.client.rpc('route_stop_skip', params: params);
+      final res = await Supabase.instance.client.rpc(
+          call['rpc'].toString(),
+          params: Map<String, dynamic>.from(call['params'] as Map));
       final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
       if (!mounted) return;
       showToast(context, m['message']?.toString() ?? '', isError: m['ok'] != true);
       if (m['ok'] == true) {
-        RenderLog.write('c1874_stop_skipped', m['skipped']?.toString() ?? '');
+        RenderLog.write('c2057_stop_menu', entry['key']?.toString() ?? '');
         RouteViewPanel.refresh(routeId);
         await _refreshToday();
       }
@@ -14744,8 +14728,8 @@ class _RoutesTabState extends State<_RoutesTab> {
     }
   }
 
-  // CMD #1917 — _reorderStops() DELETED: RouteViewPanel hands the new order
-  // straight to _reorderStopIds(), which posts it to route_reorder().
+  // CMD #2057 — _reorderStopIds() DELETED with the drag gesture: the
+  // optimised route order is locked, so nothing re-orders a route any more.
 
   // CMD #1917 — _skipStop() DELETED with the second stop row; the shared
   // row's long-press menu goes through _skipStopFromMenu().

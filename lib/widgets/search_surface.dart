@@ -9,6 +9,7 @@ import '../models/search_page.dart';
 import '../utils/render_log.dart';
 import 'compact_product_card.dart';
 import '../models/product.dart';
+import '../services/storefront_fast_order.dart';
 import 'product_row_card.dart';
 import 'scan_mic_search_controls.dart';
 
@@ -44,6 +45,8 @@ class SearchHeaderBar extends StatefulWidget {
     this.isLoading = false,
     this.onClear,
     this.trailing,
+    this.bar = SearchBarSpec.fallback,
+    this.scanResolver,
   });
 
   final TextEditingController controller;
@@ -65,6 +68,13 @@ class SearchHeaderBar extends StatefulWidget {
 
   /// An extra control on the right of the field (the desktop Search button).
   final Widget? trailing;
+
+  /// CMD #2026 — `search_page().search_bar`: which buttons sit on the right of
+  /// the field in each state, in the backend's own order.
+  final SearchBarSpec bar;
+
+  /// Injected only by tests, straight through to [ScanSearchButton].
+  final Future<ScanResult> Function(String code)? scanResolver;
 
   /// One height for both screens, so the two headers cannot drift apart.
   static const double fieldHeight = 46;
@@ -97,6 +107,53 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
   void _submit() {
     widget.onSubmit(widget.controller.text);
     FocusManager.instance.primaryFocus?.unfocus();
+  }
+
+  void _clear() {
+    widget.controller.clear();
+    widget.onClear?.call();
+    widget.onChanged('');
+  }
+
+  /// CMD #2026 — draws ONE backend-declared button. The icon is a NAME the
+  /// backend sent; a name this build does not know is skipped rather than
+  /// guessed, so the payload can never draw a blank square. Every label is the
+  /// backend's, and every target is the token minimum.
+  Widget _barAction(SearchBarAction a) {
+    switch (a.icon) {
+      case 'close':
+        return IconButton(
+          key: const Key('c2026_clear_button'),
+          tooltip: a.label,
+          onPressed: _clear,
+          icon: Icon(Icons.close,
+              size: Ds.space.x16 + 2, color: Ds.c.textSecondary),
+          // NOT VisualDensity.compact: it subtracts 4 px from the constraints
+          // below, and the one control a shopper reaches for mid-search came
+          // out 40x40 — under the 44 px floor on the viewport that matters.
+          padding: EdgeInsets.zero,
+          constraints: BoxConstraints(
+              minWidth: Ds.touch.minTarget, minHeight: Ds.touch.minTarget),
+        );
+      case 'scan':
+        return ScanSearchButton(
+            color: Ds.c.textSecondary, resolver: widget.scanResolver);
+      case 'mic':
+        return VoiceSearchButton(
+          color: Ds.c.textSecondary,
+          onQuery: (q) {
+            // A voice result is not typing: the box is SET to what the backend
+            // resolved, with the caret after it, and submitted.
+            widget.controller.value = TextEditingValue(
+              text: q,
+              selection: TextSelection.collapsed(offset: q.length),
+            );
+            _submit();
+          },
+        );
+      default:
+        return const SizedBox.shrink();
+    }
   }
 
   @override
@@ -155,32 +212,18 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
                         child: CircularProgressIndicator(
                             strokeWidth: 2, color: Ds.c.brand),
                       ),
-                    )
-                  else if (_hasText)
-                    IconButton(
-                      onPressed: () {
-                        widget.controller.clear();
-                        widget.onClear?.call();
-                        widget.onChanged('');
-                      },
-                      icon: Icon(Icons.close,
-                          size: Ds.space.x16 + 2, color: Ds.c.textSecondary),
-                      visualDensity: VisualDensity.compact,
-                      padding: EdgeInsets.zero,
-                      constraints: BoxConstraints(
-                          minWidth: Ds.touch.minTarget,
-                          minHeight: Ds.touch.minTarget),
                     ),
-                  // CMD #409's scan and voice, now on BOTH screens rather than
-                  // only the one that happened to own the header.
-                  ScanSearchButton(color: Ds.c.textSecondary),
-                  VoiceSearchButton(
-                    color: Ds.c.textSecondary,
-                    onQuery: (q) {
-                      widget.controller.text = q;
-                      _submit();
-                    },
-                  ),
+                  // CMD #2026 — the right-hand side of the field is the
+                  // BACKEND's list for the state the box is in.
+                  //
+                  // Empty: CMD #409's scan and mic. Any text: they go away and
+                  // a single × takes the far right. Before this they were drawn
+                  // unconditionally with the × squeezed in BEFORE them, so the
+                  // one control a shopper reaches for mid-search sat third from
+                  // the edge behind two buttons that cannot help while typing.
+                  for (final a in widget.bar.actionsForText(
+                      _hasText ? widget.controller.text : ''))
+                    _barAction(a),
                 ],
               ),
             ),
@@ -653,12 +696,15 @@ class SearchResultsSkeleton extends StatelessWidget {
 class SearchDebouncer {
   SearchDebouncer({this.delay = const Duration(milliseconds: 250)});
 
+  /// The DEFAULT wait. CMD #2026 — the live one is the backend's
+  /// (`search_bar.debounce_ms`), handed to [run] with the keystroke, so
+  /// retuning the box is an app_settings UPDATE and not a deploy.
   final Duration delay;
   Timer? _timer;
 
-  void run(VoidCallback fn) {
+  void run(VoidCallback fn, {Duration? delay}) {
     _timer?.cancel();
-    _timer = Timer(delay, fn);
+    _timer = Timer(delay ?? this.delay, fn);
   }
 
   void cancel() => _timer?.cancel();
@@ -709,7 +755,9 @@ class SearchChrome extends StatefulWidget {
   final VoidCallback onClear;
   final MedicineRepository? repo;
 
-  /// CMD #2010 — the character the live grid starts at. Spec: the second.
+  /// CMD #2010 — the character the live grid starts at. CMD #2026 — this is
+  /// now only the value used until the first payload lands: `search_bar`
+  /// carries the real floor, so it is one UPDATE.
   final int minChars;
 
   /// CMD #1906 — which screen mounted this ONE header. See [SearchResultsView.surface].
@@ -811,24 +859,44 @@ class _SearchChromeState extends State<SearchChrome> {
     widget.onSubmit(q);
   }
 
-  /// CMD #2010 — every keystroke IS the search.
+  /// CMD #2010 — every keystroke IS the search. CMD #2026 — and the WHOLE text
+  /// is the query.
   ///
-  /// From [SearchChrome.minChars] the debounce fires the host's own submit,
-  /// which is the same path Enter takes: one surface, one ranking, no
-  /// intermediate screen. Below that threshold — including an emptied box —
-  /// the search is cleared, which puts the browse feed (and the rail) back.
+  /// The floor and the wait are the backend's (`search_bar.min_chars` /
+  /// `debounce_ms`); above the floor the debounce fires the host's own submit,
+  /// the same path Enter takes. Below it — an emptied box included — the search
+  /// is cleared, which puts the browse feed (and the rail) back.
+  ///
+  /// Nothing here inspects the words. A space is a character: "telmed ah
+  /// tablet" is ONE query, it is sent whole on every keystroke, and no token in
+  /// it is ever selected, highlighted or committed on its own.
   void _changed(String v) {
-    final q = v.trim();
-    if (q.length < widget.minChars) {
+    final bar = _bar;
+    if (!bar.shouldSearch(v)) {
       _debounce.cancel();
       if (widget.hasQuery) widget.onClear();
       return;
     }
     _debounce.run(() {
       if (!mounted) return;
-      RenderLog.write('c2010_live_${widget.surface}', q.length);
+      RenderLog.write('c2010_live_${widget.surface}', v.trim().length);
+      RenderLog.write('c2026_live_words_${widget.surface}',
+          v.trim().split(RegExp(r'\s+')).length);
       widget.onSubmit(v);
-    });
+    }, delay: bar.debounce);
+  }
+
+  /// The bar spec in force: the live payload's, else the idle chrome's, else
+  /// the floor this widget was mounted with.
+  SearchBarSpec get _bar {
+    final p = widget.payload ?? _chrome;
+    if (p != null && p.searchBar.actions.isNotEmpty) return p.searchBar;
+    if (p != null && p.searchBar != SearchBarSpec.fallback) return p.searchBar;
+    return SearchBarSpec(
+        minChars: widget.minChars,
+        debounceMs: _debounce.delay.inMilliseconds,
+        actions: const <SearchBarAction>[],
+        chipRowOnResults: true);
   }
 
   /// The rail draws only while the box is focused with nothing typed in it,
@@ -851,6 +919,7 @@ class _SearchChromeState extends State<SearchChrome> {
           focusNode: widget.focusNode,
           placeholder: p?.placeholder ?? '',
           isLoading: widget.isLoading,
+          bar: _bar,
           onChanged: _changed,
           onSubmit: _submit,
           onClear: widget.onClear,
@@ -858,11 +927,24 @@ class _SearchChromeState extends State<SearchChrome> {
         ),
         SearchFilterChips(
           filters: p?.filters ?? SearchFilters.empty,
-          showSheetGroups: widget.hasQuery,
+          // CMD #2026 §3 — above RESULTS nothing sits between the box and the
+          // grid: not the category row, and not the filter chips either. That
+          // is the shape CMD #2011 gave the Catalogue (both rows removed, the
+          // Therapeutic class list further down is the way in) and the spec
+          // asks for the same on search. The rule is the payload's
+          // (`search_bar.chip_row_on_results`), so putting a row back above
+          // results is one app_settings UPDATE.
+          showSheetGroups: widget.hasQuery && _bar.chipRowOnResults,
           // CMD #2011 — the surface list is the BACKEND's; a payload that
           // names none (an old cache) draws the row the way every surface
           // did before this change.
-          showChipRow: p?.drawsChipRow(widget.surface) ?? true,
+          // CMD #2026 — and above RESULTS there is no row at all: the grid
+          // starts directly under the search bar. `hasQuery` is the screen's
+          // own state, the rule is the payload's.
+          showChipRow: p?.drawsChipRow(widget.surface,
+                  hasQuery: widget.hasQuery ||
+                      widget.controller.text.trim().isNotEmpty) ??
+              true,
           onPick: widget.onFilterPick,
         ),
         if (_railOpen)

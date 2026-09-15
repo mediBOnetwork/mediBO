@@ -554,7 +554,10 @@ class _HomeShellState extends State<HomeShell> {
       _browseAll = false;
       _index = 0;
       _cartOpen = false;
-      if (_searchCtrl.text != next.query) _searchCtrl.text = next.query;
+      // CMD #2026 — THE multi-word bug lived on this line. The rule, and why,
+      // are documented once on [searchBoxSync]: the box is the shopper's.
+      final sync = searchBoxSync(_searchCtrl.value, next.query);
+      if (sync != null) _searchCtrl.value = sync;
       if (!next.hasQuery) _searchPayload = null;
     });
     if (push) replaceUrl(_urlForState());
@@ -1711,7 +1714,9 @@ class _HomeShellState extends State<HomeShell> {
             onSearchChanged: (s) => setState(() {
               _search = s;
               _query = s.query;
-              if (_searchCtrl.text != s.query) _searchCtrl.text = s.query;
+              // CMD #2026 — the same rule as _applySearch: see searchBoxSync.
+              final sync = searchBoxSync(_searchCtrl.value, s.query);
+              if (sync != null) _searchCtrl.value = sync;
               if (!s.hasQuery) _searchPayload = null;
             }),
           ),

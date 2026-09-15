@@ -543,10 +543,10 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         !listEquals(next.path, _route.path);
     setState(() {
       _route = next;
-      // CMD #1906 — the controller is shared with the header now, so only
-      // write when it actually differs: an identical assignment moves the
-      // caret to the end while the shopper is still typing.
-      if (_searchCtrl.text != next.query) _searchCtrl.text = next.query;
+      // CMD #2026 — THE multi-word bug lived on this line. The rule, and why,
+      // are documented once on [searchBoxSync]: the box is the shopper's.
+      final sync = searchBoxSync(_searchCtrl.value, next.query);
+      if (sync != null) _searchCtrl.value = sync;
       _rows.clear();
       _cursor = null;
       _list = null;

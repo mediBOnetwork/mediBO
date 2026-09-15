@@ -32,8 +32,10 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pharma_b2b/app_state.dart';
 import 'package:pharma_b2b/models/cart_model.dart';
+import 'package:pharma_b2b/models/product_compare.dart';
 import 'package:pharma_b2b/models/product_detail.dart';
 import 'package:pharma_b2b/screens/product_detail_screen.dart';
+import 'package:pharma_b2b/widgets/compact_product_card.dart';
 import 'package:pharma_b2b/theme.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 
@@ -68,6 +70,11 @@ Map<String, dynamic> _payload({
   List<Map<String, dynamic>> similar = const [],
   Map<String, dynamic>? supply,
   Map<String, dynamic>? priceLines,
+  // CMD #2040 — the ONE rail, and the compare block that carries the button's
+  // caption. Both absent by default: a payload older than this change sends
+  // neither and the page must still render.
+  Map<String, dynamic>? saltRail,
+  Map<String, dynamic>? compare,
 }) =>
     {
       'ok': true,
@@ -146,6 +153,8 @@ Map<String, dynamic> _payload({
       ],
       'similar': similar,
       'similar_ready': true,
+      if (saltRail != null) 'salt_rail': saltRail,
+      if (compare != null) 'compare': compare,
       'my_history': {
         'has': hasHistory,
         'label': hasHistory ? 'You ordered 12 in the last 90 days' : '',
@@ -289,6 +298,100 @@ Finder _dangerContainers(WidgetTester tester) => find.byWidgetPredicate((w) =>
     w is Container &&
     w.decoration is BoxDecoration &&
     (w.decoration as BoxDecoration).color == const Color(0xFFFEE2E2));
+
+/// CMD #2040 — `pdp_salt_rail()`'s payload: full storefront card rows, the
+/// exact shape `_sf_cards()` sends, so the page draws real product cards.
+const Map<String, dynamic> _saltRail = {
+  'has': true,
+  'title': 'Similar products',
+  'items': [
+    {
+      'id': 1,
+      'name': 'Zeta Tablet',
+      'company': 'ZETA LABS',
+      'pack_type_label': 'Strip',
+      'pack_qty_label': '10 tablets',
+      'image': '',
+      'availability': {'can_add': true, 'cta_label': 'Add to cart',
+                       'cta_short': 'ADD'},
+      'pricing': {'has_price': true, 'price_display': '₹58.20',
+                  'mrp_display': '₹69.96'},
+    },
+    {
+      'id': 2,
+      'name': 'Alpha Tablet',
+      'company': 'ALPHA LABS',
+      'pack_type_label': 'Strip',
+      'pack_qty_label': '15 tablets',
+      'image': '',
+      'availability': {'can_add': true, 'cta_label': 'Add to cart',
+                       'cta_short': 'ADD'},
+      'pricing': {'has_price': true, 'price_display': '₹61.00',
+                  'mrp_display': '₹72.00'},
+    },
+  ],
+};
+
+/// `pdp_salt_compare()`'s payload — same SHAPE as the tray's table, different
+/// rows, plus the per-column ADD verdict this change added.
+const Map<String, dynamic> _saltTable = {
+  'ok': true,
+  'has': true,
+  'title': 'Compare',
+  'note': 'Other brands with the same composition.',
+  'empty': '',
+  'max': 2,
+  'products': [
+    {'id': '1', 'name': 'Zeta Tablet', 'company': 'ZETA LABS', 'image': '',
+     'is_current': true, 'can_add': true, 'cta_label': 'ADD'},
+    {'id': '2', 'name': 'Alpha Tablet', 'company': 'ALPHA LABS', 'image': '',
+     'is_current': false, 'can_add': false, 'cta_label': 'Notify me'},
+  ],
+  'rows': [
+    {'key': 'company', 'label': 'Company', 'cells': [
+      {'has': true, 'value': 'ZETA LABS', 'tone': 'text'},
+      {'has': true, 'value': 'ALPHA LABS', 'tone': 'text'}]},
+    {'key': 'pack', 'label': 'Pack', 'cells': [
+      {'has': true, 'value': 'strip', 'tone': 'text'},
+      {'has': true, 'value': 'strip', 'tone': 'text'}]},
+    {'key': 'mrp', 'label': 'MRP', 'cells': [
+      {'has': true, 'value': '₹69.96', 'tone': 'text'},
+      {'has': true, 'value': '₹72.00', 'tone': 'text'}]},
+    {'key': 'sale', 'label': 'Sale price', 'cells': [
+      {'has': true, 'value': '₹58.20', 'tone': 'text'},
+      {'has': true, 'value': 'PTR', 'tone': 'text'}]},
+    {'key': 'stock', 'label': 'Availability', 'cells': [
+      {'has': true, 'value': 'Add to cart', 'tone': 'success'},
+      {'has': true, 'value': 'Unavailable', 'tone': 'warning'}]},
+  ],
+};
+
+Future<void> _pumpWithCompare(
+  WidgetTester tester,
+  Map<String, dynamic> payload,
+  Future<ProductCompare> Function(String productId) compareLoader,
+) async {
+  tester.view.physicalSize = const Size(1200, 4000);
+  tester.view.devicePixelRatio = 1.0;
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+
+  await tester.pumpWidget(
+    AppState(
+      cart: CartModel.forTest(),
+      child: MaterialApp(
+        home: ProductDetailScreen(
+          key: ValueKey('pdp-${_pumpSeq++}'),
+          productId: '176026',
+          loader: (_) async => ProductDetail.fromMap(payload),
+          notifyStatusLoader: (_) async => false,
+          compareLoader: compareLoader,
+        ),
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
+}
 
 Future<void> _pump(WidgetTester tester, Map<String, dynamic> payload) async {
   tester.view.physicalSize = const Size(1200, 4000);
@@ -1074,4 +1177,240 @@ void main() {
       expect(d.priceLines.has, isFalse);
     });
   });
+  // ───────────────────────────────────────────────────────────────────────────
+  // CMD #2040 — product page polish. Six things moved, and every one of them
+  // is still the backend's decision.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /// The `card_price` block product_detail() sends inside `pricing` — the SAME
+  /// block every storefront card reads. `price_display` is the whole
+  /// entitlement rule in one string: a rupee amount for an approved pharmacy,
+  /// the literal word otherwise.
+  Map<String, dynamic> cardPrice({
+    String priceDisplay = '₹58.20',
+    bool locked = false,
+    bool hasMrp = true,
+    bool strike = true,
+  }) =>
+      {
+        'has_mrp': hasMrp,
+        'mrp_label': 'MRP',
+        'mrp_display': '₹69.96',
+        'strike_mrp': strike,
+        'sale_label': 'Sale price:',
+        'sale_bg': '#1B7A43',
+        'sale_fg': '#FFFFFF',
+        'price_display': priceDisplay,
+        'price_locked': locked,
+        'has_ptr': false,
+        'has_note': false,
+        'note': '',
+        'locked_title': 'Trade price',
+        'locked_note': 'Register and get approved to see trade prices',
+        'locked_cta': 'Register now',
+        'locked_route': '/register',
+      };
+
+  Map<String, dynamic> withCardPrice(Map<String, dynamic> p,
+      Map<String, dynamic> cp) {
+    (p['pricing'] as Map)['card_price'] = cp;
+    return p;
+  }
+
+  group('CMD #2040 — the price block is the CARD\'s block', () {
+    testWidgets('the sale row is the backend caption plus the value on the '
+        'backend\'s own badge colour', (tester) async {
+      await _pump(
+        tester,
+        withCardPrice(_payload(priceLines: _pricedLines), cardPrice()),
+      );
+
+      // The caption is `card_price.sale_label`, printed verbatim — a page that
+      // typed "Sale price" in Dart would print it without the colon.
+      expect(find.text('Sale price:'), findsOneWidget);
+      // And the value is price_display, on the plate the backend coloured.
+      final badge = tester.widget<Container>(find
+          .ancestor(
+            of: find.descendant(
+                of: find.byKey(const ValueKey('pdp-sale-line')),
+                matching: find.text('₹58.20')),
+            matching: find.byType(Container),
+          )
+          .first);
+      expect((badge.decoration as BoxDecoration).color,
+          const Color(0xFF1B7A43),
+          reason: 'sale_bg is the backend\'s, applied verbatim');
+    });
+
+    testWidgets('an unapproved viewer gets the literal word on the same badge, '
+        'never a number', (tester) async {
+      await _pump(
+        tester,
+        withCardPrice(_payload(priceLines: _quoteLines),
+            cardPrice(priceDisplay: 'PTR', locked: true)),
+      );
+      expect(find.text('PTR'), findsWidgets);
+      expect(find.textContaining('₹58'), findsNothing);
+      // Locked carries the padlock the card carries — the same widget.
+      expect(find.byIcon(Icons.lock_outline_rounded), findsOneWidget);
+    });
+
+    testWidgets('the MRP above it is struck because the BACKEND said strike',
+        (tester) async {
+      await _pump(
+        tester,
+        withCardPrice(_payload(priceLines: _pricedLines), cardPrice()),
+      );
+      final mrp = tester.widget<Text>(find.descendant(
+          of: find.byKey(const ValueKey('pdp-mrp-line')),
+          matching: find.text('₹69.96')));
+      expect(mrp.style?.decoration, TextDecoration.lineThrough);
+    });
+
+    testWidgets('a payload with no card_price keeps the plain sale row',
+        (tester) async {
+      await _pump(tester, _payload(priceLines: _pricedLines));
+      expect(find.text('Sale price:'), findsNothing);
+      expect(find.text('₹58.20'), findsOneWidget);
+    });
+  });
+
+  group('CMD #2040 — Compare is one button and one call', () {
+    testWidgets('the button prints cmp_open verbatim and opens the backend '
+        'table for THIS product', (tester) async {
+      var askedFor = '';
+      await _pumpWithCompare(
+        tester,
+        _payload(compare: const {'open_label': 'Compare', 'max': 3}),
+        (id) async {
+          askedFor = id;
+          return ProductCompare.fromMap(_saltTable);
+        },
+      );
+
+      expect(find.text('Compare'), findsWidgets);
+      await tester.tap(find.byKey(const ValueKey('pdp-compare-button')));
+      await tester.pumpAndSettle();
+
+      expect(askedFor, '176026',
+          reason: 'the app sends the product it is standing on — it never '
+              'picks a set of ids');
+      // The sheet prints the backend's rows, including the two this change
+      // added.
+      expect(find.text('MRP'), findsWidgets);
+      expect(find.text('Sale price'), findsWidgets);
+      expect(find.text('Zeta Tablet'), findsOneWidget);
+    });
+
+    testWidgets('no open_label, no button — the app supplies no caption',
+        (tester) async {
+      await _pump(tester, _payload());
+      expect(find.byKey(const ValueKey('pdp-compare-button')), findsNothing);
+    });
+  });
+
+  group('CMD #2040 — ONE rail, and it is the storefront card', () {
+    testWidgets('salt_rail renders the backend title and real product cards',
+        (tester) async {
+      await _pump(tester, _payload(saltRail: _saltRail));
+      expect(find.text('Similar products'), findsOneWidget);
+      expect(find.byType(CompactProductCard), findsNWidgets(2));
+      expect(find.text('Zeta Tablet'), findsOneWidget);
+    });
+
+    testWidgets('the substitutes rail is GONE — a payload that still carries '
+        'one draws nothing', (tester) async {
+      final p = _payload(saltRail: _saltRail);
+      p['substitutes'] = const {
+        'has': true,
+        'heading': 'Same composition',
+        'note': 'Cheaper brands of this molecule.',
+        'items': [
+          {'id': '9', 'name': 'Legacy Substitute', 'company': 'X'},
+        ],
+      };
+      await _pump(tester, p);
+      expect(find.text('Same composition'), findsNothing,
+          reason: 'two rails off one salt column became one');
+      expect(find.text('Legacy Substitute'), findsNothing);
+    });
+
+    testWidgets('no salt_rail falls back to the pre-#2040 tiles',
+        (tester) async {
+      await _pump(
+        tester,
+        _payload(similar: const [
+          {
+            'id': 293157,
+            'name': 'Alkacel PGF 50mg Injection',
+            'company': 'CELON LABORATORIES LTD',
+            'pack_label': '',
+            'form_chip': 'Vial',
+            'image': '',
+            'mrp_label': '₹2,343.75',
+          },
+        ]),
+      );
+      expect(find.text('Similar products'), findsOneWidget);
+      expect(find.text('Alkacel PGF 50mg Injection'), findsOneWidget);
+    });
+  });
+
+  group('CMD #2040 — Introduction / Uses / Benefits are an accordion', () {
+    List<Map<String, dynamic>> sections() => [
+          {'title': 'Introduction', 'body': 'Intro body', 'accordion': true},
+          {'title': 'Uses', 'body': 'Uses body', 'accordion': true},
+          {'title': 'Side effects', 'body': 'Side effects body'},
+        ];
+
+    testWidgets('collapsed by default: the titles show, the bodies do not',
+        (tester) async {
+      final p = _payload()..['sections'] = sections();
+      await _pump(tester, p);
+      expect(find.text('Introduction'), findsOneWidget);
+      expect(find.text('Uses'), findsOneWidget);
+      expect(find.text('Intro body'), findsNothing);
+      expect(find.text('Uses body'), findsNothing);
+      // A section the backend did NOT flag keeps its own block, body and all.
+      expect(find.text('Side effects body'), findsOneWidget);
+    });
+
+    testWidgets('one open at a time', (tester) async {
+      final p = _payload()..['sections'] = sections();
+      await _pump(tester, p);
+
+      await tester.tap(find.text('Introduction'));
+      await tester.pumpAndSettle();
+      expect(find.text('Intro body'), findsOneWidget);
+
+      await tester.tap(find.text('Uses'));
+      await tester.pumpAndSettle();
+      expect(find.text('Uses body'), findsOneWidget);
+      expect(find.text('Intro body'), findsNothing,
+          reason: 'opening one closes the other');
+
+      // Tapping the open header closes it, so "all closed" stays reachable.
+      await tester.tap(find.text('Uses'));
+      await tester.pumpAndSettle();
+      expect(find.text('Uses body'), findsNothing);
+    });
+  });
+
+  group('CMD #2040 — the Rx class sits beside the pack chip', () {
+    testWidgets('both chips are on ONE row, Rx first', (tester) async {
+      await _pump(tester, _payload(rx: _rxTag));
+      final row = find.ancestor(
+          of: find.text('Rx'), matching: find.byType(Wrap));
+      expect(row, findsOneWidget,
+          reason: 'the tag shares the pack chip\'s row');
+      expect(
+          find.descendant(
+              of: row, matching: find.byKey(const ValueKey('pdp-form-chip'))),
+          findsOneWidget);
+      // Rx is LEFT of the chip.
+      expect(tester.getTopLeft(find.text('Rx')).dx,
+          lessThan(tester.getTopLeft(find.text('Vial')).dx));
+    });
+  });
+
 }

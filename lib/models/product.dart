@@ -743,6 +743,22 @@ class Product {
   /// falls back to a locally-invented 'OTC' — an absent block renders nothing.
   final Map<String, dynamic>? rx;
 
+  /// CMD #2040 — the wishlist block, from `card_wish()`:
+  /// `{has, saved, add_label, remove_label}`. It is what the heart on a card
+  /// reads: `has` is the backend's answer to "is this viewer offered a
+  /// wishlist at all" (the same rule the product page's own control uses), and
+  /// `saved` is the account's row. An absent block is absence — no heart.
+  final Map<String, dynamic>? wish;
+
+  bool get hasWish => wish?['has'] == true;
+  bool get isWishlisted => wish?['saved'] == true;
+  String get wishAddLabel => (wish?['add_label'] ?? '').toString();
+  String get wishRemoveLabel => (wish?['remove_label'] ?? '').toString();
+
+  /// The label for the heart's CURRENT state, which is the one a screen reader
+  /// and a tooltip both want. Backend words either way.
+  String get wishLabel => isWishlisted ? wishRemoveLabel : wishAddLabel;
+
   /// True only when the backend actually sent a class. Absence is absence.
   bool get hasRxBadge => rx?['has'] == true;
   bool get isRx => rx?['is_rx'] == true;
@@ -754,6 +770,7 @@ class Product {
 
   const Product({
     this.rx,
+    this.wish,
     required this.id,
     required this.name,
     required this.genericName,
@@ -819,6 +836,7 @@ class Product {
     hasOffer: hasOffer,
     offerChip: offerChip,
     rx: rx,
+    wish: wish,
   );
 
   /// CHANGE #287 — read one backend label, honouring the difference between a
@@ -882,6 +900,7 @@ class Product {
       hasOffer: map['has_offer'] == true,
       offerChip: (map['offer_chip'] ?? '').toString(),
       rx: (map['rx'] as Map?)?.cast<String, dynamic>(),
+      wish: (map['wish'] as Map?)?.cast<String, dynamic>(),
       // CMD #791 — present on the catalogue grid's rows (storefront_page
       // resolves the whole page's overlays in ONE scan of order_items) and
       // absent everywhere else, which parses to PurchaseOverlay.absent().
@@ -967,6 +986,7 @@ class Product {
       hasOffer: map['has_offer'] == true,
       offerChip: (map['offer_chip'] ?? '').toString(),
       rx: (map['rx'] as Map?)?.cast<String, dynamic>(),
+      wish: (map['wish'] as Map?)?.cast<String, dynamic>(),
     );
   }
 
@@ -998,6 +1018,7 @@ class Product {
     'availability': availability?.toJson(),
     'pricing': pricing?.toJson(),
     'rx': rx,
+    'wish': wish,
   };
 
   factory Product.fromJson(Map<String, dynamic> map) {
@@ -1041,6 +1062,10 @@ class Product {
       availability: Availability.fromMap(map['availability']),
       pricing: Pricing.fromMap(map['pricing']),
       mrpText: (map['mrp_display'] ?? '').toString(),
+      // CMD #2040 — the cached card keeps the heart it was written with, and
+      // the next payload overwrites it. A cache is a render fallback.
+      rx: (map['rx'] as Map?)?.cast<String, dynamic>(),
+      wish: (map['wish'] as Map?)?.cast<String, dynamic>(),
     );
   }
 
@@ -1073,6 +1098,7 @@ class Product {
       schedule: ((m['rx'] as Map?)?['label'] ?? '').toString(),
       requiresPrescription: (m['rx'] as Map?)?['is_rx'] == true,
       rx: (m['rx'] as Map?)?.cast<String, dynamic>(),
+      wish: (m['wish'] as Map?)?.cast<String, dynamic>(),
       discount: 0.0,
     );
   }

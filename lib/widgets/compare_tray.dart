@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../app_state.dart';
 import '../design_tokens.dart';
 import '../models/product_compare.dart';
 
@@ -206,6 +207,12 @@ class CompareSheet extends StatelessWidget {
                         _HeaderRow(products: data.products, colWidth: colWidth),
                         for (final row in data.rows)
                           _BodyRow(row: row, colWidth: colWidth),
+                        // CMD #2040 — the ADD row. It exists only when the
+                        // payload sent a CTA word per column
+                        // (`pdp_salt_compare`), so the tray's own table — which
+                        // sends none — is unchanged and gains no row.
+                        if (data.products.any((p) => p.ctaLabel.isNotEmpty))
+                          _AddRow(products: data.products, colWidth: colWidth),
                       ],
                     ),
                   ),
@@ -309,6 +316,117 @@ class _BodyRow extends StatelessWidget {
                 ),
               ),
           ],
+        ),
+      );
+}
+
+/// CMD #2040 — the last row of the compare table: one cart control per column.
+///
+/// `can_add` and `cta_label` are `storefront_cta()`'s, the same verdict the
+/// card's pill reads, so a pack that is out of stock here is out of stock
+/// there. The control becomes the stepper in place the moment there is a
+/// quantity — the same behaviour, and the same AppState calls, as the card.
+class _AddRow extends StatelessWidget {
+  final List<CompareProduct> products;
+  final double colWidth;
+  const _AddRow({required this.products, required this.colWidth});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        decoration: BoxDecoration(
+          border: Border(top: BorderSide(color: Ds.c.divider)),
+        ),
+        padding: EdgeInsets.symmetric(vertical: Ds.space.x12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(width: 96),
+            for (final p in products)
+              SizedBox(
+                width: colWidth,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: Ds.space.x4),
+                  child: _AddCell(product: p),
+                ),
+              ),
+          ],
+        ),
+      );
+}
+
+class _AddCell extends StatelessWidget {
+  final CompareProduct product;
+  const _AddCell({required this.product});
+
+  @override
+  Widget build(BuildContext context) {
+    // No word from the backend means no control — never a button captioned
+    // here.
+    if (product.ctaLabel.isEmpty) return const SizedBox.shrink();
+
+    final cart = AppState.of(context);
+    final qty = cart.quantityOf(product.id);
+
+    if (qty > 0) {
+      return SizedBox(
+        height: Ds.touch.minTarget,
+        child: Material(
+          color: Ds.c.brand,
+          borderRadius: Ds.r.rChip,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _StepIcon(
+                  icon: Icons.remove_rounded,
+                  onTap: () => cart.decrementId(product.id)),
+              Text('$qty',
+                  style: Ds.t.bodyStrong.copyWith(color: Ds.c.surface)),
+              _StepIcon(
+                  icon: Icons.add_rounded,
+                  onTap: () => cart.incrementId(product.id)),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return SizedBox(
+      height: Ds.touch.minTarget,
+      child: OutlinedButton(
+        onPressed: product.canAdd
+            ? () {
+                if (cart.isPending(product.id)) return;
+                cart.addId(product.id);
+              }
+            : null,
+        style: OutlinedButton.styleFrom(
+          foregroundColor: Ds.c.brand,
+          side: BorderSide(color: Ds.c.brand),
+          padding: EdgeInsets.symmetric(horizontal: Ds.space.x8),
+          shape: RoundedRectangleBorder(borderRadius: Ds.r.rChip),
+        ),
+        child: Text(
+          product.ctaLabel,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+    );
+  }
+}
+
+class _StepIcon extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  const _StepIcon({required this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => InkWell(
+        onTap: onTap,
+        child: SizedBox(
+          width: Ds.touch.minTarget,
+          height: Ds.touch.minTarget,
+          child: Icon(icon, size: Ds.space.x16, color: Ds.c.surface),
         ),
       );
 }

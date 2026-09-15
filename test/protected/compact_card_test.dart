@@ -76,6 +76,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pharma_b2b/app_state.dart';
 import 'package:pharma_b2b/models/cart_model.dart';
 import 'package:pharma_b2b/models/product.dart';
+import 'package:pharma_b2b/models/storefront_p3.dart' show WishlistResult;
 import 'package:pharma_b2b/widgets/compact_product_card.dart';
 import 'package:pharma_b2b/widgets/ds_tone.dart';
 
@@ -1094,4 +1095,179 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   });
+  // ───────────────────────────────────────────────────────────────────────────
+  // CMD #2040 — the corner badge, and the button that is off by default.
+  // ───────────────────────────────────────────────────────────────────────────
+  group('CMD #2040 — the corner is the wishlist heart, not the Rx class', () {
+    Map<String, dynamic> withWish(Map<String, dynamic>? wish) {
+      final row = Map<String, dynamic>.from(_row());
+      row['rx'] = const {
+        'has': true,
+        'is_rx': true,
+        'label': 'Rx',
+        'tone': {'bg': '#FEE2E2', 'fg': '#991B1B'},
+      };
+      if (wish != null) row['wish'] = wish;
+      return row;
+    }
+
+    testWidgets('the Rx chip is never drawn on a card, even when the payload '
+        'still sends the class', (tester) async {
+      await _pump(tester, withWish(null));
+      expect(find.text('Rx'), findsNothing,
+          reason: 'the class is a fact about the PACK — it belongs on the '
+              'pack\'s own page, beside the pack chip');
+    });
+
+    testWidgets('no wish block, no heart — absence is absence', (tester) async {
+      await _pump(tester, withWish(null));
+      expect(find.byIcon(Icons.favorite_border), findsNothing);
+      expect(find.byIcon(Icons.favorite), findsNothing);
+    });
+
+    testWidgets('has:true draws the outline heart', (tester) async {
+      await _pump(tester, withWish(const {
+        'has': true,
+        'saved': false,
+        'add_label': 'Save',
+        'remove_label': 'Saved',
+      }));
+      expect(find.byIcon(Icons.favorite_border), findsOneWidget);
+      expect(find.byIcon(Icons.favorite), findsNothing);
+    });
+
+    testWidgets('saved:true draws the filled heart — the backend decides, not '
+        'a tap this session', (tester) async {
+      await _pump(tester, withWish(const {
+        'has': true,
+        'saved': true,
+        'add_label': 'Save',
+        'remove_label': 'Saved',
+      }));
+      expect(find.byIcon(Icons.favorite), findsOneWidget);
+      expect(find.byIcon(Icons.favorite_border), findsNothing);
+    });
+
+    testWidgets('a refused toggle leaves the heart exactly as it was',
+        (tester) async {
+      final cart = CartModel.forTest();
+      await tester.pumpWidget(
+        AppState(
+          cart: cart,
+          child: MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 200,
+                height: CompactProductCard.extent,
+                child: CompactProductCard(
+                  product: Product.fromMap(withWish(const {
+                    'has': true,
+                    'saved': false,
+                    'add_label': 'Save',
+                    'remove_label': 'Saved',
+                  })),
+                  onTap: () {},
+                  wishlistToggle: (_) async => WishlistResult.failed,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.byIcon(Icons.favorite_border));
+      await tester.pumpAndSettle();
+      expect(find.byIcon(Icons.favorite_border), findsOneWidget,
+          reason: 'there is no optimistic flip: a save the server refused '
+              'must not leave a filled heart behind');
+    });
+
+    testWidgets('the RPC\'s answer is what moves it, toast and all',
+        (tester) async {
+      await tester.pumpWidget(
+        AppState(
+          cart: CartModel.forTest(),
+          child: MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 200,
+                height: CompactProductCard.extent,
+                child: CompactProductCard(
+                  product: Product.fromMap(withWish(const {
+                    'has': true,
+                    'saved': false,
+                    'add_label': 'Save',
+                    'remove_label': 'Saved',
+                  })),
+                  onTap: () {},
+                  wishlistToggle: (_) async => const WishlistResult(
+                      ok: true,
+                      isWishlisted: true,
+                      toast: 'Added to wishlist',
+                      error: ''),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.byIcon(Icons.favorite_border));
+      await tester.pump();
+      await tester.pump();
+      expect(find.byIcon(Icons.favorite), findsOneWidget);
+      expect(find.text('Added to wishlist'), findsOneWidget,
+          reason: 'the toast is the RPC\'s own sentence, printed verbatim');
+      // The toast is a real 4 s timer; drain it so it does not outlive the
+      // test (the same reason RenderLog's debounce is disabled in this suite).
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+    });
+  });
+
+  group('CMD #2040 — Compare is off unless a caller asks for it', () {
+    testWidgets('a storefront card has no Compare button', (tester) async {
+      await _pump(tester, _row());
+      expect(find.byType(CompareButton), findsNothing);
+    });
+
+    testWidgets('given a backend caption and a tap, it draws one',
+        (tester) async {
+      var tapped = 0;
+      await tester.pumpWidget(
+        AppState(
+          cart: CartModel.forTest(),
+          child: MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 200,
+                height: CompactProductCard.extentWithCompare,
+                child: CompactProductCard(
+                  product: Product.fromMap(_row()),
+                  onTap: () {},
+                  compareLabel: 'Compare',
+                  onCompare: () => tapped++,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      expect(find.text('Compare'), findsOneWidget);
+      await tester.tap(find.text('Compare'));
+      await tester.pumpAndSettle();
+      expect(tapped, 1);
+    });
+
+    test('the taller extent is DERIVED from the plain one, never a second '
+        'number', () {
+      expect(
+        CompactProductCard.extentWithCompare,
+        CompactProductCard.extent + 4 + CompactProductCard.compareRowH,
+      );
+      expect(CompactProductCard.compareRowH,
+          greaterThanOrEqualTo(44.0),
+          reason: 'a compact button is still a 44pt tap target');
+      expect(CompactProductCard.wishTapSize, greaterThanOrEqualTo(44.0));
+    });
+  });
+
 }

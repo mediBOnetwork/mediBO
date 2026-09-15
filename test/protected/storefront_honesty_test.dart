@@ -68,11 +68,22 @@ void main() {
   });
 
   test('2 — the product page still has compare', () {
+    // CMD #2040 changed the FORM, not the rule. #746 put compare on the full
+    // product page and nowhere else, and it still is — but the tray (tick
+    // several rows, then press Compare) became one outlined button that opens
+    // the same-salt table directly, so the widgets to look for are the button
+    // and the sheet rather than the checkbox and the bar.
     final src = _read('lib/screens/product_detail_screen.dart');
-    expect(src.contains('CompareCheckbox'), isTrue,
+    expect(src.contains('CompareButton'), isTrue,
         reason: 'compare belongs on the full product page — removing it there '
             'is not what CHANGE #746 asked for');
-    expect(src.contains('CompareBar'), isTrue);
+    expect(src.contains('CompareSheet'), isTrue,
+        reason: 'the button must still open the backend-composed table');
+    // And it is still the ONLY surface that carries it: the shared card takes
+    // the caption as an opt-in parameter, default off (CMD #2040 spec 5).
+    final card = _read('lib/widgets/compact_product_card.dart');
+    expect(card.contains("this.compareLabel = ''"), isTrue,
+        reason: 'a storefront card must not grow a Compare button by default');
   });
 
   testWidgets('3 — an absent cmp_add label draws no tick at all',

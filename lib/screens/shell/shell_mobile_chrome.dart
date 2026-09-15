@@ -44,12 +44,17 @@ class _LocationHeader extends StatelessWidget {
       bottom: false,
       child: Container(
         width: double.infinity,
-        constraints: const BoxConstraints(minHeight: 70),
+        // CMD #2030 — ONE height, and it is the token the scroll-linked band
+        // travels by, so "how tall is the header" and "how far does it move"
+        // are the same number. And ONE side margin: Ds.space.x16, the search
+        // bar's own, so the avatar's left edge and the cart's right edge sit
+        // exactly on the field's edges instead of 4 px inside them.
+        height: Ds.touch.headerBand,
         decoration: const BoxDecoration(
           color: Colors.white,
           border: Border(bottom: BorderSide(color: Brand.border)),
         ),
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+        padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
         // CMD #1947 — a Stack, not a Row. The logo is centred against the
         // HEADER itself, so it stays exactly centred whatever the avatar on the
         // left and the date·zone chip on the right happen to measure. The chip
@@ -227,8 +232,11 @@ class _MobileProfileAvatarState extends State<_MobileProfileAvatar> {
           clipBehavior: Clip.none,
           children: [
         Container(
-          width: 40,
-          height: 40,
+          // CMD #2030 — the tap target is the token minimum (44), and its edge
+          // is the header's own 16 px margin, so it lands on the search bar's
+          // left edge exactly.
+          width: Ds.touch.minTarget,
+          height: Ds.touch.minTarget,
           decoration: BoxDecoration(
             gradient: const LinearGradient(
               begin: Alignment.topLeft,
@@ -391,8 +399,10 @@ class _MobileCartIconState extends State<_MobileCartIcon>
           clipBehavior: Clip.none,
           children: [
             Container(
-              width: 40,
-              height: 40,
+              // CMD #2030 — same token target as the avatar; its right edge is
+              // the search bar's right edge.
+              width: Ds.touch.minTarget,
+              height: Ds.touch.minTarget,
               decoration: BoxDecoration(
                 color: Brand.mint,
                 shape: BoxShape.circle,
@@ -456,133 +466,137 @@ class _MobileCartIconState extends State<_MobileCartIcon>
 
 // ─────────────────────── Cart panel ───────────────────────
 
-// ─── CMD #2019 — the storefront header collapses on scroll ───────────────────
+// ─── CMD #2030 — the header band follows the finger, 1:1 ─────────────────────
 //
-// The phone gives ~70 px of every screen to the header band (profile · logo ·
-// cart). Scrolling the storefront down hands that band back to the products
-// and scrolling up returns it, which is what a floating+snapping SliverAppBar
-// does — done here rather than with a real sliver because the chrome BELOW it
-// is what has to stay pinned, and that chrome changes height with focus (the
+// CMD #2019 gave the band back to the products on scroll, but it did it with a
+// verdict: 12 px of travel in one direction flipped a bool and a 180 ms curve
+// played the rest. So a 20 px drag bumped the whole 56 px band away and a tiny
+// flick popped it back — the header moved further than the finger and at its
+// own speed. #2030 deletes the verdict. The band is now a DISTANCE that IS the
+// scroll delta: down 20 px hides 20 px of it, up 20 px hands 20 px back, in the
+// same frame, with no threshold, no auto-complete and no snap. A fling gets the
+// list's own deceleration for free, because a fling is just more deltas.
+//
+// It is still not a real SliverAppBar, for #2019's reason: the chrome BELOW the
+// band is what must stay pinned, and that chrome changes height with focus (the
 // search bar, the category chip row, and the idle rail that opens under them).
-// A pinned sliver has to be told its height in advance; a widget that sits
-// outside the scroll view does not, and "outside the scroll view" is already
-// the strongest form of pinned there is. So the search bar and the category
-// row never move, and only the band above them animates.
+// A pinned sliver must be told its extent in advance; a widget that sits
+// outside the scroll view need not be, and outside the scroll view is the
+// strongest form of pinned there is. The band shrinks its own height, so the
+// search bar stays exactly under wherever the band currently ends, and the
+// category row stays under that. Nothing reflows: the width never changes.
 //
 // The page's own scrolling is the input: [shellHeaderScroll] reads the deltas
-// that bubble up out of whichever scroll view the storefront is currently
-// showing (home feed, category list or search results) and flips one notifier.
-// A `setState` on the shell would rebuild every page in the IndexedStack on
-// every flick, so the band listens to the notifier by itself.
+// bubbling out of whichever scroll view the storefront is showing (home feed,
+// category list or search results) and moves ONE notifier. A `setState` on the
+// shell would rebuild every page in the IndexedStack on every frame of every
+// flick, so the band listens to the notifier by itself and hands its child
+// through untouched — the header subtree is laid out, never rebuilt.
 
-/// Is the mobile header band currently shown?
-final ValueNotifier<bool> shellHeaderVisible = ValueNotifier<bool>(true);
+/// How many logical pixels of the header band are currently gone: 0 = the whole
+/// band is showing, `Ds.touch.headerBand` = it is entirely off the top. Every
+/// value in between is real — this is a position, not a state.
+final ValueNotifier<double> shellHeaderCollapse = ValueNotifier<double>(0);
 
-/// Below this offset the band is always shown: the top of a page keeps its
-/// full chrome, and a page too short to scroll can never hide it.
-const double _kBandFloor = 80;
+/// Is any of the band still showing? Derived, never stored: a second source of
+/// truth is how a scroll-linked header starts snapping again.
+bool get shellHeaderBandShowing =>
+    shellHeaderCollapse.value < Ds.touch.headerBand;
 
-/// How much uninterrupted travel in one direction flips the band. Small enough
-/// to feel immediate, large enough that a fling's jitter cannot strobe it.
-const double _kBandTravel = 12;
+/// The deepest collapse this session has reached, for the render log: a live
+/// page that reports it has moved the band by N pixels is proof the 1:1 driver
+/// ran, which a screenshot of a header at rest can never be.
+double _bandDeepest = 0;
 
-double _bandAcc = 0;
-
-void _bandSet(bool v) {
-  _bandAcc = 0;
-  if (shellHeaderVisible.value != v) shellHeaderVisible.value = v;
+void _bandSet(double v) {
+  if (shellHeaderCollapse.value == v) return;
+  shellHeaderCollapse.value = v;
+  if (v > _bandDeepest) {
+    _bandDeepest = v;
+    RenderLog.write('c2030_band_px', v.round());
+  }
 }
 
-/// Put the band back and forget the travel that hid it. Setting the notifier
-/// alone would leave the accumulator mid-flick, so the first delta after a tab
-/// switch could hide the header again before the finger had travelled.
-void shellHeaderBandShow() => _bandSet(true);
+/// Put the band back. A new tab, or a tab the band does not belong to, starts
+/// with full chrome.
+void shellHeaderBandShow() => _bandSet(0);
 
-/// Feeds [shellHeaderVisible] from the page's own scrolling. Always returns
-/// false: this listens, it never swallows a notification.
+/// Feeds [shellHeaderCollapse] from the page's own scrolling, 1:1. Always
+/// returns false: this listens, it never swallows a notification.
 bool shellHeaderScroll(ScrollNotification n, bool enabled) {
   if (!enabled) {
-    _bandSet(true);
+    shellHeaderBandShow();
     return false;
   }
   // Horizontal rails (the home feed's carousels, the chip row, the idle rail)
   // scroll constantly and must never move the band.
   if (n.metrics.axis != Axis.vertical) return false;
   if (!n.metrics.hasContentDimensions) return false;
-  if (n.metrics.pixels <= _kBandFloor ||
-      n.metrics.maxScrollExtent <= _kBandFloor) {
-    _bandSet(true);
+  final double h = Ds.touch.headerBand;
+  final double max = n.metrics.maxScrollExtent;
+  // A page with less to scroll than the band is tall can never lose its header:
+  // hiding it would be the only scrolling the page had.
+  if (max <= h) {
+    shellHeaderBandShow();
     return false;
   }
   if (n is! ScrollUpdateNotification) return false;
-  final d = n.scrollDelta ?? 0;
+  final double d = n.scrollDelta ?? 0;
   if (d == 0) return false;
-  if (d.isNegative != _bandAcc.isNegative) _bandAcc = 0;
-  _bandAcc += d;
-  if (_bandAcc >= _kBandTravel) {
-    _bandSet(false);
-  } else if (_bandAcc <= -_kBandTravel) {
-    _bandSet(true);
-  }
+  final double px = n.metrics.pixels;
+  // The last band-height of the list is left alone in the hiding direction.
+  // Collapsing hands the band's height to the viewport, which shortens
+  // maxScrollExtent; at the very end of the list that shortening corrects
+  // `pixels` back, and the correction arrives here as another delta. Freezing
+  // the band over that last stretch is what keeps the two from chasing each
+  // other into a strobe.
+  if (d > 0 && px >= max - h) return false;
+  // 1:1, both directions — and never more of the band hidden than the list has
+  // actually travelled from the top, so the first 56 px of the page scroll the
+  // band away exactly as if it were the first row of content, and arriving back
+  // at the top always arrives wearing the whole header.
+  double cap = px < h ? px : h;
+  if (cap < 0) cap = 0;
+  double v = shellHeaderCollapse.value + d;
+  if (v < 0) v = 0;
+  if (v > cap) v = cap;
+  _bandSet(v);
   return false;
 }
 
-/// The header band, wrapped so it can slide away and come back. [enabled] is
-/// the shell's own verdict — only the customer phone storefront collapses.
+/// The header band, wrapped so it can ride the scroll. [enabled] is the shell's
+/// own verdict — only the customer phone storefront collapses.
 Widget shellCollapsibleBand(bool enabled, Widget child) =>
     enabled ? _CollapsingBand(child: child) : child;
 
-class _CollapsingBand extends StatefulWidget {
+/// Stateless on purpose: there is no animation to own any more. The notifier is
+/// the position, the frame it is set in is the frame it is drawn in.
+class _CollapsingBand extends StatelessWidget {
   const _CollapsingBand({required this.child});
 
   final Widget child;
 
   @override
-  State<_CollapsingBand> createState() => _CollapsingBandState();
-}
-
-class _CollapsingBandState extends State<_CollapsingBand>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 180),
-    value: 1,
-  );
-  late final Animation<double> _size =
-      CurvedAnimation(parent: _c, curve: Curves.easeOutCubic);
-
-  @override
-  void initState() {
-    super.initState();
-    shellHeaderVisible.addListener(_sync);
-  }
-
-  void _sync() {
-    if (!mounted) return;
-    if (shellHeaderVisible.value) {
-      _c.forward();
-    } else {
-      _c.reverse();
-    }
-  }
-
-  @override
-  void dispose() {
-    shellHeaderVisible.removeListener(_sync);
-    _c.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    RenderLog.write('c2019_band', 1);
-    // ClipRect keeps the band's own bottom border from painting outside the
-    // height the transition is currently giving it.
+    RenderLog.write('c2030_band', 1);
+    final double h = Ds.touch.headerBand;
+    // ClipRect keeps the band's own bottom border — and the row that is rising
+    // past the top of it — from painting outside the height it currently has.
     return ClipRect(
-      child: SizeTransition(
-        sizeFactor: _size,
-        alignment: Alignment.topCenter,
-        child: widget.child,
+      child: ValueListenableBuilder<double>(
+        valueListenable: shellHeaderCollapse,
+        // Handed through, not rebuilt: an identical child Widget short-circuits
+        // the element update, so a flick lays the header out and repaints it
+        // without building a single one of its descendants again.
+        child: child,
+        builder: (_, gone, band) => Align(
+          // bottomCenter, so the band RISES: the slice still on screen is its
+          // bottom, exactly as if the row were scrolling off the top of the
+          // list. topCenter would keep it in place and merely shorten it.
+          alignment: Alignment.bottomCenter,
+          heightFactor: h <= 0 ? 1.0 : ((h - gone) / h).clamp(0.0, 1.0),
+          child: band,
+        ),
       ),
     );
   }

@@ -30,6 +30,13 @@ class RegistrationSurface {
   /// the payload an admin needs, so they never share a slot.
   static String role = 'customer';
 
+  /// CMD #2063 — and neither do two PEOPLE. The payload carries the account's
+  /// own name, email, phone and half-typed shop address, so a slot keyed by
+  /// role alone hands the previous customer's identity to the next one who
+  /// signs in on the same phone — and it paints INSTANTLY, which is the whole
+  /// point of the cache. The auth user is part of the address.
+  static String user = '';
+
   static Map<String, dynamic> _p = const {};
   static bool _restored = false;
 
@@ -48,7 +55,7 @@ class RegistrationSurface {
     return Supabase.instance.client.rpc(fn, params: params);
   }
 
-  static String get _key => '$_prefix$role';
+  static String get _key => '$_prefix${role}_${user.isEmpty ? 'anon' : user}';
 
   /// The whole payload, or an empty map when nothing has been seen yet.
   static Map<String, dynamic> get payload => _p;
@@ -84,6 +91,24 @@ class RegistrationSurface {
 
   /// Whether the backend still wants something from this account.
   static bool get needs => _p['needs'] == true;
+
+  /// Point the cache at an account. Called wherever an identity is resolved.
+  ///
+  /// A DIFFERENT auth user than the one whose payload is held drops that
+  /// payload on the spot — in memory, not just on disk — because the form
+  /// hydrates from what is held before any refresh can land. The backend
+  /// draft is NOT touched: it is the account's own, it outlives sign-out by
+  /// design, and it is read back by the refresh that follows.
+  static void identify({required String authUserId, required String role}) {
+    final nextRole = role.isEmpty ? 'customer' : role;
+    if (authUserId != user || nextRole != RegistrationSurface.role) {
+      _p = const {};
+      _restored = false;
+      revision.value++;
+    }
+    user = authUserId;
+    RegistrationSurface.role = nextRole;
+  }
 
   /// Install a payload directly (tests, and the home feed's own block).
   static void seed(Map<String, dynamic> block) {
@@ -172,17 +197,21 @@ class RegistrationSurface {
     await refresh();
   }
 
-  /// Forget everything for this role — used on sign-out.
+  /// Forget what this DEVICE is holding — used on sign-out.
+  ///
+  /// CMD #2063: this used to delete the backend draft too, which contradicts
+  /// the one promise the draft makes ("reopening resumes, even after a
+  /// restart"). Signing out is not submitting. Only the local copy goes; the
+  /// draft is cleared exactly where it is spent, in [submitted].
   static Future<void> clear() async {
     _p = const {};
+    _restored = false;
     revision.value++;
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_key);
     } catch (_) {}
-    try {
-      await _rpc('customer_reg_draft_clear', {'p_context': 'signup'});
-    } catch (_) {}
+    user = '';
   }
 
   @visibleForTesting
@@ -190,5 +219,7 @@ class RegistrationSurface {
     _p = const {};
     _restored = false;
     role = 'customer';
+    user = '';
+    revision.value = 0;
   }
 }

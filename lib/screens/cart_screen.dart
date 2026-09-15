@@ -896,6 +896,16 @@ class _CartScreenState extends State<CartScreen> {
       });
     }
 
+    // CMD #2039 — an unread cart is not an empty cart. Until the first payload
+    // lands, `lines` is empty for the same reason a page is blank before it is
+    // fetched, and drawing the empty state there told the customer their cart
+    // was empty while it was still being read. The skeleton holds the shape of
+    // the summary row and the first rows so the row the backend already sends
+    // ON OPEN has somewhere to land the moment it arrives.
+    if (!cart.hasLoaded && cart.lines.isEmpty) {
+      return const C2039CartSkeleton();
+    }
+
     if (cart.lines.isEmpty) {
       return const _EmptyCart();
     }
@@ -1850,12 +1860,22 @@ class _CartItemCard extends StatelessWidget {
                 // CHANGE #639 — qty_locked comes from cart_render(); the
                 // stepper is dead and tinted danger on the strength of the
                 // backend's flag, never on a local stock check.
+                // CMD #2039 — `qty_text` is the SERVER's number, and between
+                // the tap and the 46 ms reply it is one tap stale. Handing it
+                // to the stepper while the user has an unsent tap outstanding
+                // is what froze the digit: the control re-rendered with the
+                // OLD string every frame until the round trip returned. With a
+                // local tap outstanding the stepper prints that tap — the
+                // customer's own input echoed back, not a backend string
+                // reworded here.
                 _CartStepper(
                   product: p,
                   quantity: cart.quantityOf(p.id),
                   cart: cart,
                   locked: line.qtyLocked,
-                  qtyText: (stepper['qty_text'] ?? '').toString(),
+                  qtyText: cart.hasLocalIntent(p.id)
+                      ? ''
+                      : (stepper['qty_text'] ?? '').toString(),
                 ),
               SizedBox(height: Ds.space.x8),
               C2013RowPrice(price: price),
@@ -3375,6 +3395,80 @@ class C1815KycChip extends StatelessWidget {
           ),
         ],
       ],
+    );
+  }
+}
+
+/// CMD #2039 — the cart while it is still being READ.
+///
+/// The summary row ("Total items / Advance to pay") arrives in the SAME
+/// payload as the items, so the screen must already have a place for it when
+/// that payload lands. This holds the shape — the row across the bottom of the
+/// header block, then a few item rows — so the values drop straight in instead
+/// of the whole page appearing at once after the round trip. It draws no words
+/// at all: a skeleton that guessed at labels would be the app writing copy.
+class C2039CartSkeleton extends StatelessWidget {
+  const C2039CartSkeleton({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    RenderLog.write('c2039_cart_skeleton', '1');
+    return Shimmer(
+      child: ListView(
+        padding: EdgeInsets.fromLTRB(
+            Ds.space.x12, Ds.space.x12, Ds.space.x12, Ds.space.x24),
+        children: [
+          // The summary row's own shape: a label+value pair on each side.
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Flexible(
+                flex: 3,
+                child: SkeletonBox(height: Ds.space.x16, radius: Ds.r.chip),
+              ),
+              SizedBox(width: Ds.space.x24),
+              Flexible(
+                flex: 4,
+                child: SkeletonBox(height: Ds.space.x16, radius: Ds.r.chip),
+              ),
+            ],
+          ),
+          SizedBox(height: Ds.space.x24),
+          for (var i = 0; i < 4; i++) ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SkeletonBox(
+                    width: Ds.space.x48,
+                    height: Ds.space.x48,
+                    radius: Ds.r.card),
+                SizedBox(width: Ds.space.x12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SkeletonBox(height: Ds.space.x12, radius: Ds.r.chip),
+                      SizedBox(height: Ds.space.x8),
+                      FractionallySizedBox(
+                        widthFactor: 0.55,
+                        alignment: Alignment.centerLeft,
+                        child: SkeletonBox(
+                            height: Ds.space.x12, radius: Ds.r.chip),
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(width: Ds.space.x12),
+                SkeletonBox(
+                    width: Ds.touch.minTarget * 2 + Ds.space.x24,
+                    height: Ds.touch.minTarget,
+                    radius: Ds.r.chip),
+              ],
+            ),
+            SizedBox(height: Ds.space.x24),
+          ],
+        ],
+      ),
     );
   }
 }

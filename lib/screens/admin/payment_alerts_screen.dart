@@ -20,6 +20,7 @@ import '../../services/payment_alerts_service.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import 'payment_alert_rules_screen.dart';
+import 'payment_devices_section.dart';
 
 String _s(Object? v) => v == null ? '' : v.toString().trim();
 
@@ -68,6 +69,7 @@ class PaymentAlertsScreen extends StatefulWidget {
   const PaymentAlertsScreen({
     super.key,
     this.rpc,
+    this.devicesRpc,
     this.screenRpc,
     this.setStatusRpc,
     this.isSuperAdmin = false,
@@ -75,6 +77,11 @@ class PaymentAlertsScreen extends StatefulWidget {
 
   /// Injected in tests so the screen is proven against a payload, not a network.
   final PayAlertRpc? rpc;
+
+  /// CMD #2050 — the Devices section's own narrow seam. It is deliberately NOT
+  /// [rpc]: a test that pumps the queue against a queue payload must not have
+  /// that payload answer the device list too.
+  final PayAlertRpc? devicesRpc;
 
   /// CMD #1929's two narrow doors, kept verbatim: the protected suite pumps
   /// this screen through them, and a rewrite that widened the injection point
@@ -248,6 +255,11 @@ class _PaymentAlertsScreenState extends State<PaymentAlertsScreen> {
                 padding: EdgeInsets.only(bottom: Ds.space.x16),
                 child: Text(_s(_payload['count_label']), style: Ds.t.caption),
               ),
+            // CMD #2050 — the Devices section. Nothing fed this queue before
+            // it existed: payment_alert_device had zero rows because no screen
+            // ever paired a phone. Drawn ABOVE the queue so an empty queue is
+            // explained by the thing that causes it.
+            PaymentDevicesSection(rpc: widget.devicesRpc),
             if (filters.isNotEmpty) ...[
               _FilterRow(
                 filters: filters,

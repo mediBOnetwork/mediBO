@@ -615,50 +615,49 @@ class _CartBadgePulseState extends State<_CartBadgePulse>
       );
 }
 
-// ─────────────────── The floating cart pill (CMD #2037) ─────────────────────
+// ───────────────────── The bottom stack (CMD #2051) ─────────────────────────
 
-/// CHANGE #636's floating cart pill, positioned — and CMD #2037's lift.
+/// The storefront's ONE piece of bottom chrome, positioned.
 ///
-/// The update card is an OVERLAY installed from `MaterialApp.builder`, so
-/// nothing inside the shell's own Stack can see it by measuring itself. The
-/// card publishes its MEASURED height ([appUpdateBarHeight], 0 while it is
-/// down) and the pill floats exactly that much higher, so the two never
-/// overlap and the pill sits flat on its usual margin the rest of the time.
+/// #2037 lifted the floating pill by the update card's measured height, which
+/// worked only because the two agreed on a number: the card was an overlay
+/// installed from `MaterialApp.builder` and the pill was `Positioned` inside
+/// the shell's own Stack, so neither could see the other and the offset was
+/// the only thing holding them apart. On the product page — a route pushed
+/// over the shell, with its own Stack and no lift — they did not hold apart at
+/// all.
 ///
-/// Both breakpoints mount this one helper: the mobile Stack and the desktop
-/// Stack drew the same pill with the same reasoning, and a lift that is right
-/// on one of them and missing on the other is the bug this shape prevents.
+/// [StorefrontBottomStack] is one column: the bar, then the pill above it.
+/// Anchored at `bottom: 0` of the shell body, which is the TOP OF THE BOTTOM
+/// NAV, because a Scaffold body ends where its `bottomNavigationBar` begins.
+/// So "flush on the nav" needs no number at all.
 ///
-/// CMD #2043 — and WHICH page floats it is the registry's answer, not a page
-/// number written here. Both call sites used to read `_index == 0`, which was
-/// written when Home was the only storefront surface and was never revisited
-/// when the Catalogue became page 12: a shopper browsing a company or a salt
-/// list had a full cart and no way back to it. `cart_pill` is a column on the
-/// slot row now, so adding a surface is an UPDATE.
+/// CMD #2043 — and WHICH page floats the pill is still the registry's answer,
+/// not a page number written here. Both call sites used to read `_index == 0`,
+/// which was written when Home was the only storefront surface and was never
+/// revisited when the Catalogue became page 12: a shopper browsing a company
+/// or a salt list had a full cart and no way back to it. `cart_pill` is a
+/// column on the slot row, so adding a surface is an UPDATE.
 ///
 /// Until the registry answers, Home alone floats the pill — the same surface
-/// it floated on before this change, so a slow nav fetch can never take a
-/// control away that was already there.
-/// The decision itself lives on [CartPill.floatsOnPage] — a pure function next
-/// to the widget it governs, so the protected suite can hold it down without
-/// booting the shell.
-Widget shellFloatingCartPill(VoidCallback onTap, int page) =>
+/// it floated on before, so a slow nav fetch can never take away a control
+/// that was already there. The decision itself lives on
+/// [CartPill.floatsOnPage], a pure function next to the widget it governs, so
+/// the protected suite can hold it down without booting the shell.
+///
+/// The BAR is not subject to that question: an update is pending on every
+/// storefront surface or on none, so the stack is mounted whatever the page,
+/// and only the pill slot asks the registry.
+Widget shellBottomStack(VoidCallback onTap, int page) =>
     ValueListenableBuilder<List<Map<String, dynamic>>>(
       valueListenable: CustomerNav.value,
-      child: ValueListenableBuilder<double>(
-        valueListenable: appUpdateBarHeight,
-        child: RepaintBoundary(child: CartPill(onTap: onTap)),
-        builder: (_, barH, pill) => Positioned(
-          left: 0,
-          right: 0,
-          // CMD #2043 — the pill floats its own gap above the bottom nav, and
-          // the lists reserve the same number at their end, so "12px above the
-          // bar" and "nothing hidden behind it" are one constant.
-          bottom: CartPill.bottomGap + barH,
-          child: pill!,
+      builder: (_, slots, __) => Positioned(
+        left: 0,
+        right: 0,
+        bottom: 0,
+        child: StorefrontBottomStack(
+          onCartTap: onTap,
+          showPill: CartPill.floatsOnPage(slots, page),
         ),
       ),
-      builder: (_, slots, pill) => CartPill.floatsOnPage(slots, page)
-          ? pill!
-          : const SizedBox.shrink(),
     );

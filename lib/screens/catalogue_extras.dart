@@ -5,7 +5,7 @@ import '../design_tokens.dart';
 import '../models/product.dart';
 import '../utils/render_log.dart';
 import '../utils/toast.dart';
-import '../widgets/cart_pill.dart';
+import '../widgets/bottom_stack.dart';
 import '../widgets/compact_product_card.dart';
 
 /// CHANGE #748 — the three things the Catalogue tab was missing.
@@ -95,10 +95,12 @@ class _CatalogueRecentState extends State<CatalogueRecent> {
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView.builder(
-        // CMD #2043 — room at the end for the floating cart pill.
-        padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x16, Ds.space.x16,
-            Ds.space.x16 + CartPill.bottomInset),
-        itemCount: groups.length + 1,
+        // CMD #2051 — room at the end for the whole bottom stack. The number
+        // is MEASURED (the last row is the spacer), never the pill's height
+        // plus a guess at the update bar's.
+        padding: EdgeInsets.fromLTRB(
+            Ds.space.x16, Ds.space.x16, Ds.space.x16, 0),
+        itemCount: groups.length + 2,
         itemBuilder: (context, i) {
           if (i == 0) {
             return Padding(
@@ -113,6 +115,8 @@ class _CatalogueRecentState extends State<CatalogueRecent> {
               ),
             );
           }
+          // The last row is the bottom stack's own room.
+          if (i == groups.length + 1) return const BottomStackSpacer();
           return _group(_map(groups[i - 1]));
         },
       ),

@@ -34,7 +34,7 @@ import '../models/search_page.dart';
 import '../services/ui_copy.dart';
 import '../url_sync.dart';
 import '../utils/render_log.dart';
-import '../widgets/cart_pill.dart';
+import '../widgets/bottom_stack.dart';
 import '../widgets/catalogue_alphabet_rail.dart';
 import '../widgets/catalogue_landing.dart';
 import '../widgets/catalogue_product_card.dart';
@@ -924,7 +924,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
             onEmptyAction: _onSearchEmptyAction,
           ),
           // CMD #2043 — room at the end for the floating cart pill.
-          SizedBox(height: CartPill.bottomInset),
+          const BottomStackSpacer(),
         ],
       ),
     );
@@ -1027,7 +1027,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         if (home.showTabs) SliverToBoxAdapter(child: _chipRow()),
         SliverToBoxAdapter(child: SizedBox(height: Ds.space.x24)),
         // CMD #2043 — room at the end for the floating cart pill.
-        CartPill.bottomInsetSliver,
+        const BottomStackSliverSpacer(),
       ],
     );
   }
@@ -1110,7 +1110,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
             ),
           ),
         SliverToBoxAdapter(child: _Tail(loading: _loadingMore)),
-        CartPill.bottomInsetSliver,
+        const BottomStackSliverSpacer(),
       ],
     );
 
@@ -1175,7 +1175,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
             onClear: () => _go(_route.copy(filters: const CatFilterState())),
           ),
         ),
-        CartPill.bottomInsetSliver,
+        const BottomStackSliverSpacer(),
       ]);
     }
     // CMD #2044 — CMD #1903's one-row-per-product list is GONE. Every inner
@@ -1238,7 +1238,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
               ),
             ),
           ),
-          CartPill.bottomInsetSliver,
+          const BottomStackSliverSpacer(),
         ],
     );
   }

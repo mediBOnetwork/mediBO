@@ -18,7 +18,7 @@ import '../services/payload_cache.dart';
 import '../theme.dart';
 import '../util.dart';
 import '../utils/render_log.dart';
-import '../widgets/cart_pill.dart';
+import '../widgets/bottom_stack.dart';
 import '../widgets/animations.dart';
 import '../widgets/compact_product_card.dart';
 import '../widgets/product_card_grid.dart';
@@ -843,8 +843,8 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
           onLoadMore: _loadMoreSearch,
           onEmptyAction: _onEmptyAction,
         ),
-        // CMD #2043 — room at the end for the floating cart pill.
-        SizedBox(height: CartPill.bottomInset),
+        // CMD #2051 — room at the end for the whole bottom stack, measured.
+        const BottomStackSpacer(),
       ],
     );
   }

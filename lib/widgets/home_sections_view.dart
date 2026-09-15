@@ -16,7 +16,7 @@ import 'compact_product_card.dart';
 import 'product_card_grid.dart';
 import 'customer_surface_widgets.dart'; // CHANGE #745 — the home chip strip
 import 'product_image.dart';
-import 'update_bar.dart'; // CMD #2037 — appUpdateBarHeight
+import 'bottom_stack.dart'; // CMD #2051 — bottomStackHeight
 
 /// CHANGE #637 — the sectioned customer home feed.
 ///
@@ -133,16 +133,18 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
   /// page at once without either seeing the other's half-applied result.
   final Set<String> _paging = <String>{};
 
-  /// CMD #2037 — how much of the bottom the floating update card is covering.
-  /// The Scaffold already stops this list at the top of the bottom nav, so the
-  /// card sitting ON that nav is the only thing left to scroll clear of. It is
-  /// the card's OWN measured height (0 while it is down), published by
-  /// [appUpdateBarHeight], so this file assumes nothing about how tall it is.
-  double _updateBarClearance = appUpdateBarHeight.value;
+  /// CMD #2051 — how much of the bottom the storefront's bottom chrome is
+  /// covering. The Scaffold already stops this list at the top of the bottom
+  /// nav, so the stack sitting ON that nav (the update bar, and the cart pill
+  /// above it) is the only thing left to scroll clear of. It is the stack's
+  /// OWN measured height (0 while it is down), published by
+  /// [bottomStackHeight], so this file assumes nothing about how tall it is —
+  /// and it is right again the frame after the bar appears or a cart empties.
+  double _updateBarClearance = bottomStackHeight.value;
 
   void _onUpdateBar() {
     if (!mounted) return;
-    setState(() => _updateBarClearance = appUpdateBarHeight.value);
+    setState(() => _updateBarClearance = bottomStackHeight.value);
   }
 
   @override
@@ -175,7 +177,7 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
   void dispose() {
     _payload?.removeListener(_onPayload);
     _payload?.dispose();
-    appUpdateBarHeight.removeListener(_onUpdateBar);
+    bottomStackHeight.removeListener(_onUpdateBar);
     _homeFeedOffset = _scroll.hasClients ? _scroll.offset : _homeFeedOffset;
     _scroll.dispose();
     super.dispose();
@@ -209,7 +211,7 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
   @override
   void initState() {
     super.initState();
-    appUpdateBarHeight.addListener(_onUpdateBar);
+    bottomStackHeight.addListener(_onUpdateBar);
     // Instant paint from the memo, then ALWAYS refetch in the background so a
     // backend change (counts, delivery time, section order) shows on the next
     // open rather than being pinned to a stale cache. Scroll offset survives
@@ -473,11 +475,11 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
         // CHANGE — the feed ends at the footer. The old bottom:96 spacer left a
         // blank band scrolling past the real end of the page.
         //
-        // CMD #2037 — except for whatever the floating update card is covering.
-        // The Scaffold already ends this list at the top of the bottom nav, so
-        // the only thing left to clear is the card sitting ON that nav; the
-        // number is the card's own measured height, 0 while it is down, so the
-        // footer stops exactly at the real end of the page in the normal case.
+        // CMD #2051 — except for whatever the bottom stack is covering. The
+        // Scaffold already ends this list at the top of the bottom nav, so the
+        // only thing left to clear is the chrome sitting ON that nav; the
+        // number is the stack's own measured height, 0 while it is down, so
+        // the footer stops exactly at the real end of the page otherwise.
         padding: EdgeInsets.only(bottom: _updateBarClearance),
         // CHANGE #678a — build two screens ahead of the viewport.
         //

@@ -60,7 +60,7 @@ import 'package:pharma_b2b/screens/catalogue_screen.dart';
 import 'package:pharma_b2b/services/ui_copy.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/widgets/catalogue_alphabet_rail.dart';
-import 'package:pharma_b2b/widgets/product_row_card.dart';
+import 'package:pharma_b2b/widgets/compact_product_card.dart';
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
@@ -452,7 +452,7 @@ void main() {
         'catalogue_home': [_home()],
         'catalogue_list': [_list()],
       }, route: const CatalogueRoute(listKind: 'tab', listKey: 'cold_chain'));
-      expect(find.byType(ProductRowCard), findsOneWidget);
+      expect(find.byType(CompactProductCard), findsOneWidget);
       expect(find.text('Azithral 250mg DT Tablet'), findsOneWidget);
     });
 

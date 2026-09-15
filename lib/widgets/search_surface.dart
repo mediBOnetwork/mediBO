@@ -6,11 +6,12 @@ import 'package:flutter/services.dart';
 import '../data/medicine_repository.dart';
 import '../design_tokens.dart';
 import '../models/search_page.dart';
+import '../utils/toast.dart';
 import '../utils/render_log.dart';
 import 'compact_product_card.dart';
 import '../models/product.dart';
 import '../services/storefront_fast_order.dart';
-import 'product_row_card.dart';
+import 'product_card_grid.dart';
 import 'scan_mic_search_controls.dart';
 
 /// CMD #1906 — the ONE search surface, drawn the same way on Home and on the
@@ -549,8 +550,12 @@ class SearchEmptyView extends StatelessWidget {
 /// The header line, the rows and the load-more control — the whole result
 /// body, so Home and the Catalogue cannot lay the same rows out differently.
 ///
-/// The rows are [ProductRowCard] verbatim: image, name, company, pack, the
-/// struck MRP, `price_display` and ADD.
+/// CMD #2044 — the rows are GONE. The results are the same
+/// [ProductCardGrid] Home draws: the identical card (image with Rx badge,
+/// pack chip inside the image, pack-type chip, ADD, name, company, MRP, sale
+/// price and PTR), in the column count that fits the width — 2 on a phone, 3
+/// on a tablet, 4–5 on a desktop. The count line above it is the backend's
+/// `header_label` ("119 products for \"monticope\"").
 class SearchResultsView extends StatelessWidget {
   const SearchResultsView({
     super.key,
@@ -593,17 +598,12 @@ class SearchResultsView extends StatelessWidget {
                 Ds.space.x16, Ds.space.x8, Ds.space.x16, Ds.space.x12),
             child: Text(payload.headerLabel, style: Ds.t.caption),
           ),
-        ListView.separated(
+        ProductCardGrid(
+          items: payload.items,
           shrinkWrap: shrinkWrap,
           physics: physics ?? const NeverScrollableScrollPhysics(),
           padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-          itemCount: payload.items.length,
-          separatorBuilder: (_, _) => SizedBox(height: Ds.space.x12),
-          itemBuilder: (context, i) => ProductRowCard(
-            key: ValueKey(payload.items[i].id),
-            product: payload.items[i],
-            onTap: () => onOpenProduct(payload.items[i].id),
-          ),
+          onOpen: (p) => onOpenProduct(p.id),
         ),
         SizedBox(height: Ds.space.x16),
         if (payload.paging.hasMore && payload.paging.moreLabel.isNotEmpty)
@@ -640,39 +640,134 @@ class SearchResultsView extends StatelessWidget {
 class SearchResultsSkeleton extends StatelessWidget {
   const SearchResultsSkeleton({super.key, this.rows = 6});
 
+  /// How many CARDS to reserve. The name stayed `rows` so every caller that
+  /// asked for six placeholders still asks for six.
   final int rows;
 
   @override
   Widget build(BuildContext context) => Padding(
         padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-        child: Column(
+        child: ProductCardGridSkeleton(tiles: rows),
+      );
+}
+
+
+// ──────────────────── the focused-and-empty screen (CMD #2044) ─────────────
+
+/// CMD #2044 — what the WHOLE screen shows while the box is focused and empty.
+///
+/// Om: "on tapping search, the screen below goes blank — no Top sellers rail,
+/// no suggestions, no history — until the user types." The rail from CMD #2010
+/// drew itself under the box inside the header; everything below it was the
+/// home feed, shoved off a phone screen by the keyboard. This is the body of
+/// that state, and it is `search_idle()` rendered verbatim: the blocks the
+/// backend sent, in the order it sent them, with its titles, its chips and its
+/// cards. A `kind` this build does not know is SKIPPED, never guessed at — a
+/// fourth block ships as an INSERT.
+class SearchIdleView extends StatelessWidget {
+  const SearchIdleView({
+    super.key,
+    required this.payload,
+    required this.onPickQuery,
+    required this.onOpenProduct,
+    this.onAction,
+    this.loading = false,
+    this.surface = 'unknown',
+  });
+
+  final SearchIdlePayload payload;
+
+  /// A chip is a QUERY: the surface runs `chip.q`, exactly as it arrived.
+  final ValueChanged<String> onPickQuery;
+  final ValueChanged<String> onOpenProduct;
+
+  /// The block's own control — 'clear_recent' today.
+  final ValueChanged<String>? onAction;
+  final bool loading;
+  final String surface;
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading && payload.blocks.isEmpty) {
+      return Padding(
+        padding: EdgeInsets.symmetric(vertical: Ds.space.x16),
+        child: const SearchResultsSkeleton(rows: 4),
+      );
+    }
+    RenderLog.write('c2044_idle_$surface', payload.blocks.length);
+    if (payload.blocks.isEmpty) {
+      return Padding(
+        padding: EdgeInsets.all(Ds.space.x24),
+        child: Text(payload.emptyLabel,
+            key: const Key('c2044_idle_empty'),
+            textAlign: TextAlign.center,
+            style: Ds.t.caption),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final b in payload.blocks) _block(context, b),
+        SizedBox(height: Ds.space.x24),
+      ],
+    );
+  }
+
+  Widget _block(BuildContext context, SearchIdleBlock b) {
+    // Forward compatibility: a block this build cannot draw costs nothing.
+    final body = switch (b.kind) {
+      'recent' || 'suggest' => _chips(b),
+      'rail' => _rail(context, b),
+      _ => null,
+    };
+    if (body == null) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: EdgeInsets.fromLTRB(
+              Ds.space.x16, Ds.space.x16, Ds.space.x16, Ds.space.x8),
+          child: Row(
+            children: [
+              Expanded(child: Text(b.title, style: Ds.t.subtitle)),
+              if (b.actionLabel.isNotEmpty && b.actionKind.isNotEmpty)
+                TextButton(
+                  onPressed: () => onAction?.call(b.actionKind),
+                  style: TextButton.styleFrom(
+                    foregroundColor: Ds.c.brand,
+                    minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget),
+                  ),
+                  child: Text(b.actionLabel),
+                ),
+            ],
+          ),
+        ),
+        body,
+      ],
+    );
+  }
+
+  /// Recent and popular searches are the same control — a query you can tap —
+  /// so they are the same widget. They WRAP rather than scroll sideways: a
+  /// phone must be able to see every one of them without a gesture.
+  Widget _chips(SearchIdleBlock b) => Padding(
+        padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+        child: Wrap(
+          spacing: Ds.space.x8,
+          runSpacing: Ds.space.x8,
           children: [
-            for (int i = 0; i < rows; i++)
-              Padding(
-                padding: EdgeInsets.only(bottom: Ds.space.x12),
-                child: Container(
-                  height: ProductRowCard.rowHeight,
-                  decoration: BoxDecoration(
-                      color: Ds.c.surface, borderRadius: Ds.r.rCard),
-                  padding: EdgeInsets.all(Ds.space.x12),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _bone(ProductRowCard.imageSize, ProductRowCard.imageSize),
-                      SizedBox(width: Ds.space.x12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _bone(double.infinity, Ds.space.x16),
-                            SizedBox(height: Ds.space.x8),
-                            _bone(double.infinity, Ds.space.x12),
-                          ],
-                        ),
-                      ),
-                      SizedBox(width: Ds.space.x12),
-                      _bone(ProductRowCard.priceColW, ProductRowCard.addH),
-                    ],
+            for (final ch in b.chips)
+              ConstrainedBox(
+                constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+                child: ActionChip(
+                  key: ValueKey('c2044_chip_${b.kind}_${ch.q}'),
+                  onPressed: () => onPickQuery(ch.q),
+                  backgroundColor: Ds.c.bg,
+                  side: BorderSide(color: Ds.c.divider),
+                  shape: RoundedRectangleBorder(borderRadius: Ds.r.rChip),
+                  label: Text(
+                    ch.subLabel.isEmpty ? ch.label : '${ch.label} · ${ch.subLabel}',
+                    style: Ds.t.body,
                   ),
                 ),
               ),
@@ -680,12 +775,139 @@ class SearchResultsSkeleton extends StatelessWidget {
         ),
       );
 
-  Widget _bone(double w, double h) => Container(
-        width: w,
-        height: h,
-        decoration:
-            BoxDecoration(color: Ds.c.bg, borderRadius: Ds.r.rChip),
-      );
+  /// The product block: the SAME card every other surface draws, in the same
+  /// grid, so the focused search screen and Home cannot disagree about a price.
+  Widget _rail(BuildContext context, SearchIdleBlock b) {
+    final items = [
+      for (final c in b.items) Product.fromHomeCard(c),
+    ];
+    if (items.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+      child: ProductCardGrid(
+        items: items,
+        onOpen: (p) => onOpenProduct(p.id),
+      ),
+    );
+  }
+}
+
+/// CMD #2044 — the host-side wrapper that puts [SearchIdleView] over the page
+/// while the box is focused with nothing typed.
+///
+/// It is an overlay rather than a replacement on purpose: the page underneath
+/// (the home feed, the catalogue tree) keeps its scroll position and its state,
+/// so dismissing the keyboard puts the shopper back exactly where they were.
+class SearchIdleOverlay extends StatefulWidget {
+  const SearchIdleOverlay({
+    super.key,
+    required this.focusNode,
+    required this.hasQuery,
+    required this.onPickQuery,
+    required this.child,
+    this.repo,
+    this.surface = 'unknown',
+  });
+
+  final FocusNode focusNode;
+  final bool hasQuery;
+
+  /// Runs the chip's own query through the host's normal search path.
+  final ValueChanged<String> onPickQuery;
+  final Widget child;
+  final MedicineRepository? repo;
+  final String surface;
+
+  @override
+  State<SearchIdleOverlay> createState() => _SearchIdleOverlayState();
+}
+
+class _SearchIdleOverlayState extends State<SearchIdleOverlay> {
+  late final MedicineRepository _repo = widget.repo ?? MedicineRepository();
+  SearchIdlePayload _idle = SearchIdlePayload.empty;
+  bool _loading = false;
+  bool _focused = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _focused = widget.focusNode.hasFocus;
+    widget.focusNode.addListener(_onFocus);
+    if (_open) _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant SearchIdleOverlay old) {
+    super.didUpdateWidget(old);
+    // The shopper cleared the box: the idle screen is wanted again, and the
+    // history may have grown since it was last asked for.
+    if (old.hasQuery && !widget.hasQuery && _focused) _load();
+  }
+
+  @override
+  void dispose() {
+    widget.focusNode.removeListener(_onFocus);
+    super.dispose();
+  }
+
+  void _onFocus() {
+    final f = widget.focusNode.hasFocus;
+    if (f == _focused) return;
+    if (mounted) setState(() => _focused = f);
+    if (_open) _load();
+  }
+
+  bool get _open => _focused && !widget.hasQuery;
+
+  Future<void> _load() async {
+    if (_loading) return;
+    setState(() => _loading = true);
+    final p = await _repo.searchIdle();
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      if (p.blocks.isNotEmpty || p.ok) _idle = p;
+    });
+  }
+
+  Future<void> _action(String kind) async {
+    if (kind != 'clear_recent') return;
+    final toast = await _repo.searchRecentClear();
+    if (!mounted) return;
+    if (toast.isNotEmpty) showToast(context, toast);
+    await _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_open) return widget.child;
+    return Stack(
+      children: [
+        widget.child,
+        Positioned.fill(
+          child: Container(
+            color: Ds.c.bg,
+            child: SingleChildScrollView(
+              // The keyboard is up: a shopper dragging the panel means "let me
+              // see the page", so the drag dismisses the box rather than
+              // fighting it.
+              keyboardDismissBehavior:
+                  ScrollViewKeyboardDismissBehavior.onDrag,
+              child: SearchIdleView(
+                payload: _idle,
+                loading: _loading,
+                surface: widget.surface,
+                onPickQuery: widget.onPickQuery,
+                onOpenProduct: (id) =>
+                    Navigator.of(context).pushNamed('/product/$id'),
+                onAction: _action,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 /// Debounces keystrokes into the search. The only client-side behaviour in
@@ -737,7 +959,14 @@ class SearchChrome extends StatefulWidget {
     this.repo,
     this.surface = 'unknown',
     this.minChars = 2,
+    this.idleInBody = false,
   });
+
+  /// CMD #2044 — the host draws the whole focused-and-empty state in the BODY
+  /// ([SearchIdleOverlay]), so the header must not draw the rail a second
+  /// time. Left false the header keeps CMD #2010's rail under the box, which
+  /// is what a host that mounts the chrome on its own still gets.
+  final bool idleInBody;
 
   /// The live `search_page()` answer, when the screen has one. Its filter
   /// groups are what the header draws, so the chips above the list and the
@@ -938,7 +1167,7 @@ class _SearchChromeState extends State<SearchChrome> {
           showSheetGroups: widget.hasQuery && _bar.chipRowOnResults,
           onPick: widget.onFilterPick,
         ),
-        if (_railOpen)
+        if (_railOpen && !widget.idleInBody)
           SearchIdleRail(
             rail: (_chrome ?? p)?.rail ?? SearchRail.empty,
             surface: widget.surface,

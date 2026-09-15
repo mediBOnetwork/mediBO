@@ -628,6 +628,10 @@ void _shellFilterPick(_HomeShellState st, SearchFilterGroup g, SearchOption o) {
 
 Widget _shellSearchHeader(_HomeShellState s, {Widget? trailing}) => SearchChrome(
       surface: 'home',
+      // CMD #2044 — the focused-and-empty state is the whole BODY now
+      // ([SearchIdleOverlay] below the header), so the header stops drawing
+      // the rail on its own and the screen under the box is never blank.
+      idleInBody: true,
       controller: s._searchCtrl,
       focusNode: s._searchFocus,
       payload: s._searchPayload,

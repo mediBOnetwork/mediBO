@@ -43,7 +43,7 @@ import 'package:pharma_b2b/models/cart_model.dart';
 import 'package:pharma_b2b/models/search_page.dart';
 import 'package:pharma_b2b/screens/catalogue_screen.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
-import 'package:pharma_b2b/widgets/product_row_card.dart';
+import 'package:pharma_b2b/widgets/compact_product_card.dart';
 import 'package:pharma_b2b/widgets/search_surface.dart';
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
@@ -271,7 +271,7 @@ void main() {
       );
 
       expect(find.byType(SearchResultsView), findsOneWidget);
-      expect(find.byType(ProductRowCard), findsNWidgets(2));
+      expect(find.byType(CompactProductCard), findsNWidgets(2));
       // The header line is the backend's sentence, printed verbatim.
       expect(find.text('41 matches for "dolo"'), findsOneWidget);
     });

@@ -49,7 +49,7 @@ import 'package:pharma_b2b/models/catalogue.dart';
 import 'package:pharma_b2b/screens/catalogue_screen.dart';
 import 'package:pharma_b2b/services/ui_copy.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
-import 'package:pharma_b2b/widgets/product_row_card.dart';
+import 'package:pharma_b2b/widgets/compact_product_card.dart';
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
@@ -304,7 +304,7 @@ void main() {
       final t = _texts(tester);
       expect(t.where((s) => s == 'Available in your zone (5)').length, 1);
       expect(t.where((s) => s == 'Not available in your zone (295)').length, 1);
-      expect(find.byType(ProductRowCard), findsNWidgets(3));
+      expect(find.byType(CompactProductCard), findsNWidgets(3));
     });
 
     testWidgets('a row the backend gave no divider gets none', (tester) async {
@@ -322,7 +322,7 @@ void main() {
       final t = _texts(tester);
       expect(t.where((s) => s.startsWith('Available in your zone')), isEmpty);
       expect(t.where((s) => s.startsWith('Not available in your zone')), isEmpty);
-      expect(find.byType(ProductRowCard), findsNWidgets(2));
+      expect(find.byType(CompactProductCard), findsNWidgets(2));
     });
   });
 
@@ -381,7 +381,7 @@ void main() {
       // Three cards, three prices — the out-of-zone one is NOT price-less.
       expect(find.text('₹99.00'), findsNWidgets(3));
 
-      final rows = tester.widgetList<ProductRowCard>(find.byType(ProductRowCard)).toList();
+      final rows = tester.widgetList<CompactProductCard>(find.byType(CompactProductCard)).toList();
       final blocked = rows.firstWhere((r) => r.product.id == '201');
       expect(blocked.product.availability?.canAdd, isFalse);
       expect(blocked.product.availability?.note, 'Not available in your zone',
@@ -406,7 +406,7 @@ void main() {
       });
       final t = _texts(tester);
       expect(t.where((s) => s.contains('in your zone')), isEmpty);
-      expect(find.byType(ProductRowCard), findsNWidgets(2));
+      expect(find.byType(CompactProductCard), findsNWidgets(2));
     });
   });
 

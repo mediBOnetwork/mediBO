@@ -13,6 +13,7 @@ import '../utils/render_log.dart';
 import '../theme.dart';
 import 'animations.dart';
 import 'compact_product_card.dart';
+import 'product_card_grid.dart';
 import 'customer_surface_widgets.dart'; // CHANGE #745 — the home chip strip
 import 'product_image.dart';
 import 'update_bar.dart'; // CMD #2037 — appUpdateBarHeight
@@ -1086,12 +1087,11 @@ class _ProductGrid extends StatelessWidget {
 
   const _ProductGrid({required this.section});
 
-  /// The card is 156 wide in the rail; the grid gives it the same room. Two up
-  /// on a phone, more as the window grows — never a hardcoded pixel width.
-  static int columnsFor(double width) {
-    final n = ((width - 32 + 12) / (168.0)).floor();
-    return n.clamp(2, 6);
-  }
+  /// CMD #2044 — the column count is [ProductCardGrid.columnsFor], the one
+  /// rule every product surface now reads. Home's own copy of the formula is
+  /// gone: two definitions of "how many cards fit" is how the feed and the
+  /// search results ended up two different grids.
+  static int columnsFor(double width) => ProductCardGrid.columnsFor(width);
 
   @override
   Widget build(BuildContext context) {
@@ -1111,12 +1111,7 @@ class _ProductGrid extends StatelessWidget {
             // list is the thing that makes a feed feel broken on mobile.
             physics: const NeverScrollableScrollPhysics(),
             padding: EdgeInsets.zero,
-            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: columnsFor(c.maxWidth),
-              mainAxisExtent: CompactProductCard.extent,
-              crossAxisSpacing: 12,
-              mainAxisSpacing: 12,
-            ),
+            gridDelegate: ProductCardGrid.delegateFor(c.maxWidth),
             itemCount: count,
             itemBuilder: (context, i) {
               final p = section.cards[i];

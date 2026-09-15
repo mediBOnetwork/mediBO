@@ -1434,6 +1434,30 @@ class _HomeShellState extends State<HomeShell> {
     );
   }
 
+  /// CMD #2044 — the focused, empty search box fills the screen instead of
+  /// blanking it: `search_idle()`'s own blocks — this shopper's recent
+  /// searches, the catalogue's popular searches and the product cards — drawn
+  /// over the page, which keeps its state underneath. Only the storefront tab
+  /// has a search box, so only it is wrapped.
+  Widget _searchIdleWrap(Widget child) {
+    if (_index != 0) return child;
+    return SearchIdleOverlay(
+      surface: 'home',
+      focusNode: _searchFocus,
+      hasQuery: _search.hasQuery,
+      repo: _repo,
+      onPickQuery: (q) {
+        _searchCtrl.text = q;
+        _searchCtrl.selection =
+            TextSelection.fromPosition(TextPosition(offset: q.length));
+        _handleSearchSubmit(q);
+        // A tapped chip IS an acted-on search, so it is worth remembering.
+        unawaited(_repo.searchRecentAdd(q));
+      },
+      child: child,
+    );
+  }
+
   /// CMD #1906 — one submit handler for both breakpoints. A query REPLACES the
   /// search; clearing the box returns to the browse feed and clears the URL
   /// with it.
@@ -1854,10 +1878,10 @@ class _HomeShellState extends State<HomeShell> {
                 // it; this is the Catalogue's header, verbatim.
                 if (_index == 0) _shellSearchHeader(this),
                 Expanded(
-                  child: IndexedStack(
+                  child: _searchIdleWrap(IndexedStack(
                     index: _index,
                     children: pages,
-                  ),
+                  )),
                 ),
               ],
             )),
@@ -1944,10 +1968,10 @@ class _HomeShellState extends State<HomeShell> {
                     }
                     return false;
                   },
-                  child: IndexedStack(
+                  child: _searchIdleWrap(IndexedStack(
                     index: _index,
                     children: pages,
-                  ),
+                  )),
                 ),
               ),
             ],

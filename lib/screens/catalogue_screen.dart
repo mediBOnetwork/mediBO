@@ -38,7 +38,8 @@ import '../widgets/cart_pill.dart';
 import '../widgets/catalogue_alphabet_rail.dart';
 import '../widgets/catalogue_landing.dart';
 import '../widgets/catalogue_product_card.dart';
-import '../widgets/product_row_card.dart';
+import '../widgets/compact_product_card.dart';
+import '../widgets/product_card_grid.dart';
 import '../widgets/product_image.dart';
 import '../widgets/search_surface.dart';
 import 'catalogue_extras.dart'; // CHANGE #748
@@ -792,6 +793,9 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
           //    There is no second search box in this app any more.
           SearchChrome(
             surface: 'catalogue',
+            // CMD #2044 — the focused, empty box fills the body below
+            // ([SearchIdleOverlay]); the header stops drawing the rail itself.
+            idleInBody: true,
             controller: _searchCtrl,
             focusNode: _searchFocus,
             payload: _searchPayload,
@@ -854,7 +858,27 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
           // would otherwise have to scrape. There is no export widget, no
           // `export` block in catalogue_extras() and no catalogue_export_*
           // RPC left to call. Do not reintroduce one here.
-          Expanded(child: _body()),
+          // CMD #2044 — focused with nothing typed, the body is the backend's
+          // own idle screen (recent searches, popular searches, product
+          // cards) over whatever the shopper was browsing, which keeps its
+          // state underneath.
+          Expanded(
+            child: SearchIdleOverlay(
+              surface: 'catalogue',
+              focusNode: _searchFocus,
+              hasQuery: _route.showsSearch,
+              repo: _repo,
+              onPickQuery: (q) {
+                _searchCtrl.text = q;
+                _searchCtrl.selection = TextSelection.fromPosition(
+                    TextPosition(offset: q.length));
+                _adoptSearch(_route.search.copy(query: q, page: 0),
+                    push: false, replace: true);
+                unawaited(_repo.searchRecentAdd(q));
+              },
+              child: _body(),
+            ),
+          ),
         ],
       ),
     );
@@ -891,7 +915,11 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
             surface: 'catalogue',
             payload: p,
             loadingMore: _searchLoadingMore,
-            onOpenProduct: (id) => Navigator.of(context).pushNamed('/product/$id'),
+            onOpenProduct: (id) {
+              // CMD #2044 — an opened result is an acted-on search.
+              unawaited(_repo.searchRecentAdd(_route.search.query));
+              Navigator.of(context).pushNamed('/product/$id');
+            },
             onLoadMore: _moreSearch,
             onEmptyAction: _onSearchEmptyAction,
           ),
@@ -1150,10 +1178,24 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         CartPill.bottomInsetSliver,
       ]);
     }
-    // CMD #1903 — a product LIST, one row per product, and the same
-    // [ProductRowCard] the search results draw. It is a sliver list, so only
-    // the rows on screen are built and a 5.6-lakh scope costs the same as a
-    // 24-row one on a low-end phone.
+    // CMD #2044 — CMD #1903's one-row-per-product list is GONE. Every inner
+    // page of the catalogue (Company, Salt, Use, Category, the A–Z lists) now
+    // draws the SAME [ProductCardGrid] Home and search draw, so a product
+    // cannot look like two different products depending on how it was reached.
+    //
+    // The zone/group dividers (CMD #1909) survive the change: consecutive rows
+    // that carry no `divider_label` are ONE grid, and a row that carries one
+    // starts a new grid under its heading. The grouping is still the ROW's own
+    // label — no lookahead, no comparison between pages, and nothing decided
+    // here about which group a product belongs to.
+    final groups = <({String label, List<Product> items})>[];
+    for (final r in l.rows) {
+      if (groups.isEmpty || r.dividerLabel.isNotEmpty) {
+        groups.add((label: r.dividerLabel, items: <Product>[r.product]));
+      } else {
+        groups.last.items.add(r.product);
+      }
+    }
     return CustomScrollView(
         controller: _scroll,
         slivers: [
@@ -1162,36 +1204,30 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
           // pinned two rows above it, so printing "SUN PHARMA" again, with
           // "Products from this company" under it, was the same scope said
           // three times before a single product. The breadcrumb is the title.
-          SliverPadding(
-            padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-            sliver: SliverList(
-              delegate: SliverChildBuilderDelegate(
-                // CMD #1909 — the divider is drawn from the ROW's own
-                // `divider_label`, so it costs no lookahead, no grouping pass
-                // and no comparison between pages. An empty label is simply a
-                // row with no header above it.
-                (context, i) => Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (l.rows[i].dividerLabel.isNotEmpty)
-                      _GroupDivider(label: l.rows[i].dividerLabel, first: i == 0),
-                    Padding(
-                      padding: EdgeInsets.only(bottom: Ds.space.x12),
-                      child: ProductRowCard(
-                        product: l.rows[i].product,
-                        addedLabel: _addedLabel,
-                        undoLabel: _undoLabel,
-                        onTap: () => Navigator.of(context)
-                            .pushNamed('/product/${l.rows[i].product.id}'),
-                        onPeek: () => _openPeek(l.rows[i].product),
-                      ),
-                    ),
-                  ],
+          for (int g = 0; g < groups.length; g++) ...[
+            if (groups[g].label.isNotEmpty)
+              SliverToBoxAdapter(
+                child: _GroupDivider(label: groups[g].label, first: g == 0),
+              ),
+            SliverPadding(
+              padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x4,
+                  Ds.space.x16, Ds.space.x16),
+              sliver: SliverGrid(
+                gridDelegate: ProductCardGrid.delegateFor(
+                    MediaQuery.sizeOf(context).width - Ds.space.x32),
+                delegate: SliverChildBuilderDelegate(
+                  (context, i) => CompactProductCard(
+                    key: ValueKey(groups[g].items[i].id),
+                    product: groups[g].items[i],
+                    onTap: () => Navigator.of(context)
+                        .pushNamed('/product/${groups[g].items[i].id}'),
+                    onPeek: () => _openPeek(groups[g].items[i]),
+                  ),
+                  childCount: groups[g].items.length,
                 ),
-                childCount: l.rows.length,
               ),
             ),
-          ),
+          ],
           SliverToBoxAdapter(
             child: Padding(
               padding: EdgeInsets.all(Ds.space.x16),
@@ -1207,12 +1243,10 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
     );
   }
 
-  /// The add toast and its undo word, from the payload the extras call
-  /// returned. Absent means no snackbar — never a sentence written here.
-  String get _addedLabel =>
-      (_extras['added'] is Map ? (_extras['added'] as Map)['label'] : '')?.toString() ?? '';
-  String get _undoLabel =>
-      (_extras['added'] is Map ? (_extras['added'] as Map)['undo_label'] : '')?.toString() ?? '';
+  /// CMD #2044 — the add toast and its undo word used to be printed here for
+  /// ProductRowCard's own ADD. The grid's [CompactProductCard] carries the
+  /// cart RPC's reply itself, so the two getters that read `_extras['added']`
+  /// went with the row card; `peek` is still this screen's, for the long-press.
   String _peek(String k) =>
       (_extras['peek'] is Map ? (_extras['peek'] as Map)[k] : '')?.toString() ?? '';
 }
@@ -1627,10 +1661,7 @@ class _MoreSkeleton extends StatelessWidget {
   const _MoreSkeleton();
 
   @override
-  Widget build(BuildContext context) => SizedBox(
-        height: ProductRowCard.extent,
-        child: const CatalogueCardSkeleton(),
-      );
+  Widget build(BuildContext context) => const CatalogueCardSkeleton();
 }
 
 class _Tail extends StatelessWidget {

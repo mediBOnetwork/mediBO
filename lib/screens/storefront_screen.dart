@@ -21,7 +21,7 @@ import '../utils/render_log.dart';
 import '../widgets/cart_pill.dart';
 import '../widgets/animations.dart';
 import '../widgets/compact_product_card.dart';
-import '../widgets/product_row_card.dart';
+import '../widgets/product_card_grid.dart';
 import '../widgets/search_surface.dart';
 import 'catalogue_extras.dart';
 import '../widgets/recently_viewed_rail.dart';
@@ -818,7 +818,8 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   }
 
   /// CMD #1906 — the search body, identical to the Catalogue's: the backend's
-  /// header line, [ProductRowCard] rows, its Load more, and its empty state.
+  /// header line, its Load more and its empty state. CMD #2044 — and the SAME
+  /// [ProductCardGrid] Home draws, never a list row.
   Widget _searchBody() {
     if (_loadingFirst && _searchPayload == null) {
       return const SearchResultsSkeleton();
@@ -833,8 +834,12 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
           surface: 'home',
           payload: p,
           loadingMore: _searchLoadingMore,
-          onOpenProduct: (id) =>
-              Navigator.of(context).pushNamed('/product/$id'),
+          onOpenProduct: (id) {
+            // CMD #2044 — opening a result is what makes a query worth
+            // remembering; the history is a list of searches, not of typing.
+            unawaited(widget.repo.searchRecentAdd(widget.search.query));
+            Navigator.of(context).pushNamed('/product/$id');
+          },
           onLoadMore: _loadMoreSearch,
           onEmptyAction: _onEmptyAction,
         ),
@@ -1600,59 +1605,17 @@ class _ProductsSection extends StatelessWidget {
         ],
       );
     }
-    // CMD #1903 — SEARCH is a flat list of rows, one per product, in the
-    // backend's own rank order: the closest match first, then the other packs
-    // of the same brand, then similar brands. Browse keeps the grid.
-    if (query.trim().isNotEmpty) {
-      return ListView.separated(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        padding: EdgeInsets.zero,
-        itemCount: items.length,
-        separatorBuilder: (_, __) => SizedBox(height: Ds.space.x12),
-        itemBuilder: (context, i) => ProductRowCard(
-          key: ValueKey(items[i].id),
-          product: items[i],
-          onTap: () =>
-              Navigator.of(context).pushNamed('/product/${items[i].id}'),
-        ),
-      );
-    }
-    return LayoutBuilder(
-      builder: (context, c) {
-        final count = c.maxWidth >= 900 ? 4 : c.maxWidth >= 600 ? 3 : 2;
-        return GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          addAutomaticKeepAlives: false,
-          addRepaintBoundaries: true,
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: count,
-            // CHANGE #636 — the extent is the card's own constant, summed from
-            // the parts it lays out with. The old hardcoded 365 was duplicated
-            // here and in the skeleton, so a taller card overflowed silently.
-            mainAxisExtent: CompactProductCard.extent,
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 14,
-          ),
-          itemCount: items.length,
-          // CHANGE #678a — no entrance animation.
-          //
-          // The first page used to fade-and-slide in on a 30ms-per-card
-          // stagger. Scrolling back up replayed it, so products appeared to
-          // drop in from above every time — the page never looked settled. A
-          // product grid is a list of products; it is painted, not performed.
-          // CHANGE #746 — the card, and nothing on top of it. CMD #410's
-          // compare tick used to ride here in a Stack; a grid of 250 cards is
-          // not where a comparison starts.
-          itemBuilder: (context, i) => CompactProductCard(
-            key: ValueKey(items[i].id),
-            product: items[i],
-            onTap: () =>
-                Navigator.of(context).pushNamed('/product/${items[i].id}'),
-          ),
-        );
-      },
+    // CMD #2044 — CMD #1903's flat ROW list is gone, and so are the three
+    // breakpoints that used to be typed into the browse branch. Search and
+    // browse are the same products, so they are the same card in the same
+    // grid: [ProductCardGrid] measures the card it is laying out and owns the
+    // column count for every surface. The only difference left between the
+    // two is the order the payload arrives in.
+    return Builder(
+      builder: (context) => ProductCardGrid(
+        items: items,
+        onOpen: (p) => Navigator.of(context).pushNamed('/product/${p.id}'),
+      ),
     );
   }
 }
@@ -2144,23 +2107,19 @@ class _SkeletonGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // CMD #2044 — the skeleton reads the SAME delegate the real grid reads, so
+    // the skeleton→content swap cannot move a pixel even after the card or the
+    // column rule changes.
     return Shimmer(
       child: LayoutBuilder(
         builder: (context, c) {
-          final count = c.maxWidth >= 900 ? 4 : c.maxWidth >= 600 ? 3 : 2;
+          final count = ProductCardGrid.columnsFor(c.maxWidth);
           return GridView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
             addAutomaticKeepAlives: false,
             addRepaintBoundaries: true,
-            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: count,
-              // Same extent and spacing as the real grid — the skeleton→content
-              // swap must not move a single pixel.
-              mainAxisExtent: CompactProductCard.extent,
-              crossAxisSpacing: 12,
-              mainAxisSpacing: 14,
-            ),
+            gridDelegate: ProductCardGrid.delegateFor(c.maxWidth),
             itemCount: count * 2,
             itemBuilder: (context, i) => const CompactCardSkeleton(),
           );

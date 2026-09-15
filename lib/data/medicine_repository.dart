@@ -768,6 +768,45 @@ class MedicineRepository {
     return SearchPagePayload.fromMap(m);
   }
 
+  /// CMD #2044 — everything the FOCUSED, empty search box shows: this
+  /// shopper's own recent searches, the catalogue's popular searches and the
+  /// product rail, as ordered blocks. One RPC, rendered verbatim.
+  ///
+  /// A dead call answers [SearchIdlePayload.empty] rather than throwing: the
+  /// idle screen is an offer, and a shopper who is about to type must never be
+  /// shown an error for a panel they did not ask for.
+  Future<SearchIdlePayload> searchIdle() async {
+    try {
+      final res = await _rpc('search_idle');
+      if (res is! Map) return SearchIdlePayload.empty;
+      return SearchIdlePayload.fromMap(Map<String, dynamic>.from(res));
+    } catch (_) {
+      return SearchIdlePayload.empty;
+    }
+  }
+
+  /// Records a search the shopper ACTED on — Enter, or a product opened from
+  /// the results. Not every keystroke: the box searches as you type, and the
+  /// history must be a list of searches, not a log of typing. The retention
+  /// (`search_recent_config.keep_n`) and the normalisation are the backend's.
+  Future<void> searchRecentAdd(String q) async {
+    try {
+      await _rpc('search_recent_add', params: {'p_q': q});
+    } catch (_) {
+      // History is a convenience; a failed write never reaches the shopper.
+    }
+  }
+
+  /// The 'clear_recent' control the recent block carries. Returns the
+  /// backend's own toast, or '' when it said nothing.
+  Future<String> searchRecentClear() async {
+    try {
+      final res = await _rpc('search_recent_clear');
+      if (res is Map) return (res['toast'] ?? '').toString();
+    } catch (_) {}
+    return '';
+  }
+
   static const _kSearchChromeKey = 'search_chrome_v1';
 
   Future<void> _persistSearchChrome(Map<String, dynamic> payload) async {
@@ -987,7 +1026,7 @@ class MedicineRepository {
       } catch (e) {
         // storefront_page failed — fall back to the keyset RPC. It carries
         // neither a counter label nor an availability verdict.
-        _browseRpcError = '${category}:${_short(e)}';
+        _browseRpcError = '$category:${_short(e)}';
         final List<Product> items;
         try {
           items = await _fetchKeysetFallback(

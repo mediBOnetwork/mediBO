@@ -20,7 +20,7 @@
 //      that state the row offers no enabled control.
 //
 //   4. **NO CHIPS IN A LIST.** The brand family is not on this widget in any
-//      state: `ProductRowCard` has no variants parameter to give it one. The
+//      state: `CompactProductCard` has no variants parameter to give it one. The
 //      family arrives only through `product_detail().other_packs`.
 //
 //   5. **The "Other packs" block is the backend's, and it lists the OTHER
@@ -43,7 +43,7 @@ import 'package:pharma_b2b/models/cart_model.dart';
 import 'package:pharma_b2b/models/product.dart';
 import 'package:pharma_b2b/models/product_detail.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
-import 'package:pharma_b2b/widgets/product_row_card.dart';
+import 'package:pharma_b2b/widgets/compact_product_card.dart';
 
 /// One storefront_search_page() item — the exact shape Product.fromMap reads.
 Map<String, dynamic> _row({
@@ -112,8 +112,8 @@ Future<CartModel> _pumpRow(WidgetTester tester, Map<String, dynamic> row) async 
         home: Scaffold(
           body: SizedBox(
             width: 390,
-            height: ProductRowCard.extent,
-            child: ProductRowCard(
+            height: CompactProductCard.extent,
+            child: CompactProductCard(
               product: Product.fromMap(row),
               onTap: () {},
             ),
@@ -138,7 +138,7 @@ Future<void> _pumpList(WidgetTester tester, List<Map<String, dynamic>> rows) asy
           body: ListView.separated(
             itemCount: rows.length,
             separatorBuilder: (_, __) => const SizedBox(height: 12),
-            itemBuilder: (context, i) => ProductRowCard(
+            itemBuilder: (context, i) => CompactProductCard(
               product: Product.fromMap(rows[i]),
               onTap: () {},
             ),

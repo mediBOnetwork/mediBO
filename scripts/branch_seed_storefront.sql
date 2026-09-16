@@ -128,3 +128,20 @@ values
    'CHANGE #698 — the offer closed with nothing to supply; the order ships without the line.',
    'order_substitute_none', 'en', true, 'customer')
 on conflict (event_key) do update set enabled = excluded.enabled;
+
+-- ── 5. dashboard_section, so feature_registry's FK can be satisfied ────────
+-- Empty on a fresh branch, which makes every UPDATE that assigns a feature to
+-- a dashboard section fail the FK on the branch while passing on live — a
+-- migration that is correct reads as broken. These eight are live's own.
+insert into public.dashboard_section (section_key, label_key, sort_order,
+                                      badged_only, show_when_empty, is_active)
+values
+  ('needs_now',      'dashboard_home.section_needs_now',      10, true,  false, true),
+  ('onboarding',     'dashboard_home.section_onboarding',     20, false, false, true),
+  ('field_growth',   'dashboard_home.section_field_growth',   30, false, false, true),
+  ('orders',         'dashboard_home.section_orders',         35, false, false, true),
+  ('delivery',       'dashboard_home.section_delivery',       40, false, false, true),
+  ('money_partners', 'dashboard_home.section_money_partners', 45, false, false, true),
+  ('returns_issues', 'dashboard_home.section_returns_issues', 50, false, false, true),
+  ('my_work',        'dashboard_home.section_my_work',        60, false, false, true)
+on conflict (section_key) do nothing;

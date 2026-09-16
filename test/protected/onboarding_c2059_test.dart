@@ -24,6 +24,15 @@
 //
 //   5. AN EMPTY CACHE SHOWS A FIELD SKELETON, never a lone spinner.
 //
+//   6a. THE HELD PAYLOAD BELONGS TO ONE ACCOUNT (CMD #2063). The surface
+//      carries the signed-in customer's name, email, phone and half-typed shop
+//      address, and the form paints from it BEFORE any refresh can land — so a
+//      slot keyed by role alone handed the previous customer's identity to the
+//      next person to sign in on the same phone. identify() is the only door:
+//      a different auth user drops the held payload on the spot, and signing
+//      out forgets the device copy WITHOUT deleting the account's backend
+//      draft (that draft is what "reopening resumes" means).
+//
 //   6. THE STEP STRIP IS THE PAYLOAD. "Step 1 of 2", each step's name, its
 //      state word and the progress sentence are printed verbatim, in payload
 //      order, and BOTH steps are reachable — the documents step is never
@@ -185,6 +194,75 @@ void main() {
   });
 
   // ── 3/4. The surface seeds the form; the draft outranks the prefill ──────
+  // ── CMD #2063 — one account's payload never opens another's form ────────
+  group('the held payload is addressed to ONE account', () {
+    test('a different auth user drops what is held, in memory', () {
+      RegistrationSurface.identify(authUserId: 'user-a', role: 'customer');
+      RegistrationSurface.seed(_surface(draft: {'pharmacy_name': 'A Medical'}));
+      expect(RegistrationSurface.hasForm, isTrue);
+
+      RegistrationSurface.identify(authUserId: 'user-b', role: 'customer');
+      expect(RegistrationSurface.hasForm, isFalse,
+          reason: "customer B must not open customer A's form");
+      expect(RegistrationSurface.draft, isEmpty);
+      expect(RegistrationSurface.prefill, isEmpty);
+
+      final ctrl = CustomerFormController(formContext: 'signup');
+      addTearDown(ctrl.dispose);
+      expect(ctrl.seedFromSurface(), isFalse,
+          reason: 'nothing is held, so the screen falls back to load()');
+    });
+
+    test('the SAME auth user keeps what is held', () {
+      RegistrationSurface.identify(authUserId: 'user-a', role: 'customer');
+      RegistrationSurface.seed(_surface(draft: {'pharmacy_name': 'A Medical'}));
+      RegistrationSurface.identify(authUserId: 'user-a', role: 'customer');
+      expect(RegistrationSurface.hasForm, isTrue);
+      expect(RegistrationSurface.draft['pharmacy_name'], 'A Medical');
+    });
+
+    test('a role change on the same account also drops it', () {
+      RegistrationSurface.identify(authUserId: 'user-a', role: 'customer');
+      RegistrationSurface.seed(_surface());
+      RegistrationSurface.identify(authUserId: 'user-a', role: 'admin');
+      expect(RegistrationSurface.hasForm, isFalse);
+    });
+
+    test('signing out forgets the DEVICE copy and never deletes the draft',
+        () async {
+      final calls = <String>[];
+      RegistrationSurface.rpcTransport = (fn, params) async {
+        calls.add(fn);
+        return {'ok': true};
+      };
+      RegistrationSurface.identify(authUserId: 'user-a', role: 'customer');
+      RegistrationSurface.seed(_surface(draft: {'pharmacy_name': 'A Medical'}));
+
+      await RegistrationSurface.clear();
+
+      expect(RegistrationSurface.hasForm, isFalse);
+      expect(calls, isEmpty,
+          reason:
+              'customer_reg_draft_clear on sign-out would break "reopening '
+              'resumes, even after restart" — the draft is cleared on SUBMIT');
+    });
+
+    test('submitting IS where the backend draft is cleared', () async {
+      final calls = <String>[];
+      RegistrationSurface.rpcTransport = (fn, params) async {
+        calls.add(fn);
+        return <String, dynamic>{};
+      };
+      RegistrationSurface.identify(authUserId: 'user-a', role: 'customer');
+      RegistrationSurface.seed(_surface(draft: {'pharmacy_name': 'A Medical'}));
+
+      await RegistrationSurface.submitted();
+
+      expect(calls, contains('customer_reg_draft_clear'));
+      expect(RegistrationSurface.draft, isEmpty);
+    });
+  });
+
   group('the form the home feed delivered', () {
     test('adopt() keeps the block; a payload without one changes nothing', () {
       RegistrationSurface.adopt(_surface());

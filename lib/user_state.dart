@@ -536,10 +536,15 @@ class AuthNotifier extends ChangeNotifier {
       _session = next;
       RenderLog.write('auth_role', next.role);
 
-      // CMD #2059 — the registration surface is cached PER ROLE, and this is
-      // the one place a role is known. Warming it here (never awaited) is what
+      // CMD #2059 — the registration surface is cached and this is the one
+      // place an identity is known. Warming it here (never awaited) is what
       // lets /complete-registration open already rendered.
-      RegistrationSurface.role = next.role.isEmpty ? 'customer' : next.role;
+      // CMD #2063 — keyed by the AUTH USER as well as the role: the payload
+      // holds this account's name, email, phone and half-typed address, and
+      // the form paints from it before any refresh lands. A second customer
+      // on the same phone must never open the first one's form.
+      RegistrationSurface.identify(
+          authUserId: next.signedIn ? next.authUserId : '', role: next.role);
       RegistrationSurface.warm().ignore();
       RenderLog.write('c571_surface', next.surfaceName);
       RenderLog.write('c571_can_order', next.canPlaceOrder.toString());
@@ -744,6 +749,11 @@ class AuthNotifier extends ChangeNotifier {
       RenderLog.write('c563_disable_auto', gisDisableAutoSelect() ? 'ok' : 'no_gis');
     } catch (_) {}
     RenderLog.write('auth54_signout', 'scope=local; reason=manual_logout');
+    // CMD #2063 — the registration surface holds this account's identity and
+    // its half-typed shop details, and it paints before any refresh. A device
+    // that changes hands must not keep it. The BACKEND draft stays: it is the
+    // account's own and it is what "reopening resumes" means.
+    await RegistrationSurface.clear();
     await Supabase.instance.client.auth.signOut(scope: SignOutScope.local);
   }
 

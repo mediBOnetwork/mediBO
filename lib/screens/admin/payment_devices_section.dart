@@ -51,7 +51,8 @@ class PaymentDevicesSection extends StatefulWidget {
   State<PaymentDevicesSection> createState() => _PaymentDevicesSectionState();
 }
 
-class _PaymentDevicesSectionState extends State<PaymentDevicesSection> {
+class _PaymentDevicesSectionState extends State<PaymentDevicesSection>
+    with WidgetsBindingObserver {
   Map<String, dynamic> _payload = const {};
   bool _loading = true;
   String _error = '';
@@ -79,6 +80,23 @@ class _PaymentDevicesSectionState extends State<PaymentDevicesSection> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _load();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// CMD #2067 — coming back into the app is the ONE moment the notification
+  /// grant can have changed without this screen being rebuilt. Android's
+  /// settings screen is just one of the ways back; every one of them lands
+  /// here, re-pairs the phone and re-reads the list.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed || !mounted) return;
     _load();
   }
 
@@ -90,6 +108,14 @@ class _PaymentDevicesSectionState extends State<PaymentDevicesSection> {
       final svc = _svc;
       if (svc != null) {
         try {
+          // CMD #2067 — THE fix for "permission granted, still Not paired".
+          // This section had only ever READ the registry. It never started the
+          // listener service, so on a phone that only visited this screen the
+          // backend's package allow-list was never handed to Android (every
+          // notification dropped) and payment_alert_device_register() was
+          // never called (no device row, so the card said Not paired forever).
+          // start() is idempotent and does both, then drains the queue.
+          await svc.start();
           _device = (await svc.readState()).deviceId;
         } catch (_) {
           _device = '';
@@ -151,6 +177,24 @@ class _PaymentDevicesSectionState extends State<PaymentDevicesSection> {
     if (svc == null) return;
     await svc.openSettings();
     if (!mounted) return;
+    // Android's settings screen is a separate task: this returns immediately,
+    // and the real answer arrives on resume (didChangeAppLifecycleState). Ask
+    // once now as well, for the OEMs that return straight away.
+    await svc.syncPairing();
+    if (!mounted) return;
+    await _load();
+  }
+
+  /// CMD #2067 item 4 — the grant is on and Android never started the service.
+  /// The backend is the one that decides this button exists at all: it sends
+  /// pairing.rebind_label only in that state, and sends its wording too.
+  Future<void> _rebind() async {
+    final svc = _svc;
+    if (svc == null) return;
+    setState(() => _busy = _device);
+    await svc.rebind();
+    if (!mounted) return;
+    setState(() => _busy = '');
     await _load();
   }
 
@@ -191,6 +235,7 @@ class _PaymentDevicesSectionState extends State<PaymentDevicesSection> {
           _PairingCard(
             pairing: pairing,
             onOpenSettings: _openSettings,
+            onRebind: _rebind,
           ),
         if (_s(_payload['note']).isNotEmpty)
           Padding(
@@ -232,15 +277,24 @@ class _PaymentDevicesSectionState extends State<PaymentDevicesSection> {
 
 // ── the pairing card ─────────────────────────────────────────────────────────
 class _PairingCard extends StatelessWidget {
-  const _PairingCard({required this.pairing, required this.onOpenSettings});
+  const _PairingCard({
+    required this.pairing,
+    required this.onOpenSettings,
+    required this.onRebind,
+  });
 
   final Map<String, dynamic> pairing;
   final VoidCallback onOpenSettings;
+  final VoidCallback onRebind;
 
   @override
   Widget build(BuildContext context) {
     final tone = _s(pairing['status_tone']);
     final cta = _s(pairing['cta_label']);
+    // Present ONLY while the backend says the grant is on and the listener is
+    // still not running. Its wording is the backend's; its absence is the
+    // backend's too.
+    final rebind = _s(pairing['rebind_label']);
     return Container(
       padding: EdgeInsets.all(Ds.space.x16),
       decoration: BoxDecoration(
@@ -270,8 +324,21 @@ class _PairingCard extends StatelessWidget {
               width: double.infinity,
               height: 48,
               child: FilledButton(
+                key: const Key('c2050_pair_cta'),
                 onPressed: onOpenSettings,
                 child: Text(cta),
+              ),
+            ),
+          ],
+          if (rebind.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x8),
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: OutlinedButton(
+                key: const Key('c2067_rebind_cta'),
+                onPressed: onRebind,
+                child: Text(rebind),
               ),
             ),
           ],
@@ -324,6 +391,15 @@ class _DeviceCard extends StatelessWidget {
                 label: _s(row['status_label']),
                 tone: _s(row['status_tone']),
               ),
+              // CMD #2067 — "Listening: On" is the PERMISSION. This second
+              // chip is whether Android actually started the service, which is
+              // the only thing that decides if a payment is ever heard. Both
+              // captions and both tones are the backend's.
+              if (_s(row['bound_state']).isNotEmpty)
+                _ToneChip(
+                  label: _s(row['bound_state']),
+                  tone: _s(row['bound_tone']),
+                ),
             ],
           ),
           SizedBox(height: Ds.space.x8),

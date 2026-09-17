@@ -129,9 +129,12 @@ Future<void> _pumpFeed(WidgetTester t, Map<String, dynamic> payload,
   await t.pumpAndSettle();
 }
 
+/// CMD #2066 — the bar has no offset of its own any more, so this mounts it
+/// exactly the way the bottom stack does: anchored at the bottom of the body,
+/// and optionally given the fixed slot height the stack hands it.
 Future<void> _pumpUpdateBar(
   WidgetTester t, {
-  double? bottomGap,
+  double? fixedHeight,
   Size size = _phone360,
 }) async {
   t.view.physicalSize = size;
@@ -151,7 +154,7 @@ Future<void> _pumpUpdateBar(
                 actionLabel: 'ZZ-UPDATE-NOW',
                 updatingLabel: 'ZZ-UPDATING',
                 updating: false,
-                bottomGap: bottomGap,
+                fixedHeight: fixedHeight,
                 onUpdate: () {},
               ),
             ),
@@ -321,19 +324,28 @@ void main() {
           of: find.text('ZZ-UPDATE-AVAILABLE'),
           matching: find.byType(DecoratedBox));
       final box = t.getRect(decorated.first);
-      expect(_phone360.height - box.bottom, closeTo(Ds.touch.bottomBarGap, 1),
-          reason: '0 gap: the card rests ON the nav, it does not float above it');
+      // CMD #2066 — no offset of any kind: the bar's bottom edge is the
+      // bottom of whatever it is anchored to, which in the stack is the top
+      // of the bottom nav. It rests ON the nav; it never floats above it.
+      expect(_phone360.height - box.bottom, closeTo(0, 1),
+          reason: 'the bar rests ON the nav, it does not float above it');
     });
 
-    testWidgets('the backend\'s bottom_gap is what is used when it sends one',
+    // CMD #2066 — this used to read "the backend's bottom_gap is what is used
+    // when it sends one". A number the backend can change is a position that
+    // can move, and every position in this chrome is now static: the bar fills
+    // the slot the stack reserved for it, exactly, and `bottom_gap` is ignored
+    // (test/protected/bottom_stack_test.dart proves the payload key no longer
+    // lifts anything).
+    testWidgets('a slot height is EXACT — the bar fills it and never grows',
         (t) async {
-      await _pumpUpdateBar(t, bottomGap: 120);
+      final slot = Ds.touch.listRowMinHeight;
+      await _pumpUpdateBar(t, fixedHeight: slot);
       final decorated = find.ancestor(
           of: find.text('ZZ-UPDATE-AVAILABLE'),
           matching: find.byType(DecoratedBox));
-      expect(_phone360.height - t.getRect(decorated.first).bottom,
-          closeTo(120, 1),
-          reason: 'repositioning the card is an UPDATE, never a deploy');
+      expect(t.getRect(decorated.first).height, closeTo(slot, 0.5),
+          reason: 'a second line at 360 px must not make the chrome taller');
     });
 
     // CMD #2051 — EDGE TO EDGE, and only the top corners are rounded. #2037's
@@ -389,32 +401,35 @@ void main() {
           .contains('boxShadow: Ds.elevation.eUp'), isTrue);
     });
 
-    testWidgets('the card publishes its MEASURED height', (t) async {
-      appUpdateBarHeight.value = 0;
+    // CMD #2066 — this used to read "the card publishes its MEASURED height".
+    // Publishing a height is what made every list on screen re-pad whenever
+    // the bar arrived, a cart emptied or the sentence took a second line. The
+    // bar publishes nothing now: it is one data row tall, always.
+    testWidgets('the bar is one data row tall, and nothing is published',
+        (t) async {
       await _pumpUpdateBar(t);
       await t.pump();
-      expect(appUpdateBarHeight.value,
-          greaterThanOrEqualTo(Ds.touch.listRowMinHeight),
-          reason: 'the pill and the feed clear what the card actually is');
       final decorated = find.ancestor(
           of: find.text('ZZ-UPDATE-AVAILABLE'),
           matching: find.byType(DecoratedBox));
-      // CMD #2051 — the card's own height, and nothing added to it. #2037
-      // published height+x8 because the card carried a step of air above
-      // itself; the air belongs to the bottom stack now, which is the one
-      // thing that knows whether there is a pill up there to put air under.
-      expect(appUpdateBarHeight.value,
-          closeTo(t.getRect(decorated.first).height, 1));
-      appUpdateBarHeight.value = 0;
+      expect(t.getRect(decorated.first).height,
+          greaterThanOrEqualTo(Ds.touch.listRowMinHeight));
+      // No notifier survives for anything to listen to. (The file still
+      // NAMES both of them, in the comment that says why they are gone — so
+      // this looks for the declarations, not for the words.)
+      final src = _src('lib/widgets/update_bar.dart');
+      expect(src.contains('ValueNotifier<double> appUpdateBarHeight'), isFalse);
+      expect(src.contains('ValueNotifier<int> bottomStackMounted'), isFalse);
+      expect(src.contains('class UpdateBarHost'), isFalse,
+          reason: 'one renderer: the reserved slot of the bottom stack');
     });
 
-    test('the cart pill and the home feed both clear the published height', () {
+    test('the cart pill and the home feed both clear the ONE constant', () {
       // CMD #2051 — the pill does not clear the bar by being lifted an agreed
-      // number of pixels any more; it clears it by being ABOVE it in one
-      // column. So what this holds down is that the shell mounts that column
-      // (never a free-floating pill of its own), and that the home feed still
-      // pads by a MEASURED height rather than a constant — the stack's now,
-      // because the stack is what covers the bottom of the screen.
+      // number of pixels; it clears it by being ABOVE it in one column.
+      // CMD #2066 — and the feed pads by that column's CONSTANT height rather
+      // than by a number the column measures and republishes, which is what
+      // made the content above it jump every time the chrome changed shape.
       expect(
           _src('lib/screens/shell/shell_bottom_bars.dart')
               .contains('StorefrontBottomStack('),
@@ -425,8 +440,13 @@ void main() {
           isTrue);
       expect(
           _src('lib/widgets/home_sections_view.dart')
-              .contains('bottomStackHeight.value'),
+              .contains('=> bottomStackHeight'),
           isTrue);
+      // …and it does not listen to it, because there is nothing to hear.
+      expect(
+          _src('lib/widgets/home_sections_view.dart')
+              .contains('bottomStackHeight.addListener'),
+          isFalse);
     });
 
     testWidgets('at 412 px it still fits and the sentence is never clipped away',

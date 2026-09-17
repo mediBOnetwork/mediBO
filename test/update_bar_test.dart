@@ -15,6 +15,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pharma_b2b/design_tokens.dart';
 import 'package:pharma_b2b/services/ui_copy.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
+import 'package:pharma_b2b/widgets/bottom_stack.dart';
 import 'package:pharma_b2b/widgets/update_bar.dart';
 
 const _copy = <String, String>{
@@ -23,11 +24,27 @@ const _copy = <String, String>{
   'update_bar.updating': 'Updating…',
 };
 
-Widget _host(UpdateBarController ctrl) => MaterialApp(
+/// CMD #2066 — the bar has ONE renderer: the reserved slot of the shared
+/// bottom stack, mounted by a shell that has a bottom navigation bar. The
+/// app-level `UpdateBarHost` that used to wrap every route is gone (that is
+/// how the bar reached login, the cart and every pushed page), so this host is
+/// shell-shaped: a Scaffold WITH a nav, and the stack anchored at the bottom
+/// of its body — which is the top of that nav.
+const double _navHeight = 64;
+
+Widget _host() => MaterialApp(
       home: Scaffold(
-        body: UpdateBarHost(
-          controller: ctrl,
-          child: const Center(child: Text('page content')),
+        bottomNavigationBar: const SizedBox(height: _navHeight),
+        body: Stack(
+          children: const [
+            Center(child: Text('page content')),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: StorefrontBottomStack(showPill: false),
+            ),
+          ],
         ),
       ),
     );
@@ -37,10 +54,13 @@ void main() {
     RenderLog.flushEnabled = false;
     UiCopy.debugSet(_copy);
   });
+  // The controller is the app's single long-lived instance now, so each test
+  // has to hand it back the way it found it.
+  tearDown(appUpdateBar.reset);
 
   testWidgets('hidden until shown — the page is untouched', (t) async {
-    final ctrl = UpdateBarController();
-    await t.pumpWidget(_host(ctrl));
+    final ctrl = appUpdateBar;
+    await t.pumpWidget(_host());
 
     expect(find.text('page content'), findsOneWidget);
     expect(find.byType(UpdateBar), findsNothing);
@@ -49,8 +69,8 @@ void main() {
 
   testWidgets('shown: one backend line, one backend pill, no sub-line',
       (t) async {
-    final ctrl = UpdateBarController();
-    await t.pumpWidget(_host(ctrl));
+    final ctrl = appUpdateBar;
+    await t.pumpWidget(_host());
 
     ctrl.show(onUpdate: () {});
     await t.pumpAndSettle();
@@ -67,16 +87,16 @@ void main() {
         of: find.byType(UpdateBar), matching: find.byType(Text));
     expect(texts, findsNWidgets(2));
 
-    // CMD #2028 — the floating pill is ~72 px tall, so the sentence may take a
-    // second line on a narrow phone rather than being clipped to "App u…".
-    // It is still never a paragraph.
+    // CMD #2028/#2066 — the sentence may take a second line on a narrow phone
+    // rather than being clipped to "App u…", and the slot is tall enough for
+    // two. It is still never a paragraph.
     final line = t.widget<Text>(find.text('New update available'));
     expect(line.maxLines, 2);
   });
 
   testWidgets('pinned to the BOTTOM and reflows nothing', (t) async {
-    final ctrl = UpdateBarController();
-    await t.pumpWidget(_host(ctrl));
+    final ctrl = appUpdateBar;
+    await t.pumpWidget(_host());
     final before = t.getCenter(find.text('page content'));
 
     ctrl.show(onUpdate: () {});
@@ -94,9 +114,9 @@ void main() {
 
   testWidgets('tap runs the action once, then the pill locks with the '
       'updating label', (t) async {
-    final ctrl = UpdateBarController();
+    final ctrl = appUpdateBar;
     var taps = 0;
-    await t.pumpWidget(_host(ctrl));
+    await t.pumpWidget(_host());
 
     ctrl.show(onUpdate: () {
       taps++;
@@ -122,8 +142,8 @@ void main() {
   });
 
   testWidgets('chip and pill both clear the 44x44 touch minimum', (t) async {
-    final ctrl = UpdateBarController();
-    await t.pumpWidget(_host(ctrl));
+    final ctrl = appUpdateBar;
+    await t.pumpWidget(_host());
     ctrl.show(onUpdate: () {});
     await t.pumpAndSettle();
 
@@ -153,14 +173,14 @@ void main() {
       t.view.devicePixelRatio = 1.0;
       addTearDown(t.view.reset);
 
-      final ctrl = UpdateBarController();
-      await t.pumpWidget(_host(ctrl));
+      final ctrl = appUpdateBar;
+      await t.pumpWidget(_host());
       ctrl.show(onUpdate: () {});
       await t.pumpAndSettle();
 
       final bar = t.getSize(find.byType(UpdateBar)).width;
-      // CMD #2028 — the pill floats, so the row the sentence competes for is
-      // the bar minus the two side margins, not the whole phone.
+      // The row the sentence competes for is the bar minus its own two side
+      // paddings, not the whole phone.
       final pill = bar - 2 * Ds.space.x16;
       final line = t.getSize(find.text('New update available')).width;
       expect(line, greaterThan(pill * 0.4),
@@ -175,8 +195,8 @@ void main() {
   testWidgets('a missing copy key renders empty, never a Dart fallback',
       (t) async {
     UiCopy.debugSet(const {});
-    final ctrl = UpdateBarController();
-    await t.pumpWidget(_host(ctrl));
+    final ctrl = appUpdateBar;
+    await t.pumpWidget(_host());
     ctrl.show(onUpdate: () {});
     await t.pumpAndSettle();
 

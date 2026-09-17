@@ -1,4 +1,4 @@
-// PROTECTED — CMD #2028, the floating app-update pill.
+// PROTECTED — CMD #2028 / #2066, the app-update bar.
 //
 // See CLAUDE.md: this runs before EVERY deploy and may only be edited by a
 // CHANGE that deliberately changes this behaviour, never to make an unrelated
@@ -12,10 +12,15 @@
 //      backend, never the source. The fixture deliberately uses words no Dart
 //      file could have coined.
 //
-//   2. IT FLOATS, AND THE BACKEND SAYS HOW HIGH. `bottom_gap` lifts the pill
-//      clear of the bottom nav AND the floating cart pill; the pill itself is
-//      inset from both screen edges. A nav that grows is an UPDATE, not a
-//      deploy.
+//   2. IT SITS IN A RESERVED SLOT, ON THE NAV, AND NOWHERE ELSE. CMD #2066
+//      replaced "it floats, and the backend says how high" — `bottom_gap`
+//      lifting the bar clear of the nav and the cart pill — with a column of
+//      fixed boxes. The bar is FLUSH on the top of the bottom nav, exactly one
+//      slot tall however long the sentence is, and `bottom_gap` is IGNORED:
+//      a number the backend can change is a position that can move, and every
+//      position in this chrome is static. It also renders only where a bottom
+//      navigation bar exists — a route pushed over the shell has no edge for
+//      it to sit on and gets no bar.
 //
 //   3. THERE IS NO WAY OUT BUT UPDATING. One button, no Later, no dismiss, no
 //      close icon, no version text. A Play flow that fails or is cancelled
@@ -36,6 +41,7 @@ import 'package:pharma_b2b/design_tokens.dart';
 import 'package:pharma_b2b/services/app_update_feed.dart';
 import 'package:pharma_b2b/services/ui_copy.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
+import 'package:pharma_b2b/widgets/bottom_stack.dart';
 import 'package:pharma_b2b/widgets/update_bar.dart';
 
 /// Backend copy. Nothing here reads like something a Dart file would say.
@@ -59,11 +65,26 @@ const _copy = <String, String>{
   'update_bar.updating': 'FALLBACK UPDATING',
 };
 
-Widget _host(UpdateBarController ctrl) => MaterialApp(
+/// CMD #2066 — the bar has ONE renderer: the reserved slot of the shared
+/// bottom stack, which only a shell with a bottom navigation bar mounts. The
+/// app-level `UpdateBarHost` that wrapped every route is deleted — wrapping
+/// everything is how the bar reached login, the cart and every pushed page.
+const double _navHeight = 64;
+
+Widget _host({bool hasNav = true}) => MaterialApp(
       home: Scaffold(
-        body: UpdateBarHost(
-          controller: ctrl,
-          child: const Center(child: Text('page content')),
+        bottomNavigationBar:
+            hasNav ? const SizedBox(height: _navHeight) : null,
+        body: Stack(
+          children: const [
+            Center(child: Text('page content')),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: StorefrontBottomStack(showPill: false),
+            ),
+          ],
         ),
       ),
     );
@@ -79,12 +100,15 @@ void main() {
     RenderLog.flushEnabled = false;
     UiCopy.debugSet(_copy);
   });
+  // One long-lived controller for the whole app now, so each test hands it
+  // back the way it found it.
+  tearDown(appUpdateBar.reset);
 
   group('the pill prints the backend payload', () {
     testWidgets('sentence and button word are the payload\'s, verbatim',
         (t) async {
-      final ctrl = UpdateBarController();
-      await t.pumpWidget(_host(ctrl));
+      final ctrl = appUpdateBar;
+      await t.pumpWidget(_host());
       ctrl.show(onUpdate: () {}, payload: _payload);
       await t.pumpAndSettle();
 
@@ -96,8 +120,8 @@ void main() {
 
     testWidgets('the updating word is the payload\'s, not ui_copy\'s',
         (t) async {
-      final ctrl = UpdateBarController();
-      await t.pumpWidget(_host(ctrl));
+      final ctrl = appUpdateBar;
+      await t.pumpWidget(_host());
       ctrl.show(onUpdate: ctrl.markUpdating, payload: _payload);
       await t.pumpAndSettle();
 
@@ -110,8 +134,8 @@ void main() {
 
     testWidgets('Android: the download landing swaps to the backend\'s '
         'restarting word', (t) async {
-      final ctrl = UpdateBarController();
-      await t.pumpWidget(_host(ctrl));
+      final ctrl = appUpdateBar;
+      await t.pumpWidget(_host());
       ctrl.show(onUpdate: () {}, payload: _payload);
       await t.pumpAndSettle();
 
@@ -124,8 +148,8 @@ void main() {
 
     testWidgets('no payload → ui_copy, so an unreachable backend still speaks',
         (t) async {
-      final ctrl = UpdateBarController();
-      await t.pumpWidget(_host(ctrl));
+      final ctrl = appUpdateBar;
+      await t.pumpWidget(_host());
       ctrl.show(onUpdate: () {});
       await t.pumpAndSettle();
 
@@ -134,25 +158,45 @@ void main() {
     });
   });
 
-  group('it floats, and the backend says how high', () {
-    testWidgets('bottom_gap lifts the pill clear of the nav and the cart pill',
+  group('it sits in a reserved slot, on the nav', () {
+    testWidgets('flush on the nav — the backend\'s bottom_gap does not lift it',
         (t) async {
       t.view.physicalSize = const Size(412, 900);
       t.view.devicePixelRatio = 1.0;
       addTearDown(t.view.reset);
 
-      final ctrl = UpdateBarController();
-      await t.pumpWidget(_host(ctrl));
+      final ctrl = appUpdateBar;
+      await t.pumpWidget(_host());
       ctrl.show(onUpdate: () {}, payload: _payload);
       await t.pumpAndSettle();
 
       final screen = t.getSize(find.byType(MaterialApp));
-      final pill = t.getRect(find.byType(FilledButton));
-      // The button's bottom edge must sit at least the backend's gap above the
-      // bottom of the screen — that is the whole point of "floating above the
-      // bottom nav and cart pill".
-      expect(screen.height - pill.bottom,
-          greaterThanOrEqualTo(_payload['bottom_gap'] as int));
+      final bar = t.getRect(find.byType(UpdateBar));
+
+      // FLUSH: the bar's bottom edge IS the top of the nav. The fixture
+      // carries `bottom_gap: 128` on purpose — #2066 ignores it, so a backend
+      // number can never move this chrome again.
+      expect(bar.bottom, closeTo(screen.height - _navHeight, 0.5),
+          reason: 'bottom_gap must not lift the bar off the nav');
+      expect(bar.height, closeTo(BottomStackMetrics.slot, 0.5),
+          reason: 'exactly one slot tall, not a height it chose for itself');
+    });
+
+    testWidgets('no bottom nav, no bar — however loud the controller is',
+        (t) async {
+      t.view.physicalSize = const Size(412, 900);
+      t.view.devicePixelRatio = 1.0;
+      addTearDown(t.view.reset);
+
+      final ctrl = appUpdateBar;
+      await t.pumpWidget(_host(hasNav: false));
+      ctrl.show(onUpdate: () {}, payload: _payload);
+      await t.pumpAndSettle();
+
+      expect(ctrl.visible, isTrue);
+      expect(find.byType(UpdateBar), findsNothing,
+          reason: 'a pushed route has no nav for the bar to sit on');
+      expect(find.text('App update available'), findsNothing);
     });
 
     testWidgets('the pill is inset from both screen edges', (t) async {
@@ -160,13 +204,13 @@ void main() {
       t.view.devicePixelRatio = 1.0;
       addTearDown(t.view.reset);
 
-      final ctrl = UpdateBarController();
-      await t.pumpWidget(_host(ctrl));
+      final ctrl = appUpdateBar;
+      await t.pumpWidget(_host());
       ctrl.show(onUpdate: () {}, payload: _payload);
       await t.pumpAndSettle();
 
-      // The host is full-bleed (so it can overlay anything) but the white pill
-      // inside it keeps a margin on each side.
+      // The bar is edge to edge (it is the top surface of the bottom chrome)
+      // and its CONTENT keeps a margin on each side.
       final bar = t.getRect(find.byType(UpdateBar));
       final gear = t.getRect(find.byType(Icon));
       expect(gear.left - bar.left, greaterThanOrEqualTo(Ds.space.x16));
@@ -180,8 +224,8 @@ void main() {
         t.view.devicePixelRatio = 1.0;
         addTearDown(t.view.reset);
 
-        final ctrl = UpdateBarController();
-        await t.pumpWidget(_host(ctrl));
+        final ctrl = appUpdateBar;
+        await t.pumpWidget(_host());
         ctrl.show(onUpdate: () {}, payload: _payload);
         await t.pumpAndSettle();
 
@@ -194,8 +238,8 @@ void main() {
 
   group('there is no way out but updating', () {
     testWidgets('one button, no Later, no dismiss, no version text', (t) async {
-      final ctrl = UpdateBarController();
-      await t.pumpWidget(_host(ctrl));
+      final ctrl = appUpdateBar;
+      await t.pumpWidget(_host());
       ctrl.show(onUpdate: () {}, payload: _payload);
       await t.pumpAndSettle();
 
@@ -219,8 +263,8 @@ void main() {
 
     testWidgets('a cancelled Play flow hands the button back, never the screen',
         (t) async {
-      final ctrl = UpdateBarController();
-      await t.pumpWidget(_host(ctrl));
+      final ctrl = appUpdateBar;
+      await t.pumpWidget(_host());
       ctrl.show(onUpdate: ctrl.markUpdating, payload: _payload);
       await t.pumpAndSettle();
 

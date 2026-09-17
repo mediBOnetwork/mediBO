@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'boot_env.dart' as boot;
-import 'widgets/update_bar.dart';
 import 'widgets/test_mode_banner.dart';
 import 'services/test_session.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -764,25 +763,26 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
             builder: (context, child) => _NoteViewport(
               child: DefaultTextStyle.merge(
               style: const TextStyle(decoration: TextDecoration.none, decorationColor: Color(0x00000000)),
-              // CHANGE #286 — the slim update bar lives here, above every
-              // route, so it can sit over the bottom nav and the floating cart
-              // pill without any screen knowing about it. It overlays: it
-              // reflows nothing and it only takes taps inside its own bar.
               // CHANGE #573 — the TEST MODE strip sits above every route of
-              // every role, for the same reason the update bar does: Om walks
-              // the flow from five different logins and none of those screens
-              // should have to know test mode exists.
+              // every role: Om walks the flow from five different logins and
+              // none of those screens should have to know test mode exists.
+              //
+              // CMD #2066 — the update bar is NOT here any more. #286 wrapped
+              // the whole app in `UpdateBarHost` so the bar could float over
+              // the bottom nav without any screen knowing about it, and that
+              // is precisely how it reached login, the cart, the checkout and
+              // every pushed route — surfaces with no nav for it to sit on and
+              // no room reserved for it. It now renders in exactly one place:
+              // the reserved slot of the shared `StorefrontBottomStack`, which
+              // only a shell with a visible bottom navigation bar mounts.
               child: TestModeBannerHost(
-                child: UpdateBarHost(
-                  controller: VersionWatcher.instance.updateBar,
-                  // CHANGE #1149 — the reconnecting strip sits above every
-                  // route of every role and never blocks the page under it:
-                  // the cached payload stays visible while the backend is out.
-                  child: Column(children: [
-                    const ReconnectingBanner(),
-                    Expanded(child: child!),
-                  ]),
-                ),
+                // CHANGE #1149 — the reconnecting strip sits above every
+                // route of every role and never blocks the page under it:
+                // the cached payload stays visible while the backend is out.
+                child: Column(children: [
+                  const ReconnectingBanner(),
+                  Expanded(child: child!),
+                ]),
               ),
             ),
             ),

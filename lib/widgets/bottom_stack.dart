@@ -1,45 +1,38 @@
-// CMD #2051 — ONE bottom stack.
+// CMD #2066 — ONE bottom stack, and every position in it is STATIC.
 //
-// WHAT THIS IS
-// Before this file the update card and the floating cart pill were two
-// independent overlays that both anchored themselves to the bottom of the
-// screen and neither of which could see the other:
+// WHAT CHANGED, AND WHY
+// CMD #2051 put the update bar and the floating cart pill into one column so
+// they could not cover each other. That fixed the overlap and left a second
+// bug in place: the column MEASURED itself and published its height, so every
+// list on screen re-padded whenever the bar arrived, whenever a cart emptied,
+// and whenever the update sentence took a second line at 360 px. The chrome
+// was one anchor but it still breathed, and the content above it jumped each
+// time it did.
 //
-//   • the card was installed from `MaterialApp.builder`, so it painted OVER
-//     everything the shell drew — including the pill, on Home and on the
-//     Catalogue;
-//   • the pill was `Positioned` inside each screen's own Stack, lifted by the
-//     card's published height on the shell and NOT lifted at all on the
-//     product page, where the two therefore overlapped and the pill's edges
-//     were clipped by the page's own Stack.
-//
-// Two anchors for one strip of chrome is the bug. This is the one anchor:
+// Nothing here is measured any more. The stack is three fixed boxes:
 //
 //   ┌───────────────────────────────────────────────┐
-//   │            ( ●● ) 3 items │ View cart  ›       │   ← the pill, floating
-//   ├───────────────────────────────────────────────┤     one step of air above
-//   │  (⚙)  App update available     [ Update Now ] │   ← the bar, FLUSH on the
-//   ╞═══════════════════════════════════════════════╡     nav, full width
-//   │   Home      Orders      Bulk      Cart        │   ← the bottom nav
+//   │            ( ●● ) 3 items │ View cart  ›       │  ← pill slot   56
+//   │                                               │  ← gap         16
+//   │  (⚙)  App update available     [ Update Now ] │  ← bar slot    56
+//   ╞═══════════════════════════════════════════════╡
+//   │   Home      Orders      Bulk      Cart        │  ← the bottom nav
 //   └───────────────────────────────────────────────┘
 //
-// Bottom-up: nav, bar, pill. It is a COLUMN, so the order is the layout — the
-// bar cannot cover the pill because the pill is not behind it, and either one
-// disappearing closes its own gap without anybody recomputing an offset.
+// The bar slot is ALWAYS reserved. No update pending means an empty
+// transparent box of exactly the same height — so the pill above it sits at
+// one height for the life of the app and never moves, and the padding every
+// scrolling page reserves ([bottomStackHeight]) is a CONSTANT that no payload,
+// no cart write and no line-wrap can change.
 //
-// It is mounted at `bottom: 0` of each storefront surface's own Stack. Inside
-// the shell that point is the TOP OF THE BOTTOM NAV (a Scaffold body ends
-// where its `bottomNavigationBar` begins), which is what makes "flush on the
-// nav" a fact of the layout rather than a number that has to be kept equal to
-// the nav's height. On a route pushed over the shell (the product page) there
-// is no nav and the stack sits on the safe-area inset instead.
-//
-// HOW EVERY SCROLLING PAGE GETS OUT OF ITS WAY
-// The stack MEASURES itself and publishes the total to [bottomStackHeight];
-// [BottomStackSpacer] (and its sliver twin) is that number as a box at the end
-// of a list. So "the last card is never under the chrome" is one measurement
-// read in one place, and it is right again the frame after the bar appears or
-// disappears — no screen holds its own copy of how tall the chrome is.
+// WHERE THE BAR RENDERS — THE SHELL ANSWERS, NOT A LIST OF SCREEN NAMES
+// The bar belongs on top of a bottom navigation bar, which is the only place
+// it has an edge to sit on. So the stack asks the Scaffold it is mounted in
+// whether that Scaffold shows one ([bottomNavVisible]): a shell with tabs —
+// whichever tabs that user type has — renders the bar, and a route pushed over
+// it (product page, cart, checkout, login) does not. The pill is not subject
+// to that question: it still floats on a pushed route, at the same height,
+// because its slot is above a bar slot that is reserved either way.
 //
 // ZERO STYLE LITERALS, ZERO DART COPY. The geometry is the `Ds` token layer
 // (`listRowMinHeight` is the 56 both rows are tall, `space.x16` is the air
@@ -48,211 +41,149 @@
 
 import 'package:flutter/material.dart';
 
-import '../app_state.dart';
 import '../design_tokens.dart';
 import 'cart_pill.dart';
 import 'update_bar.dart';
 
-/// How much of the bottom of the screen the whole stack is covering, in
-/// logical pixels, measured from the top of the bottom nav upwards.
-///
-/// MEASURED, never assumed: at 360 px the update sentence is allowed a second
-/// line, and whether the pill is there at all is the cart payload's answer, so
-/// nothing may compute this from constants. 0 means the chrome is down and a
-/// list ends exactly where the page ends.
-final ValueNotifier<double> bottomStackHeight = ValueNotifier<double>(0);
+/// The two reserved boxes, by name, so the protected suite can measure the
+/// SLOTS rather than whatever the pill inside one happens to have scaled to.
+const Key kPillSlotKey = Key('bottom_stack_pill_slot');
+const Key kBarSlotKey = Key('bottom_stack_bar_slot');
 
-/// The one bottom stack: nav (already there), then the update bar, then the
-/// cart pill.
-class StorefrontBottomStack extends StatefulWidget {
+/// The bottom stack's geometry, in one place, as tokens.
+///
+/// Every one of these is a constant for the life of a frame: that is the whole
+/// point of #2066. A screen that needs to know how much room the chrome takes
+/// reads [height] — it is never told a number twice and never has to listen
+/// for one to change.
+class BottomStackMetrics {
+  const BottomStackMetrics._();
+
+  /// The update-bar slot. Always reserved, whether or not an update is
+  /// pending, so the pill above it cannot move when one arrives.
+  static double get slot => Ds.touch.listRowMinHeight;
+
+  /// The air between the pill and the bar slot.
+  static double get gap => Ds.space.x16;
+
+  /// The pill slot. The pill itself is one data row tall and animates in and
+  /// out INSIDE this box, so an empty cart leaves the box exactly as tall.
+  static double get pill => CartPill.kHeight;
+
+  /// Pill + gap + slot: how much of the bottom the chrome covers, measured up
+  /// from the top of the bottom nav.
+  static double get height => pill + gap + slot;
+}
+
+/// How much of the bottom of the screen the whole stack covers, in logical
+/// pixels, measured from the top of the bottom nav upwards.
+///
+/// A CONSTANT (#2066). It was a measured `ValueNotifier` in #2051, which is
+/// what made the content above it jump every time the chrome changed shape.
+double get bottomStackHeight => BottomStackMetrics.height;
+
+/// Does the Scaffold this widget is mounted in show a bottom navigation bar?
+///
+/// This is the shell answering for itself. A shell with tabs — customer,
+/// supplier, partner, admin, delivery, whichever ones that user type has —
+/// has a `bottomNavigationBar` and its body therefore ends at the top of it.
+/// A route pushed over the shell, a full-screen panel, a desktop layout: no
+/// nav, and the body runs to the bottom of the screen.
+///
+/// Deliberately NOT a list of screen names, and deliberately not a flag each
+/// call site passes in: the two ways the old code got this wrong were a screen
+/// index written in Dart and an offset two widgets had to keep equal.
+bool bottomNavVisible(BuildContext context) =>
+    Scaffold.maybeOf(context)?.widget.bottomNavigationBar != null;
+
+/// The one bottom stack: nav (already there), then the update-bar slot, then
+/// the cart-pill slot.
+///
+/// Mounted at `bottom: 0` of a surface's own Stack. Inside a shell that point
+/// is the TOP OF THE BOTTOM NAV (a Scaffold body ends where its
+/// `bottomNavigationBar` begins), which is what makes "flush on the nav" a
+/// fact of the layout rather than a number kept equal to the nav's height. On
+/// a route pushed over the shell there is no nav and the stack clears the
+/// system gesture area itself.
+class StorefrontBottomStack extends StatelessWidget {
   const StorefrontBottomStack({
     super.key,
-    required this.onCartTap,
+    this.onCartTap,
     this.showPill = true,
-    this.overNav = true,
   });
 
   /// Opening the cart. The shell opens its own panel; a pushed route asks the
-  /// shell for it ([requestOpenCart]).
-  final VoidCallback onCartTap;
+  /// shell for it ([requestOpenCart]). Null on a surface that has no cart at
+  /// all (the supplier shell), which is also a surface that floats no pill.
+  final VoidCallback? onCartTap;
 
-  /// Does THIS surface float the pill? The answer is the customer-nav
+  /// Does THIS surface DRAW the pill? The answer is the customer-nav
   /// registry's ([CartPill.floatsOnPage]) on the shell, and plainly true on a
   /// product page. Whether the pill then has anything to say is still the cart
-  /// payload's own answer — this only says the surface allows it.
+  /// payload's own answer.
+  ///
+  /// It does NOT change the geometry: the slot is reserved either way, because
+  /// "content never jumps" has to be true of a page that never floats a pill
+  /// as well as of one that does.
   final bool showPill;
-
-  /// True when the stack is mounted inside a Scaffold that has a bottom nav:
-  /// the body already ends at the top of the nav, so the stack needs no inset
-  /// of its own. False on a pushed route, where it clears the system gesture
-  /// area itself.
-  final bool overNav;
-
-  @override
-  State<StorefrontBottomStack> createState() => _StorefrontBottomStackState();
-}
-
-class _StorefrontBottomStackState extends State<StorefrontBottomStack> {
-  /// The stack's own box, so the number every list pads by is the height this
-  /// thing actually has on this phone, with this payload.
-  final GlobalKey _boxKey = GlobalKey();
-
-  /// Is this stack currently the bar's owner? Registered at most once, so a
-  /// rebuild can never count the same stack twice.
-  bool _owning = false;
-
-  /// The route this stack lives on, and how covered it is. A route pushed on
-  /// top drives `secondaryAnimation` from 0 to 1, which is Flutter's own
-  /// answer to "is something else in front of me" — and the answer this needs.
-  Animation<double>? _covered;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final route = ModalRoute.of(context);
-    final anim = route?.secondaryAnimation;
-    if (!identical(anim, _covered)) {
-      _covered?.removeListener(_syncOwnership);
-      _covered = anim;
-      _covered?.addListener(_syncOwnership);
-    }
-    _syncOwnership();
-  }
-
-  @override
-  void dispose() {
-    _covered?.removeListener(_syncOwnership);
-    _own(false);
-    super.dispose();
-  }
-
-  /// CMD #2051 QA round 1 — THE TAKEOVER IS THE TOPMOST ROUTE'S, NOT A COUNT.
-  ///
-  /// The first shape of this was a global mount count: any stack alive meant
-  /// the app-level host stood down. The shell's stack is alive for as long as
-  /// the shell is — including while an opaque route (a company page, an order,
-  /// the wishlist) is drawn ON TOP of it. So on every pushed route that mounts
-  /// no stack of its own, the host had stood down for a stack nobody could
-  /// see: one renderer became zero, and the update bar disappeared from a
-  /// dozen screens it had always been on.
-  ///
-  /// A stack owns the bar only while its own route is in front. Handing the
-  /// ownership back the moment something covers it is what makes "exactly one
-  /// renderer" true on a Navigator stack rather than only on one screen.
-  void _syncOwnership() {
-    final anim = _covered;
-    // No ModalRoute at all (a widget test, or a stack mounted outside a
-    // Navigator) means nothing can be covering it.
-    final covered = anim != null && anim.value > _coveredThreshold;
-    _own(!covered);
-  }
-
-  /// Half-way through the incoming route's transition is when it is fair to
-  /// call the new screen "the one in front".
-  static const double _coveredThreshold = 0.5;
-
-  void _own(bool want) {
-    if (_owning == want) return;
-    _owning = want;
-    // The app-level host listens to this, and ownership changes DURING a build
-    // (mount, dispose, a route transition tick): touching the notifier there
-    // is `markNeedsBuild()` called during build, which is an assertion in
-    // debug and a skipped frame in release. One frame late is the right kind
-    // of late — the bar animates in over a sheet duration.
-    final delta = want ? 1 : -1;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final n = bottomStackMounted.value + delta;
-      bottomStackMounted.value = n < 0 ? 0 : n;
-      // The chrome went with the screen: nothing is covered any more, and a
-      // list that outlives this stack must not keep padding for it.
-      if (n <= 0 && bottomStackHeight.value != 0) bottomStackHeight.value = 0;
-    });
-  }
-
-  void _publishHeight() {
-    if (!mounted) return;
-    final box = _boxKey.currentContext?.findRenderObject();
-    if (box is! RenderBox || !box.hasSize) return;
-    final v = box.size.height;
-    if ((bottomStackHeight.value - v).abs() > _epsilon) {
-      bottomStackHeight.value = v;
-    }
-  }
-
-  /// Smaller than this and it is rounding, not a change of height.
-  static const double _epsilon = 0.5;
 
   @override
   Widget build(BuildContext context) {
-    WidgetsBinding.instance.addPostFrameCallback((_) => _publishHeight());
-
+    final hasNav = bottomNavVisible(context);
     // No nav under us means the system gesture area is ours to clear.
     final safeBottom =
-        widget.overNav ? 0.0 : MediaQuery.of(context).viewPadding.bottom;
+        hasNav ? 0.0 : MediaQuery.of(context).viewPadding.bottom;
+    final tap = onCartTap;
 
     return Padding(
       padding: EdgeInsets.only(bottom: safeBottom),
-      // The height is re-published whenever the stack's own LAYOUT changes,
-      // not whenever this State happens to rebuild. The two are not the same
-      // thing: the bar arriving rebuilds only the bar's slot (it listens to
-      // the controller itself), and a cart emptying rebuilds only the pill's,
-      // so a State-level post-frame callback alone would have published the
-      // first height and then never moved again. Asking layout means every
-      // cause is covered — including the update sentence taking a second line
-      // at 360 px, which no flag anywhere announces.
-      child: NotificationListener<SizeChangedLayoutNotification>(
-        onNotification: (_) {
-          WidgetsBinding.instance.addPostFrameCallback((_) => _publishHeight());
-          return true;
-        },
-        child: SizeChangedLayoutNotifier(
-          child: Column(
-            key: _boxKey,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // TOP of the column = TOP of the stack = the pill, one step of
-              // air above whatever is under it.
-              if (widget.showPill) _PillSlot(onTap: widget.onCartTap),
-              const _BarSlot(),
-            ],
+      // A COLUMN of fixed boxes, bottom-up: bar slot, gap, pill slot. The
+      // order is the layout, so the bar cannot cover the pill; the heights are
+      // constants, so nothing appearing or disappearing moves anything.
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            // The RESERVED pill slot. Keyed because it — not the pill's own
+            // rectangle — is the static geometry this change is about: at 360
+            // px a long backend label makes [CartPill]'s `FittedBox` scale the
+            // pill down inside this box, which is the right answer to a narrow
+            // phone and must not be mistaken for the chrome moving.
+            key: kPillSlotKey,
+            height: BottomStackMetrics.pill,
+            // An empty box paints nothing and swallows no taps, so a page
+            // that floats no pill is not covered by the space it reserves.
+            child: showPill && tap != null
+                ? RepaintBoundary(child: CartPill(onTap: tap))
+                : null,
           ),
-        ),
+          SizedBox(height: BottomStackMetrics.gap),
+          _BarSlot(key: kBarSlotKey, hasNav: hasNav),
+        ],
       ),
     );
   }
 }
 
-/// The pill, and the step of air under it — together, so an empty cart takes
-/// the gap away with the pill instead of leaving a hole above the bar.
+/// The update-bar slot: exactly [BottomStackMetrics.slot] tall, always.
 ///
-/// This reads the cart so that a cart write repaints the slot and not the
-/// screen around it: the pill was already the only piece of storefront chrome
-/// that reads the cart, and it still is.
-class _PillSlot extends StatelessWidget {
-  const _PillSlot({required this.onTap});
+/// Holds the bar where a bottom nav exists and an update is pending, and an
+/// empty transparent box everywhere else. Both are the same height, which is
+/// the whole of #2066 in one widget.
+class _BarSlot extends StatelessWidget {
+  const _BarSlot({super.key, required this.hasNav});
 
-  final VoidCallback onTap;
+  /// Whether the enclosing shell shows a bottom navigation bar.
+  final bool hasNav;
 
   @override
   Widget build(BuildContext context) {
-    final cart = AppState.of(context);
-    if (!cart.pillShow) return const SizedBox.shrink();
-    return Padding(
-      padding: EdgeInsets.only(bottom: Ds.space.x16),
-      child: RepaintBoundary(child: CartPill(onTap: onTap)),
-    );
-  }
-}
-
-/// The update bar, or nothing. It renders the same [UpdateBar] the app-level
-/// host renders, from the same controller and the same payload — the only
-/// difference is that here it sits FLUSH (`bottomGap` 0), because the thing it
-/// would otherwise have had to clear is already below it in the column.
-class _BarSlot extends StatelessWidget {
-  const _BarSlot();
-
-  @override
-  Widget build(BuildContext context) => AnimatedBuilder(
+    final h = BottomStackMetrics.slot;
+    // No nav, no bar — the slot is still here so the pill does not move.
+    if (!hasNav) return SizedBox(height: h);
+    return SizedBox(
+      height: h,
+      child: AnimatedBuilder(
         animation: appUpdateBar,
         builder: (context, _) {
           if (!appUpdateBar.visible) return const SizedBox.shrink();
@@ -263,20 +194,24 @@ class _BarSlot extends StatelessWidget {
             downloadedLabel: appUpdateBar.downloadedLabel,
             updating: appUpdateBar.updating,
             downloaded: appUpdateBar.downloaded,
-            bottomGap: 0,
+            // FLUSH, and exactly one slot tall: the bar fills the box it was
+            // given instead of publishing a height of its own.
+            fixedHeight: h,
             onUpdate: appUpdateBar.onUpdate ?? _noop,
           );
         },
-      );
+      ),
+    );
+  }
 
   static void _noop() {}
 }
 
-/// The end-of-list box: exactly as tall as the chrome currently is, so the
-/// last card of any storefront list clears it and no more.
+/// The end-of-list box: exactly as tall as the chrome, which is a constant.
 ///
-/// It listens, so the frame after the update bar arrives (or goes) every list
-/// on screen has already made room for it.
+/// So "the last card is never under the chrome" is one number in one place,
+/// true on the first frame, and it never changes — no listener, no rebuild,
+/// no jump.
 class BottomStackSpacer extends StatelessWidget {
   const BottomStackSpacer({super.key, this.extra = 0});
 
@@ -284,9 +219,12 @@ class BottomStackSpacer extends StatelessWidget {
   final double extra;
 
   @override
-  Widget build(BuildContext context) => ValueListenableBuilder<double>(
-        valueListenable: bottomStackHeight,
-        builder: (_, h, _) => SizedBox(height: h + extra),
+  Widget build(BuildContext context) => SizedBox(
+        height: bottomStackHeight +
+            extra +
+            (bottomNavVisible(context)
+                ? 0.0
+                : MediaQuery.of(context).viewPadding.bottom),
       );
 }
 

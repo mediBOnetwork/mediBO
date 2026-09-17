@@ -1,34 +1,38 @@
-// PROTECTED — CMD #2051, the ONE bottom stack.
+// PROTECTED — CMD #2051 / #2066, the ONE bottom stack, and it is STATIC.
 //
 // See CLAUDE.md: this runs before EVERY deploy and may only be edited by a
 // CHANGE that deliberately changes this behaviour, never to make an unrelated
 // change go green.
 //
-// What it holds down — the four ways two anchors for one strip of chrome went
-// wrong before there was one:
+// #2051 put the update bar and the floating cart pill into one column so they
+// could not cover each other. #2066 took the last moving part out of that
+// column. What this file holds down:
 //
-//   1. ORDER IS LAYOUT, NOT ARITHMETIC. Bottom-up the stack is nav, update
-//      bar, cart pill. It is a column, so the bar is BELOW the pill rather
+//   1. ORDER IS LAYOUT, NOT ARITHMETIC. Bottom-up the stack is nav, update-bar
+//      slot, cart pill. It is a column, so the bar is BELOW the pill rather
 //      than painted over it, and neither one needs to know the other's height.
 //      The old shape (an app-level overlay for the bar, a Positioned pill in
-//      each screen's own Stack, and a published number holding them apart)
-//      is what let the bar cover the pill on Home and the Catalogue.
+//      each screen's own Stack, and a published number holding them apart) is
+//      what let the bar cover the pill on Home and the Catalogue.
 //
-//   2. THE GAPS BELONG TO THE THING THAT IS THERE. The pill floats one
-//      spacing step above the bar when there is a bar, and the same step above
-//      the nav when there is not. No cart means no pill AND no gap where the
-//      pill was — the stack shrinks to the bar alone.
+//   2. EVERY POSITION IS STATIC. The bar's slot is ALWAYS reserved and always
+//      exactly one data row tall: no update pending means an empty transparent
+//      box of the same height. So the pill's rectangle is IDENTICAL with a bar
+//      and without one, on a shell and on a pushed route — it never moves, and
+//      a backend `bottom_gap` cannot move it either.
 //
-//   3. EVERY LIST PADS BY THE MEASURED TOTAL. The stack publishes its own
-//      height and [BottomStackSpacer] is that number as a box, so the last
-//      card of any storefront list clears the chrome and no more — and it is
-//      right again the frame after the bar appears or a cart empties. Nobody
-//      pads by a constant.
+//   3. EVERY LIST PADS BY A CONSTANT. [bottomStackHeight] is pill + gap + slot
+//      and nothing else; [BottomStackSpacer] is that number as a box. It is
+//      right on the FIRST frame and it never changes, so content above the
+//      chrome cannot jump. #2051 measured and re-published it — that is
+//      exactly what made lists re-pad when the bar arrived or a cart emptied.
 //
-//   4. ONE BAR, NEVER TWO. The app-level [UpdateBarHost] still raises the bar
-//      on every non-storefront surface, but it stands down while a stack is
-//      mounted. Two renderers painting the same bar at two anchors is the bug
-//      this whole change is about.
+//   4. THE BAR RENDERS ONLY WHERE THERE IS A BOTTOM NAV. The shell answers
+//      that question by having one; the stack asks the Scaffold it is mounted
+//      in. A pushed route (product page, cart, checkout, login) has no nav for
+//      the bar to sit on and gets none — while still floating the pill at the
+//      very same height. There is no app-level host any more, so "two
+//      renderers at two anchors" cannot come back.
 //
 // No network, no Supabase, no goldens: the cart is a fixture payload and every
 // thumb url is empty, so ProductImage paints its offline fallback.
@@ -48,6 +52,8 @@ import 'package:pharma_b2b/widgets/update_bar.dart';
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
 /// Backend copy for the bar. Nothing here reads like something Dart coined.
+/// `bottom_gap` is deliberately still in the payload: #2066 IGNORES it, and a
+/// test below proves the bar does not float by it.
 const _barPayload = <String, dynamic>{
   'show': true,
   'platform': 'android',
@@ -93,11 +99,21 @@ Future<CartModel> _cart({required bool show}) async {
   return c;
 }
 
+/// How tall the fake nav is, so a test can say where the body ends.
+const double _navHeight = 64;
+
 /// A shell-shaped host: a Scaffold whose body Stack anchors the stack at
-/// `bottom: 0` — which in the real shell is the top of the bottom nav.
-Widget _host(CartModel cart, {bool showPill = true, bool overNav = true}) =>
+/// `bottom: 0`, which is the top of the bottom nav.
+///
+/// [hasNav] is the ONLY difference between a shell and a pushed route here,
+/// because it is the only difference the stack is allowed to look at.
+Widget _host(CartModel cart, {bool showPill = true, bool hasNav = true}) =>
     MaterialApp(
       home: Scaffold(
+        bottomNavigationBar: hasNav
+            ? const SizedBox(height: _navHeight, child: ColoredBox(
+                color: Color(0xFFEEEEEE), child: Center(child: Text('nav'))))
+            : null,
         body: AppState(
           cart: cart,
           child: Stack(
@@ -110,7 +126,6 @@ Widget _host(CartModel cart, {bool showPill = true, bool overNav = true}) =>
                 child: StorefrontBottomStack(
                   onCartTap: () {},
                   showPill: showPill,
-                  overNav: overNav,
                 ),
               ),
             ],
@@ -135,28 +150,27 @@ void main() {
   tearDown(() {
     CartModel.rpcTransport = null;
     appUpdateBar.reset();
-    bottomStackHeight.value = 0;
   });
 
   group('1. order is the layout', () {
-    testWidgets('the pill sits ABOVE the bar, and the bar is on the bottom',
+    testWidgets('the pill sits ABOVE the bar, and the bar is on the nav',
         (t) async {
       final cart = await _cart(show: true);
       await _pump(t, _host(cart));
       appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
       await t.pumpAndSettle();
 
-      final pill = t.getRect(find.byType(CartPill));
+      final pill = t.getRect(find.byKey(const Key('c2029_pill')));
       final bar = t.getRect(find.byType(UpdateBar));
       final screen = t.getSize(find.byType(MaterialApp));
 
       expect(pill.bottom, lessThanOrEqualTo(bar.top),
           reason: 'the pill must not be behind the bar — it is above it');
-      expect(bar.bottom, closeTo(screen.height, 0.5),
-          reason: 'the bar is FLUSH on whatever is under it, not floating');
+      expect(bar.bottom, closeTo(screen.height - _navHeight, 0.5),
+          reason: 'FLUSH on the top of the nav, not floating above it');
     });
 
-    testWidgets('the bar spans the full width and is one data row tall',
+    testWidgets('the bar spans the full width and is exactly one row tall',
         (t) async {
       final cart = await _cart(show: false);
       await _pump(t, _host(cart), width: 412);
@@ -165,7 +179,8 @@ void main() {
 
       final bar = t.getRect(find.byType(UpdateBar));
       expect(bar.width, 412, reason: 'edge to edge, no side margins');
-      expect(bar.height, greaterThanOrEqualTo(Ds.touch.listRowMinHeight));
+      expect(bar.height, closeTo(BottomStackMetrics.slot, 0.5),
+          reason: 'the slot height is EXACT, not a minimum that can grow');
       expect(t.takeException(), isNull);
     });
 
@@ -179,210 +194,272 @@ void main() {
       expect(pill.center.dx, closeTo(206, 1),
           reason: 'centred in the width the stack was handed');
     });
-  });
 
-  group('2. the gaps belong to the thing that is there', () {
-    testWidgets('one spacing step between the pill and the bar', (t) async {
+    testWidgets('one spacing step between the pill and the bar slot',
+        (t) async {
       final cart = await _cart(show: true);
       await _pump(t, _host(cart));
       appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
       await t.pumpAndSettle();
 
-      final pill = t.getRect(find.byType(CartPill));
-      final bar = t.getRect(find.byType(UpdateBar));
-      expect(bar.top - pill.bottom, closeTo(Ds.space.x16, 0.5));
+      // The SLOTS, not the pill's own rectangle: at 360 px a long backend
+      // label makes the pill's FittedBox scale down inside its slot, which is
+      // the right answer to a narrow phone. The reserved boxes are what may
+      // never move.
+      final slot = t.getRect(find.byKey(kPillSlotKey));
+      final bar = t.getRect(find.byKey(kBarSlotKey));
+      expect(bar.top - slot.bottom, closeTo(BottomStackMetrics.gap, 0.5));
+      expect(slot.height, closeTo(BottomStackMetrics.pill, 0.5));
+
+      // And the pill really is inside the box that was reserved for it.
+      final pill = t.getRect(find.byKey(const Key('c2029_pill')));
+      expect(slot.contains(pill.topLeft), isTrue);
+      expect(slot.contains(pill.bottomRight - const Offset(0.01, 0.01)),
+          isTrue);
+    });
+  });
+
+  group('2. every position is static', () {
+    testWidgets('the bar arriving does NOT move the pill', (t) async {
+      final cart = await _cart(show: true);
+      await _pump(t, _host(cart));
+
+      final before = t.getRect(find.byKey(const Key('c2029_pill')));
+      expect(find.byType(UpdateBar), findsNothing);
+
+      appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
+      await t.pumpAndSettle();
+      expect(find.byType(UpdateBar), findsOneWidget);
+
+      expect(t.getRect(find.byKey(const Key('c2029_pill'))), before,
+          reason: 'the slot was already reserved — nothing may shift');
     });
 
-    testWidgets('no bar → the pill floats the same step above the nav',
+    testWidgets('the empty slot is exactly as tall as the bar would be',
         (t) async {
       final cart = await _cart(show: true);
       await _pump(t, _host(cart));
 
-      expect(find.byType(UpdateBar), findsNothing);
-      final pill = t.getRect(find.byType(CartPill));
+      // No update: the pill slot's bottom edge is one gap + one empty bar
+      // slot above the top of the nav.
+      final slot = t.getRect(find.byKey(kPillSlotKey));
       final screen = t.getSize(find.byType(MaterialApp));
-      expect(screen.height - pill.bottom, closeTo(Ds.space.x16, 0.5));
+      final navTop = screen.height - _navHeight;
+      expect(navTop - slot.bottom,
+          closeTo(BottomStackMetrics.gap + BottomStackMetrics.slot, 0.5),
+          reason: 'the reserved slot is there even with nothing in it');
+      expect(find.byKey(kBarSlotKey), findsOneWidget,
+          reason: 'the bar slot is mounted with nothing in it');
+      expect(t.getRect(find.byKey(kBarSlotKey)).height,
+          closeTo(BottomStackMetrics.slot, 0.5));
     });
 
-    testWidgets('an empty cart takes the pill AND its gap away', (t) async {
-      final cart = await _cart(show: false);
-      await _pump(t, _host(cart));
+    testWidgets('an empty cart leaves the slot exactly where it was',
+        (t) async {
+      final full = await _cart(show: true);
+      await _pump(t, _host(full));
+      appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
+      await t.pumpAndSettle();
+      final withPill = t.getRect(find.byType(UpdateBar));
+
+      final empty = await _cart(show: false);
+      await _pump(t, _host(empty));
       appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
       await t.pumpAndSettle();
 
-      expect(find.byType(CartPill), findsNothing);
-      final bar = t.getRect(find.byType(UpdateBar));
-      // The stack is the bar and nothing else: no hole where the pill was.
-      expect(bottomStackHeight.value, closeTo(bar.height, 0.5));
+      // Nothing is printed when the backend says there is no pill…
+      expect(find.text('View cart'), findsNothing);
+      expect(find.text('3 items'), findsNothing);
+      // …and the bar has not moved a pixel because of it.
+      expect(t.getRect(find.byType(UpdateBar)), withPill);
     });
 
-    testWidgets('a surface that does not float the pill still gets the bar',
+    testWidgets('the backend\'s bottom_gap does not lift the bar', (t) async {
+      final cart = await _cart(show: false);
+      await _pump(t, _host(cart), width: 412);
+      appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
+      await t.pumpAndSettle();
+
+      final bar = t.getRect(find.byType(UpdateBar));
+      final screen = t.getSize(find.byType(MaterialApp));
+      // `bottom_gap: 128` is in the payload and is ignored: an offset is the
+      // one thing a static stack may not have.
+      expect(screen.height - _navHeight - bar.bottom, closeTo(0, 0.5));
+    });
+
+    testWidgets('a surface that floats no pill keeps the same geometry',
         (t) async {
       final cart = await _cart(show: true);
       await _pump(t, _host(cart, showPill: false));
       appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
       await t.pumpAndSettle();
 
-      expect(find.byType(CartPill), findsNothing);
+      expect(find.text('View cart'), findsNothing,
+          reason: 'the registry said this surface does not float the pill');
       expect(find.byType(UpdateBar), findsOneWidget);
       expect(find.text('App update available'), findsOneWidget);
+      // The space is still reserved — the chrome is one height everywhere.
+      expect(t.getRect(find.byType(UpdateBar)).top,
+          closeTo(800 - _navHeight - BottomStackMetrics.slot, 0.5));
     });
   });
 
-  group('3. every list pads by the measured total', () {
-    testWidgets('the published height is the whole stack, and it MOVES',
-        (t) async {
-      final cart = await _cart(show: true);
-      await _pump(t, _host(cart));
-
-      final pillOnly = bottomStackHeight.value;
-      expect(pillOnly, greaterThan(0));
-
-      appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
-      await t.pumpAndSettle();
-      final withBar = bottomStackHeight.value;
-
-      expect(withBar, greaterThan(pillOnly),
-          reason: 'the bar appearing must grow what every list pads by');
-      final bar = t.getRect(find.byType(UpdateBar));
-      expect(withBar - pillOnly, closeTo(bar.height, 0.5));
+  group('3. every list pads by a constant', () {
+    test('the constant is pill + gap + slot, and nothing else', () {
+      expect(
+          bottomStackHeight,
+          closeTo(
+              BottomStackMetrics.pill +
+                  BottomStackMetrics.gap +
+                  BottomStackMetrics.slot,
+              0.001));
+      expect(BottomStackMetrics.slot, Ds.touch.listRowMinHeight);
+      expect(BottomStackMetrics.gap, Ds.space.x16);
+      expect(BottomStackMetrics.pill, CartPill.kHeight);
     });
 
-    testWidgets('the spacer is exactly that number', (t) async {
-      bottomStackHeight.value = 0;
-      await t.pumpWidget(const MaterialApp(
-          home: Scaffold(body: Center(child: BottomStackSpacer()))));
-      await t.pump();
-      expect(t.getSize(find.byType(BottomStackSpacer)).height, 0);
-
-      bottomStackHeight.value = 137;
-      await t.pump();
-      expect(t.getSize(find.byType(BottomStackSpacer)).height, 137,
-          reason: 'a list re-reads the height, it does not cache a constant');
-    });
-
-    testWidgets('a page may add its own air on top of the chrome', (t) async {
-      bottomStackHeight.value = 100;
+    testWidgets('the spacer is that number on the FIRST frame', (t) async {
       await t.pumpWidget(MaterialApp(
           home: Scaffold(
-              body: Center(child: BottomStackSpacer(extra: Ds.space.x24)))));
-      await t.pump();
+        bottomNavigationBar: const SizedBox(height: _navHeight),
+        body: const Center(child: BottomStackSpacer()),
+      )));
+      // One pump: no post-frame measurement, no second frame needed.
       expect(t.getSize(find.byType(BottomStackSpacer)).height,
-          100 + Ds.space.x24);
+          closeTo(bottomStackHeight, 0.5));
     });
-  });
 
-  group('4. one bar, never two', () {
-    testWidgets('the app-level host stands down while a stack is mounted',
+    testWidgets('the bar appearing does not change what a list pads by',
         (t) async {
       final cart = await _cart(show: true);
-      // The host wraps the app exactly as MaterialApp.builder installs it, and
-      // the stack is mounted inside — the real arrangement on a storefront
-      // screen, where BOTH renderers are alive at once.
       await _pump(
         t,
         MaterialApp(
           home: Scaffold(
-            body: UpdateBarHost(
-              controller: appUpdateBar,
-              child: AppState(
-                cart: cart,
-                child: Stack(
-                  children: [
-                    const Center(child: Text('page content')),
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom: 0,
-                      child: StorefrontBottomStack(onCartTap: () {}),
-                    ),
-                  ],
+            bottomNavigationBar: const SizedBox(height: _navHeight),
+            body: AppState(
+              cart: cart,
+              child: Stack(children: [
+                const Align(
+                    alignment: Alignment.bottomCenter,
+                    child: BottomStackSpacer()),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: StorefrontBottomStack(onCartTap: () {}),
                 ),
-              ),
+              ]),
             ),
           ),
         ),
       );
+      final before = t.getSize(find.byType(BottomStackSpacer)).height;
+      appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
+      await t.pumpAndSettle();
+      expect(t.getSize(find.byType(BottomStackSpacer)).height, before,
+          reason: 'a list that re-pads is a list whose content jumps');
+    });
+
+    testWidgets('a page may add its own air on top of the chrome', (t) async {
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+        bottomNavigationBar: const SizedBox(height: _navHeight),
+        body: Center(child: BottomStackSpacer(extra: Ds.space.x24)),
+      )));
+      expect(t.getSize(find.byType(BottomStackSpacer)).height,
+          closeTo(bottomStackHeight + Ds.space.x24, 0.5));
+    });
+  });
+
+  group('4. the bar renders only where there is a bottom nav', () {
+    testWidgets('no bottom nav → no bar, however loud the controller is',
+        (t) async {
+      final cart = await _cart(show: true);
+      await _pump(t, _host(cart, hasNav: false));
       appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
       await t.pumpAndSettle();
 
-      expect(find.byType(UpdateBar), findsOneWidget);
-      expect(find.text('Update Now'), findsOneWidget);
+      expect(appUpdateBar.visible, isTrue);
+      expect(find.byType(UpdateBar), findsNothing,
+          reason: 'a pushed route has no nav for the bar to sit on');
+      expect(find.text('App update available'), findsNothing);
     });
 
-    testWidgets('a stack COVERED by a pushed route hands the bar back',
-        (t) async {
-      // CMD #2051 QA round 1. The first shape of the takeover was a global
-      // mount count, and the shell's stack is alive for as long as the shell
-      // is — including behind an opaque pushed route. So on every pushed
-      // customer route that mounts no stack of its own (a company page, an
-      // order, the wishlist) the host had stood down for a stack nobody could
-      // see, and the update bar vanished from a dozen screens.
+    testWidgets('and the pill is at exactly the same height there', (t) async {
+      final cart = await _cart(show: true);
+
+      await _pump(t, _host(cart, hasNav: true));
+      appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
+      await t.pumpAndSettle();
+      final onShell = t.getRect(find.byKey(const Key('c2029_pill')));
+      final screen = t.getSize(find.byType(MaterialApp));
+      // Distance from the top of the nav — the edge the chrome sits on.
+      final liftOnShell = (screen.height - _navHeight) - onShell.bottom;
+
+      await _pump(t, _host(cart, hasNav: false));
+      await t.pumpAndSettle();
+      final pushed = t.getRect(find.byKey(const Key('c2029_pill')));
+      final liftPushed = screen.height - pushed.bottom;
+
+      expect(find.text('View cart'), findsOneWidget,
+          reason: 'the pill still floats on a product page');
+      expect(liftPushed, closeTo(liftOnShell, 0.5),
+          reason: 'the reserved slot keeps the pill at one height everywhere');
+    });
+
+    testWidgets('the shell decides, not a screen name', (t) async {
+      // The same widget, the same route, the same payload: the ONLY thing that
+      // changes is whether the Scaffold has a nav.
+      final cart = await _cart(show: true);
+      appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
+
+      await _pump(t, _host(cart, hasNav: false));
+      expect(find.byType(UpdateBar), findsNothing);
+
+      await _pump(t, _host(cart, hasNav: true));
+      expect(find.byType(UpdateBar), findsOneWidget);
+    });
+
+    testWidgets('there is exactly one renderer — no app-level host', (t) async {
       final cart = await _cart(show: true);
       final nav = GlobalKey<NavigatorState>();
       await _pump(
         t,
         MaterialApp(
           navigatorKey: nav,
-          // The host is installed from `builder`, ABOVE the Navigator, exactly
-          // as main.dart installs it — that is why it can still draw the bar
-          // over a route pushed on top of the shell.
-          builder: (_, child) =>
-              UpdateBarHost(controller: appUpdateBar, child: child!),
           home: Scaffold(
+            bottomNavigationBar: const SizedBox(height: _navHeight),
             body: AppState(
               cart: cart,
-              child: Stack(
-                children: [
-                  const Center(child: Text('shell')),
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    child: StorefrontBottomStack(onCartTap: () {}),
-                  ),
-                ],
-              ),
+              child: Stack(children: [
+                const Center(child: Text('shell')),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: StorefrontBottomStack(onCartTap: () {}),
+                ),
+              ]),
             ),
           ),
         ),
       );
       appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
       await t.pumpAndSettle();
-      expect(find.byType(UpdateBar), findsOneWidget,
-          reason: 'the shell owns the bar while it is in front');
+      expect(find.byType(UpdateBar), findsOneWidget);
 
-      // A pushed route that draws no stack of its own — the case that broke.
+      // A pushed route with no nav of its own: the bar goes with the shell it
+      // belonged to instead of being drawn over a screen with no room for it.
       nav.currentState!.push(MaterialPageRoute<void>(
           builder: (_) => const Scaffold(body: Center(child: Text('pushed')))));
       await t.pumpAndSettle();
-
       expect(find.text('pushed'), findsOneWidget);
-      expect(find.byType(UpdateBar), findsOneWidget,
-          reason: 'the host takes the bar back — one renderer, never zero');
-      expect(find.text('App update available'), findsOneWidget);
+      expect(find.byType(UpdateBar), findsNothing);
 
-      // And back: the shell owns it again, exactly once.
+      // And back: the shell renders it again, exactly once.
       nav.currentState!.pop();
       await t.pumpAndSettle();
-      expect(find.byType(UpdateBar), findsOneWidget);
-    });
-
-    testWidgets('with no stack mounted the host still raises it', (t) async {
-      await _pump(
-        t,
-        MaterialApp(
-          home: Scaffold(
-            body: UpdateBarHost(
-              controller: appUpdateBar,
-              child: const Center(child: Text('page content')),
-            ),
-          ),
-        ),
-      );
-      appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
-      await t.pumpAndSettle();
-
       expect(find.byType(UpdateBar), findsOneWidget);
     });
   });
@@ -399,6 +476,7 @@ void main() {
         final bar = t.getRect(find.byType(UpdateBar));
         final pill = t.getRect(find.byKey(const Key('c2029_pill')));
         expect(bar.width, width);
+        expect(bar.height, closeTo(BottomStackMetrics.slot, 0.5));
         expect(pill.width, lessThanOrEqualTo(width));
         expect(pill.left, greaterThanOrEqualTo(0));
         expect(t.getSize(find.byType(FilledButton)).height,
@@ -409,9 +487,9 @@ void main() {
     testWidgets('a pushed route with no nav clears the gesture area itself',
         (t) async {
       final cart = await _cart(show: true);
-      await _pump(t, _host(cart, overNav: false));
+      await _pump(t, _host(cart, hasNav: false));
       expect(t.takeException(), isNull);
-      expect(find.byType(CartPill), findsOneWidget);
+      expect(find.text('View cart'), findsOneWidget);
     });
   });
 }

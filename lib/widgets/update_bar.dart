@@ -130,11 +130,12 @@ class UpdateBarController extends ChangeNotifier {
   /// Android flexible flow: what it says while Play restarts the app.
   String get downloadedLabel => _s('downloaded_label', 'update_bar.updating');
 
-  /// How far off the bottom of the SCREEN the bar floats when it is drawn on
-  /// its own (the app-level host, on a surface with no bottom stack). Null
-  /// falls back to the design token. Inside the stack it is 0 — the stack is
-  /// already sitting on the nav.
-  double? get bottomGap => (_payload['bottom_gap'] as num?)?.toDouble();
+  // CMD #2066 — `bottom_gap` is no longer read, and the bar has no offset of
+  // any kind. An offset was how the bar was kept clear of a bottom nav it was
+  // painted OVER; it now sits IN a reserved slot on top of that nav, so "how
+  // high does it float" has no answer to give. The payload key may keep
+  // arriving — it is ignored, which is the only way "every position is static"
+  // can be true of a number the backend can change.
 
   /// Test seam — the controller is a long-lived singleton in production.
   @visibleForTesting
@@ -148,87 +149,28 @@ class UpdateBarController extends ChangeNotifier {
   }
 }
 
-/// CMD #2037 — how much of the bottom of the screen the update card is
-/// currently covering, in logical pixels, or 0 when it is not showing.
-///
-/// The card is an OVERLAY installed from `MaterialApp.builder`, so nothing
-/// inside the app can see it by looking at its own layout. Anything that has to
-/// stay clear of it — the floating cart pill, a page's bottom padding — listens
-/// to this instead of being told the number twice. It is MEASURED, not
-/// computed: the sentence is allowed a second line at 360 px, so the card's
-/// height is not a constant anyone may assume.
-final ValueNotifier<double> appUpdateBarHeight = ValueNotifier<double>(0);
+// CMD #2066 — THE BAR HAS ONE HOME AND ONE HEIGHT.
+//
+// #2037 published a MEASURED height here (`appUpdateBarHeight`) because the
+// bar was an overlay installed from `MaterialApp.builder` that nothing inside
+// the app could see, and #2051 added a mount count (`bottomStackMounted`) so
+// that overlay could stand down while the storefront's own column drew the
+// bar. Both are gone: the bar renders in exactly one place — the update-bar
+// slot of [StorefrontBottomStack] — and that slot is a fixed
+// `Ds.touch.listRowMinHeight`, so there is no height for anyone to publish and
+// no second renderer for anyone to count.
 
-/// CMD #2051 — how many storefront bottom stacks are mounted right now.
-///
-/// The bar has TWO renderers and must never have two at once: the app-level
-/// [UpdateBarHost] (which is what every non-storefront screen gets) and the
-/// storefront's own bottom stack, where the bar is one row of a column instead
-/// of a free-floating overlay. While a stack is up it owns the bar and the
-/// host stands down. It lives here rather than in the stack's own file so the
-/// dependency runs one way: the stack knows about the bar, the bar knows only
-/// that somebody has taken it over.
-final ValueNotifier<int> bottomStackMounted = ValueNotifier<int>(0);
 
 /// The ONE controller the app-level host renders. Both the web watcher and the
 /// Android driver raise this same instance, which is what makes "same bar, same
 /// look" true rather than a coincidence of two widgets.
 final UpdateBarController appUpdateBar = UpdateBarController();
 
-/// Wraps the whole app (from `MaterialApp.builder`) and parks the pill at the
-/// bottom of the screen on top of everything else — above the bottom nav, above
-/// the floating cart pill, above any sheet backdrop.
-class UpdateBarHost extends StatelessWidget {
-  const UpdateBarHost({super.key, required this.controller, required this.child});
-
-  final UpdateBarController controller;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: Listenable.merge([controller, bottomStackMounted]),
-      builder: (context, _) {
-        // CMD #2051 — a storefront bottom stack is up, so the bar is one row
-        // of THAT column and this host draws nothing. One bar, never two, and
-        // never one covering the other.
-        final takenOver = bottomStackMounted.value > 0;
-        if (!controller.visible || takenOver) {
-          // CMD #2037 — nothing is covered while the card is down, and the
-          // pill that lifts for it has to hear that too.
-          if (appUpdateBarHeight.value != 0) {
-            WidgetsBinding.instance.addPostFrameCallback(
-                (_) => appUpdateBarHeight.value = 0);
-          }
-          return child;
-        }
-
-        // The Stack's only extra child is the bar itself, so nothing outside
-        // the bar's own rectangle can swallow a tap.
-        return Stack(
-          children: [
-            child,
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: UpdateBar(
-                title: controller.label,
-                actionLabel: controller.actionLabel,
-                updatingLabel: controller.updatingLabel,
-                downloadedLabel: controller.downloadedLabel,
-                updating: controller.updating,
-                downloaded: controller.downloaded,
-                bottomGap: controller.bottomGap,
-                onUpdate: controller.onUpdate ?? () {},
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-}
+// The app-level host that used to wrap the whole app is deleted with #2066:
+// wrapping everything is exactly how the bar reached login, the cart, the
+// checkout and every pushed route — surfaces with no bottom nav for it to sit
+// on. Where it renders is now the SHELL's answer (`bottomNavVisible`), asked
+// by the one widget that draws it.
 
 /// The pill itself — pure presentation, so a widget test can mount it with
 /// fixture copy and no network, no timers and no service singleton.
@@ -242,7 +184,7 @@ class UpdateBar extends StatefulWidget {
     required this.onUpdate,
     this.downloadedLabel,
     this.downloaded = false,
-    this.bottomGap,
+    this.fixedHeight,
   });
 
   final String title;
@@ -255,10 +197,12 @@ class UpdateBar extends StatefulWidget {
   final bool updating;
   final bool downloaded;
 
-  /// How far off the bottom of the screen the pill floats, from the backend, so
-  /// clearing a taller bottom nav is an UPDATE. Null falls back to the design
-  /// token (bottom nav height) plus one step of the spacing scale.
-  final double? bottomGap;
+  /// CMD #2066 — the exact height of the slot this bar was given, when it is
+  /// in one. The stack reserves [BottomStackMetrics.slot] whether or not an
+  /// update is pending, so the bar fills that box rather than sizing itself:
+  /// a sentence that takes a second line at 360 px must not make the chrome
+  /// taller and push the cart pill up. Null = size to content (no slot).
+  final double? fixedHeight;
 
   final VoidCallback onUpdate;
 
@@ -270,28 +214,10 @@ class _UpdateBarState extends State<UpdateBar> with SingleTickerProviderStateMix
   late final AnimationController _ctrl =
       AnimationController(vsync: this, duration: Ds.motion.sheet)..forward();
 
-  /// CMD #2037 — the card's own box, so its height is MEASURED rather than
-  /// assumed. At 360 px the sentence takes a second line and the card grows;
-  /// anything clearing it has to clear what it actually is.
-  final GlobalKey _cardKey = GlobalKey();
-
   @override
   void dispose() {
     _ctrl.dispose();
     super.dispose();
-  }
-
-  /// Publish how much of the bottom of the screen the card covers, measured
-  /// from the top of the bottom nav upwards: the card itself plus the step of
-  /// air above it.
-  void _publishHeight() {
-    if (!mounted) return;
-    final box = _cardKey.currentContext?.findRenderObject();
-    if (box is! RenderBox || !box.hasSize) return;
-    final v = box.size.height;
-    if ((appUpdateBarHeight.value - v).abs() > 0.5) {
-      appUpdateBarHeight.value = v;
-    }
   }
 
   String get _label {
@@ -309,36 +235,29 @@ class _UpdateBarState extends State<UpdateBar> with SingleTickerProviderStateMix
           'variant:floating_pill;updating:${widget.updating}');
       RenderLog.write(kUpdatePillRenderKey, 1);
     } catch (_) {}
-    WidgetsBinding.instance.addPostFrameCallback((_) => _publishHeight());
-
-    // CMD #2051 — FLUSH, and full width.
-    //
-    // `bottomGap` is still the backend's number and still means "how far off
-    // the bottom of the SCREEN does this bar float", which is what the
-    // app-level host (every non-storefront surface) needs to clear a bottom
-    // nav it is painted over. Zero means flush: the bar is a row of the
-    // storefront bottom stack, the stack is already sitting on the nav, and
-    // whatever safe-area there is below has been dealt with by the thing that
-    // owns that edge. Adding a system inset here as well would show as a white
-    // seam between the bar and the nav.
-    final gap = widget.bottomGap ?? Ds.touch.bottomBarGap;
-    final bottomInset =
-        gap <= 0 ? 0.0 : MediaQuery.of(context).viewPadding.bottom + gap;
+    // CMD #2051/#2066 — FLUSH, full width, and no inset of its own. The bar is
+    // the top surface of the bottom chrome; the stack it sits in owns the
+    // bottom edge and whatever safe area is below it. An inset here as well
+    // would show as a white seam between the bar and the nav.
 
     // One data row tall — the same 56 the pill above it is, so the two read as
-    // one stack rather than two unrelated bits of chrome.
+    // one stack rather than two unrelated bits of chrome. CMD #2066: when the
+    // bottom stack hands the bar a slot, that height is EXACT, not a minimum.
+    final fixed = widget.fixedHeight;
     final minHeight = Ds.touch.listRowMinHeight;
+    // A fixed slot has to fit a 44 px gear, a 44 px button and up to two lines
+    // of the backend's sentence inside 56 px, so the breathing room is one
+    // step of the scale rather than two. Sizing to content keeps the roomier
+    // padding it always had.
+    final vPad = fixed == null ? Ds.space.x8 : Ds.space.x4;
 
     return SlideTransition(
       position: Tween<Offset>(begin: const Offset(0, 1), end: Offset.zero)
           .animate(CurvedAnimation(parent: _ctrl, curve: Ds.motion.curve)),
-      child: Padding(
-        // CMD #2051 — edge to edge. The bar is not a floating card any more:
-        // it is the top surface of the bottom chrome, so it spans the screen
-        // and only its TOP corners are rounded.
-        padding: EdgeInsets.only(bottom: bottomInset),
-        child: DecoratedBox(
-          key: _cardKey,
+      // CMD #2051 — edge to edge. The bar is not a floating card any more: it
+      // is the top surface of the bottom chrome, so it spans the screen and
+      // only its TOP corners are rounded.
+      child: DecoratedBox(
           decoration: BoxDecoration(
             color: Ds.c.surface,
             borderRadius:
@@ -351,10 +270,12 @@ class _UpdateBarState extends State<UpdateBar> with SingleTickerProviderStateMix
           child: Material(
             type: MaterialType.transparency,
             child: ConstrainedBox(
-              constraints: BoxConstraints(minHeight: minHeight),
+              constraints: fixed == null
+                  ? BoxConstraints(minHeight: minHeight)
+                  : BoxConstraints.tightFor(height: fixed),
               child: Padding(
                 padding: EdgeInsets.symmetric(
-                    horizontal: Ds.space.x16, vertical: Ds.space.x8),
+                    horizontal: Ds.space.x16, vertical: vPad),
                 // MOBILE FIRST: at 360 px the sentence, the circle and the
                 // button cannot all have their ideal width, so the CHROME
                 // gives way and the sentence is allowed a second line — it is
@@ -379,7 +300,6 @@ class _UpdateBarState extends State<UpdateBar> with SingleTickerProviderStateMix
             ),
           ),
         ),
-      ),
     );
   }
 

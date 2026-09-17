@@ -1873,7 +1873,11 @@ class _HomeShellState extends State<HomeShell> {
           // CMD #2051 — ONE bottom stack: the update bar flush on the nav,
           // the cart pill floating one step above it. Anchored at the bottom
           // of the body, which IS the top of the bottom nav.
-          if (!isAdmin) shellBottomStack(_openCart, _index),
+          // CMD #2066 — mounted for STAFF as well: the update bar belongs on
+          // every shell that has tabs, and this one has them for admin too.
+          // Staff draw no cart pill; the space it would take is still
+          // reserved, because the chrome is the same height for everyone.
+          shellBottomStack(_openCart, _index, staff: isAdmin),
           if (!isAdmin)
             RepaintBoundary(
               child: CartPanel(
@@ -1959,7 +1963,11 @@ class _HomeShellState extends State<HomeShell> {
           // CMD #2051 — ONE bottom stack: the update bar flush on the nav,
           // the cart pill floating one step above it. Anchored at the bottom
           // of the body, which IS the top of the bottom nav.
-          if (!isAdmin) shellBottomStack(_openCart, _index),
+          // CMD #2066 — mounted for STAFF as well: the update bar belongs on
+          // every shell that has tabs, and this one has them for admin too.
+          // Staff draw no cart pill; the space it would take is still
+          // reserved, because the chrome is the same height for everyone.
+          shellBottomStack(_openCart, _index, staff: isAdmin),
           if (!isAdmin) ...[
             LoginPanel(
               open: _loginOpen,

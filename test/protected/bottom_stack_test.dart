@@ -421,6 +421,79 @@ void main() {
       expect(find.byType(UpdateBar), findsOneWidget);
     });
 
+    // ── CMD #2066 QA round 1 ──────────────────────────────────────────────
+    // Every case above pumps a FRESH tree, and a fresh tree always rebuilds —
+    // which is precisely why they all passed while the bar stayed on a shell
+    // that had dropped its nav. The bug needs the SAME element to stay mounted
+    // while the nav changes underneath it, so this host mounts the stack the
+    // way the supplier shell does (const, nav derived from the width) and then
+    // only resizes the view. Nothing is re-pumped.
+    Widget resizingHost(CartModel cart) => MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              // The supplier shell's own rule: no nav on a wide viewport.
+              bottomNavigationBar: MediaQuery.of(context).size.width >= 900
+                  ? null
+                  : const SizedBox(height: _navHeight),
+              body: AppState(
+                cart: cart,
+                child: const Stack(
+                  children: [
+                    Center(child: Text('page content')),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: StorefrontBottomStack(showPill: false),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+
+    testWidgets('the nav going away on a RESIZE takes the bar with it',
+        (t) async {
+      final cart = await _cart(show: false);
+      t.view.devicePixelRatio = 1.0;
+      addTearDown(t.view.reset);
+
+      t.view.physicalSize = const Size(360, 800);
+      await t.pumpWidget(resizingHost(cart));
+      appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
+      await t.pumpAndSettle();
+      expect(find.byType(UpdateBar), findsOneWidget,
+          reason: 'a phone-width supplier shell has a nav, so it has the bar');
+
+      // The ONLY change: the viewport. Same tree, same elements.
+      t.view.physicalSize = const Size(1000, 800);
+      await t.pumpAndSettle();
+
+      expect(find.byType(UpdateBar), findsNothing,
+          reason: 'no bottom nav any more -> the bar must not render. '
+              'Scaffold.maybeOf registers no dependency, so the stack must '
+              'take one from MediaQuery or it latches at its first answer.');
+    });
+
+    testWidgets('and the nav coming BACK brings the bar back', (t) async {
+      final cart = await _cart(show: false);
+      t.view.devicePixelRatio = 1.0;
+      addTearDown(t.view.reset);
+
+      t.view.physicalSize = const Size(1000, 800);
+      await t.pumpWidget(resizingHost(cart));
+      appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
+      await t.pumpAndSettle();
+      expect(find.byType(UpdateBar), findsNothing);
+
+      t.view.physicalSize = const Size(360, 800);
+      await t.pumpAndSettle();
+
+      expect(find.byType(UpdateBar), findsOneWidget,
+          reason: 'the latch must not work in this direction either');
+    });
+
     testWidgets('there is exactly one renderer — no app-level host', (t) async {
       final cart = await _cart(show: true);
       final nav = GlobalKey<NavigatorState>();
@@ -490,6 +563,155 @@ void main() {
       await _pump(t, _host(cart, hasNav: false));
       expect(t.takeException(), isNull);
       expect(find.text('View cart'), findsOneWidget);
+    });
+  });
+
+  // ── 6. THE STAFF SHELLS RESERVE THE BAR'S ROOM (CMD #2070) ────────────────
+  //
+  // #2066 reserved the chrome inside the CUSTOMER lists and left the admin,
+  // supplier and partner pages hosting the very same bar with nothing held
+  // back for it, so an admin's last row sat under it. A per-page spacer was
+  // never going to hold across dozens of staff pages written by dozens of
+  // commands, so the SHELL reserves it once for its whole page host.
+  group('6. staff shells clear the bar', () {
+    const lastRow = Key('c2070_last_row');
+
+    /// A staff shell: nav, a page host, and the same stack the shells mount.
+    Widget staffHost(
+      CartModel cart, {
+      required bool staff,
+      bool hasNav = true,
+      double navBreakpoint = 0,
+    }) =>
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              // A nav unless this shell drops it on a wide viewport, which
+              // is the supplier shell's own rule at 900.
+              bottomNavigationBar: (hasNav &&
+                      (navBreakpoint == 0 ||
+                          MediaQuery.of(context).size.width < navBreakpoint))
+                  ? const SizedBox(height: _navHeight)
+                  : null,
+              body: AppState(
+                cart: cart,
+                child: Stack(
+                  children: [
+                    Column(
+                      children: [
+                        Expanded(
+                          child: staffPageHost(
+                            ListView(
+                              children: const [
+                                SizedBox(height: 2000),
+                                SizedBox(
+                                  key: lastRow,
+                                  height: 40,
+                                  child: Text('last row'),
+                                ),
+                              ],
+                            ),
+                            staff: staff,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: StorefrontBottomStack(showPill: false),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+
+    Future<Rect> scrolledToLastRow(WidgetTester t) async {
+      await t.drag(find.byType(ListView), const Offset(0, -3000));
+      await t.pumpAndSettle();
+      return t.getRect(find.byKey(lastRow));
+    }
+
+    testWidgets('an admin page ends ABOVE the bar, never under it', (t) async {
+      final cart = await _cart(show: false);
+      await _pump(t, staffHost(cart, staff: true));
+      appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
+      await t.pumpAndSettle();
+
+      final row = await scrolledToLastRow(t);
+      final bar = t.getRect(find.byType(UpdateBar));
+      expect(row.bottom, lessThanOrEqualTo(bar.top + 0.5),
+          reason: 'the last row of a staff page must clear the update bar');
+    });
+
+    testWidgets('without the clearance that same row IS under the bar',
+        (t) async {
+      // The control: this is exactly what every admin page did before #2070.
+      final cart = await _cart(show: false);
+      await _pump(t, staffHost(cart, staff: false));
+      appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
+      await t.pumpAndSettle();
+
+      final row = await scrolledToLastRow(t);
+      final bar = t.getRect(find.byType(UpdateBar));
+      expect(row.bottom, greaterThan(bar.top),
+          reason: 'proves the assertion above is measuring the clearance '
+              'and not something the ListView would have done anyway');
+    });
+
+    testWidgets('the clearance is a CONSTANT — an update arriving moves '
+        'nothing', (t) async {
+      final cart = await _cart(show: false);
+      await _pump(t, staffHost(cart, staff: true));
+
+      final before = await scrolledToLastRow(t);
+      appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
+      await t.pumpAndSettle();
+      final after = t.getRect(find.byKey(lastRow));
+
+      expect(after, before,
+          reason: 'the bar slot is reserved whether or not an update is '
+              'pending, so content above it cannot jump');
+    });
+
+    testWidgets('it reserves the BAR slot, not the pill a staff page never '
+        'floats', (t) async {
+      expect(bottomBarOnlyHeight, BottomStackMetrics.slot);
+      expect(bottomStackHeight,
+          BottomStackMetrics.pill + BottomStackMetrics.gap + BottomStackMetrics.slot);
+      expect(bottomBarOnlyHeight, lessThan(bottomStackHeight),
+          reason: 'a surface with no pill must not pay for the pill slot');
+    });
+
+    testWidgets('a wide staff shell with no nav paints no bar and owes no '
+        'clearance', (t) async {
+      final cart = await _cart(show: false);
+      t.view.devicePixelRatio = 1.0;
+      addTearDown(t.view.reset);
+
+      t.view.physicalSize = const Size(360, 800);
+      await t.pumpWidget(
+          staffHost(cart, staff: true, navBreakpoint: 900));
+      appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
+      await t.pumpAndSettle();
+      final narrow = await scrolledToLastRow(t);
+      final bar = t.getRect(find.byType(UpdateBar));
+      expect(narrow.bottom, lessThanOrEqualTo(bar.top + 0.5));
+
+      // The ONLY change is the viewport — the same elements, rebuilt.
+      t.view.physicalSize = const Size(1000, 800);
+      await t.pumpAndSettle();
+      expect(find.byType(UpdateBar), findsNothing,
+          reason: 'no nav, no bar (CMD #2066 QA round 1)');
+
+      final wide = await scrolledToLastRow(t);
+      final screen = t.getSize(find.byType(MaterialApp));
+      expect(wide.bottom, closeTo(screen.height, 0.5),
+          reason: 'nothing paints down there any more, so the host must not '
+              'keep holding room back — the clearance must not latch either');
     });
   });
 }

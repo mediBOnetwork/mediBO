@@ -18,9 +18,12 @@
 
 begin;
 
--- ── 1. test-only flags where the role tables had none ───────────────────────
-alter table public.company_profiles add column if not exists is_synthetic boolean not null default false;
-alter table public.mr_registrations  add column if not exists is_synthetic boolean not null default false;
+-- ── 1. test-only flags ───────────────────────────────────────────────────────
+-- No DDL on the registration tables: the first replay of this file on live was
+-- cancelled on a lock timeout while altering company_profiles. The flag for
+-- company / mr / worker accounts is the identity ledger itself
+-- (qa_test_identities.account_id + auth.users.raw_user_meta_data.test_only),
+-- read through is_qa_test_identity(); delivery keeps its own is_synthetic.
 
 -- ── 2. the eight roles exist as rows, always ─────────────────────────────────
 insert into public.qa_test_identities (role, note) values
@@ -113,13 +116,13 @@ begin
     if v_owner is null then
       insert into public.company_profiles
         (user_id, status, company_name, contact_person, phone, email, registered_address, city, state,
-         is_synthetic, submitted_at, reviewed_at)
+         submitted_at, reviewed_at)
       values (v_uid, 'approved', p_label, 'QA bot', p_phone10, v_email, 'synthetic — do not use', 'Test', 'TS',
-              true, now(), now())
+              now(), now())
       returning id::text into v_owner;
     else
       update public.company_profiles
-         set user_id = v_uid, status = 'approved', is_synthetic = true, email = v_email, phone = p_phone10, is_deleted = false
+         set user_id = v_uid, status = 'approved', email = v_email, phone = p_phone10, is_deleted = false
        where id::text = v_owner;
     end if;
   elsif p_role = 'mr' then
@@ -128,13 +131,13 @@ begin
     if v_owner is null then
       insert into public.mr_registrations
         (user_id, status, full_name, phone, email, company_represented, territory_zone, city, state,
-         is_synthetic, submitted_at, reviewed_at)
+         submitted_at, reviewed_at)
       values (v_uid, 'approved', p_label, p_phone10, v_email, 'TST QA Company - SYNTHETIC', 'Zone tst', 'Test', 'TS',
-              true, now(), now())
+              now(), now())
       returning id::text into v_owner;
     else
       update public.mr_registrations
-         set user_id = v_uid, status = 'approved', is_synthetic = true, email = v_email, phone = p_phone10, is_deleted = false
+         set user_id = v_uid, status = 'approved', email = v_email, phone = p_phone10, is_deleted = false
        where id::text = v_owner;
     end if;
   elsif p_role = 'worker' then
@@ -219,7 +222,7 @@ BEGIN
   SELECT cp.id, cp.company_name, cp.email, cp.city
   FROM company_profiles cp
   WHERE (cp.is_deleted IS NULL OR cp.is_deleted = false)
-    AND NOT coalesce(cp.is_synthetic, false)          -- CMD #2075: test-only rows never report
+    AND NOT public.is_qa_test_identity(cp.user_id)   -- CMD #2075: test-only accounts never report
     AND (p_search = ''
          OR cp.company_name ILIKE '%' || p_search || '%'
          OR cp.email ILIKE '%' || p_search || '%')
@@ -263,7 +266,18 @@ grant execute on function public.test_journey_sql_assert(text, bigint, bigint) t
 -- origin before reading which origin was asking. A bot session is scoped to the
 -- bot's own identities, raises no banner, lives an hour and is swept (CHANGE
 -- #1821), so it is allowed through — gated by one column Om can flip.
-alter table public.test_mode_config add column if not exists automated_when_off boolean not null default true;
+do $lk$ declare i int; begin
+  for i in 1..6 loop
+    begin
+      perform set_config('lock_timeout', '3000', true);
+      execute 'alter table public.test_mode_config add column if not exists automated_when_off boolean not null default true';
+      exit;
+    exception when lock_not_available then
+      if i = 6 then raise; end if;
+      perform pg_sleep(4);
+    end;
+  end loop;
+end $lk$;
 
 CREATE OR REPLACE FUNCTION public.test_session_start(p_label text DEFAULT NULL::text, p_hours numeric DEFAULT NULL::numeric)
  RETURNS jsonb

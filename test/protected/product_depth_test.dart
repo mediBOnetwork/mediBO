@@ -48,7 +48,7 @@ import 'package:pharma_b2b/widgets/companion_rail.dart';
 import 'package:pharma_b2b/widgets/purchase_overlay_card.dart';
 
 const _labels = <String, dynamic>{
-  'pdp_overview_title': 'Overview',
+  'pdp_overview_title': 'Product overview',
   'pdp_similar_title': 'Similar products',
   'pdp_read_more': 'Read more',
   'pdp_read_less': 'Read less',
@@ -118,9 +118,21 @@ Map<String, dynamic> _payload({
         'has_supplier_label': false,
         'supplier_label': '',
       },
-      'overview': const [
-        {'label': 'Composition', 'value': 'Levocetirizine (5mg) + Montelukast (10mg)'},
-      ],
+      // CMD #2073 — ONE card. What used to be Overview plus "Product details"
+      // is a single ordered list built by `_pdp_overview_rows()`: Composition,
+      // Form, Pack, Manufacturer, Therapeutic class, Medication type, Storage,
+      // Habit forming. Cold chain is deliberately NOT here — an absent value
+      // is an absent ROW, decided in SQL.
+      if (facts)
+        'overview': const [
+          {'key': 'composition', 'label': 'Composition', 'value': 'Levocetirizine (5mg) + Montelukast (10mg)'},
+          {'key': 'form', 'label': 'Form', 'value': 'Strip'},
+          {'key': 'pack', 'label': 'Pack', 'value': '10 tablets in 1 strip'},
+          {'key': 'manufacturer', 'label': 'Manufacturer', 'value': 'MANKIND PHARMA LTD'},
+          {'key': 'med_type', 'label': 'Medication type', 'value': 'Prescription required (Rx)'},
+          {'key': 'storage', 'label': 'Storage', 'value': 'Store below 30°C'},
+          {'key': 'habit', 'label': 'Habit forming', 'value': 'No'},
+        ],
       'has_highlight': false,
       'highlight': '',
       'sections': const [
@@ -140,23 +152,10 @@ Map<String, dynamic> _payload({
           'close_label': 'Done',
           'images': _galleryImages,
         },
-      if (facts)
-        'facts': {
-          'has': true,
-          'title': 'Product details',
-          'rows': const [
-            {
-              'key': 'salt',
-              'label': 'Composition & strength',
-              'value': 'Levocetirizine (5mg) + Montelukast (10mg)',
-            },
-            {'key': 'form', 'label': 'Form', 'value': 'Strip'},
-            {'key': 'pack', 'label': 'Pack', 'value': '10 tablets in 1 strip'},
-            {'key': 'rx', 'label': 'Prescription', 'value': 'Prescription required (Rx)'},
-            {'key': 'habit', 'label': 'Habit forming', 'value': 'No'},
-            {'key': 'storage', 'label': 'Storage', 'value': 'Store below 30°C'},
-          ],
-        },
+      // CMD #2073 — product_detail() sends this block has:false from here on.
+      // It stays in the fixture because a page that started reading it again
+      // would be reading a block the backend has stopped filling.
+      'facts': const {'has': false, 'title': '', 'rows': <Map<String, dynamic>>[]},
       if (purchase)
         'purchase': {
           'has': true,
@@ -290,22 +289,31 @@ void main() {
     });
   });
 
-  group('CMD #791 — fact table', () {
-    testWidgets('renders every fact row in payload order, both halves verbatim',
+  // CMD #2073 — ONE card, and the #791 rule is unchanged inside it: every row
+  // is the backend's label and the backend's value, in the backend's order,
+  // and a column with nothing in it is an absent ROW rather than a dash.
+  group('CMD #2073 — the merged Product overview card', () {
+    testWidgets('renders every row in payload order, both halves verbatim',
         (tester) async {
       await _pump(tester, _payload());
 
-      expect(find.text('Product details'), findsOneWidget);
+      // The heading is the label table's, so renaming the card is an UPDATE.
+      expect(find.text('Product overview'), findsOneWidget);
+      // …and the retired second card is not drawn beside it.
+      expect(find.text('Product details'), findsNothing);
       for (final s in const [
-        'Composition & strength',
+        'Composition',
         'Form',
         'Pack',
-        'Prescription',
+        'Manufacturer',
+        'Medication type',
         'Habit forming',
         'Storage',
       ]) {
-        expect(find.text(s), findsWidgets, reason: 'missing fact label $s');
+        expect(find.text(s), findsWidgets, reason: 'missing overview label $s');
       }
+      // "Prescription" was renamed at the label, not mapped in Dart.
+      expect(find.text('Prescription'), findsNothing);
       // The Rx wording is the backend's sentence, not a schedule the app maps.
       expect(find.text('Prescription required (Rx)'), findsOneWidget);
       expect(find.text('10 tablets in 1 strip'), findsOneWidget);
@@ -313,10 +321,22 @@ void main() {
       // appear at all — an absent value is an absent ROW, never a dash.
       expect(find.text('Cold chain'), findsNothing);
       expect(find.text('—'), findsNothing);
+
+      // ONE card: the rows are in a single box, in payload order.
+      final labels = tester
+          .widgetList<Text>(find.byType(Text))
+          .map((t) => t.data)
+          .where((t) => t != null)
+          .cast<String>()
+          .toList();
+      expect(labels.indexOf('Composition') < labels.indexOf('Form'), isTrue);
+      expect(labels.indexOf('Medication type') < labels.indexOf('Storage'),
+          isTrue);
     });
 
-    testWidgets('no facts block means no section', (tester) async {
+    testWidgets('no rows means no card at all', (tester) async {
       await _pump(tester, _payload(facts: false));
+      expect(find.text('Product overview'), findsNothing);
       expect(find.text('Product details'), findsNothing);
     });
   });
@@ -373,7 +393,7 @@ void main() {
       // CMD #1896 — the gallery proves itself with its page control now; the
       // counter moved into the zoom.
       expect(find.byKey(const ValueKey('pdp-gallery-dots')), findsOneWidget);
-      expect(find.text('Product details'), findsOneWidget);
+      expect(find.text('Product overview'), findsOneWidget);
       expect(find.text('Uses'), findsOneWidget);
       expect(find.text('Side effects'), findsOneWidget);
       expect(find.text('Frequently bought together'), findsOneWidget);
@@ -441,10 +461,22 @@ void main() {
       expect(d.gallery.images.every((i) => i.counterLabel.isEmpty), isTrue);
     });
 
-    test('facts and companions keep payload order', () {
+    test('the overview and the companions keep payload order', () {
       final d = ProductDetail.fromMap(_payload());
-      expect(d.facts.rows.map((r) => r.key).toList(),
-          ['salt', 'form', 'pack', 'rx', 'habit', 'storage']);
+      // CMD #2073 — the parser sorts nothing: the merged card comes out in the
+      // order `_pdp_overview_rows()` composed it.
+      expect(d.overview.map((r) => r.label).toList(), [
+        'Composition',
+        'Form',
+        'Pack',
+        'Manufacturer',
+        'Medication type',
+        'Storage',
+        'Habit forming',
+      ]);
+      // And the block it replaced parses to empty, never to invented rows.
+      expect(d.facts.has, isFalse);
+      expect(d.facts.rows, isEmpty);
       expect(d.companions.items.map((c) => c.id).toList(), ['504544', '354517']);
     });
   });

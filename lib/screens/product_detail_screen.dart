@@ -8,8 +8,6 @@ import '../design_tokens.dart';
 import '../models/product.dart';
 import '../models/product_compare.dart';
 import '../models/product_detail.dart';
-import '../models/product_reviews.dart';
-import '../models/shell_nav.dart';
 import '../models/storefront_p3.dart';
 import '../services/storefront_fast_order.dart';
 import '../theme.dart';
@@ -24,9 +22,19 @@ import '../widgets/compare_tray.dart';
 import '../widgets/notify_control.dart';
 import '../widgets/product_image.dart';
 import '../widgets/purchase_overlay_card.dart';
-import '../widgets/product_reviews_block.dart';
 
 typedef WishlistToggle = Future<WishlistResult> Function(String productId);
+
+/// CMD #2073 — ONE type for the company, the pack line, the MRP and the sale
+/// price.
+///
+/// They used to be four treatments in a column an inch tall: an uppercase
+/// tracked caption, a plain caption, a struck caption and a heading-sized
+/// number on a plate. The spec asks for one font, one size, one weight, and
+/// `Ds.t.bodyStrong` IS that pair of tokens (type.body.size at
+/// type.subtitle.weight), so the whole block still follows a token change with
+/// no deploy. Only the ink differs, which is what tells the four apart.
+TextStyle _pdpLine(Color color) => Ds.t.bodyStrong.copyWith(color: color);
 
 /// CHANGE #636 — the full-page product detail screen (PDP).
 ///
@@ -63,11 +71,6 @@ class ProductDetailScreen extends StatefulWidget {
   /// through [MedicineRepository]; a test supplies parsed payloads so the
   /// block can be rendered with no network and no Supabase, the same
   /// constructor-injected-closure shape the rest of the protected suite uses.
-  final Future<ProductReviews> Function(String productId, int offset)? reviewsLoader;
-  final Future<ReviewWriteResult> Function(String productId, int stars, String body)? reviewSubmit;
-  final Future<ReviewWriteResult> Function(String productId, String body)? questionSubmit;
-  final Future<ReviewWriteResult> Function(String questionId, String body)? answerSubmit;
-  final Future<ReviewWriteResult> Function(String kind, String targetId)? flagRaise;
   /// CMD #2040 — one product id, not a list of ticked ones: the table is the
   /// same-salt set, composed by `pdp_salt_compare()`.
   final Future<ProductCompare> Function(String productId)? compareLoader;
@@ -79,11 +82,6 @@ class ProductDetailScreen extends StatefulWidget {
     this.notifyStatusLoader,
     this.notifyRequest,
     this.wishlistToggle,
-    this.reviewsLoader,
-    this.reviewSubmit,
-    this.questionSubmit,
-    this.answerSubmit,
-    this.flagRaise,
     this.compareLoader,
   });
 
@@ -96,12 +94,6 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
   bool _loading = true;
   bool _subscribed = false;
   bool _wishlisted = false;
-
-  /// CMD #410 — the reviews block is a SECOND call on purpose: it pages by the
-  /// backend's own offset and it is re-read after every write, while the page
-  /// payload above it is not. Folding it into product_detail_v2 would make
-  /// every "show more" refetch the whole product.
-  ProductReviews _reviews = ProductReviews.empty_;
 
 
   @override
@@ -146,8 +138,14 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
         'gallery=${res.gallery.images.length};facts=${res.facts.rows.length};'
         'purchase=${res.purchase.has};usual=${res.purchase.usualQty};'
         'companions=${res.companions.items.length}');
+    // CMD #2073 — REACHABILITY PROOF for this change: the ONE merged card, the
+    // per-product dropdown list, and the two blocks that left the page.
+    RenderLog.write('c2073_pdp_overview',
+        'overview=${res.overview.length};sections=${res.sections.length};'
+        'dropdowns=${res.sections.where((x) => x.accordion).length};'
+        'facts=${res.facts.rows.length};reviews=0;'
+        'compare_icon=${res.compareOpenLabel.isNotEmpty ? 1 : 0}');
 
-    if (res.ok) unawaited(_loadReviews());
     // CMD #409 — one product open, recorded into the customer's recently-viewed
     // ring. Fire-and-forget by contract: a customer never waits on, and is
     // never shown an error from, their own view history. An anonymous viewer
@@ -166,33 +164,6 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     final subscribed = await status(widget.productId);
     if (!mounted) return;
     setState(() => _subscribed = subscribed);
-  }
-
-  /// CMD #410 — (re)read the reviews block. Called on load and after every
-  /// successful write, because a submitted review is PENDING and only the
-  /// backend knows what the list looks like afterwards. Nothing is patched
-  /// optimistically here.
-  Future<void> _loadReviews({int offset = 0}) async {
-    ProductReviews res;
-    try {
-      final load = widget.reviewsLoader ??
-          (id, off) => MedicineRepository().fetchProductReviews(id, offset: off);
-      res = await load(widget.productId, offset);
-    } catch (_) {
-      // The block is an ADDITION to the page, never a gate on it: a product
-      // page that cannot reach the reviews RPC still shows the product. The
-      // empty payload renders as ok:false, which draws nothing at all.
-      res = ProductReviews.empty_;
-    }
-    if (!mounted) return;
-    setState(() => _reviews = res);
-    // CMD #410 — REACHABILITY PROOF for the PDP block. Canvas cannot be
-    // clicked by a tool, so this records what the backend actually decided:
-    // whether the composer is open to this account, whether the aggregate
-    // cleared its floor, and how many rows were drawn.
-    RenderLog.write('c410_reviews_block',
-        'ok=${res.ok};can_write=${res.canWrite};rating=${res.summary.has};'
-        'items=${res.items.length};qs=${res.questions.length}');
   }
 
   /// CMD #2040 — Compare is ONE tap and ONE call.
@@ -248,15 +219,22 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
           onPressed: () => Navigator.of(context).maybePop(),
         ),
         actions: [
-          // CMD #2021 — the storefront home, from a page the bottom bar cannot
-          // reach. A product page is a real route (CHANGE #636) pushed ABOVE
-          // the shell, so the Home tab is not on screen here; this pops back
-          // to the shell and asks it for the same home root the tab and the
-          // logo land on. Glyph only — it adds no string to translate.
-          IconButton(
-            icon: Icon(Icons.home_outlined, color: Ds.c.textSecondary),
-            onPressed: () => ShellHomeSignal.goHome(context),
-          ),
+          // CMD #2073 — Compare is a top-bar glyph, the same size and weight as
+          // the heart beside it, and it is the page's ONLY compare entry point:
+          // the full-width button under the price and the Compare row on every
+          // card both went. One tap still opens the SAME same-composition
+          // table `pdp_salt_compare()` composes — nothing about the call
+          // changed, only where the finger lands. The caption is the backend's
+          // (`cmp_open`), read here as the tooltip, so no word is typed in
+          // Dart; no caption, no control.
+          if (!_loading && d != null && d.ok && d.compareOpenLabel.isNotEmpty)
+            IconButton(
+              key: const ValueKey('pdp-compare-button'),
+              tooltip: d.compareOpenLabel,
+              icon: Icon(Icons.compare_arrows_rounded,
+                  color: Ds.c.textSecondary),
+              onPressed: _openCompare,
+            ),
           if (showWishlistBtn)
             IconButton(
               tooltip: d.label(
@@ -283,25 +261,6 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
               ? _NotFound(data: d)
               : _Body(
                   data: d,
-                  reviews: _reviews,
-                  onOpenCompare: _openCompare,
-                  onReviewsChanged: _loadReviews,
-                  onReview: (stars, body) =>
-                      (widget.reviewSubmit ??
-                              (id, s2, b) => MedicineRepository()
-                                  .reviewSubmit(id, s2, b))(d.id, stars, body),
-                  onQuestion: (body) =>
-                      (widget.questionSubmit ??
-                              (id, b) => MedicineRepository()
-                                  .questionSubmit(id, b))(d.id, body),
-                  onAnswer: (qid, body) =>
-                      (widget.answerSubmit ??
-                              (id, b) => MedicineRepository()
-                                  .answerSubmit(id, b))(qid, body),
-                  onFlag: (kind, target) =>
-                      (widget.flagRaise ??
-                              (k, t) => MedicineRepository()
-                                  .contentFlag(k, t))(kind, target),
                   subscribed: _subscribed,
                   notifyRequest: widget.notifyRequest,
                 ),
@@ -339,17 +298,6 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
 class _Body extends StatelessWidget {
   final ProductDetail data;
 
-  /// CMD #410 — the reviews block. CMD #2040 — and the one compare call, which
-  /// the price block and every salt-rail card share. Both are handed in
-  /// already resolved; this widget still prints and decides nothing.
-  final ProductReviews reviews;
-  final Future<void> Function() onOpenCompare;
-  final Future<void> Function() onReviewsChanged;
-  final Future<ReviewWriteResult> Function(int stars, String body) onReview;
-  final Future<ReviewWriteResult> Function(String body) onQuestion;
-  final Future<ReviewWriteResult> Function(String questionId, String body) onAnswer;
-  final Future<ReviewWriteResult> Function(String kind, String targetId) onFlag;
-
   /// CMD #1896 — the buy control moved onto the price row, so the Notify state
   /// the sticky bar used to hold comes down here with it.
   final bool subscribed;
@@ -357,13 +305,6 @@ class _Body extends StatelessWidget {
 
   const _Body({
     required this.data,
-    required this.reviews,
-    required this.onOpenCompare,
-    required this.onReviewsChanged,
-    required this.onReview,
-    required this.onQuestion,
-    required this.onAnswer,
-    required this.onFlag,
     required this.subscribed,
     required this.notifyRequest,
   });
@@ -382,19 +323,14 @@ class _Body extends StatelessWidget {
         _Gallery(gallery: data.gallery, heroId: data.id),
         SizedBox(height: Ds.space.x16),
         _TitleBlock(data: data),
-        // CMD #410 — the aggregate rating. `has` is the backend's verdict on
-        // whether there is enough evidence to show one at all; below its floor
-        // there is no row here, not a 5.0 written by a single customer.
-        if (data.rating.has) ...[
-          SizedBox(height: Ds.space.x8),
-          _RatingRow(summary: data.rating),
-        ],
+        // CMD #2073 — the star row went with the Ratings & reviews block it
+        // summarised. A rating on a page that no longer shows a single review
+        // is a number with nowhere to go.
         SizedBox(height: Ds.space.x16),
         _PriceRow(
           data: data,
           subscribed: subscribed,
           notifyRequest: notifyRequest,
-          onCompare: onOpenCompare,
         ),
         // CMD #1903 — the pack family, and the ONLY place it appears in the
         // app. Every list is one row per product now; a buyer who wants the
@@ -447,28 +383,25 @@ class _Body extends StatelessWidget {
           SizedBox(height: Ds.space.x8),
           _TrustStrip(trust: data.trust),
         ],
+        // CMD #2073 — ONE fact card. Overview and "Product details" printed
+        // facts about the same pack in two boxes; `_pdp_overview_rows()` is
+        // now the single ordered list (Composition, Form, Pack, Manufacturer,
+        // Therapeutic class, Medication type, Storage, Habit forming) and a
+        // column with nothing in it is an absent ROW, decided in SQL. The
+        // heading is `pdp_overview_title`, so renaming the card is an UPDATE.
         if (data.overview.isNotEmpty) ...[
-          const SizedBox(height: 24),
+          SizedBox(height: Ds.space.x24),
           _SectionTitle(text: data.label('pdp_overview_title')),
-          const SizedBox(height: 10),
+          SizedBox(height: Ds.space.x8),
           _OverviewTable(rows: data.overview),
         ],
-        // CMD #791 — composition & strength, form, pack, Rx/OTC, habit
-        // forming, cold chain, storage. `product_facts()` sends only the rows
-        // whose column actually holds something, so an absent value is an
-        // absent ROW here — never a label with a dash beside it.
-        if (data.facts.has) ...[
-          SizedBox(height: Ds.space.x24),
-          _SectionTitle(text: data.facts.title),
-          SizedBox(height: Ds.space.x8),
-          _FactsTable(rows: data.facts.rows),
-        ],
-        // CMD #2040 — the sections the backend flagged (`accordion:true`, from
-        // `pdp_accordion_sections` in Postgres — Introduction, Uses, Benefits
-        // today) collapse into ONE accordion with one panel open at a time.
-        // Every other section is untouched and still prints its title and its
-        // read-more body. Which sections those are is DATA: adding "How it
-        // works" to the list is an UPDATE, not a deploy.
+        // CMD #2073 — EVERY text section is a collapsed dropdown, and WHICH
+        // sections exist is decided per product: `_pdp_sections()` walks the
+        // `pdp_section_source` table and sends only the MEDICINE columns this
+        // product actually filled. There is no fixed set here and no title the
+        // page recognises — adding a column is one INSERT, not a deploy. The
+        // non-accordion loop below is kept for a payload built before this
+        // change, which still flagged only some of them.
         if (data.sections.any((s) => s.accordion)) ...[
           SizedBox(height: Ds.space.x24),
           _SectionAccordion(
@@ -501,6 +434,9 @@ class _Body extends StatelessWidget {
         // drawn further down out of the SAME CompactProductCard the storefront
         // draws. The compare tray went with it — Compare is now one button that
         // opens the table directly.
+        // CMD #2073 — and its cards carry no Compare row: compare is the top
+        // bar's glyph now, on every product page, so no card in the app draws
+        // one.
         // CMD #791 — frequently bought together, from the nightly co-purchase
         // job. `has` is the backend's verdict, so a pack with no real
         // co-purchase evidence shows no rail at all rather than a
@@ -529,28 +465,17 @@ class _Body extends StatelessWidget {
           SizedBox(height: Ds.space.x24),
           _SectionTitle(text: data.saltRail.title),
           SizedBox(height: Ds.space.x12),
-          _SaltRail(
-            rail: data.saltRail,
-            compareLabel: data.compareOpenLabel,
-            onCompare: onOpenCompare,
-          ),
+          _SaltRail(rail: data.saltRail),
         ] else if (data.similar.isNotEmpty) ...[
           const SizedBox(height: 28),
           _SectionTitle(text: data.label('pdp_similar_title')),
           const SizedBox(height: 12),
           _SimilarRail(items: data.similar),
         ],
-        // CMD #410 — ratings, reviews and Q&A. The block renders nothing at
-        // all until product_reviews() answers ok:true, so a slow second call
-        // never leaves a half-drawn section on the page.
-        ProductReviewsBlock(
-          data: reviews,
-          onChanged: onReviewsChanged,
-          onReview: onReview,
-          onQuestion: onQuestion,
-          onAnswer: onAnswer,
-          onFlag: onFlag,
-        ),
+        // CMD #2073 — Ratings & reviews and Questions & answers are OFF this
+        // page. The widget and its RPCs are untouched; the product page simply
+        // no longer draws them, so a pharmacy's buying screen ends on the
+        // products it could buy instead.
         // CMD #2051 — room at the end for the whole bottom stack, plus the
         // page's own last step of air.
         BottomStackSpacer(extra: Ds.space.x24),
@@ -716,10 +641,7 @@ class _TitleBlock extends StatelessWidget {
           SizedBox(height: Ds.space.x4),
           Text(
             company.toUpperCase(),
-            style: Ds.t.caption.copyWith(
-                color: Ds.c.textSecondary,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.7),
+            style: _pdpLine(Ds.c.textSecondary),
           ),
         ],
         if (packLine.isNotEmpty) ...[
@@ -727,40 +649,12 @@ class _TitleBlock extends StatelessWidget {
           Text(
             packLine,
             key: const ValueKey('pdp-pack-line'),
-            style: Ds.t.caption.copyWith(color: Ds.c.textSecondary),
+            style: _pdpLine(Ds.c.textSecondary),
           ),
         ],
       ],
     );
   }
-}
-
-/// CMD #410 — the stars plus the backend's own sentence. The app paints the
-/// five icons; it does not build the words beside them.
-class _RatingRow extends StatelessWidget {
-  final RatingSummary summary;
-  const _RatingRow({required this.summary});
-
-  @override
-  Widget build(BuildContext context) => Row(
-        children: [
-          for (var i = 1; i <= 5; i++)
-            Icon(
-              summary.stars >= i
-                  ? Icons.star_rounded
-                  : (summary.stars >= i - 0.5
-                      ? Icons.star_half_rounded
-                      : Icons.star_border_rounded),
-              size: Ds.space.x16,
-              color: Ds.c.warning,
-            ),
-          SizedBox(width: Ds.space.x8),
-          Flexible(
-            child: Text(summary.countLabel,
-                overflow: TextOverflow.ellipsis, style: Ds.t.caption),
-          ),
-        ],
-      );
 }
 
 /// CMD #366 row 175 — one line, both strings from `delivery_promise()`.
@@ -1019,44 +913,15 @@ class _ZoomViewerState extends State<_ZoomViewer> {
   }
 }
 
-/// CMD #791 — the fact table. Same card as the Overview above it; both halves
-/// of every row arrive rendered.
-class _FactsTable extends StatelessWidget {
-  final List<PdFactRow> rows;
-  const _FactsTable({required this.rows});
-
-  @override
-  Widget build(BuildContext context) => _FactCard(
-        rows: [for (final r in rows) (label: r.label, value: r.value)],
-      );
-}
-
-/// CMD #1896 — the price block, and the one control that acts on it.
-///
-/// Reading order is the order a pharmacy reads a pack: the printed ceiling
-/// first, small, struck and grey, then the number they actually pay, large.
-/// Beside the big number, the discount off MRP; under it, the per-unit rate.
-/// All four are strings from `price_lines` — this widget divides nothing,
-/// subtracts nothing and formats nothing.
-///
-/// The buy control sits on the same row, right-aligned, because the price and
-/// the button that acts on it belong together. It used to live in a sticky bar
-/// that reprinted the price to explain itself.
 class _PriceRow extends StatelessWidget {
   final ProductDetail data;
   final bool subscribed;
   final NotifyRequest? notifyRequest;
 
-  /// CMD #2040 — Compare, directly under the Sale price line. It is the PDP's
-  /// only compare entry point now: one tap, one table of the same salt. The
-  /// tray that made the customer tick boxes first went with the second rail.
-  final Future<void> Function() onCompare;
-
   const _PriceRow({
     required this.data,
     required this.subscribed,
     required this.notifyRequest,
-    required this.onCompare,
   });
 
   @override
@@ -1090,22 +955,6 @@ class _PriceRow extends StatelessWidget {
             ),
           ],
         ),
-        // The caption is `cmp_open`. No word, no button — this page never
-        // supplies one of its own.
-        if (data.compareOpenLabel.isNotEmpty) ...[
-          SizedBox(height: Ds.space.x8),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: SizedBox(
-              key: const ValueKey('pdp-compare-button'),
-              height: CompactProductCard.compareRowH,
-              child: CompareButton(
-                label: data.compareOpenLabel,
-                onTap: () => onCompare(),
-              ),
-            ),
-          ),
-        ],
         // The margin line: the whole reason a pharmacy is on this screen.
         // Rendered only when the backend computed one — never derived here
         // from mrp minus price, which would be the app pricing the product.
@@ -1424,16 +1273,14 @@ class _MrpLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final style = Ds.t.caption.copyWith(
-      color: Ds.c.textSecondary,
+    final style = _pdpLine(Ds.c.textSecondary).copyWith(
       decoration: line.strike ? TextDecoration.lineThrough : null,
       decorationColor: Ds.c.textSecondary,
     );
     return Row(
       children: [
         if (line.caption.isNotEmpty) ...[
-          Text(line.caption,
-              style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+          Text(line.caption, style: _pdpLine(Ds.c.textSecondary)),
           SizedBox(width: Ds.space.x4),
         ],
         Flexible(child: Text(line.value, maxLines: 1, style: style)),
@@ -1484,10 +1331,8 @@ class _SaleLine extends StatelessWidget {
     // the plain row it has always drawn rather than printing nothing.
     final useCard = c != null && c.priceDisplay.isNotEmpty;
 
-    final TextStyle valueStyle = line.hasAmount
-        ? AppType.h4.copyWith(color: Brand.price)
-        : AppType.l4.copyWith(
-            color: Brand.inkSub, fontWeight: FontWeight.w600);
+    final TextStyle valueStyle = _pdpLine(
+        line.hasAmount ? Brand.price : Ds.c.textSecondary);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1498,7 +1343,13 @@ class _SaleLine extends StatelessWidget {
           textBaseline: TextBaseline.alphabetic,
           children: [
             if (useCard)
-              Flexible(child: CardSaleLine(price: c, height: _badgeH))
+              Flexible(
+                  child: CardSaleLine(
+                price: c,
+                height: _badgeH,
+                labelStyle: _pdpLine(Ds.c.textSecondary),
+                valueStyle: _pdpLine(Ds.c.surface),
+              ))
             else
               Flexible(
                   child: Text(line.value, maxLines: 1, style: valueStyle)),
@@ -1875,19 +1726,16 @@ class _CollapsibleBodyState extends State<_CollapsibleBody> {
 /// because they are all the same salt — that is what the table compares.
 class _SaltRail extends StatelessWidget {
   final PdSaltRail rail;
-  final String compareLabel;
-  final Future<void> Function() onCompare;
 
-  const _SaltRail({
-    required this.rail,
-    required this.compareLabel,
-    required this.onCompare,
-  });
+  const _SaltRail({required this.rail});
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: CompactProductCard.extentWithCompare,
+      // CMD #2073 — the plain extent: with no Compare row the rail is exactly
+      // as tall as the storefront grid's card, and the taller extent is what
+      // the card carried the row in.
+      height: CompactProductCard.extent,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: EdgeInsets.zero,
@@ -1899,8 +1747,6 @@ class _SaltRail extends StatelessWidget {
             width: CompactProductCard.railWidth,
             child: CompactProductCard(
               product: p,
-              compareLabel: compareLabel,
-              onCompare: () => onCompare(),
               // Each card pushes its OWN product page — a fresh route, so back
               // returns to this product rather than skipping the chain.
               onTap: () =>
@@ -2323,16 +2169,23 @@ class _RxTag extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (data.rxLabel.isEmpty) return const SizedBox.shrink();
-    final bg = Ds.hex(data.rxTone?['bg'], Ds.c.infoSoft);
-    final fg = Ds.hex(data.rxTone?['fg'], Ds.c.info);
-    return Container(
-      padding: EdgeInsets.symmetric(
-          horizontal: Ds.space.x8, vertical: Ds.space.x4),
-      decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rChip),
-      child: Text(
-        data.rxLabel,
-        style: Ds.t.caption.copyWith(color: fg, fontWeight: FontWeight.w500),
-      ),
+    // CMD #2073 — the SAME chip the pack badge is, so Rx/OTC and "Strip" read
+    // as one pair: one shape, one fill. `tone.name` is the backend's word for
+    // the token, which is why the two stay identical through a token change;
+    // the hex pair beside it is what a build older than this change reads, and
+    // the info tint is the last resort.
+    final tone = (data.rxTone?['name'] ?? '').toString();
+    final bg = tone == 'success'
+        ? Ds.c.successSoft
+        : Ds.hex(data.rxTone?['bg'], Ds.c.infoSoft);
+    final fg = tone == 'success'
+        ? Ds.c.success
+        : Ds.hex(data.rxTone?['fg'], Ds.c.info);
+    return _Chip(
+      key: const ValueKey('pdp-rx-tag'),
+      text: data.rxLabel,
+      bg: bg,
+      fg: fg,
     );
   }
 }

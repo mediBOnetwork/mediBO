@@ -68,19 +68,26 @@ void main() {
   });
 
   test('2 — the product page still has compare', () {
-    // CMD #2040 changed the FORM, not the rule. #746 put compare on the full
-    // product page and nowhere else, and it still is — but the tray (tick
-    // several rows, then press Compare) became one outlined button that opens
-    // the same-salt table directly, so the widgets to look for are the button
-    // and the sheet rather than the checkbox and the bar.
+    // CMD #2040 changed the FORM, not the rule; CMD #2073 changed it again.
+    // #746 put compare on the full product page and nowhere else, and it still
+    // is — the outlined button under the price became a top-bar glyph beside
+    // the heart, so what to look for is that control and the sheet it opens.
     final src = _read('lib/screens/product_detail_screen.dart');
-    expect(src.contains('CompareButton'), isTrue,
+    expect(src.contains("ValueKey('pdp-compare-button')"), isTrue,
         reason: 'compare belongs on the full product page — removing it there '
             'is not what CHANGE #746 asked for');
+    expect(src.contains('_openCompare'), isTrue,
+        reason: 'the control must still make the same-salt call');
     expect(src.contains('CompareSheet'), isTrue,
-        reason: 'the button must still open the backend-composed table');
-    // And it is still the ONLY surface that carries it: the shared card takes
-    // the caption as an opt-in parameter, default off (CMD #2040 spec 5).
+        reason: 'the control must still open the backend-composed table');
+    // CMD #2073 — and NO card anywhere draws a Compare row: the page's own
+    // rail stopped passing the caption, and the shared card still takes it as
+    // an opt-in parameter that defaults off.
+    expect(src.contains('CompareButton'), isFalse,
+        reason: 'the full-width Compare button under the price is gone — it '
+            'is the top-bar glyph now');
+    expect(src.contains('compareLabel:'), isFalse,
+        reason: 'a card on the product page must not carry a Compare row');
     final card = _read('lib/widgets/compact_product_card.dart');
     expect(card.contains("this.compareLabel = ''"), isTrue,
         reason: 'a storefront card must not grow a Compare button by default');

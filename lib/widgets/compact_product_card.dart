@@ -1112,7 +1112,21 @@ class CardPriceLines extends StatelessWidget {
 class CardSaleLine extends StatelessWidget {
   final CardPrice price;
   final double height;
-  const CardSaleLine({super.key, required this.price, required this.height});
+
+  /// CMD #2073 — the product page draws this row in ONE type with the company,
+  /// the pack line and the MRP above it, so it hands its own style down rather
+  /// than growing a second copy of the widget. Null is the card's own type,
+  /// which is what every grid still gets.
+  final TextStyle? labelStyle;
+  final TextStyle? valueStyle;
+
+  const CardSaleLine({
+    super.key,
+    required this.price,
+    required this.height,
+    this.labelStyle,
+    this.valueStyle,
+  });
 
   /// The badge's side padding. Vertical padding would fight [height].
   static const double _padH = 8;
@@ -1139,8 +1153,9 @@ class CardSaleLine extends StatelessWidget {
               price.priceDisplay,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: AppType.l5.copyWith(
-                fontWeight: FontWeight.w800,
+              style: (valueStyle ??
+                      AppType.l5.copyWith(fontWeight: FontWeight.w800))
+                  .copyWith(
                 color: price.saleFg == null
                     ? Colors.white
                     : Color(price.saleFg!),
@@ -1166,7 +1181,7 @@ class CardSaleLine extends StatelessWidget {
           Text(
             price.saleLabel,
             maxLines: 1,
-            style: AppType.t1.copyWith(color: Brand.inkSub),
+            style: labelStyle ?? AppType.t1.copyWith(color: Brand.inkSub),
           ),
           const SizedBox(width: CompactProductCard._gapM),
         ],

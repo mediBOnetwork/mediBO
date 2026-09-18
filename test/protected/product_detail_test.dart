@@ -1275,8 +1275,13 @@ void main() {
     });
   });
 
-  group('CMD #2040 — Compare is one button and one call', () {
-    testWidgets('the button prints cmp_open verbatim and opens the backend '
+  // CMD #2073 — Compare moved to the TOP BAR, beside the heart, and the
+  // full-width button under the price went with the Compare row on every card.
+  // The CALL is untouched: one tap, one `pdp_salt_compare()` for the product
+  // the page is standing on, and the caption is still the backend's `cmp_open`
+  // — read as the glyph's tooltip, because a glyph has no words of its own.
+  group('CMD #2073 — Compare is one top-bar glyph and one call', () {
+    testWidgets('the glyph carries cmp_open verbatim and opens the backend '
         'table for THIS product', (tester) async {
       var askedFor = '';
       await _pumpWithCompare(
@@ -1288,7 +1293,18 @@ void main() {
         },
       );
 
-      expect(find.text('Compare'), findsWidgets);
+      // A glyph, in the bar — not a button in the page body.
+      final btn = tester.widget<IconButton>(
+          find.byKey(const ValueKey('pdp-compare-button')));
+      expect(btn.tooltip, 'Compare',
+          reason: 'the caption is cmp_open, printed verbatim as the tooltip');
+      expect(find.descendant(
+            of: find.byType(AppBar),
+            matching: find.byKey(const ValueKey('pdp-compare-button')),
+          ), findsOneWidget);
+      // And no card on this page grows one of its own.
+      expect(find.byType(CompareButton), findsNothing);
+
       await tester.tap(find.byKey(const ValueKey('pdp-compare-button')));
       await tester.pumpAndSettle();
 
@@ -1302,7 +1318,7 @@ void main() {
       expect(find.text('Zeta Tablet'), findsOneWidget);
     });
 
-    testWidgets('no open_label, no button — the app supplies no caption',
+    testWidgets('no open_label, no glyph — the app supplies no caption',
         (tester) async {
       await _pump(tester, _payload());
       expect(find.byKey(const ValueKey('pdp-compare-button')), findsNothing);

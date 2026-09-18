@@ -111,11 +111,10 @@ kotlin {
 }
 
 dependencies {
-    // CMD #2076 — the androidTest runner for Firebase Test Lab (ActivityTestRule
-    // lives in androidx.test:rules). Test-source-set only: nothing here reaches
-    // the release bundle or the 16 KB / signing gates.
-    androidTestImplementation("androidx.test:runner:1.6.2")
-    androidTestImplementation("androidx.test:rules:1.6.1")
+    // CMD #2076 — the androidTest runner for Firebase Test Lab needs nothing
+    // declared here: the integration_test plugin exports androidx.test
+    // runner/rules as `api`, and pinning them again fails Gradle's consistent
+    // resolution (checkDebugAndroidTestAarMetadata). See MainActivityTest.java.
     // CHANGE #225 — DocScanReadiness needs these symbols in the app module.
     // play-services-base carries GoogleApiAvailability + the ModuleInstall API;
     // the document-scanner artifact is already on the classpath transitively via

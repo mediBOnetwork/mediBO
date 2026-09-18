@@ -671,3 +671,39 @@ begin
   end $b$;$t$)
   on conflict (name) do update set body = excluded.body, note = excluded.note, enabled = true;
 end $mig$;
+
+-- ── 6. the config registry (CMD #1949): every knob is a registered key ───────
+do $mig$
+begin
+  if to_regclass('public.dev_config_registry') is null then return; end if;
+  insert into public.dev_config_registry
+    (key_path, description, type, default_value, owner_change, read_by, label, help, control, editable, min_value, max_value, sort_order)
+  values
+    ('build_rules.android_testlab',
+     'Android Test Lab gate: the rule text, gate name, Firebase project, device, timeout, free daily quota and the spec-derived check rules behind scripts/android_testlab.sh',
+     'object', null, 2076, array['sh:scripts/android_testlab.sh','sh:scripts/publish_play.sh','sh:runner.sh'], null, null, null, false, null, null, 1010),
+    ('build_rules.android_testlab.enforce',
+     'Whether a Play Production upload is refused until the Firebase Test Lab matrix is green (off needs enforce_off_reason)',
+     'boolean', 'true'::jsonb, 2076, array['sql:android_testlab_gate','sql:_dev_android_gate'], 'Enforce the Test Lab gate', 'Switch off only with a written reason; rg_check goes red on an unexplained off.', 'switch', true, null, null, 1011),
+    ('build_rules.android_testlab.enforce_off_reason',
+     'The written reason the Test Lab gate is switched off, shown by rg_check when enforce is false',
+     'string', '""'::jsonb, 2076, array['sql:android_testlab_gate'], 'Why the gate is off', null, 'text', true, null, null, 1012),
+    ('build_rules.android_testlab.daily_quota',
+     'Firebase Test Lab virtual-device runs this project may start per day — the free Spark allowance, never above 10',
+     'number', '10'::jsonb, 2076, array['sql:android_testlab_begin'], 'Daily Test Lab runs', 'Runs beyond this are recorded as quota and never started.', 'number', true, 1, 10, 1013),
+    ('build_rules.android_testlab.timeout_s',
+     'Hard timeout in seconds for one Firebase Test Lab matrix (one device, one API level)',
+     'number', '600'::jsonb, 2076, array['sh:scripts/android_testlab.sh'], 'Matrix timeout (s)', null, 'number', true, 60, 600, 1014),
+    ('build_rules.android_testlab.device.model',
+     'The one Firebase Test Lab virtual device model the matrix runs on (fallback_models when it is retired)',
+     'string', '"MediumPhone.arm"'::jsonb, 2076, array['sh:scripts/android_testlab.sh'], 'Test Lab device model', null, 'text', true, null, null, 1015),
+    ('build_rules.android_testlab.device.version',
+     'The one Android API level the Firebase Test Lab matrix runs at',
+     'string', '"33"'::jsonb, 2076, array['sh:scripts/android_testlab.sh'], 'Test Lab API level', null, 'text', true, null, null, 1016)
+  on conflict (key_path) do update
+    set description = excluded.description, type = excluded.type, default_value = excluded.default_value,
+        owner_change = excluded.owner_change, read_by = excluded.read_by, label = excluded.label,
+        help = excluded.help, control = excluded.control, editable = excluded.editable,
+        min_value = excluded.min_value, max_value = excluded.max_value, sort_order = excluded.sort_order,
+        updated_at = now();
+end $mig$;

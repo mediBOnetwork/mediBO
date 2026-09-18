@@ -109,10 +109,10 @@ else
 fi
 
 # ── 6  the in-app updater: the backend knows the code the APK will carry ────
-CODE=$(grep -oP 'const int kAndroidVersionCode = \K\d+' lib/services/android_update_check.dart | head -1)
+CODE=$(grep -oP 'const int kAndroidVersionCode = \K\d+' lib/services/app_update_feed.dart | head -1)
 U=$(curl -s -X POST "$URL/rest/v1/rpc/app_update_check" \
       -H "apikey: $ANON" -H "Content-Type: application/json" \
-      -d "$(jq -nc --argjson c "${CODE:-0}" '{p_platform:"android",p_version_code:$c}')")
+      -d "$(jq -nc --arg c "${CODE:-0}" '{p_platform:"android",p_installed_version:$c}')")
 if jq -e 'type=="object"' >/dev/null 2>&1 <<<"$U"; then
   ok "app_update_check answers for android code $CODE"
 else

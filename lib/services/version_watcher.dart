@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
@@ -9,6 +9,7 @@ import '../build_info.dart';
 import '../widgets/update_bar.dart';
 import 'app_update_feed.dart';
 import 'page_reload.dart';
+import 'sw_probe.dart';
 import '../utils/render_log.dart';
 
 /// Polls /version.json and, when a newer build is live, raises the floating
@@ -174,6 +175,11 @@ class VersionWatcher {
 
   /// Begin periodic polling. Call immediately after init().
   void start() {
+    // CMD #2065 — THE WEB WATCHER IS WEB-ONLY. It used to be started on every
+    // platform, which is how an Android phone could be told about a build that
+    // lives on a CDN and that Play has never heard of. Android asks Play; see
+    // AndroidUpdateBar.
+    if (!kIsWeb) return;
     _firstPoll = Timer(_firstDelay, _check);
     _arm();
     // CMD #2028 — a tab that was in the background for an hour must not wait
@@ -198,6 +204,13 @@ class VersionWatcher {
 
   Future<void> _check() async {
     if (_handled) return;
+    // CMD #2065 — AN INSTALLED PWA IS A DIFFERENT QUESTION. It does not reload
+    // when a deploy lands: the shell it booted is the shell it keeps until its
+    // service worker is replaced, and the browser parks that replacement in
+    // `waiting`. That parked worker IS the update here, and version.json
+    // cannot see it. Asked first, and only when this really is the installed
+    // app — a browser tab keeps the version.json answer it always had.
+    if (await _checkPwa()) return;
     final live = await _fetchCommit();
     try {
       RenderLog.write(
@@ -253,13 +266,49 @@ class VersionWatcher {
     }
   }
 
+  /// CMD #2065 — the PWA branch. Returns true when it raised the bar, so the
+  /// version.json comparison is skipped: one bar, one reason, one action.
+  Future<bool> _checkPwa() async {
+    try {
+      if (!await isStandalonePwa()) return false;
+      final state = await waitingWorkerState();
+      final res = await AppUpdateFeed.fetch(
+        platform: AppUpdateFeed.pPwa,
+        installedVersion: _bootCommit,
+        liveVersion: _liveChange.isEmpty ? null : _liveChange,
+        platformState: state,
+      );
+      try {
+        RenderLog.write('c2065_pwa_worker',
+            'state=$state;show=${res?[AppUpdateFeed.kShow]};reason=${res?[AppUpdateFeed.kReason]}');
+      } catch (_) {}
+      if (res == null || res[AppUpdateFeed.kShow] != true) return false;
+      _payload = res;
+      _handled = true;
+      _arm();
+      _showBanner(onUpdate: _applyWorker, platform: AppUpdateFeed.pPwa);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Update Now, on a PWA: let the waiting worker take over, then reload.
+  void _applyWorker() {
+    updateBar.markUpdating();
+    try {
+      RenderLog.write('c2065_pwa_skip_waiting', 1);
+    } catch (_) {}
+    applyWaitingWorker();
+  }
+
   /// CMD #2028 — the backend decides. The tab hands over both build strings
   /// and renders whatever comes back; if the RPC is unreachable the pill still
   /// goes up, on its ui_copy fallbacks, because a browser on a stale bundle is
   /// the one case where saying nothing is worse than saying it plainly.
   Future<void> _raise(String from, String to) async {
     final res = await AppUpdateFeed.fetch(
-        platform: 'web', build: from, liveBuild: to);
+        platform: AppUpdateFeed.pWeb, installedVersion: from, liveVersion: to);
     if (res != null) {
       _payload = res;
       _arm();
@@ -271,6 +320,14 @@ class VersionWatcher {
       }
     }
     _showBanner();
+  }
+
+  Future<void> _dismiss(String platform) async {
+    await AppUpdateFeed.markDismissed(platform);
+    updateBar.hide();
+    // The bar was taken down, not the update: the next check must be free to
+    // raise it again the moment the backend stops calling it dismissed.
+    _handled = false;
   }
 
   void _reload() {
@@ -302,11 +359,17 @@ class VersionWatcher {
   /// Nothing visual lives here any more. Both strings are ui_copy keys and
   /// every token is read in the widget, so rewording or restyling the prompt
   /// stays an UPDATE, not a deploy.
-  void _showBanner() {
+  void _showBanner({VoidCallback? onUpdate, String platform = AppUpdateFeed.pWeb}) {
     // Belt and braces: a MaterialBanner left over from a previous build (or a
     // hot reload across this change) must not linger at the top.
     messengerKey.currentState?.clearMaterialBanners();
-    updateBar.show(onUpdate: _reload, payload: _payload);
+    updateBar.show(
+      onUpdate: onUpdate ?? _reload,
+      payload: _payload,
+      // CMD #2065 — Later, remembered under THIS platform's key. A phone that
+      // postponed the Android update has said nothing about this browser.
+      onDismiss: () => _dismiss(platform),
+    );
     try {
       RenderLog.write('c286_update_prompt_shown', 'surface=bottom_bar');
     } catch (_) {}

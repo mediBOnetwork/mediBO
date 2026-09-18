@@ -40,11 +40,11 @@ if [ ! -f android/key.properties ] && [ "${ALLOW_DEBUG_SIGNING:-}" != "1" ]; the
 fi
 
 # versionName/versionCode live in android/app/build.gradle.kts and MUST stay in
-# lockstep with kAndroidVersionCode in lib/services/android_update_check.dart —
+# lockstep with kAndroidVersionCode in lib/services/app_update_feed.dart —
 # the updater compares the backend's latest code against that constant.
 VER=$(grep -oP 'versionName = "\K[^"]+' android/app/build.gradle.kts)
 CODE=$(grep -oP 'versionCode = \K\d+' android/app/build.gradle.kts)
-DART_CODE=$(grep -oP 'kAndroidVersionCode = \K\d+' lib/services/android_update_check.dart)
+DART_CODE=$(grep -oP 'kAndroidVersionCode = \K\d+' lib/services/app_update_feed.dart)
 if [ "$CODE" != "$DART_CODE" ]; then
   echo "❌  versionCode $CODE != kAndroidVersionCode $DART_CODE — fix the lockstep first." >&2
   exit 3

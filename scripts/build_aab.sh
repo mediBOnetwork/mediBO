@@ -46,7 +46,7 @@ fi
 
 VER=$(grep -oP 'versionName = "\K[^"]+' android/app/build.gradle.kts)
 CODE=$(grep -oP 'versionCode = \K\d+' android/app/build.gradle.kts)
-DART_CODE=$(grep -oP 'kAndroidVersionCode = \K\d+' lib/services/android_update_check.dart)
+DART_CODE=$(grep -oP 'kAndroidVersionCode = \K\d+' lib/services/app_update_feed.dart)
 if [ "$CODE" != "$DART_CODE" ]; then
   echo "❌  versionCode $CODE != kAndroidVersionCode $DART_CODE — fix the lockstep first." >&2
   exit 3

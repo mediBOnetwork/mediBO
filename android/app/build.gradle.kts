@@ -36,6 +36,10 @@ android {
         applicationId = "in.medibo.app"
         minSdk = flutter.minSdkVersion
         targetSdk = 36
+        // CMD #2076 — Firebase Test Lab drives integration_test/android_gate_test.dart
+        // through this runner (android/app/src/androidTest). Debug/androidTest only;
+        // the release AAB carries none of it.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         versionCode = 51
         versionName = "1.3.30"
     }
@@ -107,6 +111,11 @@ kotlin {
 }
 
 dependencies {
+    // CMD #2076 — the androidTest runner for Firebase Test Lab (ActivityTestRule
+    // lives in androidx.test:rules). Test-source-set only: nothing here reaches
+    // the release bundle or the 16 KB / signing gates.
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:rules:1.6.1")
     // CHANGE #225 — DocScanReadiness needs these symbols in the app module.
     // play-services-base carries GoogleApiAvailability + the ModuleInstall API;
     // the document-scanner artifact is already on the classpath transitively via

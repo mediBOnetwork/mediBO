@@ -192,6 +192,21 @@ update auth.users u
  where u.id in (select account_id from public.qa_test_identities where account_id is not null)
    and coalesce((u.raw_user_meta_data->>'test_only')::boolean, false) = false;
 
+-- the harness reads test_identities(); the VM seeder needs the account id to set
+-- a password through the GoTrue admin API. Additive: every existing key stays.
+create or replace function public.test_identities()
+returns jsonb
+language sql stable security definer set search_path to 'public'
+as $fn$
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'role', t.role, 'identity', coalesce(t.identity,''),
+           'ready', t.ready, 'note', coalesce(t.note,''),
+           'account_id', t.account_id) order by t.role), '[]'::jsonb)
+    from public.qa_test_identities t;
+$fn$;
+revoke all on function public.test_identities() from public, anon;
+grant execute on function public.test_identities() to authenticated, service_role;
+
 -- ── 5. reports: the company list never shows a synthetic company ────────────
 create or replace function public.admin_list_companies(p_search text DEFAULT ''::text)
  RETURNS TABLE(id uuid, company_name text, email text, city text)

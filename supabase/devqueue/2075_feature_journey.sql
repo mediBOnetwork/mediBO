@@ -675,4 +675,27 @@ begin
     'has_more', coalesce(v_more, false), 'next_after_id', v_last);
 end $function$;
 
+-- ── 11. the deploy card knows the new phase ────────────────────────────────
+-- direct_deploy.sh reports 'journey' after the lock is released and before
+-- 'deployed', while the feature journey runs on medibo.in.
+create or replace function public._deploy_direct_phase(p_status text)
+ RETURNS jsonb
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+  select case p_status
+    when 'starting'     then jsonb_build_object('where','queue','word','starting')
+    when 'waiting_lock' then jsonb_build_object('where','queue','word','waiting for the deploy lock')
+    when 'merging'      then jsonb_build_object('where','lock','word','merging the branch onto the live base')
+    when 'testing'      then jsonb_build_object('where','lock','word','running the protected suite')
+    when 'building'     then jsonb_build_object('where','lock','word','building the web bundle')
+    when 'migrating'    then jsonb_build_object('where','lock','word','replaying migrations on live')
+    when 'verifying'    then jsonb_build_object('where','lock','word','verifying live')
+    when 'journey'      then jsonb_build_object('where','done','word','running the feature journey on medibo.in')
+    when 'deployed'     then jsonb_build_object('where','done','word','live')
+    when 'failed'       then jsonb_build_object('where','done','word','failed')
+    else jsonb_build_object('where','lock','word', p_status)
+  end
+$function$;
+
 commit;

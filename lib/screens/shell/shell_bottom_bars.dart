@@ -615,40 +615,35 @@ class _CartBadgePulseState extends State<_CartBadgePulse>
       );
 }
 
-// ───────────────────── The bottom stack (CMD #2051) ─────────────────────────
+// ────────────────── The bottom stack (CMD #2051 / #2066) ────────────────────
 
-/// The storefront's ONE piece of bottom chrome, positioned.
+/// The shell's ONE piece of bottom chrome, positioned.
 ///
 /// #2037 lifted the floating pill by the update card's measured height, which
-/// worked only because the two agreed on a number: the card was an overlay
+/// worked only because two widgets agreed on a number: the card was an overlay
 /// installed from `MaterialApp.builder` and the pill was `Positioned` inside
 /// the shell's own Stack, so neither could see the other and the offset was
-/// the only thing holding them apart. On the product page — a route pushed
-/// over the shell, with its own Stack and no lift — they did not hold apart at
-/// all.
+/// the only thing holding them apart. #2051 made them one column. #2066 made
+/// every height in that column a CONSTANT, so nothing above it ever moves.
 ///
-/// [StorefrontBottomStack] is one column: the bar, then the pill above it.
 /// Anchored at `bottom: 0` of the shell body, which is the TOP OF THE BOTTOM
 /// NAV, because a Scaffold body ends where its `bottomNavigationBar` begins.
-/// So "flush on the nav" needs no number at all.
+/// So "flush on the nav" needs no number at all — and the stack asks that same
+/// Scaffold whether a nav is there, which is how the update bar renders on a
+/// shell with tabs and on nothing else.
 ///
-/// CMD #2043 — and WHICH page floats the pill is still the registry's answer,
-/// not a page number written here. Both call sites used to read `_index == 0`,
-/// which was written when Home was the only storefront surface and was never
+/// CMD #2043 — WHICH page draws the pill is still the registry's answer, not a
+/// page number written here. Both call sites used to read `_index == 0`, which
+/// was written when Home was the only storefront surface and was never
 /// revisited when the Catalogue became page 12: a shopper browsing a company
 /// or a salt list had a full cart and no way back to it. `cart_pill` is a
 /// column on the slot row, so adding a surface is an UPDATE.
 ///
-/// Until the registry answers, Home alone floats the pill — the same surface
-/// it floated on before, so a slow nav fetch can never take away a control
-/// that was already there. The decision itself lives on
-/// [CartPill.floatsOnPage], a pure function next to the widget it governs, so
-/// the protected suite can hold it down without booting the shell.
-///
-/// The BAR is not subject to that question: an update is pending on every
-/// storefront surface or on none, so the stack is mounted whatever the page,
-/// and only the pill slot asks the registry.
-Widget shellBottomStack(VoidCallback onTap, int page) =>
+/// CMD #2066 — the stack is mounted on the ADMIN/staff shell too, because the
+/// update bar belongs wherever there are tabs, whatever tabs that user type
+/// has. Staff float no cart pill, so [staff] reserves the pill's space (the
+/// geometry is constant for everyone) and draws nothing in it.
+Widget shellBottomStack(VoidCallback onTap, int page, {bool staff = false}) =>
     ValueListenableBuilder<List<Map<String, dynamic>>>(
       valueListenable: CustomerNav.value,
       builder: (_, slots, __) => Positioned(
@@ -656,8 +651,8 @@ Widget shellBottomStack(VoidCallback onTap, int page) =>
         right: 0,
         bottom: 0,
         child: StorefrontBottomStack(
-          onCartTap: onTap,
-          showPill: CartPill.floatsOnPage(slots, page),
+          onCartTap: staff ? null : onTap,
+          showPill: !staff && CartPill.floatsOnPage(slots, page),
         ),
       ),
     );

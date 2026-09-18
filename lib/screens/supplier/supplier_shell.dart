@@ -17,6 +17,7 @@ import 'supplier_payout_screen.dart';
 import 'supplier_records_screen.dart';
 import 'supplier_scorecard_inbox.dart'; // #465 row 65 — the bell + inbox
 import 'supplier_staff_screen.dart';
+import '../../widgets/bottom_stack.dart';
 
 class SupplierShell extends StatefulWidget {
   // When set, the shell runs in View-As preview mode using admin preview RPCs.
@@ -362,7 +363,15 @@ class _SupplierShellState extends State<SupplierShell> {
 
     return Scaffold(
       backgroundColor: Ds.c.bg,
-      body: Column(children: [
+      // CMD #2066 — the update bar renders wherever a shell has tabs, whatever
+      // tabs that user type has. A supplier's are the mobile bottom nav below,
+      // so the ONE shared bottom stack is mounted here too: the bar in its
+      // reserved slot, flush on that nav, and nothing else (a supplier has no
+      // cart, so the pill's space is reserved and empty — the chrome is the
+      // same height on every shell). On desktop there is no bottom nav, so the
+      // stack asks the Scaffold and draws no bar.
+      body: Stack(children: [
+        Column(children: [
         _SupplierHeader(
           inboxUnread: _inboxUnread,
           onInbox: viewAsSupplierId == null
@@ -396,6 +405,13 @@ class _SupplierShellState extends State<SupplierShell> {
           ),
         Expanded(
           child: IndexedStack(index: _index, children: pages),
+        ),
+        ]),
+        const Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: StorefrontBottomStack(showPill: false),
         ),
       ]),
       bottomNavigationBar: isDesktop ? null : _MobileBottomNav(

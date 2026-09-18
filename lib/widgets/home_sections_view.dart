@@ -133,19 +133,17 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
   /// page at once without either seeing the other's half-applied result.
   final Set<String> _paging = <String>{};
 
-  /// CMD #2051 — how much of the bottom the storefront's bottom chrome is
-  /// covering. The Scaffold already stops this list at the top of the bottom
-  /// nav, so the stack sitting ON that nav (the update bar, and the cart pill
-  /// above it) is the only thing left to scroll clear of. It is the stack's
-  /// OWN measured height (0 while it is down), published by
-  /// [bottomStackHeight], so this file assumes nothing about how tall it is —
-  /// and it is right again the frame after the bar appears or a cart empties.
-  double _updateBarClearance = bottomStackHeight.value;
-
-  void _onUpdateBar() {
-    if (!mounted) return;
-    setState(() => _updateBarClearance = bottomStackHeight.value);
-  }
+  /// CMD #2051/#2066 — how much of the bottom the storefront's bottom chrome
+  /// is covering. The Scaffold already stops this list at the top of the
+  /// bottom nav, so the stack sitting ON that nav (the update-bar slot, and
+  /// the cart pill above it) is the only thing left to scroll clear of.
+  ///
+  /// It is a CONSTANT. #2051 measured it and re-published it, which meant this
+  /// list re-padded — and the content above it jumped — every time the bar
+  /// arrived, a cart emptied or the update sentence took a second line. The
+  /// slot is reserved whether or not there is an update, so there is one
+  /// number, right on the first frame, that never changes.
+  double get _updateBarClearance => bottomStackHeight;
 
   @override
   void didUpdateWidget(covariant HomeSectionsView old) {
@@ -177,7 +175,6 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
   void dispose() {
     _payload?.removeListener(_onPayload);
     _payload?.dispose();
-    bottomStackHeight.removeListener(_onUpdateBar);
     _homeFeedOffset = _scroll.hasClients ? _scroll.offset : _homeFeedOffset;
     _scroll.dispose();
     super.dispose();
@@ -211,7 +208,6 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
   @override
   void initState() {
     super.initState();
-    bottomStackHeight.addListener(_onUpdateBar);
     // Instant paint from the memo, then ALWAYS refetch in the background so a
     // backend change (counts, delivery time, section order) shows on the next
     // open rather than being pinned to a stale cache. Scroll offset survives

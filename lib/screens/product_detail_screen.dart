@@ -306,10 +306,15 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                   notifyRequest: widget.notifyRequest,
                 ),
           // CMD #2051 — the SAME bottom stack the shell draws, so the update
-          // bar and the cart pill cannot overlap here either. This page is a
-          // route pushed over the shell, so there is no bottom nav under it
-          // and the stack clears the system gesture area itself (`overNav:
-          // false`).
+          // bar and the cart pill cannot overlap here either.
+          //
+          // CMD #2066 — and it needs no flag from this page. The stack asks
+          // the Scaffold it is in whether there is a bottom nav: this page is
+          // a route pushed over the shell and has none, so the update bar does
+          // NOT render here (an update is offered on the shell, where it has an
+          // edge to sit on) and the stack clears the system gesture area
+          // itself. The pill still floats, at exactly the height it has on the
+          // shell, because the bar's slot is reserved either way.
           //
           // The pill inside it still shows itself: `render.pill.show` is the
           // backend's answer to "is there a cart", so an empty cart draws
@@ -321,7 +326,6 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
               bottom: 0,
               child: StorefrontBottomStack(
                 onCartTap: () => requestOpenCart(context),
-                overNav: false,
               ),
             ),
         ],

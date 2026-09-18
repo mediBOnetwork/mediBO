@@ -22,10 +22,21 @@
 //      navigation bar exists — a route pushed over the shell has no edge for
 //      it to sit on and gets no bar.
 //
-//   3. THERE IS NO WAY OUT BUT UPDATING. One button, no Later, no dismiss, no
-//      close icon, no version text. A Play flow that fails or is cancelled
-//      hands the button BACK (markIdle) — it never takes the bar away, because
-//      the update is still pending.
+//   3. LATER EXISTS ONLY WHEN THE BACKEND SENT ONE. CMD #2065 replaced "there
+//      is never a dismiss" with "the dismiss is the backend's": a payload with
+//      dismissible:true and a dismiss_label gets ONE close control, which
+//      stamps this platform's 24 h dismissal and takes the bar down; a forced
+//      update (dismissible:false) gets no control at all — not a disabled one,
+//      none. Nothing else was added: still no Later word eating the sentence,
+//      still no version text, and a Play flow that fails or is cancelled hands
+//      the button BACK (markIdle) rather than taking the bar away.
+//
+//   5. CMD #2065 — EACH PLATFORM ANSWERS ITS OWN QUESTION, AND ANDROID'S IS
+//      PLAY'S. The Android driver asks the In-App Update API and reports the
+//      verdict verbatim; 'unknown' and 'none' are not updates. The web watcher
+//      never runs off the web at all, so a phone can no longer be told about a
+//      build that lives on a CDN. These are the four lines that made "Update
+//      Now does nothing" possible.
 //
 //   4. NEITHER PLATFORM DECIDES ANYTHING. The web watcher no longer runs a
 //      countdown and reloads only after clearing caches; the Android driver
@@ -38,6 +49,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pharma_b2b/design_tokens.dart';
+import 'package:pharma_b2b/services/android_update_bar.dart';
 import 'package:pharma_b2b/services/app_update_feed.dart';
 import 'package:pharma_b2b/services/ui_copy.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
@@ -55,6 +67,24 @@ const _payload = <String, dynamic>{
   'flow': 'flexible',
   'poll_seconds': 300,
   'bottom_gap': 128,
+};
+
+/// CMD #2065 — the same answer with a Later on it. `dismissible` and the word
+/// are BOTH the backend's: the bar renders a control it was sent, and invents
+/// nothing when it was sent none.
+const _dismissable = <String, dynamic>{
+  ..._payload,
+  'dismissible': true,
+  'dismiss_label': 'Not right now',
+  'forced': false,
+};
+
+/// A forced update: the backend withheld both, so there is no way out.
+const _forced = <String, dynamic>{
+  ..._payload,
+  'dismissible': false,
+  'dismiss_label': null,
+  'forced': true,
 };
 
 /// Deliberately different words, so a test that passes on the ui_copy path
@@ -236,11 +266,12 @@ void main() {
     }
   });
 
-  group('there is no way out but updating', () {
-    testWidgets('one button, no Later, no dismiss, no version text', (t) async {
+  group('later exists only when the backend sent one', () {
+    testWidgets('a forced update has no dismiss control at all', (t) async {
       final ctrl = appUpdateBar;
       await t.pumpWidget(_host());
-      ctrl.show(onUpdate: () {}, payload: _payload);
+      // dismissible:false is what `forced` looks like on the wire.
+      ctrl.show(onUpdate: () {}, onDismiss: () {}, payload: _forced);
       await t.pumpAndSettle();
 
       expect(
@@ -259,6 +290,71 @@ void main() {
           .map((e) => (e.widget as Text).data)
           .toList();
       expect(texts, ['App update available', 'Update Now']);
+    });
+
+    testWidgets('a dismissable update gets ONE control, and it takes the bar down',
+        (t) async {
+      final ctrl = appUpdateBar;
+      var dismissed = 0;
+      await t.pumpWidget(_host());
+      ctrl.show(
+          onUpdate: () {},
+          onDismiss: () {
+            dismissed++;
+            ctrl.hide();
+          },
+          payload: _dismissable);
+      await t.pumpAndSettle();
+
+      final close = find.descendant(
+          of: find.byType(UpdateBar), matching: find.byType(IconButton));
+      expect(close, findsOneWidget);
+      // The word is the BACKEND's, and it is a tooltip rather than a label:
+      // at 360 px a second word would come out of the sentence's share.
+      expect(t.widget<IconButton>(close).tooltip, 'Not right now');
+      // Still a 44 px target.
+      final box = t.getSize(close);
+      expect(box.width, greaterThanOrEqualTo(Ds.touch.minTarget));
+      expect(box.height, greaterThanOrEqualTo(Ds.touch.minTarget));
+
+      await t.tap(close);
+      await t.pumpAndSettle();
+      expect(dismissed, 1);
+      // The slot stays (the chrome must not move); the bar inside it is gone.
+      expect(find.byType(UpdateBar), findsNothing);
+      expect(find.byKey(kBarSlotKey), findsOneWidget);
+    });
+
+    testWidgets('no dismiss_label, no control — a missing flag is not a Later',
+        (t) async {
+      final ctrl = appUpdateBar;
+      await t.pumpWidget(_host());
+      ctrl.show(onUpdate: () {}, onDismiss: () {}, payload: _payload);
+      await t.pumpAndSettle();
+      expect(
+          find.descendant(
+              of: find.byType(UpdateBar), matching: find.byType(IconButton)),
+          findsNothing);
+    });
+
+    testWidgets('while the update runs there is nothing left to postpone',
+        (t) async {
+      final ctrl = appUpdateBar;
+      await t.pumpWidget(_host());
+      ctrl.show(
+          onUpdate: ctrl.markUpdating, onDismiss: () {}, payload: _dismissable);
+      await t.pumpAndSettle();
+      expect(
+          find.descendant(
+              of: find.byType(UpdateBar), matching: find.byType(IconButton)),
+          findsOneWidget);
+
+      await t.tap(find.text('Update Now'));
+      await t.pumpAndSettle();
+      expect(
+          find.descendant(
+              of: find.byType(UpdateBar), matching: find.byType(IconButton)),
+          findsNothing);
     });
 
     testWidgets('a cancelled Play flow hands the button back, never the screen',
@@ -317,6 +413,73 @@ void main() {
       expect(a.contains("? 'immediate'"), isFalse);
       expect(a.contains('min_version_code'), isFalse,
           reason: 'the minimum version lives in app_settings, not in Dart');
+    });
+
+    // ── CMD #2065 — each platform answers its own question ───────────────
+    test('Android reports PLAY\'s verdict, and unknown is never an update', () {
+      // The mapping is pure, so the words that reach the backend are held down
+      // without a device. 'none' and 'unknown' are DIFFERENT facts: which of
+      // them is an update is the backend's call, and neither of them is.
+      expect(AndroidUpdateBar.playState(const {'available': true}),
+          'update_available');
+      expect(AndroidUpdateBar.playState(const {'available': false}), 'none');
+      expect(
+          AndroidUpdateBar.playState(
+              const {'available': false, 'inProgress': true}),
+          'in_progress');
+      // Play could not be reached / no Play Store / sideloaded.
+      expect(AndroidUpdateBar.playState(const {}), 'unknown');
+    });
+
+    test('the Android driver asks Play first and compares no web build', () {
+      final a = _read('lib/services/android_update_bar.dart');
+      expect(a.contains('PlayUpdateChannel.instance.check()'), isTrue,
+          reason: 'Play is asked before the bar is raised');
+      expect(a.contains('platformState: state'), isTrue,
+          reason: 'the verdict is reported verbatim, not acted on here');
+      // The three things the old path did, none of which may come back.
+      expect(a.contains('app_published_release'), isFalse);
+      expect(a.contains('version.json'), isFalse);
+      expect(a.contains('liveVersion'), isFalse,
+          reason: 'Android is never compared against the web build');
+    });
+
+    test('the web watcher never runs off the web', () {
+      final vw = _read('lib/services/version_watcher.dart');
+      expect(vw.contains('if (!kIsWeb) return;'), isTrue,
+          reason: 'a phone must not be told about a build on a CDN');
+    });
+
+    test('the PWA asks the service worker, not version.json', () {
+      final vw = _read('lib/services/version_watcher.dart');
+      expect(vw.contains('waitingWorkerState()'), isTrue);
+      expect(vw.contains('isStandalonePwa()'), isTrue,
+          reason: 'a browser tab keeps the version.json answer it always had');
+      final w = _read('lib/services/sw_probe_web.dart');
+      expect(w.contains("'SKIP_WAITING'"), isTrue);
+      // The stub must carry the same names or the native build will not link,
+      // and it must answer 'none' — never 'waiting'.
+      final stub = _read('lib/services/sw_probe_stub.dart');
+      expect(stub.contains('waitingWorkerState'), isTrue);
+      expect(stub.contains('isStandalonePwa'), isTrue);
+      expect(stub.contains("'waiting'"), isFalse);
+      // The worker itself has to let the waiting one through, or Update Now on
+      // a PWA is a button that does nothing — the exact bug this command ends.
+      expect(_read('web/firebase-messaging-sw.js').contains('skipWaiting()'),
+          isTrue);
+    });
+
+    test('the dismissal is per platform, and is a timestamp not a verdict', () {
+      final f = _read('lib/services/app_update_feed.dart');
+      expect(f.contains("'app_update_dismissed_\$platform'"), isTrue,
+          reason: 'one phone tapping Later says nothing about a browser');
+      expect(f.contains("'p_dismissed_at'"), isTrue,
+          reason: 'how long a Later lasts is the backend\'s, so a time goes out');
+      // The number itself is never in Dart: the device stores WHEN it was
+      // dismissed and the backend decides whether that is still true.
+      expect(f.contains('Duration(hours:'), isFalse);
+      expect(f.contains("'dismiss_hours'"), isFalse,
+          reason: 'dismiss_hours lives in app_settings, not in Dart');
     });
 
     test('the web clear-and-reload really drops caches and workers', () {

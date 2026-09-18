@@ -68,17 +68,20 @@ void main() {
   });
 
   test('2 — the product page still has compare', () {
-    // CMD #2040 changed the FORM, not the rule; CMD #2073 changed it again.
-    // #746 put compare on the full product page and nowhere else, and it still
-    // is — the outlined button under the price became a top-bar glyph beside
-    // the heart, so what to look for is that control and the sheet it opens.
+    // CMD #2040 changed the FORM, not the rule; #2073 changed it again, and
+    // #2074 again: #746 put compare on the full product page and nowhere else,
+    // and it still is. The outlined button under the price became a top-bar
+    // glyph beside the heart, and the bottom sheet became a pushed PAGE —
+    // twenty same-salt rows do not fit in a sheet, and a sheet cannot hold the
+    // scroll position while one of those products is opened on top of it. So
+    // what to look for is that control and the SCREEN it opens.
     final src = _read('lib/screens/product_detail_screen.dart');
     expect(src.contains("ValueKey('pdp-compare-button')"), isTrue,
         reason: 'compare belongs on the full product page — removing it there '
             'is not what CHANGE #746 asked for');
     expect(src.contains('_openCompare'), isTrue,
         reason: 'the control must still make the same-salt call');
-    expect(src.contains('CompareSheet'), isTrue,
+    expect(src.contains('CompareScreen'), isTrue,
         reason: 'the control must still open the backend-composed table');
     // CMD #2073 — and NO card anywhere draws a Compare row: the page's own
     // rail stopped passing the caption, and the shared card still takes it as

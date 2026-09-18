@@ -32,8 +32,9 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pharma_b2b/app_state.dart';
 import 'package:pharma_b2b/models/cart_model.dart';
-import 'package:pharma_b2b/models/product_compare.dart';
+import 'package:pharma_b2b/models/compare_table.dart';
 import 'package:pharma_b2b/models/product_detail.dart';
+import 'package:pharma_b2b/screens/compare_screen.dart';
 import 'package:pharma_b2b/screens/product_detail_screen.dart';
 import 'package:pharma_b2b/widgets/compact_product_card.dart';
 import 'package:pharma_b2b/theme.dart';
@@ -332,44 +333,62 @@ const Map<String, dynamic> _saltRail = {
   ],
 };
 
-/// `pdp_salt_compare()`'s payload — same SHAPE as the tray's table, different
-/// rows, plus the per-column ADD verdict this change added.
+/// `pdp_salt_compare()`'s payload. CMD #2074 turned it ninety degrees: products
+/// are ROWS and attributes are COLUMNS, so the same-salt table can carry twenty
+/// brands. The full contract lives in compare_table_test.dart; this fixture is
+/// only what the product page's glyph has to be able to open.
 const Map<String, dynamic> _saltTable = {
   'ok': true,
   'has': true,
   'title': 'Compare',
   'note': 'Other brands with the same composition.',
   'empty': '',
-  'max': 2,
-  'products': [
-    {'id': '1', 'name': 'Zeta Tablet', 'company': 'ZETA LABS', 'image': '',
-     'is_current': true, 'can_add': true, 'cta_label': 'ADD'},
-    {'id': '2', 'name': 'Alpha Tablet', 'company': 'ALPHA LABS', 'image': '',
-     'is_current': false, 'can_add': false, 'cta_label': 'Notify me'},
+  'max': 20,
+  'layout': {
+    'name_pct': 42, 'name_min': 116, 'name_max': 200,
+    'row_h': 64, 'head_h': 44,
+  },
+  'columns': [
+    {'key': 'name', 'kind': 'name', 'align': 'left', 'frozen': true,
+     'label': 'Product'},
+    {'key': 'company', 'kind': 'text', 'align': 'left', 'frozen': false,
+     'width': 116, 'label': 'Company'},
+    {'key': 'mrp', 'kind': 'text', 'align': 'right', 'frozen': false,
+     'width': 92, 'label': 'MRP'},
+    {'key': 'sale', 'kind': 'pill', 'align': 'right', 'frozen': false,
+     'width': 104, 'label': 'Sale price'},
+    {'key': 'add', 'kind': 'add', 'align': 'left', 'frozen': false,
+     'width': 112, 'label': 'Add'},
   ],
   'rows': [
-    {'key': 'company', 'label': 'Company', 'cells': [
-      {'has': true, 'value': 'ZETA LABS', 'tone': 'text'},
-      {'has': true, 'value': 'ALPHA LABS', 'tone': 'text'}]},
-    {'key': 'pack', 'label': 'Pack', 'cells': [
-      {'has': true, 'value': 'strip', 'tone': 'text'},
-      {'has': true, 'value': 'strip', 'tone': 'text'}]},
-    {'key': 'mrp', 'label': 'MRP', 'cells': [
-      {'has': true, 'value': '₹69.96', 'tone': 'text'},
-      {'has': true, 'value': '₹72.00', 'tone': 'text'}]},
-    {'key': 'sale', 'label': 'Sale price', 'cells': [
-      {'has': true, 'value': '₹58.20', 'tone': 'text'},
-      {'has': true, 'value': 'PTR', 'tone': 'text'}]},
-    {'key': 'stock', 'label': 'Availability', 'cells': [
-      {'has': true, 'value': 'Add to cart', 'tone': 'success'},
-      {'has': true, 'value': 'Unavailable', 'tone': 'warning'}]},
+    {'id': '1', 'name': 'Zeta Tablet', 'company': 'ZETA LABS',
+     'is_current': true, 'tag': 'Viewing', 'can_add': true, 'cta_label': 'ADD',
+     'cells': [
+       {'has': true, 'value': 'Zeta Tablet', 'tone': 'text'},
+       {'has': true, 'value': 'ZETA LABS', 'tone': 'text'},
+       {'has': true, 'value': '₹69.96', 'tone': 'text'},
+       {'has': true, 'value': '₹58.20', 'tone': 'text', 'locked': false,
+        'pill': {'bg': '#1B7A43', 'fg': '#FFFFFF'}},
+       {'has': true, 'value': '', 'tone': 'text'},
+     ]},
+    {'id': '2', 'name': 'Alpha Tablet', 'company': 'ALPHA LABS',
+     'is_current': false, 'tag': '', 'can_add': false,
+     'cta_label': 'Notify me',
+     'cells': [
+       {'has': true, 'value': 'Alpha Tablet', 'tone': 'text'},
+       {'has': true, 'value': 'ALPHA LABS', 'tone': 'text'},
+       {'has': true, 'value': '₹72.00', 'tone': 'text'},
+       {'has': true, 'value': 'PTR', 'tone': 'text', 'locked': true,
+        'pill': {'bg': '#F3F4F6', 'fg': '#6B7280'}},
+       {'has': true, 'value': '', 'tone': 'text'},
+     ]},
   ],
 };
 
 Future<void> _pumpWithCompare(
   WidgetTester tester,
   Map<String, dynamic> payload,
-  Future<ProductCompare> Function(String productId) compareLoader,
+  Future<CompareTable> Function(String productId) compareLoader,
 ) async {
   tester.view.physicalSize = const Size(1200, 4000);
   tester.view.devicePixelRatio = 1.0;
@@ -1289,7 +1308,7 @@ void main() {
         _payload(compare: const {'open_label': 'Compare', 'max': 3}),
         (id) async {
           askedFor = id;
-          return ProductCompare.fromMap(_saltTable);
+          return CompareTable.fromMap(_saltTable);
         },
       );
 
@@ -1311,8 +1330,10 @@ void main() {
       expect(askedFor, '176026',
           reason: 'the app sends the product it is standing on — it never '
               'picks a set of ids');
-      // The sheet prints the backend's rows, including the two this change
-      // added.
+      // CMD #2074 — what opens is the compare PAGE, and it prints the
+      // backend's own column headings and its first row.
+      expect(find.byType(CompareScreen), findsOneWidget,
+          reason: 'the glyph pushes the compare page, not a sheet');
       expect(find.text('MRP'), findsWidgets);
       expect(find.text('Sale price'), findsWidgets);
       expect(find.text('Zeta Tablet'), findsOneWidget);

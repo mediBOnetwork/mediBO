@@ -5,6 +5,7 @@ import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
 import 'dev_queue_common.dart';
 import 'dev_queue_service.dart';
+import 'feature_journey_card.dart';
 
 /// Bug-Loop Prevention — the QA & Journeys surface.
 ///
@@ -56,6 +57,11 @@ class _QaJourneySectionState extends State<QaJourneySection> {
     }
     final findings = _list(_d['findings']);
     final runs = _list(_d['runs']);
+    // CMD #2075 — the command's own browser journey: one block the backend
+    // builds (_dev_feature_journey_card), rendered verbatim at the top of the
+    // Journeys section. Absent payload → nothing drawn, never a guess.
+    final fjRaw = _d['feature_journey'];
+    final fj = fjRaw is Map ? Map<String, dynamic>.from(fjRaw) : null;
     final canWaive = _d['can_waive'] == true;
     final previewLabel = (_d['preview_label'] ?? '').toString();
     // CMD #368 — how big a QA pass this row actually earned. The label, the
@@ -150,6 +156,7 @@ class _QaJourneySectionState extends State<QaJourneySection> {
         builder: (_) => Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              if (fj != null) FeatureJourneyCard(fj: fj),
               if (runs.isEmpty)
                 Text((_d['runs_empty'] ?? '').toString(),
                     style: Ds.t.caption.copyWith(color: kTextLo))

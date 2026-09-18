@@ -70,6 +70,10 @@ bash scripts/rg_after_deploy.sh "$CMD_ID" || true
 # live — they write a VERDICT, and rg_check's behaviour tests
 # (mobile_first_rule_present / responsive_no_overflow) are what turn red.
 bash scripts/mobile_first_check.sh || true
+# CMD #2075: the feature-journey gate must stay wired end to end (rule, gate
+# condition, prompt line, devcmd door, preview + live hooks, runner). Writes the
+# verdict rg_check's feature_journey_rule_present asserts.
+bash scripts/feature_journey_check.sh || true
 if [ "${MEDIBO_SKIP_RESPONSIVE_SWEEP:-0}" != "1" ]; then
   timeout 900 node scripts/responsive_sweep.js --quiet \
     || echo "⚠️   responsive sweep reported a phone-layout problem — see rg_runner_verdict"

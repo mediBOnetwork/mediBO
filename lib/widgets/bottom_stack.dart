@@ -129,10 +129,23 @@ class StorefrontBottomStack extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // CMD #2066 QA round 1 — READ THE METRICS UNCONDITIONALLY, BEFORE THE
+    // BRANCH THAT USES THEM. `bottomNavVisible` asks the Scaffold, and
+    // `Scaffold.maybeOf` is `findAncestorStateOfType`, which registers NO
+    // dependency: on its own it gives a fresh answer only on a build that
+    // happens for some other reason. The MediaQuery read used to sit inside
+    // the `hasNav ? ... : ...` below, so a first build that FOUND a nav took
+    // the constant branch, never touched MediaQuery, and registered no
+    // dependency at all — after which nothing could make this element rebuild
+    // and BOTH `hasNav` and `safeBottom` latched at their first value for its
+    // whole life. A shell that drops its nav on a wide viewport (the supplier
+    // shell does, at 900 px) then kept painting a bar with no nav under it.
+    // Reading it up front is the dependency: a metrics change is exactly what
+    // flips those shells between layouts, so the stack rebuilds and re-asks.
+    final viewPaddingBottom = MediaQuery.of(context).viewPadding.bottom;
     final hasNav = bottomNavVisible(context);
     // No nav under us means the system gesture area is ours to clear.
-    final safeBottom =
-        hasNav ? 0.0 : MediaQuery.of(context).viewPadding.bottom;
+    final safeBottom = hasNav ? 0.0 : viewPaddingBottom;
     final tap = onCartTap;
 
     return Padding(

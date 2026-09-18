@@ -407,10 +407,17 @@ class _SupplierShellState extends State<SupplierShell> {
           child: IndexedStack(index: _index, children: pages),
         ),
         ]),
-        const Positioned(
+        // NOT const — deliberately. A `const` subtree is identity-equal on
+        // every rebuild, so `Element.updateChild` short-circuits and the stack
+        // never hears that this shell just swapped its nav for a desktop
+        // layout (see `bottomNavigationBar:` below, which is null at >= 900).
+        // CMD #2066 QA round 1 found the bar latched on across that resize.
+        // ignore: prefer_const_constructors
+        Positioned(
           left: 0,
           right: 0,
           bottom: 0,
+          // ignore: prefer_const_constructors
           child: StorefrontBottomStack(showPill: false),
         ),
       ]),

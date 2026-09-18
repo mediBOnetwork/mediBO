@@ -421,6 +421,79 @@ void main() {
       expect(find.byType(UpdateBar), findsOneWidget);
     });
 
+    // ── CMD #2066 QA round 1 ──────────────────────────────────────────────
+    // Every case above pumps a FRESH tree, and a fresh tree always rebuilds —
+    // which is precisely why they all passed while the bar stayed on a shell
+    // that had dropped its nav. The bug needs the SAME element to stay mounted
+    // while the nav changes underneath it, so this host mounts the stack the
+    // way the supplier shell does (const, nav derived from the width) and then
+    // only resizes the view. Nothing is re-pumped.
+    Widget resizingHost(CartModel cart) => MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              // The supplier shell's own rule: no nav on a wide viewport.
+              bottomNavigationBar: MediaQuery.of(context).size.width >= 900
+                  ? null
+                  : const SizedBox(height: _navHeight),
+              body: AppState(
+                cart: cart,
+                child: const Stack(
+                  children: [
+                    Center(child: Text('page content')),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: StorefrontBottomStack(showPill: false),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+
+    testWidgets('the nav going away on a RESIZE takes the bar with it',
+        (t) async {
+      final cart = await _cart(show: false);
+      t.view.devicePixelRatio = 1.0;
+      addTearDown(t.view.reset);
+
+      t.view.physicalSize = const Size(360, 800);
+      await t.pumpWidget(resizingHost(cart));
+      appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
+      await t.pumpAndSettle();
+      expect(find.byType(UpdateBar), findsOneWidget,
+          reason: 'a phone-width supplier shell has a nav, so it has the bar');
+
+      // The ONLY change: the viewport. Same tree, same elements.
+      t.view.physicalSize = const Size(1000, 800);
+      await t.pumpAndSettle();
+
+      expect(find.byType(UpdateBar), findsNothing,
+          reason: 'no bottom nav any more -> the bar must not render. '
+              'Scaffold.maybeOf registers no dependency, so the stack must '
+              'take one from MediaQuery or it latches at its first answer.');
+    });
+
+    testWidgets('and the nav coming BACK brings the bar back', (t) async {
+      final cart = await _cart(show: false);
+      t.view.devicePixelRatio = 1.0;
+      addTearDown(t.view.reset);
+
+      t.view.physicalSize = const Size(1000, 800);
+      await t.pumpWidget(resizingHost(cart));
+      appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
+      await t.pumpAndSettle();
+      expect(find.byType(UpdateBar), findsNothing);
+
+      t.view.physicalSize = const Size(360, 800);
+      await t.pumpAndSettle();
+
+      expect(find.byType(UpdateBar), findsOneWidget,
+          reason: 'the latch must not work in this direction either');
+    });
+
     testWidgets('there is exactly one renderer — no app-level host', (t) async {
       final cart = await _cart(show: true);
       final nav = GlobalKey<NavigatorState>();

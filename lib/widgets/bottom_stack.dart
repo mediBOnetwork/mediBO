@@ -207,6 +207,11 @@ class _BarSlot extends StatelessWidget {
             downloadedLabel: appUpdateBar.downloadedLabel,
             updating: appUpdateBar.updating,
             downloaded: appUpdateBar.downloaded,
+            // CMD #2065 — Later, when the backend sent one. Both of these are
+            // null on a forced update, which is how "non-dismissable" is
+            // rendered: not a disabled button, no control at all.
+            dismissLabel: appUpdateBar.dismissLabel,
+            onDismiss: appUpdateBar.onDismiss,
             // FLUSH, and exactly one slot tall: the bar fills the box it was
             // given instead of publishing a height of its own.
             fixedHeight: h,

@@ -5,24 +5,24 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../utils/render_log.dart';
 import '../widgets/update_bar.dart';
-import 'android_update_check.dart' show kAndroidVersionCode;
 import 'app_update_feed.dart';
 import 'play_update_channel.dart';
 
-/// CMD #2028 — the Android half of the floating update pill.
+/// CMD #2028 → CMD #2065 — the Android half of the ONE update bar.
 ///
-/// The SAME bar the web watcher raises, driven by the SAME RPC. This service
-/// only supplies the one fact the backend cannot know (the running
-/// versionCode) and performs the one action a database cannot perform
-/// (starting Play's in-app update flow).
+/// WHAT CHANGED, AND WHY IT MATTERED
+/// The bar used to be raised by `app_update_bar()`, which compared the running
+/// versionCode against a row in OUR database. That row moves when we publish —
+/// not when Play starts serving. So during a review, or a staged rollout, or
+/// any hour when our table ran ahead of the Play Store, every Android customer
+/// saw "App update available" over a button that could do nothing: the in-app
+/// flow has no update to start, and it returns straight away.
 ///
-/// Flow selection is NOT a decision made here: `app_update_bar()` returns
-/// 'flexible' or 'immediate' — immediate when the running build is below the
-/// minimum version in app_settings — and it is passed through untouched.
-///
-/// If Play cannot serve the update in-app (a sideloaded build, no Play Store,
-/// an outage) the button falls back to opening the store listing, so the
-/// customer is never left with a button that does nothing.
+/// Play is now asked FIRST — on launch and on every resume — and the bar goes
+/// up only for `UPDATE_AVAILABLE`. Anything else (in review, already current,
+/// sideloaded, no Play Store, Play unreachable) shows no bar at all. The RPC is
+/// still what decides and still what writes every word; this service only
+/// carries Play's verdict to it.
 class AndroidUpdateBar with WidgetsBindingObserver {
   AndroidUpdateBar._();
   static final AndroidUpdateBar instance = AndroidUpdateBar._();
@@ -33,8 +33,8 @@ class AndroidUpdateBar with WidgetsBindingObserver {
   bool _started = false;
   Map<String, dynamic>? _payload;
 
-  /// Start checking. No-op on web/iOS: the RPC is never called and no observer
-  /// is installed.
+  /// Start checking. No-op on web/iOS: neither Play nor the RPC is asked and
+  /// no observer is installed.
   Future<void> start() async {
     if (_started || !AppUpdateFeed.isAndroid) return;
     _started = true;
@@ -60,8 +60,8 @@ class AndroidUpdateBar with WidgetsBindingObserver {
     );
   }
 
-  /// Foreground: re-ask, and apply a flexible download that finished while the
-  /// app was away.
+  /// Foreground: ask Play again, and apply a flexible download that finished
+  /// while the app was away.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed) return;
@@ -78,20 +78,56 @@ class AndroidUpdateBar with WidgetsBindingObserver {
     await _check();
   }
 
+  /// CMD #2065 — Play's word, then the backend's words.
+  ///
+  /// `state` is reported verbatim and nothing here acts on it: 'none' and
+  /// 'unknown' are two different facts, and which of them is an update is the
+  /// backend's call, not this file's.
   Future<void> _check() async {
+    final play = await PlayUpdateChannel.instance.check();
+    final state = playState(play);
     final res = await AppUpdateFeed.fetch(
-      platform: 'android',
-      versionCode: kAndroidVersionCode,
+      platform: AppUpdateFeed.pAndroid,
+      installedVersion: '$kAndroidVersionCode',
+      platformState: state,
+      platformVersion: play['versionCode']?.toString(),
     );
     if (res == null) return; // a failed check never puts a bar on screen
     _payload = res;
-    if (res[AppUpdateFeed.kShow] != true) return;
+    try {
+      RenderLog.write('c2065_android_play_state',
+          'play=$state;show=${res[AppUpdateFeed.kShow]};reason=${res[AppUpdateFeed.kReason]}');
+    } catch (_) {}
+    if (res[AppUpdateFeed.kShow] != true) {
+      _arm();
+      return;
+    }
     try {
       RenderLog.write('c2028_update_bar_android',
-          'flow=${res[AppUpdateFeed.kFlow]};code=${res['target_code']}');
+          'flow=${res[AppUpdateFeed.kFlow]};target=${res['target_version']}');
     } catch (_) {}
-    appUpdateBar.show(payload: res, onUpdate: _update);
+    appUpdateBar.show(
+      payload: res,
+      onUpdate: _update,
+      onDismiss: () => _dismiss(),
+    );
     _arm();
+  }
+
+  /// Play's answer, as the one word the backend reads. Pure, so the protected
+  /// test can hold the mapping down without a device.
+  @visibleForTesting
+  static String playState(Map<String, dynamic> play) {
+    if (play.isEmpty) return 'unknown';
+    if (play['available'] == true) return 'update_available';
+    if (play['inProgress'] == true) return 'in_progress';
+    if (play.containsKey('available')) return 'none';
+    return 'unknown';
+  }
+
+  Future<void> _dismiss() async {
+    await AppUpdateFeed.markDismissed(AppUpdateFeed.pAndroid);
+    appUpdateBar.hide();
   }
 
   Future<void> _update() async {

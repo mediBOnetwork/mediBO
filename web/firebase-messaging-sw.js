@@ -128,6 +128,11 @@ function showOrderCard(alert, notif, data) {
 // device opened the order.
 self.addEventListener('message', event => {
   const msg = event.data || {};
+  // CMD #2065 — the PWA's Update Now. A worker parked in `waiting` IS the
+  // update on an installed PWA, and this is the only thing that can let it
+  // through. The page reloads on `controllerchange` (index.html), so one
+  // message is the whole flow.
+  if (msg.type === 'SKIP_WAITING') { self.skipWaiting(); return; }
   if (msg.type !== 'order_alert_seen') return;
   event.waitUntil(closeOrderCards(msg.orderId || ''));
 });

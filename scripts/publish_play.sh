@@ -384,11 +384,11 @@ bump_version() {
     sed -i "s/versionCode = .*/versionCode = $code/; s/versionName = \".*\"/versionName = \"$name\"/" \
       android/app/build.gradle.kts
     sed -i "s/const int kAndroidVersionCode = .*/const int kAndroidVersionCode = $code;/" \
-      lib/services/android_update_check.dart
+      lib/services/app_update_feed.dart
   fi
   grep -q "versionCode = $code" android/app/build.gradle.kts \
     && grep -q "versionName = \"$name\"" android/app/build.gradle.kts \
-    && grep -q "kAndroidVersionCode = $code;" lib/services/android_update_check.dart \
+    && grep -q "kAndroidVersionCode = $code;" lib/services/app_update_feed.dart \
     || die "version bump did not apply to every file — refusing to build out of lockstep"
 }
 

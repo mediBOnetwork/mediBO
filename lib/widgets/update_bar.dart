@@ -46,6 +46,7 @@ class UpdateBarController extends ChangeNotifier {
   bool _updating = false;
   bool _downloaded = false;
   VoidCallback? _onUpdate;
+  VoidCallback? _onDismiss;
   Map<String, dynamic> _payload = const {};
 
   bool get visible => _visible;
@@ -62,19 +63,44 @@ class UpdateBarController extends ChangeNotifier {
 
   VoidCallback? get onUpdate => _onUpdate;
 
+  /// What Later does, when the backend allows one.
+  VoidCallback? get onDismiss => _onDismiss;
+
   /// The last `app_update_bar()` payload. Every string the pill prints and the
   /// height it floats at are read out of here.
   Map<String, dynamic> get payload => _payload;
 
   /// Raise the pill with the payload that decided it.
-  void show({required VoidCallback onUpdate, Map<String, dynamic>? payload}) {
+  ///
+  /// CMD #2065 — [onDismiss] is what Later does on this platform: remember the
+  /// dismissal for this device and take the bar down. It is passed in rather
+  /// than done here because WHERE the 24 h stamp is written is the driver's
+  /// business, and WHETHER there is a Later at all is the backend's
+  /// ([dismissible]).
+  void show({
+    required VoidCallback onUpdate,
+    Map<String, dynamic>? payload,
+    VoidCallback? onDismiss,
+  }) {
     _onUpdate = onUpdate;
+    _onDismiss = onDismiss;
     if (payload != null) _payload = payload;
     if (_visible) {
       notifyListeners();
       return;
     }
     _visible = true;
+    notifyListeners();
+  }
+
+  /// CMD #2065 — Later. The bar goes down for this device; the backend decides
+  /// for how long (`dismiss_hours`, 24 by default) by refusing to raise it
+  /// again until the stamp the device sends back has aged out.
+  void hide() {
+    if (!_visible) return;
+    _visible = false;
+    _updating = false;
+    _downloaded = false;
     notifyListeners();
   }
 
@@ -112,6 +138,16 @@ class UpdateBarController extends ChangeNotifier {
   // how a fallback starts showing on one surface only. It lives here, next to
   // the payload it resolves, and both renderers ask.
 
+  /// Two payload names for one string: the RPC's (CMD #2065) and the one the
+  /// pre-#2065 `app_update_bar()` alias still sends.
+  String _s2(String key, String alt, String copyKey) {
+    final v = _payload[key];
+    if (v is String && v.isNotEmpty) return v;
+    final w = _payload[alt];
+    if (w is String && w.isNotEmpty) return w;
+    return c(copyKey);
+  }
+
   String _s(String key, String copyKey) {
     final v = _payload[key];
     if (v is String && v.isNotEmpty) return v;
@@ -119,10 +155,24 @@ class UpdateBarController extends ChangeNotifier {
   }
 
   /// The one line of copy in the middle of the bar.
-  String get label => _s('label', 'update_bar.title');
+  String get label => _s2('title', 'label', 'update_bar.title');
 
   /// The word on the green button.
-  String get actionLabel => _s('button_label', 'update_bar.action');
+  String get actionLabel => _s2('cta', 'button_label', 'update_bar.action');
+
+  /// CMD #2065 — Later's word, and null when the backend says there is no
+  /// Later: a forced update has no dismiss control at all.
+  String? get dismissLabel {
+    if (_payload['dismissible'] != true) return null;
+    final v = _payload['dismiss_label'];
+    return (v is String && v.isNotEmpty) ? v : null;
+  }
+
+  /// True only when the backend said so. A missing flag is not a Later.
+  bool get dismissible => _payload['dismissible'] == true;
+
+  /// The backend's forced flag, rendered as "no way out but updating".
+  bool get forced => _payload['forced'] == true;
 
   /// What the button says once the update is running.
   String get updatingLabel => _s('updating_label', 'update_bar.updating');
@@ -144,6 +194,7 @@ class UpdateBarController extends ChangeNotifier {
     _updating = false;
     _downloaded = false;
     _onUpdate = null;
+    _onDismiss = null;
     _payload = const {};
     notifyListeners();
   }
@@ -185,6 +236,8 @@ class UpdateBar extends StatefulWidget {
     this.downloadedLabel,
     this.downloaded = false,
     this.fixedHeight,
+    this.dismissLabel,
+    this.onDismiss,
   });
 
   final String title;
@@ -205,6 +258,12 @@ class UpdateBar extends StatefulWidget {
   final double? fixedHeight;
 
   final VoidCallback onUpdate;
+
+  /// CMD #2065 — Later. Both null means there is no Later: the backend said
+  /// this update is forced, or the platform driver has nowhere to remember a
+  /// dismissal. One control, one decision, and neither is taken here.
+  final String? dismissLabel;
+  final VoidCallback? onDismiss;
 
   @override
   State<UpdateBar> createState() => _UpdateBarState();
@@ -293,6 +352,10 @@ class _UpdateBarState extends State<UpdateBar> with SingleTickerProviderStateMix
                       ),
                     ),
                     SizedBox(width: Ds.space.x8),
+                    if (_canDismiss) ...[
+                      _dismiss(),
+                      SizedBox(width: Ds.space.x4),
+                    ],
                     _action(),
                   ],
                 ),
@@ -302,6 +365,27 @@ class _UpdateBarState extends State<UpdateBar> with SingleTickerProviderStateMix
         ),
     );
   }
+
+  /// CMD #2065 — a Later exists only when the BACKEND sent one. While the
+  /// update is running there is nothing left to postpone, so it stands down.
+  bool get _canDismiss =>
+      widget.onDismiss != null &&
+      (widget.dismissLabel?.isNotEmpty ?? false) &&
+      !widget.updating &&
+      !widget.downloaded;
+
+  /// Later: one 44x44 tap target, the backend's word as its tooltip and its
+  /// semantic label. A word would take the sentence's room at 360 px — the
+  /// mobile-first rule here has always been that the CHROME gives way.
+  Widget _dismiss() => IconButton(
+        onPressed: widget.onDismiss,
+        tooltip: widget.dismissLabel,
+        icon: Icon(Icons.close, color: Ds.c.textSecondary, size: Ds.t.subtitleSize),
+        constraints: BoxConstraints.tightFor(
+            width: Ds.touch.minTarget, height: Ds.touch.minTarget),
+        padding: EdgeInsets.zero,
+        visualDensity: VisualDensity.standard,
+      );
 
   /// The gear, in its own white shadowed circle.
   Widget _gear() => Container(

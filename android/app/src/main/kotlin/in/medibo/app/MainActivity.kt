@@ -117,9 +117,25 @@ class MainActivity : FlutterActivity() {
                                 android.os.Build.MODEL.orEmpty(),
                             ).filter { it.isNotBlank() }.joinToString(" "),
                             "sdk" to android.os.Build.VERSION.SDK_INT,
+                            // CMD #2067 — the grant and the BIND are separate
+                            // facts. bound_at is set by onListenerConnected and
+                            // is the only proof Android actually started us;
+                            // allow_count is 0 on a phone that has never been
+                            // handed payment_listener_boot().packages, which is
+                            // what made a granted phone deaf on 17 Sep.
+                            "bound_at" to PaymentListener.boundAt(applicationContext),
+                            "binds" to PaymentListener.bindCount(applicationContext),
+                            "allow_count" to PaymentListener.allowCount(applicationContext),
+                            // What Play knows this build as. Reported so the
+                            // Devices list can name the version a phone is on
+                            // without the app inventing a string.
+                            "app_version" to appVersionLabel(),
                         ),
                     )
                     "openSettings" -> result.success(PaymentListener.openSettings(applicationContext))
+                    // CMD #2067 item 4 — force the listener to start when the
+                    // grant is on but Android never bound it (ColorOS/MIUI).
+                    "rebind" -> result.success(PaymentListener.rebind(applicationContext))
                     "setPackages" -> {
                         PaymentListener.setPackages(
                             applicationContext,
@@ -192,6 +208,21 @@ class MainActivity : FlutterActivity() {
      * per user, survives updates, and is reset by a factory reset — exactly
      * the lifetime a "does this phone speak?" switch should have.
      */
+    /** versionName (versionCode), straight from the installed package. */
+    private fun appVersionLabel(): String = try {
+        val pi = applicationContext.packageManager
+            .getPackageInfo(applicationContext.packageName, 0)
+        val code = if (android.os.Build.VERSION.SDK_INT >= 28) {
+            pi.longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            pi.versionCode.toLong()
+        }
+        "${pi.versionName} ($code)"
+    } catch (_: Throwable) {
+        ""
+    }
+
     @android.annotation.SuppressLint("HardwareIds")
     private fun deviceId(): String = try {
         android.provider.Settings.Secure.getString(

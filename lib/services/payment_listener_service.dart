@@ -18,6 +18,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../utils/render_log.dart';
@@ -30,13 +31,32 @@ class PaymentListenerState {
     this.queued = 0,
     this.deviceId = '',
     this.model = '',
+    this.boundAtMs = 0,
+    this.allowCount = 0,
+    this.appVersion = '',
   });
 
   final bool available;
+
+  /// Notification access, as Android's own settings report it.
   final bool granted;
   final int queued;
   final String deviceId;
   final String model;
+
+  /// When Android last STARTED the listener service (onListenerConnected).
+  /// CMD #2067: a grant is not a bind — on ColorOS/MIUI a phone can be
+  /// "allowed" and never connected, and that phone hears nothing.
+  final int boundAtMs;
+
+  /// How many packages the backend has handed down. 0 = this phone drops every
+  /// notification, which is what made a granted phone deaf on 17 Sep.
+  final int allowCount;
+
+  /// versionName (versionCode) of the running build, reported never composed.
+  final String appVersion;
+
+  bool get bound => boundAtMs > 0;
 }
 
 /// One per app. Started from the Money screen, kept alive for the session so a
@@ -61,6 +81,10 @@ class PaymentListenerService {
   String get model => _model;
   String _model = '';
 
+  /// versionName (versionCode) of the installed build, as Android reports it.
+  String get appVersion => _appVersion;
+  String _appVersion = '';
+
   /// The platform string the backend switches the card on.
   static String get platform => kIsWeb
       ? 'web'
@@ -76,6 +100,8 @@ class PaymentListenerService {
   bool _speakOn = true;
   Timer? _drainTimer;
   LiveFeedHandle? _feed;
+  _ListenerLifecycle? _lifecycle;
+  String _lastSyncSig = '';
 
   /// Anything the card should redraw for: a grant changed, a queue emptied.
   final ValueNotifier<int> revision = ValueNotifier<int>(0);
@@ -101,12 +127,16 @@ class PaymentListenerService {
       final res = await _ch.invokeMapMethod<String, dynamic>('state');
       _deviceId = (res?['device_id'] ?? '').toString();
       _model = (res?['model'] ?? '').toString();
+      _appVersion = (res?['app_version'] ?? '').toString();
       return PaymentListenerState(
         available: true,
         granted: res?['granted'] == true,
         queued: (res?['queued'] as num?)?.toInt() ?? 0,
         deviceId: _deviceId,
         model: _model,
+        boundAtMs: (res?['bound_at'] as num?)?.toInt() ?? 0,
+        allowCount: (res?['allow_count'] as num?)?.toInt() ?? 0,
+        appVersion: _appVersion,
       );
     } catch (_) {
       return const PaymentListenerState(available: true);
@@ -125,18 +155,23 @@ class PaymentListenerService {
 
   /// Boot: pull the allow-list, tell Android about it, report our state back,
   /// drain whatever is waiting, and start listening for something to say.
+  ///
+  /// CMD #2067 — this used to be called from exactly ONE place, the Money
+  /// home's card. The Devices section on the Payment alerts screen — the
+  /// screen with the "Turn on notification access" button — never called it,
+  /// so on a phone that only ever visited that screen the allow-list was never
+  /// written and payment_alert_device_register() was never called. Granted
+  /// access, no device row, nothing heard. Every surface now calls start(),
+  /// and start() is cheap and idempotent.
   Future<void> start() async {
-    if (!supported || _booted) return;
-    _booted = true;
+    if (!supported) return;
+    if (!_booted) {
+      _booted = true;
+      _lifecycle ??= _ListenerLifecycle(this);
+      WidgetsBinding.instance.addObserver(_lifecycle!);
+    }
     try {
-      await _refreshAllowList();
-      // CMD #2050 — FIRST LAUNCH PAIRS THE PHONE. Before this, a device row
-      // existed only if payment_listener_report happened to run, which is why
-      // live had none at all: the registry is now written on boot, once, and
-      // the rest of the chain (report, card, speak_pull) has a row to find.
-      await register();
-      await reportState();
-      await drain();
+      await syncPairing();
       await _subscribeSpeak();
       _drainTimer?.cancel();
       // A phone that was offline when the payment landed catches up here; the
@@ -148,11 +183,65 @@ class PaymentListenerService {
     }
   }
 
+  /// THE one door. Safe to call on every build, on every resume and on the way
+  /// back from Android's settings screen.
+  ///
+  /// It does, in order: re-read the backend's package allow-list and hand it to
+  /// Android (a phone with an empty list drops every notification), ask Android
+  /// what it currently grants and whether the service is BOUND, pair the phone
+  /// with that answer, and drain anything the queue is still holding.
+  Future<PaymentListenerState> syncPairing() async {
+    if (!supported) return const PaymentListenerState();
+    try {
+      await _refreshAllowList();
+    } catch (_) {
+      // No network: Android keeps the list it already has.
+    }
+    final st = await readState();
+    if (st.deviceId.isEmpty) return st;
+    if (st.granted) {
+      await register(state: st);
+      await reportState(state: st);
+      await drain();
+    }
+    // Redraw ONLY when something a card shows actually changed. The Money
+    // card reloads on `revision`, and reloading calls start() again — an
+    // unconditional bump here is an endless load/sync/load cycle.
+    final sig = '${st.granted}|${st.bound}|${st.queued}|'
+        '${st.allowCount}|${st.deviceId}';
+    if (sig != _lastSyncSig) {
+      _lastSyncSig = sig;
+      _bump();
+    }
+    return st;
+  }
+
+  /// CMD #2067 item 4 — the grant is on, Android never started the service.
+  /// Ask it to, the polite way and then the hard way, and re-pair with whatever
+  /// it says afterwards. The wording of any button that calls this is the
+  /// backend's (`pairing.rebind_label`).
+  Future<PaymentListenerState> rebind() async {
+    if (!supported) return const PaymentListenerState();
+    try {
+      await _ch.invokeMethod<bool>('rebind');
+    } catch (_) {
+      // An OEM that refuses the toggle still gets the re-read below.
+    }
+    // Binding is asynchronous on the system side; give it a moment before
+    // asking again, so the card does not report the state from before.
+    await Future<void>.delayed(const Duration(milliseconds: 1200));
+    return syncPairing();
+  }
+
   void dispose() {
     _drainTimer?.cancel();
     _drainTimer = null;
     _feed?.dispose();
     _feed = null;
+    if (_lifecycle != null) {
+      WidgetsBinding.instance.removeObserver(_lifecycle!);
+      _lifecycle = null;
+    }
     _booted = false;
   }
 
@@ -170,16 +259,25 @@ class PaymentListenerService {
 
   /// Pair this phone with the backend's device registry. Idempotent: the RPC
   /// upserts, so every launch simply refreshes last-seen and the zone.
-  Future<Map<String, dynamic>> register() async {
+  Future<Map<String, dynamic>> register({PaymentListenerState? state}) async {
     if (!supported) return const <String, dynamic>{'ok': false};
-    final st = await readState();
+    final st = state ?? await readState();
     if (st.deviceId.isEmpty) return const <String, dynamic>{'ok': false};
     try {
       final res = await _rpc('payment_alert_device_register', <String, dynamic>{
         'p_device': st.deviceId,
         if (st.model.isNotEmpty) 'p_label': st.model,
+        // CMD #2067 — one call now both pairs the phone AND tells the backend
+        // what Android says: the grant, and whether the listener service has
+        // actually been started. "Paired" on its own was a status a deaf phone
+        // could show.
+        'p_listener_enabled': st.granted,
+        'p_bound': st.bound,
+        if (st.appVersion.isNotEmpty) 'p_app_version': st.appVersion,
       });
       RenderLog.write('c2050_device_registered', res['ok'] == true ? 1 : 0);
+      RenderLog.write('c2067_pair_bound', st.bound ? 1 : 0);
+      RenderLog.write('c2067_pair_packages', st.allowCount);
       return res;
     } catch (_) {
       return const <String, dynamic>{'ok': false};
@@ -187,14 +285,16 @@ class PaymentListenerService {
   }
 
   /// Tell the backend what Android granted, and get the card back.
-  Future<Map<String, dynamic>> reportState() async {
+  Future<Map<String, dynamic>> reportState({PaymentListenerState? state}) async {
     if (!supported) return const <String, dynamic>{'show': false};
-    final st = await readState();
+    final st = state ?? await readState();
     if (st.deviceId.isEmpty) return const <String, dynamic>{'show': false};
     final card = await _rpc('payment_listener_report', <String, dynamic>{
       'p_device': st.deviceId,
       'p_enabled': st.granted,
       'p_queued': st.queued,
+      if (st.appVersion.isNotEmpty) 'p_app_version': st.appVersion,
+      if (st.model.isNotEmpty) 'p_label': st.model,
     });
     _speakOn = card['speak_on'] != false;
     _speakVolume = (card['volume'] as num?)?.toInt() ?? 100;
@@ -326,5 +426,25 @@ class PaymentListenerService {
     } catch (_) {
       return const <String, dynamic>{'show': false};
     }
+  }
+}
+
+
+/// CMD #2067 — every return to the app re-checks the grant.
+///
+/// The 17 Sep failure was a round trip: tap the button, grant access in
+/// Android's settings, come back — and nothing on the way back asked Android
+/// what had just changed. `AppLifecycleState.resumed` is that moment, for the
+/// settings screen and for every other way back into the app.
+class _ListenerLifecycle with WidgetsBindingObserver {
+  _ListenerLifecycle(this.service);
+
+  final PaymentListenerService service;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    // Fire and forget: a resume must never be blocked on the network.
+    service.syncPairing();
   }
 }

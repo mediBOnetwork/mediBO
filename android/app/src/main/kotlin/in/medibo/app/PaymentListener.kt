@@ -4,6 +4,7 @@ import android.app.Notification
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -35,6 +36,14 @@ object PaymentListener {
     private const val K_MAX = "queue_max"
     private const val K_SEQ = "seq"
 
+    // CMD #2067 — the grant and the BIND are two different facts. On ColorOS
+    // and MIUI a listener can be "allowed" in Settings and never started, and
+    // that is exactly the shape of the 17 Sep failure: access ON, nothing
+    // heard. onListenerConnected is the only honest answer, so it is recorded
+    // here and reported to the backend as listener_bound_at.
+    private const val K_BOUND_AT = "bound_at"
+    private const val K_BINDS = "binds"
+
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     /** The allow-list, exactly as the backend sent it. No default, ever. */
@@ -61,7 +70,74 @@ object PaymentListener {
     fun allows(ctx: Context, pkg: String): Boolean {
         if (pkg.isBlank()) return false
         if (stringSet(ctx, K_IGNORE).contains(pkg)) return false
-        return stringSet(ctx, K_PACKAGES).contains(pkg)
+        val allowed = stringSet(ctx, K_PACKAGES)
+        // CMD #2067 — payment_alert_rules carries a "*" rule, and the backend
+        // hands it down inside packages[]. It means every app; an exact-set
+        // match silently dropped it, so a shop whose bank app was not on the
+        // list heard nothing. The wildcard is the BACKEND's decision, honoured
+        // here, never invented here.
+        if (allowed.contains("*")) return true
+        return allowed.contains(pkg)
+    }
+
+    /** How many packages the backend has told this phone about. 0 = deaf. */
+    fun allowCount(ctx: Context): Int = stringSet(ctx, K_PACKAGES).size
+
+    /** When Android last actually STARTED the listener service. 0 = never. */
+    fun boundAt(ctx: Context): Long = prefs(ctx).getLong(K_BOUND_AT, 0L)
+
+    fun bindCount(ctx: Context): Int = prefs(ctx).getInt(K_BINDS, 0)
+
+    fun markBound(ctx: Context, bound: Boolean) {
+        val p = prefs(ctx)
+        if (bound) {
+            p.edit()
+                .putLong(K_BOUND_AT, System.currentTimeMillis())
+                .putInt(K_BINDS, p.getInt(K_BINDS, 0) + 1)
+                .apply()
+        } else {
+            p.edit().putLong(K_BOUND_AT, 0L).apply()
+        }
+    }
+
+    /**
+     * CMD #2067 item 4 — force Android to bind the service.
+     *
+     * A grant given while the app is in the foreground does not always start
+     * the listener on OEM builds (ColorOS, MIUI, ColorOS-derived HyperOS).
+     * Toggling the component's enabled state makes the system tear the
+     * registration down and build it again, which is the documented way to
+     * recover a listener that was never connected. requestRebind is the polite
+     * path and is tried first.
+     */
+    fun rebind(ctx: Context): Boolean {
+        val cn = ComponentName(ctx, PaymentNotificationListenerService::class.java)
+        var ok = false
+        if (Build.VERSION.SDK_INT >= 24) {
+            try {
+                NotificationListenerService.requestRebind(cn)
+                ok = true
+            } catch (_: Throwable) {
+                // fall through to the hard toggle
+            }
+        }
+        try {
+            val pm = ctx.packageManager
+            pm.setComponentEnabledSetting(
+                cn,
+                PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                PackageManager.DONT_KILL_APP,
+            )
+            pm.setComponentEnabledSetting(
+                cn,
+                PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                PackageManager.DONT_KILL_APP,
+            )
+            ok = true
+        } catch (_: Throwable) {
+            // A locked-down OEM may refuse; requestRebind may still have taken.
+        }
+        return ok
     }
 
     /** Has the user granted notification access to THIS app? */
@@ -217,11 +293,49 @@ object PaymentListener {
  * Parsing, matching and every word spoken happen in the backend.
  */
 class PaymentNotificationListenerService : NotificationListenerService() {
+    /**
+     * CMD #2067 item 2 — the proof that the service is actually running. Until
+     * this fires, notification access being "ON" in Settings means nothing.
+     * The timestamp is read back through the method channel and reported to
+     * payment_alert_device_register(p_bound), so the Devices card can say
+     * "Listening on" only when Android really did start us.
+     */
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        try {
+            PaymentListener.markBound(applicationContext, true)
+            android.util.Log.i(TAG, "onListenerConnected — payment listener bound")
+        } catch (_: Throwable) {
+            // never let bookkeeping kill the listener
+        }
+    }
+
+    override fun onListenerDisconnected() {
+        super.onListenerDisconnected()
+        try {
+            PaymentListener.markBound(applicationContext, false)
+            android.util.Log.w(TAG, "onListenerDisconnected — asking Android to rebind")
+            if (Build.VERSION.SDK_INT >= 24) {
+                requestRebind(ComponentName(this, PaymentNotificationListenerService::class.java))
+            }
+        } catch (_: Throwable) {
+            // nothing else to try
+        }
+    }
+
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         val n = sbn ?: return
         try {
             val pkg = n.packageName ?: return
             if (pkg == packageName) return
+            if (PaymentListener.allowCount(applicationContext) == 0) {
+                // CMD #2067 — the 17 Sep failure, stated out loud. An empty
+                // allow-list means Dart has never run payment_listener_boot()
+                // on this phone, so EVERY payment is dropped here. It is not a
+                // parser problem and it is not a permission problem.
+                android.util.Log.w(TAG, "allow-list empty — open mediBO once to pair; dropping $pkg")
+                return
+            }
             if (!PaymentListener.allows(applicationContext, pkg)) return
             val extras: Bundle = n.notification?.extras ?: return
             val title = (extras.getCharSequence(Notification.EXTRA_TITLE) ?: "").toString()
@@ -239,4 +353,8 @@ class PaymentNotificationListenerService : NotificationListenerService() {
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) { /* nothing to do */ }
+
+    companion object {
+        private const val TAG = "mediBO/pay"
+    }
 }

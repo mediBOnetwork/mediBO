@@ -947,10 +947,16 @@ class _CartScreenState extends State<CartScreen> {
     );
     if (bill != null) RenderLog.write('c2014_bill_rows', bill.rows.length);
     if (rail != null) RenderLog.write('c2014_rail_cards', rail.items.length);
+    // CMD #2079 — the order the spec fixes: the cart's own lines, then the
+    // customer's Wishlist, then the bill. The bill is the LAST thing in the
+    // scroll because it is the answer to everything above it.
     final scrollFooters = <Widget>[
-      if (bill != null) bill,
       if (rail != null) rail,
+      if (bill != null) bill,
     ];
+    RenderLog.write('c2079_cart_blocks',
+        'rail=${rail?.items.length ?? 0};bill=${bill?.rows.length ?? 0}'
+        ';order=rail_then_bill');
 
     return LayoutBuilder(
       builder: (context, constraints) {

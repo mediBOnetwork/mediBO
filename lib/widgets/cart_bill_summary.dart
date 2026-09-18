@@ -29,6 +29,11 @@ class BillRow {
   final String freeLabel;
   final bool waived;
 
+  /// CMD #2079 — the backend answered this row in WORDS, not rupees (the sale
+  /// price total before every line has a PTR). A sentence is never struck
+  /// through and never carries FREE; it is simply what this row is worth.
+  final bool isText;
+
   /// 'default' | 'brand' | 'total' — chosen by the backend, never inferred
   /// from the row's key here.
   final String tone;
@@ -47,6 +52,7 @@ class BillRow {
     required this.struckValue,
     required this.freeLabel,
     required this.waived,
+    this.isText = false,
     required this.tone,
     required this.bold,
     required this.dividerBefore,
@@ -68,6 +74,7 @@ class BillRow {
       struckValue: (m['struck_value'] ?? '').toString(),
       freeLabel: (m['free_label'] ?? '').toString(),
       waived: m['waived'] == true,
+      isText: m['is_text'] == true,
       tone: (m['tone'] ?? '').toString(),
       bold: m['bold'] == true,
       dividerBefore: m['divider_before'] == true,
@@ -118,6 +125,8 @@ class CartBillSummary extends StatelessWidget {
     'discount_outlined': Icons.discount_outlined,
     'payments_outlined': Icons.payments_outlined,
     'info_outline': Icons.info_outline,
+    'inventory_outlined': Icons.inventory_2_outlined,
+    'devices_outlined': Icons.devices_outlined,
   };
 
   static IconData? glyphFor(String name) => _glyphs[name];
@@ -125,8 +134,11 @@ class CartBillSummary extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
+      // CMD #2079 — the bill runs the full width of the scroll. It is the
+      // last block on the page and the one the customer reads a total off;
+      // an inset card made it look like one more suggestion band.
       margin: EdgeInsets.fromLTRB(
-          Ds.space.x12, Ds.space.x8, Ds.space.x12, Ds.space.x8),
+          Ds.space(0), Ds.space.x12, Ds.space(0), Ds.space.x8),
       padding: EdgeInsets.symmetric(
           horizontal: Ds.space.x16, vertical: Ds.space.x16),
       decoration: BoxDecoration(
@@ -242,6 +254,9 @@ class _BillRowTile extends StatelessWidget {
         ? Semantics(
             button: true,
             label: row.label,
+            // CMD #2079 — the row's own key as a handle, so a fee's popup can
+            // be opened by name in a browser journey.
+            identifier: 'cart_bill_fee_${row.key}',
             child: InkWell(
               onTap: () => _openPopup(context),
               borderRadius: Ds.r.rButton,
@@ -277,6 +292,19 @@ class _Amount extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (row.isText) {
+      // A sentence, right-aligned like every other value, in the secondary
+      // colour so it reads as an answer rather than a number. It wraps before
+      // it ever pushes the label off a 320px screen.
+      return Flexible(
+        child: Text(row.value,
+            style: style.copyWith(
+                color: Ds.c.textSecondary, fontWeight: FontWeight.w500),
+            textAlign: TextAlign.right,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis),
+      );
+    }
     if (!row.waived) {
       return Text(row.value, style: style, textAlign: TextAlign.right);
     }

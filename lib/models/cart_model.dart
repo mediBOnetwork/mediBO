@@ -848,6 +848,11 @@ class CartModel extends ChangeNotifier {
     RenderLog.write(kC2025RowFailed, '$productId:${_rowError[productId]!['message']}');
   }
 
+  /// CMD #2079 — how many bill rows and pill thumbnails the WRITE itself
+  /// carried back. A zero here is the old behaviour (card and pill waiting on
+  /// a full render) showing up in the render log rather than in a screenshot.
+  static const kC2079LiveBlocks = 'c2079_live_blocks';
+
   static const kC2025RowFailed = 'c2025_cart_row_failed';
   static const kC2025FastWrite = 'c2025_cart_fast_write';
 
@@ -911,11 +916,23 @@ class CartModel extends ChangeNotifier {
           render['pill'] = pill;
         }
       }
+      // CMD #2079 — the tap re-priced the whole basket, so the tap's own
+      // answer replaces the pill and the bill card outright. Both blocks are
+      // the SAME ones cart_render() sends (cart_pill_block / _cart_bill_core
+      // over the rows this write just read), so adopting them here cannot
+      // disagree with the next full render — and the thumbnails, the MRP
+      // total, the sale price, every fee and the advance all move on the tap
+      // instead of waiting for one.
+      if (summary['pill'] is Map) {
+        render['pill'] = Map<String, dynamic>.from(summary['pill'] as Map);
+      }
       _cart = {
         ..._cart,
         'render': render,
+        if (summary['bill'] is Map) 'bill': summary['bill'],
         if (summary['item_count'] != null) 'item_count': summary['item_count'],
         if (summary['unit_count'] != null) 'unit_count': summary['unit_count'],
+        if (summary['mrp_total'] != null) 'mrp_total': summary['mrp_total'],
         if (summary['badge'] != null) 'badge': summary['badge'],
       };
     }
@@ -928,6 +945,10 @@ class CartModel extends ChangeNotifier {
     RenderLog.write(kC2025FastWrite,
         'row:$productId;qty:$quantity;items:${lines.length};'
         'advance:${(summary?['bottom'] as Map?)?['advance_display'] ?? ''}');
+    RenderLog.write(
+        kC2079LiveBlocks,
+        'bill_rows:${((summary?['bill'] as Map?)?['rows'] as List?)?.length ?? 0}'
+        ';thumbs:${((summary?['pill'] as Map?)?['thumbs'] as List?)?.length ?? 0}');
     return true;
   }
 
@@ -1136,8 +1157,14 @@ class CartModel extends ChangeNotifier {
   /// never counts items to decide that: a client-side `distinctItems > 0` is a
   /// second answer to a question the cart payload already answers, and the two
   /// disagree for exactly as long as a write is in flight.
+  ///
+  /// CMD #2079 — cart_state() carries the same block at the top level, so a
+  /// payload that came from a plain cart read (not a full cart_render()) still
+  /// paints the right thumbnails instead of the previous basket's.
   Map<String, dynamic> get pill =>
-      (render['pill'] as Map?)?.cast<String, dynamic>() ?? const {};
+      (render['pill'] as Map?)?.cast<String, dynamic>() ??
+      (_cart['pill'] as Map?)?.cast<String, dynamic>() ??
+      const {};
 
   /// CMD #791 — "Frequently bought together" for the basket as a whole, from
   /// `cart_render().companions`. `has` is the backend's verdict; the strip is

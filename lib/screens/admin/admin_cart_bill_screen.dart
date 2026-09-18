@@ -233,6 +233,7 @@ class _RowCardState extends State<_RowCard> {
   late final TextEditingController _popupTitle;
   late final TextEditingController _popupBody;
   late final TextEditingController _popupDismiss;
+  late TextEditingController _fallback;
   late String _source;
   late String _tone;
   late bool _visible;
@@ -256,6 +257,9 @@ class _RowCardState extends State<_RowCard> {
     _popupTitle = TextEditingController(text: _s('popup_title'));
     _popupBody = TextEditingController(text: _s('popup_body'));
     _popupDismiss = TextEditingController(text: _s('popup_dismiss'));
+    // CMD #2079 — the sentence a row prints instead of a price while the
+    // basket is not fully priced yet. Stored copy, edited here, never in Dart.
+    _fallback = TextEditingController(text: _s('fallback_text'));
     _source = _s('value_source');
     _tone = _s('tone');
     _visible = widget.row['visible'] == true;
@@ -275,6 +279,7 @@ class _RowCardState extends State<_RowCard> {
       _popupTitle,
       _popupBody,
       _popupDismiss,
+      _fallback,
     ]) {
       c.dispose();
     }
@@ -300,6 +305,7 @@ class _RowCardState extends State<_RowCard> {
         'popup_title': _popupTitle.text,
         'popup_body': _popupBody.text,
         'popup_dismiss': _popupDismiss.text,
+        'fallback_text': _fallback.text,
       });
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -319,7 +325,13 @@ class _RowCardState extends State<_RowCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          InkWell(
+          // CMD #2079 — a stable handle for this row, so the feature journey
+          // can open exactly the fee it is about instead of the first card on
+          // the screen. The key is the backend's, never invented here.
+          Semantics(
+            button: true,
+            identifier: 'cart_bill_row_${_s('key')}',
+            child: InkWell(
             onTap: () => setState(() => _open = !_open),
             borderRadius: Ds.r.rButton,
             child: ConstrainedBox(
@@ -346,6 +358,7 @@ class _RowCardState extends State<_RowCard> {
                 ],
               ),
             ),
+          ),
           ),
           if (_open) ...[
             SizedBox(height: Ds.space.x12),
@@ -378,6 +391,7 @@ class _RowCardState extends State<_RowCard> {
                 label: t('divider_before'),
                 value: _divider,
                 onChanged: (v) => setState(() => _divider = v)),
+            _Field(label: t('fallback_text'), ctrl: _fallback),
             _Field(label: t('popup_title'), ctrl: _popupTitle),
             _Field(label: t('popup_body'), ctrl: _popupBody, lines: 3),
             _Field(label: t('popup_dismiss'), ctrl: _popupDismiss),

@@ -404,7 +404,13 @@ class _SupplierShellState extends State<SupplierShell> {
             onTap: _onTabTap,
           ),
         Expanded(
-          child: IndexedStack(index: _index, children: pages),
+          // CMD #2070 — the supplier's pages end above the update bar. The
+          // shell reserves it once for all of them; no supplier page carries
+          // a spacer of its own, and none has to.
+          child: staffPageHost(
+            IndexedStack(index: _index, children: pages),
+            staff: true,
+          ),
         ),
         ]),
         // NOT const — deliberately. A `const` subtree is identity-equal on

@@ -232,14 +232,88 @@ class BottomStackSpacer extends StatelessWidget {
   final double extra;
 
   @override
-  Widget build(BuildContext context) => SizedBox(
-        height: bottomStackHeight +
-            extra +
-            (bottomNavVisible(context)
-                ? 0.0
-                : MediaQuery.of(context).viewPadding.bottom),
-      );
+  Widget build(BuildContext context) {
+    // CMD #2070 — the same unconditional read the stack itself makes, for the
+    // same reason: `bottomNavVisible` registers no dependency, so if the only
+    // MediaQuery read sits on one side of that question, the first answer is
+    // the last one this element ever gives. A shell that drops its nav on a
+    // wide viewport would leave the list padded for a nav that is gone.
+    final viewPaddingBottom = MediaQuery.of(context).viewPadding.bottom;
+    final hasNav = bottomNavVisible(context);
+    return SizedBox(
+      height: bottomStackHeight + extra + (hasNav ? 0.0 : viewPaddingBottom),
+    );
+  }
 }
+
+/// How much bottom chrome a surface that floats NO cart pill can cover.
+///
+/// The staff shells (admin, supplier, partner) mount the stack with
+/// `showPill: false`: the pill slot above the bar is then an empty
+/// transparent box that paints nothing and swallows no taps, so the only box
+/// that can ever put ink over a staff page is the bar slot. Reserving the
+/// pill's 56 as well would hand every admin phone a permanently dead band
+/// twice the height of the thing it is clearing.
+///
+/// A CONSTANT, like [bottomStackHeight] — it is the slot's height, not the
+/// bar's, so an update arriving or finishing moves nothing.
+double get bottomBarOnlyHeight => BottomStackMetrics.slot;
+
+/// Reserves the chrome's height under a WHOLE PAGE HOST, once, in the shell.
+///
+/// CMD #2070 — [BottomStackSpacer] is an end-of-list box each scrolling page
+/// has to remember to add, and only the customer surfaces ever did. The staff
+/// shells host dozens of pages built by dozens of commands, so "every page
+/// remembers" was never going to hold: the shell reserves the room instead,
+/// which is one place, cannot be forgotten by a page written next month, and
+/// needs no page to know the chrome exists at all.
+///
+/// Wraps the shell's page host, so every page inside it — list, form, board,
+/// empty state — ends above the bar instead of under it.
+class BottomStackClearance extends StatelessWidget {
+  const BottomStackClearance({
+    super.key,
+    required this.child,
+    this.pill = false,
+  });
+
+  /// The shell's page host.
+  final Widget child;
+
+  /// Does this surface float the cart pill? Staff surfaces do not, so they
+  /// clear the bar slot alone ([bottomBarOnlyHeight]).
+  final bool pill;
+
+  @override
+  Widget build(BuildContext context) {
+    // Unconditional, before the branch that uses it — see [BottomStackSpacer].
+    final viewPaddingBottom = MediaQuery.of(context).viewPadding.bottom;
+    final hasNav = bottomNavVisible(context);
+    // No nav means no bar (see [_BarSlot]) — on that layout the only thing
+    // below the page is the system gesture area, and the stack clears it
+    // itself, so the host owes the chrome nothing.
+    final chrome = pill
+        ? bottomStackHeight
+        : (hasNav ? bottomBarOnlyHeight : 0.0);
+    final safeBottom = hasNav ? 0.0 : viewPaddingBottom;
+    return Padding(
+      padding: EdgeInsets.only(bottom: chrome + safeBottom),
+      child: child,
+    );
+  }
+}
+
+/// A shell's page host, with the bottom chrome cleared when that shell is a
+/// STAFF shell.
+///
+/// CMD #2070 — the customer surfaces pad their own lists
+/// ([BottomStackSpacer]) so a storefront list scrolls UNDER the floating pill,
+/// which is the behaviour a shopper expects. The staff shells float no pill
+/// and their pages carry no spacer, so the shell reserves the bar's room for
+/// all of them at once. One call per shell, and a staff page added tomorrow
+/// inherits it without knowing the chrome exists.
+Widget staffPageHost(Widget child, {required bool staff}) =>
+    staff ? BottomStackClearance(child: child) : child;
 
 /// The same box for a `CustomScrollView`.
 class BottomStackSliverSpacer extends StatelessWidget {

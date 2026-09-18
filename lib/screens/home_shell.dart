@@ -1862,10 +1862,13 @@ class _HomeShellState extends State<HomeShell> {
                 // it; this is the Catalogue's header, verbatim.
                 if (_index == 0) _shellSearchHeader(this),
                 Expanded(
-                  child: _shellSearchIdleWrap(this, IndexedStack(
-                    index: _index,
-                    children: pages,
-                  )),
+                  // CMD #2070 — a staff page ends ABOVE the update bar; the
+                  // reasoning lives with the stack, not twice in the shell.
+                  child: staffPageHost(
+                    _shellSearchIdleWrap(
+                        this, IndexedStack(index: _index, children: pages)),
+                    staff: isAdmin,
+                  ),
                 ),
               ],
             )),
@@ -1944,19 +1947,21 @@ class _HomeShellState extends State<HomeShell> {
               if (!isAdmin) const RegistrationBanner(),
               if (_index == 0) _shellSearchHeader(this),
               Expanded(
-                child: NotificationListener<ScrollNotification>(
-                  onNotification: (n) {
-                    if (_index != 0) return false;
-                    final newScrolled = n.metrics.pixels > 400;
-                    if (newScrolled != _desktopScrolled) {
-                      setState(() => _desktopScrolled = newScrolled);
-                    }
-                    return false;
-                  },
-                  child: _shellSearchIdleWrap(this, IndexedStack(
-                    index: _index,
-                    children: pages,
-                  )),
+                // CMD #2070 — same clearance on the wide layout, same reason.
+                child: staffPageHost(
+                  NotificationListener<ScrollNotification>(
+                    onNotification: (n) {
+                      if (_index != 0) return false;
+                      final newScrolled = n.metrics.pixels > 400;
+                      if (newScrolled != _desktopScrolled) {
+                        setState(() => _desktopScrolled = newScrolled);
+                      }
+                      return false;
+                    },
+                    child: _shellSearchIdleWrap(
+                        this, IndexedStack(index: _index, children: pages)),
+                  ),
+                  staff: isAdmin,
                 ),
               ),
             ],

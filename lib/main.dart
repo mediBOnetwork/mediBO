@@ -76,6 +76,7 @@ import 'screens/pharmacy/pharmacy_variance_screen.dart'; // CMD #413 — /pharma
 import 'screens/pharmacy/pharmacy_audit_screen.dart';   // CMD #447 — /pharmacy/audit
 import 'screens/pharmacy/rx_scan_screen.dart';           // CMD #418 — /pharmacy/prescription
 import 'screens/admin/nav_registry_view.dart'; // CHANGE #325 — deep links
+import 'screens/compare_screen.dart'; // CMD #2074: /compare/:id
 import 'screens/product_detail_screen.dart'; // C636: /product/:id
 import 'screens/reorder_screen.dart'; // #173: /reorder
 import 'screens/admin/reorder_admin_screen.dart'; // #173: /admin/reorder
@@ -822,6 +823,20 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // Declared here rather than in `routes:` because that map is
               // flat and cannot carry a path parameter. It must stay ABOVE the
               // trailing /:code guard, which is documented as last.
+              // CMD #2074 — the compare table is a PAGE with its own URL, so
+              // it can be opened (and screenshot) directly, and so the browser
+              // back button behaves like the app's. The product page pushes the
+              // same screen; this only gives it a front door.
+              if (name.startsWith('/compare/')) {
+                final id = name.substring('/compare/'.length).split('?').first;
+                if (id.isNotEmpty) {
+                  return MaterialPageRoute<void>(
+                    settings: settings,
+                    builder: (_) => CompareScreen(productId: id),
+                  );
+                }
+              }
+
               if (name.startsWith('/product/')) {
                 final id = name.substring('/product/'.length).split('?').first;
                 if (id.isNotEmpty) {

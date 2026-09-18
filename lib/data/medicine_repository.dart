@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../models/compare_table.dart';
 import '../models/home_sections.dart';
 import '../models/product.dart';
 import '../models/product_detail.dart';
@@ -558,21 +559,23 @@ class MedicineRepository {
   }
 
   /// CMD #2040 — the product page's compare table.
+  /// CMD #2074 — and it comes back as product ROWS with attribute COLUMNS.
   ///
   /// One id in, the whole table out: `pdp_salt_compare()` picks the same-salt
-  /// set itself (this pack first), composes every row and every cell, and
-  /// carries the ADD verdict per column. The app contributes the product it is
-  /// standing on and nothing else.
-  Future<ProductCompare> fetchSaltCompare(String productId) async {
+  /// set itself (this pack first, up to twenty in all), composes every column
+  /// heading, every cell, every tone and the table's own geometry, and carries
+  /// the ADD verdict per ROW. The app contributes the product it is standing on
+  /// and nothing else.
+  Future<CompareTable> fetchSaltCompare(String productId) async {
     final id = int.tryParse(productId);
-    if (id == null) return ProductCompare.failed;
+    if (id == null) return CompareTable.failed;
     try {
       final res =
           await _rpc('pdp_salt_compare', params: {'p_product_id': id});
-      if (res is! Map) return ProductCompare.failed;
-      return ProductCompare.fromMap(Map<String, dynamic>.from(res));
+      if (res is! Map) return CompareTable.failed;
+      return CompareTable.fromMap(Map<String, dynamic>.from(res));
     } catch (_) {
-      return ProductCompare.failed;
+      return CompareTable.failed;
     }
   }
 

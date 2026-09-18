@@ -5,8 +5,8 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../data/medicine_repository.dart';
 import '../design_tokens.dart';
+import '../models/compare_table.dart';
 import '../models/product.dart';
-import '../models/product_compare.dart';
 import '../models/product_detail.dart';
 import '../models/storefront_p3.dart';
 import '../services/storefront_fast_order.dart';
@@ -18,10 +18,10 @@ import '../widgets/bottom_stack.dart';
 import '../widgets/cart_pill.dart';
 import '../widgets/compact_product_card.dart';
 import '../widgets/companion_rail.dart';
-import '../widgets/compare_tray.dart';
 import '../widgets/notify_control.dart';
 import '../widgets/product_image.dart';
 import '../widgets/purchase_overlay_card.dart';
+import 'compare_screen.dart';
 
 typedef WishlistToggle = Future<WishlistResult> Function(String productId);
 
@@ -73,7 +73,7 @@ class ProductDetailScreen extends StatefulWidget {
   /// constructor-injected-closure shape the rest of the protected suite uses.
   /// CMD #2040 — one product id, not a list of ticked ones: the table is the
   /// same-salt set, composed by `pdp_salt_compare()`.
-  final Future<ProductCompare> Function(String productId)? compareLoader;
+  final Future<CompareTable> Function(String productId)? compareLoader;
 
   const ProductDetailScreen({
     super.key,
@@ -167,23 +167,23 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
   }
 
   /// CMD #2040 — Compare is ONE tap and ONE call.
+  /// CMD #2074 — and what it opens is a PAGE, not a sheet.
   ///
   /// The tray is gone: the question a pharmacy is asking on this page is
   /// "what else is this salt", and `pdp_salt_compare()` answers it with this
-  /// pack in column one. The app picks no ids, caps no count and words no
-  /// refusal — the whole table, including its title, its note and its ADD
-  /// labels, arrives composed.
+  /// pack in ROW one and up to nineteen other brands under it. Twenty rows do
+  /// not fit in a bottom sheet, and a sheet cannot hold the scroll position
+  /// while one of those products is opened on top of it — so [CompareScreen] is
+  /// pushed, and it owns the call. The app picks no ids, caps no count and
+  /// words no refusal.
   Future<void> _openCompare() async {
-    ProductCompare res;
-    try {
-      final load = widget.compareLoader ??
-          (id) => MedicineRepository().fetchSaltCompare(id);
-      res = await load(widget.productId);
-    } catch (_) {
-      res = ProductCompare.failed;
-    }
-    if (!mounted) return;
-    await CompareSheet.show(context, res);
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      settings: RouteSettings(name: '/compare/${widget.productId}'),
+      builder: (_) => CompareScreen(
+        productId: widget.productId,
+        loader: widget.compareLoader,
+      ),
+    ));
   }
 
   Future<void> _toggleWishlist() async {

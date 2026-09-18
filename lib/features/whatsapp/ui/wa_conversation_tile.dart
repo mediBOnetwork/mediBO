@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../services/date_labels.dart';
 import 'package:intl/intl.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
+import 'package:pharma_b2b/design_tokens.dart';
 import '../models/wa_conversation.dart';
 
 class WaConversationTile extends StatelessWidget {
@@ -98,6 +99,28 @@ class WaConversationTile extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
+                  // CMD #2071 — the bot hit its 24h reply cap for this number.
+                  // Flag and words both come from wa_conversations.
+                  if (c.showsBotCap) ...[
+                    SizedBox(height: Ds.space.x4),
+                    Container(
+                      padding: EdgeInsets.symmetric(
+                          horizontal: Ds.space.x8, vertical: Ds.space.x4),
+                      decoration: BoxDecoration(
+                        color: Ds.c.warningSoft,
+                        borderRadius: Ds.r.rChip,
+                      ),
+                      child: Builder(builder: (_) {
+                        RenderLog.write('c2071_bot_cap_chip', 1);
+                        return Text(
+                          c.botCapLabel!,
+                          style: Ds.t.caption.copyWith(color: Ds.c.warning),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        );
+                      }),
+                    ),
+                  ],
                 ],
               ),
             ),

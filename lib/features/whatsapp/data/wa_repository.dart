@@ -13,12 +13,29 @@ class WaThreadResult {
   final String? label;
   final String? senderType;
 
+  /// CMD #2071 — the 24h automated-reply cap for this number, as the backend
+  /// decided it. The label is the backend's words; null means show nothing.
+  final bool botCapped;
+  final String? botCapLabel;
+  final String? botCapNote;
+
   const WaThreadResult({
     required this.messages,
     this.name,
     this.label,
     this.senderType,
+    this.botCapped = false,
+    this.botCapLabel,
+    this.botCapNote,
   });
+
+  bool get showsBotCap => botCapped && botCapLabel != null;
+}
+
+String? _text(dynamic v) {
+  if (v == null) return null;
+  final s = v.toString().trim();
+  return s.isEmpty ? null : s;
 }
 
 class WaSendException implements Exception {
@@ -175,6 +192,9 @@ class WaRepository {
         senderType: (map is Map && map['sender_type'] != null)
             ? map['sender_type'].toString()
             : null,
+        botCapped: (map is Map) && map['bot_capped'] == true,
+        botCapLabel: _text(map is Map ? map['bot_cap_label'] : null),
+        botCapNote: _text(map is Map ? map['bot_cap_note'] : null),
       );
     } catch (e) {
       debugPrint('[WaRepository] getThread error: $e');

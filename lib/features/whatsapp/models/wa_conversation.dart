@@ -11,6 +11,12 @@ class WaConversation {
   final String lastText;
   final int unread;
 
+  /// CMD #2071 — the 24h automated-reply cap, decided by the backend.
+  /// `botCapLabel` is the backend's own words; the row prints it verbatim and
+  /// shows nothing at all when it is null.
+  final bool botCapped;
+  final String? botCapLabel;
+
   const WaConversation({
     required this.senderPhone,
     required this.senderType,
@@ -21,6 +27,8 @@ class WaConversation {
     this.lastAt,
     required this.lastText,
     required this.unread,
+    this.botCapped = false,
+    this.botCapLabel,
   });
 
   /// Returns a copy with selected fields overridden (used for optimistic
@@ -36,6 +44,8 @@ class WaConversation {
       lastAt: lastAt,
       lastText: lastText,
       unread: unread ?? this.unread,
+      botCapped: botCapped,
+      botCapLabel: botCapLabel,
     );
   }
 
@@ -50,7 +60,15 @@ class WaConversation {
       lastAt: _asDate(j['last_at']),
       lastText: (j['last_text'] ?? '').toString(),
       unread: _asInt(j['unread']),
+      botCapped: j['bot_capped'] == true,
+      botCapLabel: _asText(j['bot_cap_label']),
     );
+  }
+
+  static String? _asText(dynamic v) {
+    if (v == null) return null;
+    final s = v.toString().trim();
+    return s.isEmpty ? null : s;
   }
 
   static int _asInt(dynamic v) {
@@ -92,4 +110,8 @@ class WaConversation {
   }
 
   bool get hasUnread => unread > 0;
+
+  /// The cap strip shows only when the BACKEND both flagged the row and sent
+  /// the words for it. No client-side sentence is ever assembled.
+  bool get showsBotCap => botCapped && botCapLabel != null;
 }

@@ -7,6 +7,7 @@ import '../../../services/ui_copy.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
+import 'package:pharma_b2b/design_tokens.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../data/wa_repository.dart';
 import '../models/wa_conversation.dart';
@@ -35,6 +36,13 @@ class _WaChatScreenState extends State<WaChatScreen>
   // CHANGE #207: resolved identity from wa_thread (falls back to conversation).
   String? _threadName;
   String? _threadLabel;
+
+  // CMD #2071 — the 24h automated-reply cap for this number. Both the flag and
+  // the words arrive from wa_thread; the composer is unaffected, because a
+  // reply an admin types is never an automated one.
+  bool _botCapped = false;
+  String? _botCapLabel;
+  String? _botCapNote;
 
   // CHANGE #209: Supabase Realtime — one INSERT channel per thread (phone).
   RealtimeChannel? _waThreadChannel;
@@ -186,6 +194,9 @@ class _WaChatScreenState extends State<WaChatScreen>
           _messages = res.messages;
           _threadName = res.name;
           _threadLabel = res.label;
+          _botCapped = res.botCapped;
+          _botCapLabel = res.botCapLabel;
+          _botCapNote = res.botCapNote;
         });
         if (!_loggedOpen) {
           _loggedOpen = true;
@@ -854,6 +865,31 @@ class _WaChatScreenState extends State<WaChatScreen>
       ),
       body: Column(
         children: [
+          // CMD #2071 — the bot has hit its 24h reply cap for this number.
+          // Backend flag, backend words; nothing is written here.
+          if (_botCapped && _botCapLabel != null)
+            Container(
+              width: double.infinity,
+              color: Ds.c.warningSoft,
+              padding: EdgeInsets.symmetric(
+                  horizontal: Ds.space.x16, vertical: Ds.space.x12),
+              child: Builder(builder: (_) {
+                RenderLog.write('c2071_bot_cap_header', 1);
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(_botCapLabel!,
+                        style: Ds.t.bodyStrong.copyWith(color: Ds.c.warning)),
+                    if (_botCapNote != null) ...[
+                      SizedBox(height: Ds.space.x4),
+                      Text(_botCapNote!,
+                          style: Ds.t.caption.copyWith(color: Ds.c.warning)),
+                    ],
+                  ],
+                );
+              }),
+            ),
           Expanded(
             child: Container(
               // CHANGE #208: WhatsApp-style warm wallpaper behind messages.

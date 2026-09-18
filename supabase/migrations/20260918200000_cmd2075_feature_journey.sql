@@ -257,6 +257,117 @@ end $fn$;
 revoke all on function public.test_journey_sql_assert(text, bigint, bigint) from public, anon, authenticated;
 grant execute on function public.test_journey_sql_assert(text, bigint, bigint) to service_role;
 
+-- ── 6b. an AUTOMATED test session may open while the human switch is off ──────
+-- Every direct deploy since 16 Sep recorded its critical-path smoke as
+-- "not_run: Test mode is switched off": test_session_start() refused every
+-- origin before reading which origin was asking. A bot session is scoped to the
+-- bot's own identities, raises no banner, lives an hour and is swept (CHANGE
+-- #1821), so it is allowed through — gated by one column Om can flip.
+alter table public.test_mode_config add column if not exists automated_when_off boolean not null default true;
+
+CREATE OR REPLACE FUNCTION public.test_session_start(p_label text DEFAULT NULL::text, p_hours numeric DEFAULT NULL::numeric)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_id bigint; v_hours numeric; v_uid uuid; v_label text;
+        v_origin text; v_scope text; v_cap numeric; v_token text;
+        v_live_id bigint; v_live_origin text;
+begin
+  if not public._test_guard() then return jsonb_build_object('ok',false,'error','not_authorized'); end if;
+  -- CMD #2075 — the global switch is a HUMAN switch. An AUTOMATED session
+  -- (the runner, the smoke gate, a feature journey) is bot-scoped, banner-less,
+  -- one hour long and swept — everything CHANGE #1821 made it — so it may open
+  -- while the platform-wide switch is off, unless test_mode_config
+  -- .automated_when_off says no (one UPDATE, never a deploy). From 16 Sep every
+  -- critical-path smoke on every deploy was 'not_run: Test mode is switched
+  -- off' because this check came before the origin was even read.
+  if not (select enabled from public.test_mode_config where id=1) then
+    if not (public._test_caller_origin() = 'automated'
+            and coalesce((select automated_when_off from public.test_mode_config where id=1), true)) then
+      return jsonb_build_object('ok',false,'error','test_mode_off',
+        'message', public.uic('test_mode.off','Test mode is switched off.'));
+    end if;
+  end if;
+
+  v_origin := public._test_caller_origin();
+  begin v_uid := auth.uid(); exception when others then v_uid := null; end;
+  if v_origin = 'automated' then v_uid := null; end if;
+
+  update public.test_sessions
+     set status='ended', ended_at=coalesce(ended_at, expires_at), auto_expired=true
+   where status='live' and (ended_at is not null or now() >= expires_at);
+
+  if v_origin = 'human' then
+    -- CMD #1848 — this INSTALL already carries a live session: hand its
+    -- token back so the client is whole again, do not open a second one.
+    v_live_id := public.test_session_mine();
+    if v_live_id is not null then
+      return jsonb_build_object('ok',true,'already',true,'session_id',v_live_id,
+        'origin','human','scope','install',
+        'token', (select token from public.test_sessions where id = v_live_id),
+        'message', public.uic('test_session.already_on','Test mode is already on.'));
+    end if;
+    -- A person supersedes a live automated run, as before. Another person's
+    -- install-bound session is THEIRS and is left alone: sessions no longer
+    -- collide, because each stamps only the install that carries its token.
+    update public.test_sessions
+       set status='ended', ended_at=coalesce(ended_at, now()), ended_kind='superseded'
+     where status='live' and ended_at is null and now() < expires_at and origin = 'automated';
+  else
+    select id, origin into v_live_id, v_live_origin
+      from public.test_sessions
+     where status='live' and ended_at is null and now() < expires_at
+     order by (origin = 'human') desc, id desc
+     limit 1;
+    if v_live_origin = 'human' then
+      return jsonb_build_object('ok',false,'error','human_session_live',
+        'session_id', v_live_id,
+        'message', public.uic('test_session.human_live',
+          'A person has test mode on. Automated runs do not join it.'));
+    end if;
+    if v_live_id is not null then
+      return jsonb_build_object('ok',true,'already',true,'session_id',v_live_id,
+        'origin', v_live_origin,
+        'message', public.uic('test_session.already_on','Test mode is already on.'));
+    end if;
+  end if;
+
+  if v_origin = 'automated' then
+    v_scope := 'automated';
+    v_cap := coalesce((select automated_session_hours from public.test_mode_config where id=1), 1);
+    v_hours := least(coalesce(nullif(p_hours,0), v_cap), v_cap);
+    v_token := null;
+  else
+    v_scope := 'install';
+    v_hours := coalesce(nullif(p_hours,0),
+                        (select session_hours from public.test_mode_config where id=1), 12);
+    -- Opaque, unguessable, and the ONLY thing that binds a write to this run.
+    v_token := replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '');
+  end if;
+
+  v_label := coalesce(nullif(btrim(p_label),''),
+                      to_char(now() at time zone 'Asia/Kolkata','DD Mon HH24:MI') || ' run');
+
+  insert into public.test_sessions (label, scope, origin, started_by, started_by_label,
+                                    started_by_kind, expires_at, before_fp, token)
+  values (v_label, v_scope, v_origin, v_uid,
+          case when v_origin = 'automated' then 'automated'
+               else coalesce((select email from auth.users where id = v_uid), 'admin') end,
+          v_origin,
+          now() + make_interval(mins => greatest(1, (v_hours*60)::int)),
+          public.test_fingerprint(), v_token)
+  returning id into v_id;
+
+  return jsonb_build_object('ok',true,'session_id',v_id,'origin',v_origin,'scope',v_scope,
+    'banner', (v_origin = 'human'),
+    'token', v_token,
+    'message', case when v_origin = 'human'
+      then public.uic('test_session.started','Test mode is ON. Everything you do now is a test.')
+      else public.uic('test_session.started_automated','Automated test run open — no banner, bot scope only.') end);
+end $function$;
+
 -- ── 7. rg: the rule cannot quietly disappear, and the gate must be proven wired ─
 insert into rg_behavior_tests (name, enabled, note, body) values (
  'feature_journey_rule_present', true,

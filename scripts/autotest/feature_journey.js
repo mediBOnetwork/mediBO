@@ -145,15 +145,39 @@ async function enableSemantics(page) {
   } catch (_) {}
 }
 async function findTap(page, id, ms) {
-  const dl = Date.now() + ms; const sels = tapSelectors(id);
+  // Flutter only builds what is laid out: a section far down a lazy list has no
+  // semantics node until the list is scrolled to it (lesson 340). So a node that
+  // is not on the page is looked for again after each scroll of the viewport,
+  // until the budget runs out.
+  const dl = Date.now() + ms; const sels = tapSelectors(id); let scrolls = 0;
   while (Date.now() < dl) {
     for (const s of sels) {
       try { const n = await page.locator(s).count(); if (n > 0) return s; } catch (_) {}
     }
     await enableSemantics(page);
-    await page.waitForTimeout(500);
+    if (scrolls < 12) {
+      try {
+        const vp = page.viewportSize() || { width: 360, height: 800 };
+        await page.mouse.move(Math.round(vp.width / 2), Math.round(vp.height * 0.6));
+        await page.mouse.wheel(0, Math.round(vp.height * 0.7));
+      } catch (_) {}
+      scrolls++;
+    }
+    await page.waitForTimeout(700);
   }
   return null;
+}
+// what the page DOES expose — printed into a failed tap's note so the next
+// person knows whether semantics were off or the node was simply never built
+async function semanticsDiag(page) {
+  try {
+    return await page.evaluate(() => {
+      const all = document.querySelectorAll('flt-semantics');
+      const ids = []; all.forEach((e) => { const v = e.getAttribute('flt-semantics-identifier') || e.id; if (v && ids.length < 12 && !ids.includes(v)) ids.push(v); });
+      const ph = !!document.querySelector('flt-semantics-placeholder');
+      return `${all.length} semantics node(s), placeholder=${ph}, identifiers: ${ids.join(', ') || 'none'}`;
+    });
+  } catch (e) { return 'diag failed: ' + String(e.message).slice(0, 80); }
 }
 function withAudit(route) {
   // keep the route's own query, add the app's semantics switch
@@ -197,17 +221,36 @@ async function runWidth(browser, width, plan, session, ctx0) {
           const url = TARGET + withAudit(s.route || '/');
           const r = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
           try { await page.waitForLoadState('load', { timeout: 30000 }); } catch (_) {}
-          const painted = await waitRenderKey(page, 'boot_status', 'painted', 60000);
+          let painted = await waitRenderKey(page, 'boot_status', 'painted', 60000);
+          let dl = '';
+          if (painted.ok && /^\/admin\//.test(s.route || '')) {
+            // An admin deep link is opened by the shell only once the session
+            // has resolved to an admin. Injected sessions sometimes lose that
+            // race on a cold boot (the route stays parked): wait for the app's
+            // own record that it opened, and reload ONCE when it never comes.
+            let opened = await waitRenderKey(page, 'c325_deep_link_opened', '', 8000);
+            if (!opened.ok) {
+              say(`w${width} open: deep link not opened after 8 s — reloading once`);
+              try { await page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 }); } catch (_) {}
+              painted = await waitRenderKey(page, 'boot_status', 'painted', 60000);
+              opened = await waitRenderKey(page, 'c325_deep_link_opened', '', 25000);
+            }
+            dl = opened.ok ? `, deep link opened (${opened.value})` : ', deep link NOT opened';
+          }
           await enableSemantics(page);
           await page.waitForTimeout(1500);
-          res = painted.ok ? { ok: true, note: `${url} -> ${r ? r.status() : '?'}, painted` }
+          res = painted.ok ? { ok: true, note: `${url} -> ${r ? r.status() : '?'}, painted${dl}` }
                            : { ok: false, note: `${url} never painted (boot_status=${painted.value === undefined ? 'nothing' : painted.value})` };
           break;
         }
         case 'tap': {
           lastActionIdx = net.length;
-          const sel = await findTap(page, s.identifier, s.timeout_ms || 20000);
-          if (!sel) { res = { ok: false, note: `no semantics node "${s.identifier}" on the page` }; break; }
+          const sel = await findTap(page, s.identifier, s.timeout_ms || 25000);
+          if (!sel) {
+            const rl = await renderLog(page);
+            res = { ok: false, note: `no semantics node "${s.identifier}" on the page — ${await semanticsDiag(page)}; deep_link_opened=${rl.c325_deep_link_opened || 'none'}` };
+            break;
+          }
           try { await page.locator(sel).first().click({ timeout: 10000, force: true }); }
           catch (e) {
             // an overlay node that Playwright deems not actionable still takes a DOM click
@@ -315,8 +358,11 @@ async function main() {
   try { session = await api.signIn(ident.identity, password); }
   catch (e) { finish(`feature journey feat-${CMD} on ${LANE}: NOT RUN — sign-in failed for role '${role}': ${String(e.message).slice(0, 160)}`, isTransport(e) ? 3 : 2); }
 
-  // the purging TEST MODE session — the run is stamped and purged as a whole
-  const started = await pre('test_run_start', {
+  // the purging TEST MODE session — the run is stamped and purged as a whole.
+  // --no-session is a REHEARSAL of the browser steps only: no session, no run
+  // row, and the lane is recorded as 'skipped' so it can never count as green.
+  const noSession = flag('no-session');
+  const started = noSession ? { ok: true, run_id: null, test_session_id: null } : await pre('test_run_start', {
     p_kind: 'feature_' + LANE, p_target_url: TARGET, p_commit: COMMIT, p_deploy_no: CHANGE,
     p_command_id: CMD, p_triggered_by: 'feature_journey', p_note: `feat-${CMD} ${LANE} ${att.note || ''}`.trim(), p_open_session: true
   });
@@ -327,7 +373,7 @@ async function main() {
   }
   const runId = started.run_id; const sessionId = started.test_session_id;
   const root = process.env.AUTOTEST_ARTIFACTS || path.join(HOME, 'mediBO-runner', 'autotest-runs');
-  const artifactDir = path.join(root, `fj-${CMD}-${LANE}-${runId}`); fs.mkdirSync(artifactDir, { recursive: true });
+  const artifactDir = path.join(root, `fj-${CMD}-${LANE}-${runId == null ? 'rehearsal-' + Date.now() : runId}`); fs.mkdirSync(artifactDir, { recursive: true });
   writeSummary({ status: 'running', run_id: runId, session_id: sessionId, artifacts: artifactDir });
   say(`run ${runId} · session ${sessionId} · ${role} (${ident.identity}) · ${TARGET} · widths ${widths.join('/')} · attempt ${att.attempt_no}/${att.max}`);
 
@@ -367,7 +413,7 @@ async function main() {
 
   // close the run: the status is stated, never inferred from a results table this run never writes
   let finished = null;
-  try {
+  if (!noSession) try {
     finished = await api.rpc('test_run_finish', { p_run_id: runId, p_status: allOk ? 'passed' : 'failed', p_artifacts_path: artifactDir,
       p_console_errors: consoleErrors, p_network_failures: netFail, p_purge: true }, null);
   } catch (e) { say('test_run_finish failed: ' + e.message); }
@@ -382,15 +428,17 @@ async function main() {
     steps: Object.fromEntries(results.map((r) => [r.width, r.steps])),
     console_errors: consoleErrors, network_failures: netFail,
     purge: { clean: purge.clean, residue: purge.residue, message: typeof purge.message === 'string' ? purge.message.slice(0, 200) : undefined },
-    attempt: att.attempt_no, commit: COMMIT, artifacts: artifactDir
+    attempt: att.attempt_no, commit: COMMIT, artifacts: artifactDir,
+    rehearsal: noSession || undefined
   };
+  if (noSession) evidence.note = 'REHEARSAL without a test session (--no-session) — ' + evidence.note;
   let rec = null;
   try {
-    rec = await ctlRpc('dev_feature_journey_record', { p_command_id: CMD, p_lane: LANE, p_status: allOk ? 'passed' : 'failed',
+    rec = await ctlRpc('dev_feature_journey_record', { p_command_id: CMD, p_lane: LANE, p_status: noSession ? 'skipped' : (allOk ? 'passed' : 'failed'),
       p_evidence: evidence, p_change_no: CHANGE, p_commit: COMMIT, p_duration_ms: Date.now() - t0 });
   } catch (e) { say('record failed: ' + e.message); }
   fs.writeFileSync(path.join(artifactDir, 'run.json'), JSON.stringify({ def, evidence, finished, rec }, null, 1));
-  const detail = (rec && rec.line) ? rec.line.replace(/^feature journey [^:]+: /, '') : evidence.note;
+  const detail = (!noSession && rec && rec.line) ? rec.line.replace(/^feature journey [^:]+: /, '') : evidence.note;
   writeSummary({ status: allOk ? 'passed' : 'failed', widths_passed: passed, widths_failed: failed, failed_step: evidence.failed_step, green: !!(rec && rec.green), run_id: runId });
   finish(`feature journey feat-${CMD} on ${LANE}: ${allOk ? 'PASSED' : 'FAILED'} — ${detail}`, allOk ? 0 : (crashed ? 5 : 1));
 }

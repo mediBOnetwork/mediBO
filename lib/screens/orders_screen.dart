@@ -27,6 +27,7 @@ import '../widgets/customer_order_item_card.dart'; // #641: the Items-tab card
 import '../widgets/order_card_lean.dart'; // #630: the lean card, its progress line and the change window
 import '../widgets/substitute_ask_card.dart'; // #698: the substitute offer
 import '../services/ui_copy.dart';
+import '../supabase_config.dart';
 import '../design_tokens.dart'; // #173: Ds tokens for the reorder entry points
 import '../widgets/delivery_proof_card.dart'; // #691: arrival window + proof of delivery
 import '../widgets/customer_surface_widgets.dart'; // CHANGE #745 — Rewards section
@@ -1938,11 +1939,17 @@ class _BillActionsRowState extends State<_BillActionsRow> {
   // returns, no client-side layout/math.
   Future<({List<int> bytes, String filename})?> _fetchBillPdf() async {
     try {
-      final token = Supabase.instance.client.auth.currentSession?.accessToken ?? '';
+      // CMD #2082 — bill-pdf returns binary, so it cannot go through
+      // functions.invoke (which utf8-decodes any non-octet-stream body). It
+      // gets the same headers by hand instead: never an empty Bearer, and
+      // always apikey, or the gateway answers 401 before the function runs.
+      final token = Supabase.instance.client.auth.currentSession?.accessToken ??
+          SupabaseConfig.anonKey;
       final resp = await http.post(
-        Uri.parse('https://swojhmarmaijkshsbeih.supabase.co/functions/v1/bill-pdf'),
+        Uri.parse('${SupabaseConfig.url}/functions/v1/bill-pdf'),
         headers: {
           'Authorization': 'Bearer $token',
+          'apikey': SupabaseConfig.anonKey,
           'Content-Type': 'application/json',
         },
         body: jsonEncode({'order_id': widget.orderId}),

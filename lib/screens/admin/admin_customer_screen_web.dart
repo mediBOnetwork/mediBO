@@ -19,6 +19,7 @@ import '../../widgets/geo_position.dart' as geo;
 import '../../utils/file_pick_io.dart' as filepick;
 
 import '../../utils/download_bytes.dart'; // CHANGE #463
+import '../../services/ocr_edge_client.dart';
 import '../../utils/render_log.dart';
 import 'customer_tab_target.dart'; // CMD #2056
 import 'customer_pipeline_screen.dart';
@@ -5857,11 +5858,10 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
 
       final idxMap = <int, String>{};
       try {
-        final resp = await http.post(
-          Uri.parse('https://swojhmarmaijkshsbeih.supabase.co/functions/v1/gemini-ocr'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({'image_base64': '', 'mime_type': 'text/plain', 'prompt': prompt}),
-        ).timeout(const Duration(seconds: 20));
+        final resp = await OcrEdge.call(
+          prompt: prompt,
+          timeout: const Duration(seconds: 20),
+        );
         if (resp.statusCode == 200) {
           final txt = (jsonDecode(resp.body) as Map<String, dynamic>)['text'] as String? ?? '';
           final jm = RegExp(r'\[[\s\S]*\]').firstMatch(txt);

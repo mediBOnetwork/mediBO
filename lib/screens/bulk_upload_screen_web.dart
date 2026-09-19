@@ -5,7 +5,6 @@ import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
@@ -22,6 +21,7 @@ import '../utils/download_bytes.dart' as dl;
 import '../app_state.dart';
 import '../config/api_keys.dart';
 import '../models/product.dart';
+import '../services/ocr_edge_client.dart';
 import '../services/ui_copy.dart';
 import '../user_state.dart';
 import '../util.dart';
@@ -1351,9 +1351,6 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     throw lastError!;
   }
 
-  static const _ocrEdgeFn =
-      'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/gemini-ocr';
-
   Future<List<Map<String, dynamic>>> _callGeminiOnce(
       String rawContent, {int attempt = 0}) async {
     final isPdf = rawContent.startsWith('PDF_BYTES:');
@@ -1380,17 +1377,15 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       prompt = _geminiTextPrompt(rawContent);
     }
 
-    final Map<String, dynamic> requestBody = {
-      'image_base64': imageBase64,
-      'mime_type': mimeType,
-      'prompt': prompt,
-    };
-
-    final response = await http.post(
-      Uri.parse(_ocrEdgeFn),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode(requestBody),
-    ).timeout(const Duration(seconds: 60));
+    // CMD #2082 — through the Supabase functions client so the session JWT
+    // (Authorization) and apikey always reach the gateway. A bare http.post
+    // here was rejected with 401 UNAUTHORIZED_NO_AUTH_HEADER.
+    final response = await OcrEdge.call(
+      imageBase64: imageBase64,
+      mimeType: mimeType,
+      prompt: prompt,
+      timeout: const Duration(seconds: 60),
+    );
 
     debugPrint('[OCR] HTTP ${response.statusCode} — body(200)=${response.statusCode == 200 ? response.body.substring(0, response.body.length.clamp(0, 400)) : response.body}');
     if (response.statusCode != 200) {
@@ -2388,17 +2383,14 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       if (cropBytes == null) return null;
       final base64Data = base64Encode(cropBytes);
 
-      final response = await http.post(
-        Uri.parse(_ocrEdgeFn),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'image_base64': base64Data,
-          'mime_type': 'image/jpeg',
-          'prompt': 'This is a crop of ONE handwritten medicine name from a pharmacy '
-              'order list. Read and return ONLY the medicine name as plain text. '
-              'Best guess if unclear. No JSON, no explanation.',
-        }),
-      ).timeout(const Duration(seconds: 30));
+      final response = await OcrEdge.call(
+        imageBase64: base64Data,
+        mimeType: 'image/jpeg',
+        prompt: 'This is a crop of ONE handwritten medicine name from a pharmacy '
+            'order list. Read and return ONLY the medicine name as plain text. '
+            'Best guess if unclear. No JSON, no explanation.',
+        timeout: const Duration(seconds: 30),
+      );
 
       if (response.statusCode != 200) return null;
       final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -3025,7 +3017,10 @@ class _UploadCard extends StatelessWidget {
                               Expanded(
                                 child: SizedBox(
                                   height: 52,
-                                  child: FilledButton.icon(
+                                  child: Semantics(
+                                    identifier: 'bulk_upload_camera',
+                                    button: true,
+                                    child: FilledButton.icon(
                                     onPressed: onCamera,
                                     icon: const Icon(Icons.camera_alt_outlined, size: 18),
                                     label: Text(c('bulk_upload_screen_web.camera'),
@@ -3038,13 +3033,17 @@ class _UploadCard extends StatelessWidget {
                                       elevation: 0,
                                     ),
                                   ),
+                                  ),
                                 ),
                               ),
                               const SizedBox(width: 12),
                               Expanded(
                                 child: SizedBox(
                                   height: 52,
-                                  child: FilledButton.icon(
+                                  child: Semantics(
+                                    identifier: 'bulk_upload_file',
+                                    button: true,
+                                    child: FilledButton.icon(
                                     onPressed: onPickFile,
                                     icon: const Icon(Icons.upload_file_outlined, size: 18),
                                     label: Text(c('bulk_upload_screen_web.upload_file'),
@@ -3056,6 +3055,7 @@ class _UploadCard extends StatelessWidget {
                                           borderRadius: BorderRadius.circular(10)),
                                       elevation: 0,
                                     ),
+                                  ),
                                   ),
                                 ),
                               ),
@@ -3762,7 +3762,10 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                   SizedBox(
                     width: double.infinity,
                     height: 48,
-                    child: FilledButton(
+                    child: Semantics(
+                      identifier: 'bulk_upload_add_to_cart',
+                      button: true,
+                      child: FilledButton(
                       onPressed: canAdd ? () => widget.onAddToCart() : null,
                       style: FilledButton.styleFrom(
                         backgroundColor: const Color(0xFF16A34A),
@@ -3772,6 +3775,7 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                       child: widget.addingToCart
                           ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                           : Text(c('bulk_upload_screen_web.add_matched_to_cart'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                    ),
                     ),
                   ),
                 ],

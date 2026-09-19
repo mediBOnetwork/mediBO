@@ -7,13 +7,13 @@ import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:xml/xml.dart' as xmlp;
 
 import '../../config/api_keys.dart';
+import '../../services/ocr_edge_client.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import '../../models/product.dart';
@@ -413,8 +413,6 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
     return (headers: List.filled(maxCols, ''), rows: allRows);
   }
 
-  static const _ocrEdgeFn =
-      'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/gemini-ocr';
 
   Future<({List<String> headers, List<List<String>> rows})> _geminiTable(
       bool isImage, String mime, String b64, String pdfMime) async {
@@ -425,15 +423,12 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
         'Use empty string "" for missing headers. '
         'Include all data rows. Keep currency symbols (₹) in values as-is.';
 
-    final resp = await http.post(
-      Uri.parse(_ocrEdgeFn),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'image_base64': b64,
-        'mime_type': isImage ? mime : pdfMime,
-        'prompt': prompt,
-      }),
-    ).timeout(const Duration(seconds: 60));
+    final resp = await OcrEdge.call(
+      imageBase64: b64,
+      mimeType: isImage ? mime : pdfMime,
+      prompt: prompt,
+      timeout: const Duration(seconds: 60),
+    );
     if (resp.statusCode != 200) throw Exception('OCR API error (HTTP ${resp.statusCode})');
     final data = jsonDecode(resp.body) as Map<String, dynamic>;
     final txt = data['text'] as String? ?? '';
@@ -501,11 +496,10 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
         '[{"index":0,"mapped_to":"product_name"},...]';
 
     try {
-      final resp = await http.post(
-        Uri.parse(_ocrEdgeFn),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'image_base64': '', 'mime_type': 'text/plain', 'prompt': prompt}),
-      ).timeout(const Duration(seconds: 30));
+      final resp = await OcrEdge.call(
+        prompt: prompt,
+        timeout: const Duration(seconds: 30),
+      );
       if (resp.statusCode == 200) {
         final txt = (jsonDecode(resp.body) as Map<String, dynamic>)['text'] as String? ?? '';
         final jm = RegExp(r'\[[\s\S]*\]').firstMatch(txt);

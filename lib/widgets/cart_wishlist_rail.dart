@@ -58,44 +58,69 @@ class CartWishlistRail extends StatelessWidget {
   /// reserved height below cannot drift from the card that fills it.
   static const double cardW = 156;
 
+  // CMD #2087 — the rail occupies a CONSTANT height. Every gap below is a
+  // named constant and [extent] is their sum, so the fixed slot this rail
+  // sits in (CartRailSlot) reserves exactly the band the rail draws: a rail
+  // with three cards cannot be a different height from one with ten, and the
+  // blocks beneath it never move when the payload changes.
+  static const double _topGap = 8;
+  static const double _titleH = 24;
+  static const double _titleGap = 12;
+  static const double _bottomGap = 16;
+
+  /// The height one rail always takes: gap, title line, gap, card, gap.
+  static const double extent =
+      _topGap + _titleH + _titleGap + CompactProductCard.extent + _bottomGap;
+
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(top: Ds.space.x8, bottom: Ds.space.x16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (title.isNotEmpty)
-            Padding(
-              padding: EdgeInsets.fromLTRB(
-                  Ds.space.x16, Ds.space.x4, Ds.space.x16, Ds.space.x12),
-              child: Text(title, style: Ds.t.subtitle),
-            ),
-          SizedBox(
-            height: CompactProductCard.extent,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              physics: const ClampingScrollPhysics(),
-              padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-              itemExtent: cardW + Ds.space.x12,
-              itemCount: items.length,
-              itemBuilder: (context, i) {
-                final p = items[i];
-                return Padding(
-                  padding: EdgeInsets.only(right: Ds.space.x12),
-                  child: SizedBox(
-                    width: cardW,
-                    child: CompactProductCard(
-                      product: p,
-                      onTap: () => onOpen(p),
-                    ),
-                  ),
-                );
-              },
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(height: _topGap),
+        // CMD #2087 — the title sits on the SAME 16px gutter the cart rows
+        // use, so the rail reads as one more full-width block of the page
+        // rather than an inset card.
+        SizedBox(
+          height: _titleH,
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(title,
+                  style: Ds.t.subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis),
             ),
           ),
-        ],
-      ),
+        ),
+        SizedBox(height: _titleGap),
+        SizedBox(
+          height: CompactProductCard.extent,
+          child: ListView.builder(
+            scrollDirection: Axis.horizontal,
+            physics: const ClampingScrollPhysics(),
+            padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+            itemExtent: cardW + Ds.space.x12,
+            itemCount: items.length,
+            itemBuilder: (context, i) {
+              final p = items[i];
+              return Padding(
+                padding: EdgeInsets.only(right: Ds.space.x12),
+                child: SizedBox(
+                  width: cardW,
+                  child: CompactProductCard(
+                    product: p,
+                    onTap: () => onOpen(p),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        SizedBox(height: _bottomGap),
+      ],
     );
   }
 }

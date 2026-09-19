@@ -1793,9 +1793,7 @@ class _HomeShellState extends State<HomeShell> {
             )
           : (_cartOpen
               ? null
-              // CMD #2080 — the bar hides on the way down and returns on the
-              // way up, on the header's own driver. Customer chrome only: the
-              // staff bar above is wrapped in nothing and is unchanged.
+              // CMD #2080 — customer chrome only.
               : shellHidingNav(
                   enabled: !isAdmin && shellNavHideEnabled,
                   ValueListenableBuilder<List<Map<String, dynamic>>>(
@@ -1833,11 +1831,7 @@ class _HomeShellState extends State<HomeShell> {
         // same band: one shell, one driver, one notifier, never a second
         // controller to keep in step. Its own chrome — the search field, the
         // breadcrumb, the A–Z rail and the list toolbar — sits outside its
-        // scroll view exactly as Home's does, so only the header travels.
-        // CMD #2080 — and the BOTTOM chrome rides the very same driver. The
-        // band belongs to Home and the Catalogue; the bar belongs to every
-        // customer tab, so the shell answers for each separately and the one
-        // driver publishes its one travel into both.
+        // scroll view as Home's does. CMD #2080 — so does the bottom bar.
         onNotification: (n) => shellHeaderScroll(
             n, !isAdmin && shellHeaderBandTab(_index),
             nav: !isAdmin && shellNavHideEnabled),

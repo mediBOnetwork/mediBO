@@ -1221,10 +1221,24 @@ class CartModel extends ChangeNotifier {
           .map((m) => m.cast<String, dynamic>())
           .toList(growable: false);
 
+  /// CMD #2089 — the overflow bubble is gone: `has_more` is emitted false and
+  /// `more_label` empty by `cart_pill_block`, because the second line already
+  /// says "N items" and a circle beside it was the same number twice. The two
+  /// getters stay so an older cached payload still reads, and the widget draws
+  /// no bubble either way.
   bool get pillHasMore => pill['has_more'] == true;
   String get pillMoreLabel => (pill['more_label'] ?? '').toString();
   String get pillA11y => (pill['a11y'] ?? '').toString();
   String get pillIdentifier => (pill['identifier'] ?? '').toString();
+
+  /// CMD #2089 — the pill's SHAPE, decided in `storefront_ui_label` beside its
+  /// words: `color_token` (which `design.colors` key paints it), `height`,
+  /// `width_factor`, `min_width`, `thumb`, `thumb_overlap`, `chevron_box`,
+  /// `chevron`, `pad_left`, `pad_right`. Empty before the first payload — the
+  /// widget then draws its own constants, which is the same shape, so the
+  /// first frame is never a pill of size null.
+  Map<String, dynamic> get pillUi =>
+      (pill['ui'] as Map?)?.cast<String, dynamic>() ?? const {};
 
   /// #355 — the one figure the customer pays, as the SERVER computed it: the
   /// trade payable (taxable + GST) over the lines that have a trade rate.

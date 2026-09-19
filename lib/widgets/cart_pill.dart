@@ -6,25 +6,39 @@ import '../design_tokens.dart';
 import '../utils/render_log.dart';
 import 'product_image.dart';
 
-/// CMD #2081 — the floating "View cart" pill, in the Blinkit shape.
+/// CMD #2089 — the floating "View cart" pill: compact, brand green, no bubble.
 ///
-/// One solid dark-green full-radius pill, [kHeight] tall and about
-/// [kWidthFactor] of the screen wide (never narrower than [kMinWidth], never
-/// wider than the room it is handed), centred over the bottom stack. Left: the
-/// overlapping ringed thumbnails, then the backend's "+N" bubble when the
-/// basket holds more than they show. Middle: TWO STACKED LINES. Right: one
-/// chevron inside a subtle circle. There is no separator bar any more — #2043
-/// needed one because both facts shared a single line, and they no longer do.
+/// One solid full-radius pill in the mediBO brand green — the SAME token the
+/// Place-order and every other primary button uses — about [kWidthFactor] of
+/// the screen wide and [kHeight] tall, centred over the bottom stack. Left:
+/// up to two overlapping ringed thumbnails. Middle: TWO STACKED LINES. Right:
+/// one chevron inside a subtle circle.
 ///
-/// Everything it SAYS still comes from `cart_render().render.pill`: whether to
-/// appear at all (`show`), the two stacked lines (`lines`, in DRAW order — the
-/// backend pluralises and words them, never Dart), the thumbnail stack
-/// (`thumbs`, [0] behind and the most recently added item on top) and the
-/// overflow bubble (`has_more` / `more_label`). The app does not count the
-/// cart, does not pick "the first image", does not work out what "+2" means
-/// and does not decide what an item without a picture looks like — an empty
-/// url makes [ProductImage] paint the same grey placeholder tile the product
-/// cards use, which is the answer to "no image", never an empty circle.
+/// WHAT #2089 CHANGED, AND WHY
+///  * The "+N" bubble is gone. The second line already says "N items", so the
+///    circle beside the thumbnails was the same number twice — and it was the
+///    widest thing in a pill this change makes narrower. The backend stopped
+///    emitting it (`has_more` false, `more_label` empty) and this widget no
+///    longer knows how to draw one.
+///  * 48 px tall and 55% of the screen, down from #2081's 64 / 60%. The
+///    thumbnails, the chevron circle and both paddings scale with it.
+///  * `Ds.c.brand`, not `Ds.c.brandDark`. The pill names a design TOKEN, never
+///    a hex, so `ui_design_set` still recolours it with the rest of the app.
+///
+/// EVERYTHING IT SAYS — AND NOW EVERYTHING IT IS — COMES FROM THE PAYLOAD.
+/// `cart_render().render.pill` decides whether to appear (`show`), the two
+/// stacked lines (`lines`, in draw order — the backend pluralises and words
+/// them, never Dart), the thumbnail stack (`thumbs`, [0] behind and the most
+/// recently added item on top) and, since #2089, the SHAPE: `ui.color_token`,
+/// `ui.height`, `ui.width_factor`, `ui.min_width`, `ui.thumb`,
+/// `ui.thumb_overlap`, `ui.chevron_box`, `ui.chevron`, `ui.pad_left`,
+/// `ui.pad_right`. Re-proportioning or recolouring the pill is an UPDATE to
+/// `storefront_ui_label`, not a deploy.
+///
+/// The `k*` constants below are NOT a second opinion — they are what is drawn
+/// in the one frame before the first payload lands, and they are the same
+/// shape the backend ships. A pill that is briefly 48 px is right; a pill that
+/// is briefly nothing is not.
 ///
 /// This is the only widget in the storefront chrome that reads the cart, so a
 /// cart write repaints the pill and nothing else.
@@ -32,32 +46,37 @@ class CartPill extends StatelessWidget {
   final VoidCallback onTap;
   const CartPill({super.key, required this.onTap});
 
-  /// Geometry. Named so no bare number is written into a layout call and the
-  /// whole shape can be re-proportioned in one place.
-  static const double kHeight = 64;
-  static const double kThumb = 40;
+  /// The SLOT's height, and the pill's own default. The bottom stack reserves
+  /// exactly this much room for the pill ([BottomStackMetrics.pill]) and that
+  /// reservation is a compile-time constant on purpose (#2066): it is what
+  /// stops every list on screen re-padding when a payload arrives. So
+  /// `ui.height` may make the pill SHORTER than its slot — which moves
+  /// nothing, because the pill is centred in the room it was given — and is
+  /// clamped at this value, which is also the height the backend ships.
+  static const double kHeight = 48;
+  static const double kThumb = 30;
   static const double kThumbRing = 2;
 
   /// How far each further circle is pushed right of the one before it, so
   /// overlapping tiles still read as separate tiles.
-  static const double kThumbOverlap = 14;
-  static const double kPadLeft = 12;
-  static const double kPadRight = 12;
+  static const double kThumbOverlap = 11;
+  static const double kPadLeft = 8;
+  static const double kPadRight = 10;
 
-  /// The pill is a proportion of the screen, not of its content: Blinkit's
-  /// shape is a fixed bar, and a bar that changed width every time an item
-  /// was added would be the thing the eye follows instead of the basket.
-  static const double kWidthFactor = 0.6;
+  /// The pill is a proportion of the screen, not of its content: a bar that
+  /// changed width every time an item was added would be the thing the eye
+  /// follows instead of the basket.
+  static const double kWidthFactor = 0.55;
 
-  /// …with a floor, because 60% of a 320px phone is less than two thumbnails,
-  /// two lines and a chevron need. Below ~400px the floor wins and the pill
+  /// …with a floor, because 55% of a 320 px phone is less than two thumbnails,
+  /// two lines and a chevron need. Below ~345 px the floor wins and the pill
   /// simply reads a little wider. It is still clamped to the room it was
   /// handed, so it can never reach the screen edges.
-  static const double kMinWidth = 240;
+  static const double kMinWidth = 190;
 
   /// The chevron's circle, and the glyph inside it.
-  static const double kChevronBox = 32;
-  static const double kChevron = 20;
+  static const double kChevronBox = 26;
+  static const double kChevron = 18;
   static const double kChevronAlpha = 0.18;
 
   /// The second line is the quieter of the two.
@@ -65,11 +84,11 @@ class CartPill extends StatelessWidget {
   static const double kShadowElevation = 6;
   static const double kShadowAlpha = 0.24;
 
-  /// The gap between the pill and the bottom nav, and the inset a scrolling
-  /// storefront surface reserves at its end so the last card is never left
-  /// underneath the pill. One number, read by the shell (which positions the
-  /// pill) and by the lists (which get out of its way), so the two can never
-  /// disagree about how much room the pill takes.
+  /// The gap between the pill and the bottom bar above which it floats, and
+  /// the inset a scrolling storefront surface reserves at its end so the last
+  /// card is never left underneath the pill. One number, read by the shell
+  /// (which positions the pill) and by the lists (which get out of its way),
+  /// so the two can never disagree about how much room the pill takes.
   static double get bottomGap => Ds.space.x12;
   static double get bottomInset => kHeight + bottomGap * 2;
 
@@ -107,13 +126,19 @@ class CartPill extends StatelessWidget {
     final cart = AppState.of(context);
     final show = cart.pillShow;
     final thumbs = cart.pillThumbs;
-    final more = cart.pillHasMore ? cart.pillMoreLabel : '';
+    final ui = PillUi.from(cart.pillUi);
     if (show) {
       try {
         RenderLog.write('c2029_cart_pill',
             'items=${cart.pillItemsLabel}|thumbs=${thumbs.length}');
         RenderLog.write('c2081_cart_pill',
-            'lines=${cart.pillLines.length}|thumbs=${thumbs.length}|more=$more');
+            'lines=${cart.pillLines.length}|thumbs=${thumbs.length}|more=');
+        // CMD #2089 — the SHAPE that actually painted, so "the pill got
+        // smaller and greener" is something the render log can answer.
+        RenderLog.write(
+            'c2089_cart_pill',
+            'h=${ui.height.round()}|wf=${ui.widthFactor}'
+            '|token=${ui.colorToken}|thumbs=${thumbs.length}|bubble=0');
       } catch (_) {}
     }
 
@@ -128,32 +153,34 @@ class CartPill extends StatelessWidget {
           opacity: show ? 1 : 0,
           // The Center keeps the pill in the middle of whatever width the
           // stack hands it; the padding is what stops it reaching the screen
-          // edges on a 320px phone.
+          // edges on a 320 px phone.
           child: Padding(
             padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
             child: LayoutBuilder(
               builder: (context, box) {
-                // 60% of the SCREEN (the padding above is added back), floored
-                // so the content always fits and capped at the room available:
-                // 320 / 360 / 412 / 480 all land inside their own screen with
-                // nothing wrapped and nothing clipped.
+                // The backend's share of the SCREEN (the padding above is
+                // added back), floored so the content always fits and capped
+                // at the room available: 320 / 360 / 412 / 480 all land inside
+                // their own screen with nothing wrapped and nothing clipped.
                 final screen = box.maxWidth + Ds.space.x16 * 2;
                 final floor =
-                    kMinWidth > box.maxWidth ? box.maxWidth : kMinWidth;
+                    ui.minWidth > box.maxWidth ? box.maxWidth : ui.minWidth;
                 final width =
-                    (screen * kWidthFactor).clamp(floor, box.maxWidth);
+                    (screen * ui.widthFactor).clamp(floor, box.maxWidth);
                 return Center(
                   child: SizedBox(
                     key: const Key('c2029_pill'),
                     width: width,
-                    height: kHeight,
+                    // Never taller than the slot the stack reserved — see
+                    // [kHeight]. Shorter is free; the pill is centred in it.
+                    height: ui.height > kHeight ? kHeight : ui.height,
                     // Nothing is printed when the backend says there is no
                     // pill. An empty label is still a Text, and a hidden pill
                     // must leave no widget on the page it floats over — the
                     // product page proves it (`find.text('')` there is an
                     // assertion that the page prints no blank captions).
                     child: show
-                        ? _pill(cart, thumbs, more)
+                        ? _pill(cart, thumbs, ui)
                         : const SizedBox.shrink(),
                   ),
                 );
@@ -166,10 +193,11 @@ class CartPill extends StatelessWidget {
   }
 
   Widget _pill(
-      CartModel cart, List<Map<String, dynamic>> thumbs, String moreLabel) {
-    final radius = BorderRadius.circular(kHeight / 2);
+      CartModel cart, List<Map<String, dynamic>> thumbs, PillUi ui) {
+    final h = ui.height > kHeight ? kHeight : ui.height;
+    final radius = BorderRadius.circular(h / 2);
     return Material(
-      color: Ds.c.brandDark,
+      color: ui.color,
       borderRadius: radius,
       elevation: kShadowElevation,
       shadowColor: Colors.black.withValues(alpha: kShadowAlpha),
@@ -181,21 +209,100 @@ class CartPill extends StatelessWidget {
           label: cart.pillA11y,
           button: true,
           child: Padding(
-            padding: const EdgeInsets.only(left: kPadLeft, right: kPadRight),
+            padding:
+                EdgeInsets.only(left: ui.padLeft, right: ui.padRight),
             child: Row(
               children: [
-                _ThumbStack(thumbs: thumbs, moreLabel: moreLabel),
-                SizedBox(width: Ds.space.x12),
+                _ThumbStack(thumbs: thumbs, ui: ui),
+                SizedBox(width: Ds.space.x8),
                 // The two stacked lines, both backend copy.
                 Expanded(child: _Lines(lines: cart.pillLines)),
                 SizedBox(width: Ds.space.x8),
-                const _Chevron(),
+                _Chevron(ui: ui),
               ],
             ),
           ),
         ),
       ),
     );
+  }
+}
+
+/// CMD #2089 — the pill's shape, as the backend sent it.
+///
+/// Every field falls back to the matching `CartPill.k*` constant, which is the
+/// value the backend ships: the fallback exists for the frame before the first
+/// payload, not as a second opinion about how big the pill should be.
+///
+/// [colorToken] names a key of `design.colors` — `brand` is the primary green
+/// the Place-order button uses. Resolving it here is what keeps a hex out of
+/// this file: the pill asks for a TOKEN and the token layer answers, so
+/// `ui_design_set` recolours the pill along with everything else.
+class PillUi {
+  final String colorToken;
+  final double height, widthFactor, minWidth;
+  final double thumb, thumbOverlap, chevronBox, chevron, padLeft, padRight;
+
+  const PillUi({
+    required this.colorToken,
+    required this.height,
+    required this.widthFactor,
+    required this.minWidth,
+    required this.thumb,
+    required this.thumbOverlap,
+    required this.chevronBox,
+    required this.chevron,
+    required this.padLeft,
+    required this.padRight,
+  });
+
+  static double _d(Object? v, double fallback) {
+    if (v is num) {
+      final d = v.toDouble();
+      return d > 0 ? d : fallback;
+    }
+    if (v is String) {
+      final d = double.tryParse(v.trim());
+      if (d != null && d > 0) return d;
+    }
+    return fallback;
+  }
+
+  factory PillUi.from(Map<String, dynamic> m) => PillUi(
+        colorToken: ((m['color_token'] ?? '').toString().trim().isEmpty)
+            ? 'brand'
+            : m['color_token'].toString().trim(),
+        height: _d(m['height'], CartPill.kHeight),
+        widthFactor: _d(m['width_factor'], CartPill.kWidthFactor),
+        minWidth: _d(m['min_width'], CartPill.kMinWidth),
+        thumb: _d(m['thumb'], CartPill.kThumb),
+        thumbOverlap: _d(m['thumb_overlap'], CartPill.kThumbOverlap),
+        chevronBox: _d(m['chevron_box'], CartPill.kChevronBox),
+        chevron: _d(m['chevron'], CartPill.kChevron),
+        padLeft: _d(m['pad_left'], CartPill.kPadLeft),
+        padRight: _d(m['pad_right'], CartPill.kPadRight),
+      );
+
+  /// The token, resolved. An unknown name falls back to the brand green rather
+  /// than to a colour this file invented.
+  Color get color {
+    switch (colorToken) {
+      case 'brandDark':
+        return Ds.c.brandDark;
+      case 'success':
+        return Ds.c.success;
+      case 'info':
+        return Ds.c.info;
+      case 'warning':
+        return Ds.c.warning;
+      case 'danger':
+        return Ds.c.danger;
+      case 'text':
+        return Ds.c.text;
+      case 'brand':
+      default:
+        return Ds.c.brand;
+    }
   }
 }
 
@@ -218,7 +325,7 @@ class _Lines extends StatelessWidget {
         softWrap: false,
         overflow: TextOverflow.ellipsis,
         style: i == 0
-            ? Ds.t.body.copyWith(
+            ? Ds.t.caption.copyWith(
                 color: Colors.white, fontWeight: FontWeight.w700)
             : Ds.t.caption.copyWith(
                 color: Colors.white.withValues(alpha: CartPill.kSubAlpha)),
@@ -234,63 +341,55 @@ class _Lines extends StatelessWidget {
   }
 }
 
-/// One chevron inside a subtle circle. #2043's hairline divider is gone with
-/// the single line it separated.
+/// One chevron inside a subtle circle, sized by the payload.
 class _Chevron extends StatelessWidget {
-  const _Chevron();
+  const _Chevron({required this.ui});
+  final PillUi ui;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: CartPill.kChevronBox,
-      height: CartPill.kChevronBox,
+      width: ui.chevronBox,
+      height: ui.chevronBox,
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: CartPill.kChevronAlpha),
         shape: BoxShape.circle,
       ),
-      child: const Icon(Icons.chevron_right,
-          color: Colors.white, size: CartPill.kChevron),
+      child: Icon(Icons.chevron_right,
+          color: Colors.white, size: ui.chevron),
     );
   }
 }
 
-/// The one or two overlapping thumbnails, and the backend's "+N" bubble when
-/// the basket holds more than they show. One item draws one circle; the
-/// backend decides how many there are, in which order they stack, and whether
-/// there is an overflow at all.
+/// The overlapping thumbnails — and, since #2089, NOTHING ELSE.
+///
+/// The backend decides how many circles there are (`ui.max_thumbs`, two) and
+/// in which order they stack. The "+N" bubble that used to sit at the end of
+/// this strip is gone: the pill's own second line already says "N items", so
+/// the circle repeated a number the shopper was already reading, in the part
+/// of a narrower pill that could least afford the width.
 class _ThumbStack extends StatelessWidget {
   final List<Map<String, dynamic>> thumbs;
-
-  /// `more_label`, verbatim — '' when `has_more` was false. The count inside
-  /// it was worked out in SQL; this widget only prints it.
-  final String moreLabel;
-  const _ThumbStack({required this.thumbs, this.moreLabel = ''});
+  final PillUi ui;
+  const _ThumbStack({required this.thumbs, required this.ui});
 
   @override
   Widget build(BuildContext context) {
-    final slots = thumbs.length + (moreLabel.isEmpty ? 0 : 1);
-    if (slots == 0) {
-      return const SizedBox(width: CartPill.kThumb, height: CartPill.kThumb);
+    if (thumbs.isEmpty) {
+      return SizedBox(width: ui.thumb, height: ui.thumb);
     }
     return SizedBox(
-      width: CartPill.kThumb + CartPill.kThumbOverlap * (slots - 1),
-      height: CartPill.kThumb,
+      width: ui.thumb + ui.thumbOverlap * (thumbs.length - 1),
+      height: ui.thumb,
       child: Stack(
         children: [
           for (var i = 0; i < thumbs.length; i++)
             Positioned(
               key: Key('c2029_pill_thumb_$i'),
-              left: CartPill.kThumbOverlap * i,
+              left: ui.thumbOverlap * i,
               top: 0,
               child: _tile(thumbs[i]),
-            ),
-          if (moreLabel.isNotEmpty)
-            Positioned(
-              key: const Key('c2081_pill_more'),
-              left: CartPill.kThumbOverlap * thumbs.length,
-              top: 0,
-              child: _bubble(moreLabel),
             ),
         ],
       ),
@@ -301,10 +400,10 @@ class _ThumbStack extends StatelessWidget {
   /// overlapping tiles still read as two.
   Widget _tile(Map<String, dynamic> t) {
     final url = (t['image_url'] ?? '').toString();
-    const inner = CartPill.kThumb - CartPill.kThumbRing * 2;
+    final inner = ui.thumb - CartPill.kThumbRing * 2;
     return Container(
-      width: CartPill.kThumb,
-      height: CartPill.kThumb,
+      width: ui.thumb,
+      height: ui.thumb,
       decoration: const BoxDecoration(
         color: Colors.white,
         shape: BoxShape.circle,
@@ -316,37 +415,6 @@ class _ThumbStack extends StatelessWidget {
         height: inner,
         fit: BoxFit.cover,
         radius: BorderRadius.circular(inner / 2),
-      ),
-    );
-  }
-
-  /// The overflow bubble: the same ringed circle as a thumbnail, so the row
-  /// reads as one strip, carrying the backend's own string.
-  Widget _bubble(String label) {
-    return Container(
-      width: CartPill.kThumb,
-      height: CartPill.kThumb,
-      padding: const EdgeInsets.all(CartPill.kThumbRing),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        shape: BoxShape.circle,
-      ),
-      child: DecoratedBox(
-        decoration: BoxDecoration(color: Ds.c.brand, shape: BoxShape.circle),
-        child: Center(
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Padding(
-              padding: EdgeInsets.all(Ds.space.x4),
-              child: Text(
-                label,
-                maxLines: 1,
-                style: Ds.t.caption.copyWith(
-                    color: Colors.white, fontWeight: FontWeight.w700),
-              ),
-            ),
-          ),
-        ),
       ),
     );
   }

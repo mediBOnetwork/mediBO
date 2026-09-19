@@ -123,14 +123,32 @@ class _MobileBottomBar extends StatelessWidget {
       items: [
         for (final s in slots)
           BottomNavigationBarItem(
-            icon: _glyph(s, cart, active: false),
-            activeIcon: _glyph(s, cart, active: true),
+            // CMD #2080 — a stable handle on each tab, named by the ROW's own
+            // key, so a browser journey can tap "Orders" without a test
+            // knowing which position the registry currently sorts it into.
+            icon: _identified(s, _glyph(s, cart, active: false)),
+            activeIcon: _identified(s, _glyph(s, cart, active: true)),
             // The word is the backend's, from ui_copy, like every other label.
             label: (s['label'] ?? '').toString(),
           ),
       ],
     );
   }
+
+  /// CMD #2080 — the tab's own handle, for a browser journey.
+  ///
+  /// The name is the registry row's `slot_key`, so re-ordering the bar or
+  /// hiding a slot cannot move it and nothing here has to agree with a list
+  /// written somewhere else.
+  static Widget _identified(Map<String, dynamic> slot, Widget child) =>
+      Semantics(
+        // Its OWN node: the bar already wraps each item in a semantics
+        // container, and a bare child would merge into that one and take the
+        // handle with it.
+        container: true,
+        identifier: 'nav_slot_${(slot['key'] ?? '').toString()}',
+        child: child,
+      );
 
   /// `icon_key` -> glyph, plus the row's own badge.
   ///

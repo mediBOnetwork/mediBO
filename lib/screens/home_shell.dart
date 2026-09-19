@@ -147,6 +147,7 @@ import '../widgets/customer_surface_widgets.dart';
 // Every other concern is a part below, with its own path and its own lease.
 part 'shell/shell_mobile_chrome.dart';
 part 'shell/shell_header_band.dart'; // CMD #2052 — the collapsing band
+part 'shell/shell_nav_hide.dart'; // CMD #2080 — the bar rides the same scroll
 part 'shell/shell_cart_panel.dart';
 part 'shell/shell_login_panel.dart';
 part 'shell/shell_bottom_bars.dart';
@@ -1792,7 +1793,10 @@ class _HomeShellState extends State<HomeShell> {
             )
           : (_cartOpen
               ? null
-              : ValueListenableBuilder<List<Map<String, dynamic>>>(
+              // CMD #2080 — customer chrome only.
+              : shellHidingNav(
+                  enabled: !isAdmin && shellNavHideEnabled,
+                  ValueListenableBuilder<List<Map<String, dynamic>>>(
                   // CHANGE #630 — the slots, their order, their labels and WHO
                   // is offered each one are customer_nav()'s answer, rendered
                   // verbatim. The shell used to compute
@@ -1815,7 +1819,7 @@ class _HomeShellState extends State<HomeShell> {
                     // CMD #2021 — and landing on it means its ROOT.
                     onPageTap: _setIndex,
                   ),
-                )),
+                ))),
       body: shellStaffBody(
         isTablet: isTablet,
         entries: isAdmin ? visibleNavEntries(shellStaffBarEntries(kAdminBottomNav), Access.instance.routeCanView) : const [],
@@ -1827,9 +1831,10 @@ class _HomeShellState extends State<HomeShell> {
         // same band: one shell, one driver, one notifier, never a second
         // controller to keep in step. Its own chrome — the search field, the
         // breadcrumb, the A–Z rail and the list toolbar — sits outside its
-        // scroll view exactly as Home's does, so only the header travels.
-        onNotification: (n) =>
-            shellHeaderScroll(n, !isAdmin && shellHeaderBandTab(_index)),
+        // scroll view as Home's does. CMD #2080 — so does the bottom bar.
+        onNotification: (n) => shellHeaderScroll(
+            n, !isAdmin && shellHeaderBandTab(_index),
+            nav: !isAdmin && shellNavHideEnabled),
         child: Stack(
         children: [
           SizedBox.expand(

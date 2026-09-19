@@ -168,23 +168,23 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
   }
 
   /// CMD #2040 — Compare is ONE tap and ONE call.
-  /// CMD #2074 — and what it opens is a PAGE, not a sheet.
+  /// CMD #2074 — and what it opens is the same-composition table.
+  /// CMD #2095 — opened as a BOTTOM SHEET over this page, not pushed as a
+  /// route.
   ///
   /// The tray is gone: the question a pharmacy is asking on this page is
   /// "what else is this salt", and `pdp_salt_compare()` answers it with this
-  /// pack in ROW one and up to nineteen other brands under it. Twenty rows do
-  /// not fit in a bottom sheet, and a sheet cannot hold the scroll position
-  /// while one of those products is opened on top of it — so [CompareScreen] is
-  /// pushed, and it owns the call. The app picks no ids, caps no count and
-  /// words no refusal.
+  /// pack in ROW one and up to nineteen other brands under it. Comparing is a
+  /// glance, not a destination — the sheet keeps the product underneath it,
+  /// takes the backend's own share of the screen and closes on its × or on a
+  /// swipe down. `/compare/:id` still resolves, for a shared link, and draws
+  /// the SAME table. The app picks no ids, caps no count and words no refusal.
   Future<void> _openCompare() async {
-    await Navigator.of(context).push(MaterialPageRoute<void>(
-      settings: RouteSettings(name: '/compare/${widget.productId}'),
-      builder: (_) => CompareScreen(
-        productId: widget.productId,
-        loader: widget.compareLoader,
-      ),
-    ));
+    await showCompareSheet(
+      context,
+      productId: widget.productId,
+      loader: widget.compareLoader,
+    );
   }
 
   Future<void> _toggleWishlist() async {
@@ -229,12 +229,18 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
           // (`cmp_open`), read here as the tooltip, so no word is typed in
           // Dart; no caption, no control.
           if (!_loading && d != null && d.ok && d.compareOpenLabel.isNotEmpty)
-            IconButton(
-              key: const ValueKey('pdp-compare-button'),
-              tooltip: d.compareOpenLabel,
-              icon: Icon(Icons.compare_arrows_rounded,
-                  color: Ds.c.textSecondary),
-              onPressed: _openCompare,
+            // CMD #2095 — the one handle a browser journey can hold on this
+            // page: the tap that opens the compare sheet.
+            Semantics(
+              button: true,
+              identifier: 'pdp_compare_open',
+              child: IconButton(
+                key: const ValueKey('pdp-compare-button'),
+                tooltip: d.compareOpenLabel,
+                icon: Icon(Icons.compare_arrows_rounded,
+                    color: Ds.c.textSecondary),
+                onPressed: _openCompare,
+              ),
             ),
           if (showWishlistBtn)
             IconButton(

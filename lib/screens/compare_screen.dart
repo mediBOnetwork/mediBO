@@ -5,7 +5,29 @@ import '../data/medicine_repository.dart';
 import '../design_tokens.dart';
 import '../models/compare_table.dart';
 import '../utils/render_log.dart';
+import '../widgets/notify_control.dart';
 import 'product_detail_screen.dart';
+
+/// CMD #2095 — the heading treatment. Headings are the ONE bold thing in the
+/// table; every value under them is [Ds.t.body], regular, the same token the
+/// product page's Product-overview card prints its right column in.
+TextStyle get _headStyle =>
+    Ds.t.caption.copyWith(color: Ds.c.text, fontWeight: FontWeight.w700);
+
+/// Where a column sits, as the PAYLOAD says: the frozen product name is left,
+/// everything else is centred. An alignment this file does not recognise falls
+/// back to left rather than guessing.
+Alignment _alignOf(CompareColumn c) => c.isCenter
+    ? Alignment.center
+    : c.isRight
+        ? Alignment.centerRight
+        : Alignment.centerLeft;
+
+TextAlign _textAlignOf(CompareColumn c) => c.isCenter
+    ? TextAlign.center
+    : c.isRight
+        ? TextAlign.right
+        : TextAlign.left;
 
 /// '#RRGGBB' / '#AARRGGBB' -> Color. The fallback is a COLOUR only, never copy.
 Color _hexColor(String hex, Color fallback) {
@@ -15,6 +37,14 @@ Color _hexColor(String hex, Color fallback) {
   return v == null ? fallback : Color(v);
 }
 
+/// CMD #2095 — and what opens it is a BOTTOM SHEET, not a push.
+///
+/// [showCompareSheet] is the product page's door: a modal sheet at the
+/// backend's own share of the screen (`compare_layout.sheet_pct`, 85), which
+/// slides up, closes on the × in its handle bar and closes on a swipe down.
+/// The `/compare/:id` route still exists for a shared link and still draws the
+/// SAME body through [CompareScreen] — one table, two doors, no second design.
+///
 /// CMD #2074 — the compare table, as its own page.
 ///
 /// It was a bottom sheet with products across the top, which works for three
@@ -29,6 +59,56 @@ Color _hexColor(String hex, Color fallback) {
 /// offsets, which stay alive while a product page is open on top of it, and the
 /// cart calls behind the stepper — the same `AppState` calls the product card
 /// makes, so a quantity set here is the same quantity there.
+/// The product page's compare door. Returns when the sheet is dismissed.
+Future<void> showCompareSheet(
+  BuildContext context, {
+  required String productId,
+  Future<CompareTable> Function(String productId)? loader,
+  NotifyRequest? notifyRequest,
+}) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    // The swipe-down close, and the scrim behind it. Both are the sheet's own
+    // behaviour — nothing here re-implements a gesture.
+    enableDrag: true,
+    isDismissible: true,
+    backgroundColor: Ds.c.surface,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Ds.r.rCard.topLeft),
+    ),
+    // The sheet may grow to the whole screen; the share it actually takes is
+    // the BACKEND's (`compare_layout.sheet_pct`, 85) and is applied inside,
+    // once the payload has arrived — so raising it is an UPDATE, not a deploy.
+    constraints: BoxConstraints(
+      maxHeight: MediaQuery.of(context).size.height,
+    ),
+    builder: (_) => _CompareSheet(
+        productId: productId, loader: loader, notifyRequest: notifyRequest),
+  );
+}
+
+/// The sheet's contents: the handle bar with the backend's close caption, then
+/// the same body the route draws.
+class _CompareSheet extends StatelessWidget {
+  final String productId;
+  final Future<CompareTable> Function(String productId)? loader;
+  final NotifyRequest? notifyRequest;
+
+  const _CompareSheet(
+      {required this.productId, this.loader, this.notifyRequest});
+
+  @override
+  Widget build(BuildContext context) => CompareScreen(
+        key: const ValueKey('compare-sheet'),
+        productId: productId,
+        loader: loader,
+        notifyRequest: notifyRequest,
+        asSheet: true,
+      );
+}
+
 class CompareScreen extends StatefulWidget {
   final String productId;
 
@@ -36,7 +116,23 @@ class CompareScreen extends StatefulWidget {
   /// parsed payload so the table renders with no network and no Supabase.
   final Future<CompareTable> Function(String productId)? loader;
 
-  const CompareScreen({super.key, required this.productId, this.loader});
+  /// Test seam for the Notify control on an unavailable row. Production calls
+  /// `stock_notify_request` through the repository, exactly as the card and
+  /// the product page do.
+  final NotifyRequest? notifyRequest;
+
+  /// CMD #2095 — true inside [showCompareSheet]: the table wears a handle bar
+  /// with the backend's close caption instead of an app bar, and it sizes
+  /// itself to the sheet rather than to a route.
+  final bool asSheet;
+
+  const CompareScreen({
+    super.key,
+    required this.productId,
+    this.loader,
+    this.notifyRequest,
+    this.asSheet = false,
+  });
 
   @override
   State<CompareScreen> createState() => _CompareScreenState();
@@ -95,6 +191,12 @@ class _CompareScreenState extends State<CompareScreen> {
     // REACHABILITY PROOF. Flutter renders to canvas, so no browser tool can
     // read this table — the render log is how a live build proves the rows, the
     // columns and the two trade columns actually reached a real device.
+    // CMD #2095 — the sheet's own proof. A sheet changes no URL, so this key
+    // is what a live browser journey reads to know the table actually opened
+    // over the product page, and in which door.
+    RenderLog.write('c2095_compare_sheet',
+        'sheet=${widget.asSheet};id=${widget.productId};rows=${res.rows.length}');
+
     RenderLog.write(
         'c2074_compare',
         'rows=${res.rows.length};cols=${res.columns.length};'
@@ -120,25 +222,75 @@ class _CompareScreenState extends State<CompareScreen> {
   @override
   Widget build(BuildContext context) {
     final d = _data;
-    return Scaffold(
-      backgroundColor: Ds.c.bg,
-      appBar: AppBar(
-        backgroundColor: Ds.c.surface,
-        surfaceTintColor: Ds.c.surface,
-        elevation: Ds.space.hairline / 2,
-        title: Text(d?.title ?? '', style: Ds.t.subtitle),
-      ),
-      body: _loading
-          ? const _CompareSkeleton()
-          : (d == null || !d.ok)
-              ? const SizedBox.shrink()
-              : _CompareBody(
-                  data: d,
-                  hBody: _hBody,
-                  hHead: _hHead,
-                  vBody: _vBody,
-                  onOpen: _openProduct,
+    final body = _loading
+        ? const _CompareSkeleton()
+        : (d == null || !d.ok)
+            ? const SizedBox.shrink()
+            : _CompareBody(
+                data: d,
+                hBody: _hBody,
+                hHead: _hHead,
+                vBody: _vBody,
+                onOpen: _openProduct,
+                notifyRequest: widget.notifyRequest,
+              );
+
+    if (!widget.asSheet) {
+      return Scaffold(
+        backgroundColor: Ds.c.bg,
+        appBar: AppBar(
+          backgroundColor: Ds.c.surface,
+          surfaceTintColor: Ds.c.surface,
+          elevation: Ds.space.hairline / 2,
+          title: Text(d?.title ?? '', style: Ds.t.subtitle),
+        ),
+        body: body,
+      );
+    }
+
+    // The sheet. A grab handle (the swipe-down target), the backend's title,
+    // and the × carrying the backend's own close caption as its tooltip.
+    return SizedBox(
+      height: (d?.layout ?? CompareLayout.fallback)
+          .sheetHeight(MediaQuery.of(context).size.height),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: EdgeInsets.only(top: Ds.space.x8),
+            child: Container(
+              width: Ds.space.x48,
+              height: Ds.space.x4,
+              decoration: BoxDecoration(
+                color: Ds.c.divider,
+                borderRadius: Ds.r.rChip,
+              ),
+            ),
+          ),
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+                Ds.space.x16, Ds.space.x8, Ds.space.x8, 0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(d?.title ?? '',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Ds.t.subtitle),
                 ),
+                IconButton(
+                  key: const ValueKey('compare-close'),
+                  tooltip: d?.closeLabel ?? '',
+                  onPressed: () => Navigator.of(context).maybePop(),
+                  icon: Icon(Icons.close_rounded, color: Ds.c.textSecondary),
+                ),
+              ],
+            ),
+          ),
+          Divider(height: Ds.space.hairline, color: Ds.c.divider),
+          Expanded(child: body),
+        ],
+      ),
     );
   }
 }
@@ -149,6 +301,7 @@ class _CompareBody extends StatelessWidget {
   final ScrollController hHead;
   final ScrollController vBody;
   final void Function(String id) onOpen;
+  final NotifyRequest? notifyRequest;
 
   const _CompareBody({
     required this.data,
@@ -156,6 +309,7 @@ class _CompareBody extends StatelessWidget {
     required this.hHead,
     required this.vBody,
     required this.onOpen,
+    this.notifyRequest,
   });
 
   @override
@@ -231,7 +385,8 @@ class _CompareBody extends StatelessWidget {
                                       _DataRow(
                                           row: r,
                                           data: data,
-                                          columns: scroll),
+                                          columns: scroll,
+                                          notifyRequest: notifyRequest),
                                   ],
                                 ),
                               ),
@@ -287,7 +442,7 @@ class _HeaderBand extends StatelessWidget {
                 child: Text(name?.label ?? '',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: Ds.t.caption),
+                    style: _headStyle),
               ),
             ),
           ),
@@ -307,15 +462,12 @@ class _HeaderBand extends StatelessWidget {
                           padding:
                               EdgeInsets.symmetric(horizontal: Ds.space.x8),
                           child: Align(
-                            alignment: c.isRight
-                                ? Alignment.centerRight
-                                : Alignment.centerLeft,
+                            alignment: _alignOf(c),
                             child: Text(c.label,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                textAlign:
-                                    c.isRight ? TextAlign.right : TextAlign.left,
-                                style: Ds.t.caption),
+                                textAlign: _textAlignOf(c),
+                                style: _headStyle),
                           ),
                         ),
                       ),
@@ -365,7 +517,8 @@ class _NameCell extends StatelessWidget {
                 Text(row.name,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: Ds.t.bodyStrong),
+                    // CMD #2095 — regular, like every other value.
+                    style: Ds.t.body),
                 if (row.tag.isNotEmpty)
                   Text(row.tag,
                       maxLines: 1,
@@ -384,11 +537,13 @@ class _DataRow extends StatelessWidget {
   final CompareTableRow row;
   final CompareTable data;
   final List<CompareColumn> columns;
+  final NotifyRequest? notifyRequest;
 
   const _DataRow({
     required this.row,
     required this.data,
     required this.columns,
+    this.notifyRequest,
   });
 
   @override
@@ -409,7 +564,11 @@ class _DataRow extends StatelessWidget {
               child: Padding(
                 padding: EdgeInsets.symmetric(horizontal: Ds.space.x8),
                 child: _Cell(
-                    column: columns[i], cell: row.cell(i + 1), row: row),
+                    column: columns[i],
+                    cell: row.cell(i + 1),
+                    row: row,
+                    layout: data.layout,
+                    notifyRequest: notifyRequest),
               ),
             ),
         ],
@@ -422,8 +581,16 @@ class _Cell extends StatelessWidget {
   final CompareColumn column;
   final CompareTableCell cell;
   final CompareTableRow row;
+  final CompareLayout layout;
+  final NotifyRequest? notifyRequest;
 
-  const _Cell({required this.column, required this.cell, required this.row});
+  const _Cell({
+    required this.column,
+    required this.cell,
+    required this.row,
+    required this.layout,
+    this.notifyRequest,
+  });
 
   /// The tone is a backend word. Anything it does not recognise falls back to
   /// body text — an unknown tone must never crash a table a pharmacy is
@@ -445,10 +612,12 @@ class _Cell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (column.isAdd) return _AddCell(row: row);
+    if (column.isAdd) {
+      return _AddCell(
+          row: row, layout: layout, notifyRequest: notifyRequest);
+    }
 
-    final align =
-        column.isRight ? Alignment.centerRight : Alignment.centerLeft;
+    final align = _alignOf(column);
 
     // A pill because the PAYLOAD sent colours for this cell — the sale price
     // always, margin and profit only while they are locked. The app chooses no
@@ -466,7 +635,7 @@ class _Cell extends StatelessWidget {
           child: Text(cell.value,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: Ds.t.caption
+              style: Ds.t.body
                   .copyWith(color: _hexColor(cell.pillFg, Ds.c.text))),
         ),
       );
@@ -478,29 +647,61 @@ class _Cell extends StatelessWidget {
         cell.value,
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
-        textAlign: column.isRight ? TextAlign.right : TextAlign.left,
+        textAlign: _textAlignOf(column),
+        // CMD #2095 — every VALUE is the regular body token, the same one the
+        // product page's Product-overview card prints its right column in.
+        // Only the headings are bold, so the table has one emphasis and the
+        // eye can find the row it wants. The ink still carries the tone.
         style: Ds.t.body.copyWith(
           // has:false is the backend saying "we do not know this". It is drawn
           // in the secondary colour so a dash never reads as a measured value.
           color: cell.has ? _tone(cell.tone) : Ds.c.textSecondary,
-          fontWeight: cell.has ? FontWeight.w600 : FontWeight.w400,
         ),
       ),
     );
   }
 }
 
-/// The cart control, one per row: the backend's ADD word until there is a
-/// quantity, then a − n + stepper in its place. Both read and write the SAME
-/// [AppState] cart the product card does, so a quantity set here shows there.
+/// The cart control, one per row.
+///
+/// CMD #2095 — it is ONE box, `compare_layout.ctrl_w` x `ctrl_h`, and all
+/// three states draw inside it: the backend's ADD word, the - n + stepper that
+/// replaces it, and Notify on a pack this buyer cannot add. ADD used to size
+/// itself to its caption and the stepper to its arms, so a row visibly jumped
+/// the moment a quantity appeared; the box is fixed now, so nothing moves.
+///
+/// Availability is the ROW's `can_add`, the backend's verdict — never a count
+/// and never this file's opinion. Available -> the cart control. Unavailable
+/// -> [NotifyControl], the SAME widget the card and the product page use, so
+/// its words, its toast and its subscribed state stay the backend's.
 class _AddCell extends StatelessWidget {
   final CompareTableRow row;
-  const _AddCell({required this.row});
+  final CompareLayout layout;
+  final NotifyRequest? notifyRequest;
+  const _AddCell(
+      {required this.row, required this.layout, this.notifyRequest});
 
   @override
   Widget build(BuildContext context) {
-    // No word from the backend means no control — never a button captioned
+    // Not addable: Notify takes the box, and it is the only control the row
+    // gets. No word from the backend means no control — never one captioned
     // here.
+    if (!row.canAdd) {
+      if (row.notifyLabel.isEmpty) return const SizedBox.shrink();
+      return Center(
+        child: NotifyControl(
+          key: ValueKey('compare-notify-${row.id}'),
+          productId: row.id,
+          initiallySubscribed: row.notifySubscribed,
+          width: layout.ctrlW,
+          height: layout.ctrlH,
+          notifyLabel: row.notifyLabel,
+          subscribedLabel: row.notifyDoneLabel,
+          request: notifyRequest,
+        ),
+      );
+    }
+
     if (row.ctaLabel.isEmpty) return const SizedBox.shrink();
 
     final cart = AppState.of(context);
@@ -509,23 +710,26 @@ class _AddCell extends StatelessWidget {
     if (qty > 0) {
       return Center(
         child: SizedBox(
-          height: Ds.touch.minTarget,
+          width: layout.ctrlW,
+          height: layout.ctrlH,
           child: Material(
             color: Ds.c.brand,
             borderRadius: Ds.r.rChip,
             child: Row(
-              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 _StepIcon(
                     icon: Icons.remove_rounded,
                     semantic: 'compare-minus-${row.id}',
+                    height: layout.ctrlH,
                     onTap: () => cart.decrementId(row.id)),
                 Text('$qty',
                     key: ValueKey('compare-qty-${row.id}'),
-                    style: Ds.t.bodyStrong.copyWith(color: Ds.c.surface)),
+                    style: Ds.t.body.copyWith(color: Ds.c.surface)),
                 _StepIcon(
                     icon: Icons.add_rounded,
                     semantic: 'compare-plus-${row.id}',
+                    height: layout.ctrlH,
                     onTap: () => cart.incrementId(row.id)),
               ],
             ),
@@ -536,25 +740,24 @@ class _AddCell extends StatelessWidget {
 
     return Center(
       child: SizedBox(
-        height: Ds.touch.minTarget,
+        width: layout.ctrlW,
+        height: layout.ctrlH,
         child: OutlinedButton(
           key: ValueKey('compare-add-${row.id}'),
-          onPressed: row.canAdd
-              ? () {
-                  if (cart.isPending(row.id)) return;
-                  cart.addId(row.id);
-                }
-              : null,
+          onPressed: () {
+            if (cart.isPending(row.id)) return;
+            cart.addId(row.id);
+          },
           style: OutlinedButton.styleFrom(
             foregroundColor: Ds.c.brand,
             side: BorderSide(color: Ds.c.brand),
-            padding: EdgeInsets.symmetric(horizontal: Ds.space.x8),
+            padding: EdgeInsets.symmetric(horizontal: Ds.space.x4),
             shape: RoundedRectangleBorder(borderRadius: Ds.r.rChip),
           ),
           child: Text(row.ctaLabel,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: Ds.t.caption.copyWith(color: Ds.c.brand)),
+              style: Ds.t.body.copyWith(color: Ds.c.brand)),
         ),
       ),
     );
@@ -564,19 +767,25 @@ class _AddCell extends StatelessWidget {
 class _StepIcon extends StatelessWidget {
   final IconData icon;
   final String semantic;
+  final double height;
   final VoidCallback onTap;
-  const _StepIcon(
-      {required this.icon, required this.semantic, required this.onTap});
+  const _StepIcon({
+    required this.icon,
+    required this.semantic,
+    required this.height,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) => InkWell(
         key: ValueKey(semantic),
         onTap: onTap,
         child: SizedBox(
-          // A stepper arm is half a tap target wide and a full one tall, so the
-          // pair still clears the minimum in the direction a thumb misses.
-          width: Ds.touch.minTarget * 0.75,
-          height: Ds.touch.minTarget,
+          // An arm is a third of the control's own box wide and its full
+          // height, so the pair still clears the minimum in the direction a
+          // thumb misses and the stepper is exactly as wide as ADD was.
+          width: height * 0.75,
+          height: height,
           child: Icon(icon, size: Ds.space.x16, color: Ds.c.surface),
         ),
       );

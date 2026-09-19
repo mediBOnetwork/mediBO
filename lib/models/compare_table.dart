@@ -28,6 +28,11 @@ class CompareTable {
   final String empty;
   final int max;
 
+  /// CMD #2095 — the sheet's close caption (`cmp_close`). The table is a
+  /// bottom sheet now, and the word on its × is the backend's like every other
+  /// word here; empty draws the glyph with no caption rather than a Dart one.
+  final String closeLabel;
+
   /// The column order, labels and widths — all the backend's. Column 0 is the
   /// frozen one; it exists even when [has] is false, so the empty state draws
   /// under a real heading instead of under nothing.
@@ -48,6 +53,7 @@ class CompareTable {
     required this.note,
     required this.empty,
     required this.max,
+    required this.closeLabel,
     required this.columns,
     required this.rows,
     required this.layout,
@@ -55,7 +61,8 @@ class CompareTable {
 
   static const CompareTable failed = CompareTable(
       ok: false, has: false, title: '', note: '', empty: '', max: 0,
-      columns: [], rows: [], layout: CompareLayout.fallback);
+      closeLabel: '', columns: [], rows: [],
+      layout: CompareLayout.fallback);
 
   static String _s(Object? v) => v?.toString() ?? '';
 
@@ -74,6 +81,7 @@ class CompareTable {
       note: _s(m['note']),
       empty: _s(m['empty']),
       max: mx is int ? mx : int.tryParse(_s(mx)) ?? 0,
+      closeLabel: _s(m['close_label']),
       columns: ((m['columns'] as List?) ?? const [])
           .whereType<Map>()
           .map((c) => CompareColumn.fromMap(c.cast<String, dynamic>()))
@@ -117,6 +125,11 @@ class CompareColumn {
   bool get isAdd => kind == 'add';
   bool get isRight => align == 'right';
 
+  /// CMD #2095 — the product name stays left and every other column is
+  /// centred, which is a word in the PAYLOAD (`align`), not a rule this file
+  /// keeps. An unknown alignment still falls back to left.
+  bool get isCenter => align == 'center';
+
   factory CompareColumn.fromMap(Map<String, dynamic> m) => CompareColumn(
         key: CompareTable._s(m['key']),
         label: CompareTable._s(m['label']),
@@ -134,18 +147,30 @@ class CompareLayout {
   final double rowH;
   final double headH;
 
+  /// CMD #2095 — the share of the screen the compare SHEET takes (spec: 85).
+  final double sheetPct;
+
+  /// CMD #2095 — the cart control's box. ADD, the − n + stepper and Notify all
+  /// draw at exactly this size, so tapping ADD cannot change the row's shape.
+  final double ctrlW;
+  final double ctrlH;
+
   const CompareLayout({
     required this.namePct,
     required this.nameMin,
     required this.nameMax,
     required this.rowH,
     required this.headH,
+    required this.sheetPct,
+    required this.ctrlW,
+    required this.ctrlH,
   });
 
   /// Only ever reached by [CompareTable.failed], which draws no table at all —
   /// a payload-less table has no geometry to argue about.
   static const CompareLayout fallback = CompareLayout(
-      namePct: 42, nameMin: 116, nameMax: 200, rowH: 64, headH: 44);
+      namePct: 42, nameMin: 116, nameMax: 200, rowH: 64, headH: 44,
+      sheetPct: 85, ctrlW: 96, ctrlH: 44);
 
   factory CompareLayout.fromMap(Map<String, dynamic> m) => CompareLayout(
         namePct: CompareTable._d(m['name_pct'], fallback.namePct),
@@ -153,11 +178,19 @@ class CompareLayout {
         nameMax: CompareTable._d(m['name_max'], fallback.nameMax),
         rowH: CompareTable._d(m['row_h'], fallback.rowH),
         headH: CompareTable._d(m['head_h'], fallback.headH),
+        sheetPct: CompareTable._d(m['sheet_pct'], fallback.sheetPct),
+        ctrlW: CompareTable._d(m['ctrl_w'], fallback.ctrlW),
+        ctrlH: CompareTable._d(m['ctrl_h'], fallback.ctrlH),
       );
 
   /// The frozen column is a SHARE of whatever viewport it is handed, clamped
   /// by the backend's own bounds — the one piece of arithmetic on this screen,
   /// and it is layout, not money.
+  /// The sheet's height as a share of the screen. Clamped so a bad token can
+  /// never produce a sheet taller than the screen or too short to read.
+  double sheetHeight(double screen) =>
+      screen * (sheetPct.clamp(30, 100) / 100.0);
+
   double nameWidth(double viewport) {
     final lo = nameMin <= nameMax ? nameMin : nameMax;
     final hi = nameMin <= nameMax ? nameMax : nameMin;
@@ -185,6 +218,13 @@ class CompareTableRow {
   final bool canAdd;
   final String ctaLabel;
 
+  /// CMD #2095 — an unavailable row offers Notify where ADD would be. Both
+  /// words and this viewer's current subscription arrive ON the row, so the
+  /// sheet makes no second call per row and invents no caption.
+  final String notifyLabel;
+  final String notifyDoneLabel;
+  final bool notifySubscribed;
+
   final List<CompareTableCell> cells;
 
   const CompareTableRow({
@@ -195,6 +235,9 @@ class CompareTableRow {
     required this.tag,
     required this.canAdd,
     required this.ctaLabel,
+    this.notifyLabel = '',
+    this.notifyDoneLabel = '',
+    this.notifySubscribed = false,
     required this.cells,
   });
 
@@ -206,6 +249,9 @@ class CompareTableRow {
         tag: CompareTable._s(m['tag']),
         canAdd: m['can_add'] == true,
         ctaLabel: CompareTable._s(m['cta_label']),
+        notifyLabel: CompareTable._s(m['notify_label']),
+        notifyDoneLabel: CompareTable._s(m['notify_done_label']),
+        notifySubscribed: m['notify_subscribed'] == true,
         cells: ((m['cells'] as List?) ?? const [])
             .whereType<Map>()
             .map((c) => CompareTableCell.fromMap(c.cast<String, dynamic>()))

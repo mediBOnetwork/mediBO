@@ -26,6 +26,14 @@ class NotifyControl extends StatefulWidget {
   /// Card-sized when true, product-page-sized when false.
   final bool compact;
 
+  /// CMD #2095 — the compare sheet draws this control in a cart column where
+  /// ADD and the − n + stepper are one fixed box, so Notify has to be that box
+  /// too or the row changes shape between an available and an unavailable
+  /// pack. Both are backend measurements (`compare_layout.ctrl_w/ctrl_h`);
+  /// null keeps the card's own size, which is what every other caller wants.
+  final double? width;
+  final double? height;
+
   /// Idle label. Defaults to the cached backend label.
   final String? notifyLabel;
 
@@ -40,6 +48,8 @@ class NotifyControl extends StatefulWidget {
     required this.productId,
     this.initiallySubscribed = false,
     this.compact = true,
+    this.width,
+    this.height,
     this.notifyLabel,
     this.subscribedLabel,
     this.request,
@@ -126,7 +136,8 @@ class _NotifyControlState extends State<NotifyControl> {
 
     if (widget.compact) {
       return SizedBox(
-        height: 28,
+        width: widget.width,
+        height: widget.height ?? 28,
         child: InkWell(
           borderRadius: BorderRadius.circular(8),
           onTap: _tap,
@@ -139,6 +150,7 @@ class _NotifyControlState extends State<NotifyControl> {
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Icon(icon, size: 13, color: fg),
                 const SizedBox(width: 4),

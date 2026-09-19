@@ -68,21 +68,25 @@ void main() {
   });
 
   test('2 — the product page still has compare', () {
-    // CMD #2040 changed the FORM, not the rule; #2073 changed it again, and
-    // #2074 again: #746 put compare on the full product page and nowhere else,
-    // and it still is. The outlined button under the price became a top-bar
-    // glyph beside the heart, and the bottom sheet became a pushed PAGE —
-    // twenty same-salt rows do not fit in a sheet, and a sheet cannot hold the
-    // scroll position while one of those products is opened on top of it. So
-    // what to look for is that control and the SCREEN it opens.
+    // CMD #2040 changed the FORM, not the rule; #2073, #2074 and #2095 each
+    // changed it again: #746 put compare on the full product page and nowhere
+    // else, and it still is. The outlined button under the price became a
+    // top-bar glyph beside the heart; the table became a pushed page and then,
+    // in CMD #2095, an 85% bottom SHEET over the product — comparing is a
+    // glance, not a destination, and /compare/:id still resolves to the same
+    // table for a shared link. So what to look for is that control and the
+    // door it opens.
     final src = _read('lib/screens/product_detail_screen.dart');
     expect(src.contains("ValueKey('pdp-compare-button')"), isTrue,
         reason: 'compare belongs on the full product page — removing it there '
             'is not what CHANGE #746 asked for');
     expect(src.contains('_openCompare'), isTrue,
         reason: 'the control must still make the same-salt call');
-    expect(src.contains('CompareScreen'), isTrue,
+    expect(src.contains('showCompareSheet'), isTrue,
         reason: 'the control must still open the backend-composed table');
+    expect(_read('lib/screens/compare_screen.dart').contains('CompareScreen'),
+        isTrue,
+        reason: 'and /compare/:id must still resolve to that same table');
     // CMD #2073 — and NO card anywhere draws a Compare row: the page's own
     // rail stopped passing the caption, and the shared card still takes it as
     // an opt-in parameter that defaults off.

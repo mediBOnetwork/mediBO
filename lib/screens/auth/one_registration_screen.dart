@@ -118,7 +118,12 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
           ';pending=${_map(p['docs_pending'])['show'] == true ? 1 : 0}');
 
       // Resume lands on the papers that are still out, without a second route.
-      if (_map(p['docs_pending'])['show'] == true) {
+      // CMD #2087 — the cart's Place order gate opens this form with the
+      // backend's own anchor in the route arguments ('documents' when a
+      // starred paper is what is missing). Whoever sent us here says where to
+      // land; the payload's own docs_pending still answers every other way in.
+      if (_map(p['docs_pending'])['show'] == true ||
+          _routeAnchor() == 'documents') {
         WidgetsBinding.instance.addPostFrameCallback((_) => _toDocs());
       }
     } catch (_) {
@@ -129,6 +134,14 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
       });
       RenderLog.write('c2061_one_form', 'error');
     }
+  }
+
+  /// CMD #2087 — the section the caller asked us to resume at, from the
+  /// route's own arguments. Absent is absent: the form opens at the top.
+  String _routeAnchor() {
+    final args = ModalRoute.of(context)?.settings.arguments;
+    if (args is Map && args['anchor'] != null) return args['anchor'].toString();
+    return '';
   }
 
   void _toDocs() {

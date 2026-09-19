@@ -23,6 +23,7 @@ import '../services/ui_copy.dart';
 import '../view_as_state.dart';
 import '../widgets/animations.dart';
 import '../widgets/cart_bill_summary.dart';
+import '../widgets/cart_rail_slot.dart';
 import '../widgets/cart_wishlist_rail.dart';
 import '../widgets/checkout_pay_sheet.dart';
 import '../widgets/companion_rail.dart';
@@ -567,11 +568,54 @@ class _CartScreenState extends State<CartScreen> {
     // ── Normal (non-ViewAs) flow ─────────────────────────────────────────────
 
     final auth = UserState.read(context);
-    if (!auth.isAuthenticated) {
+
+    // CMD #2087 — ONE ROUND TRIP DECIDES WHETHER THIS TAP BECOMES AN ORDER.
+    //
+    // cart_place_gate() answers with an ACTION, never a state to branch on:
+    //   'order'  — place it
+    //   'popup'  — show the backend's title/body/dismiss verbatim
+    //   'route'  — open the named route it sends, at the anchor it sends
+    // Logged out, not registered, half-registered and "submitted, waiting for
+    // approval" are four answers to the same question, answered in ONE place
+    // in the backend's own words. The Dart ladder that used to start here
+    // asked three different sources and worded the fourth case itself.
+    final gateRes = await _placeGate();
+    if (!mounted) return;
+    if (gateRes != null) {
+      final g = C2087PlaceGate.from(gateRes);
+      RenderLog.write('c2087_place_gate', g.logLine);
+      if (g.showsPopup) {
+        _showOrderGate(
+          title: g.popupTitle,
+          message: g.popupBody,
+          dismissLabel: g.popupDismiss,
+        );
+        return;
+      }
+      if (g.opensRoute) {
+        // The route is the backend's; only the push is ours. The anchor rides
+        // along as route arguments, so a screen that knows how to resume at a
+        // section can, and one that does not simply opens at the top.
+        await Navigator.of(context).pushNamed(g.route,
+            arguments: <String, dynamic>{'anchor': g.anchor});
+        if (!mounted) return;
+        await auth.refreshSession();
+        if (!mounted) return;
+        setState(() {});
+        return;
+      }
+      // An action with nothing to open, and anything this build does not
+      // recognise, stops here rather than placing an order on a guess.
+      if (!g.placesOrder) return;
+      // 'order' — fall through to the placement path below.
+    } else if (!auth.isAuthenticated) {
+      // The gate could not be reached at all. The one thing the screen may
+      // still decide by itself is that a signed-out person needs to sign in.
       await Navigator.push(context,
           MaterialPageRoute(builder: (_) => const LoginScreen()));
       return;
     }
+
     // #571 — ONE gate. The backend decided whether this account may order and
     // wrote the exact words for the case where it may not. The four-step Dart
     // ladder this replaces (isRegistered -> suspended -> canOrder, with seven
@@ -793,6 +837,22 @@ class _CartScreenState extends State<CartScreen> {
     return res?.toString() ?? '';
   }
 
+  /// CMD #2087 — the Place order gate, asked ON THE TAP.
+  ///
+  /// Null means the call itself failed (offline, a timeout): the caller then
+  /// falls back to the gates it already had rather than placing an order on an
+  /// unanswered question.
+  Future<Map<String, dynamic>?> _placeGate() async {
+    try {
+      final raw = await Supabase.instance.client.rpc('cart_place_gate');
+      final res = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
+      if (res is Map) return res.cast<String, dynamic>();
+    } catch (_) {
+      // An absent answer is not a refusal.
+    }
+    return null;
+  }
+
   void _showOrderGate({
     required String title,
     required String message,
@@ -801,6 +861,9 @@ class _CartScreenState extends State<CartScreen> {
     String? secondLine,
     String? actionLabel,
     VoidCallback? onAction,
+    /// CMD #2087 — the backend's own word for "close". Empty keeps the ui_copy
+    /// fallback, so every existing caller is unchanged.
+    String dismissLabel = '',
   }) {
     showDialog<void>(
       context: context,
@@ -825,7 +888,8 @@ class _CartScreenState extends State<CartScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: Text(c('cart.gate_ok')),
+            child: Text(
+                dismissLabel.isNotEmpty ? dismissLabel : c('cart.gate_ok')),
           ),
           if (actionLabel != null && onAction != null)
             FilledButton(
@@ -941,22 +1005,28 @@ class _CartScreenState extends State<CartScreen> {
     // it, so neither is sticky and neither sits under the header. Each returns
     // null when the backend says it has nothing to draw.
     final bill = CartBillSummary.fromPayload(cart.billBlock);
-    final rail = CartWishlistRail.fromPayload(
-      cart.railBlock,
-      (p) => Navigator.of(context).pushNamed('/product/${p.id}'),
-    );
+    void openProduct(Product p) =>
+        Navigator.of(context).pushNamed('/product/${p.id}');
+    final rail = CartWishlistRail.fromPayload(cart.railBlock, openProduct);
+    // CMD #2087 — the SECOND rail: what pharmacies buy together with this
+    // basket, off the same order-history evidence the companion strip reads.
+    // It is one more `{has, title, items}` block, so it is the same widget.
+    final alsoLike =
+        CartWishlistRail.fromPayload(cart.alsoLikeBlock, openProduct);
     if (bill != null) RenderLog.write('c2014_bill_rows', bill.rows.length);
     if (rail != null) RenderLog.write('c2014_rail_cards', rail.items.length);
-    // CMD #2079 — the order the spec fixes: the cart's own lines, then the
-    // customer's Wishlist, then the bill. The bill is the LAST thing in the
-    // scroll because it is the answer to everything above it.
-    final scrollFooters = <Widget>[
-      if (rail != null) rail,
-      if (bill != null) bill,
-    ];
+    if (alsoLike != null) {
+      RenderLog.write('c2087_also_like_cards', alsoLike.items.length);
+    }
+    // CMD #2087 — the rails LEAVE the item list. They used to be trailing rows
+    // of the very ListView the cart lines live in, so every add and every
+    // remove re-laid that list out and the rails moved under the finger. They
+    // are a slot of their own now, at a constant height; the cart rows grow in
+    // their own list above it and the bill answers below it.
+    final railSlot = CartRailSlot(rails: [rail, alsoLike]);
     RenderLog.write('c2079_cart_blocks',
         'rail=${rail?.items.length ?? 0};bill=${bill?.rows.length ?? 0}'
-        ';order=rail_then_bill');
+        ';also=${alsoLike?.items.length ?? 0};order=rows_rails_bill');
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -986,14 +1056,20 @@ class _CartScreenState extends State<CartScreen> {
                             // else. The item count and the advance used to be
                             // repeated here, three centimetres above the list
                             // that shows them and again above Place order.
-                            child: _ItemList(
-                              key: _itemListKey,
-                              cart: cart,
-                              externalSearchQuery: widget.externalSearchQuery,
-                              viewAsChecked: cart.isViewAs ? _viewAsChecked : null,
-                              onViewAsToggle: cart.isViewAs ? _toggleViewAsChecked : null,
-                              lineAvailability: _lineAvailability,
-                              footers: scrollFooters,
+                            child: _C2087CartBody(
+                              rows: _ItemList(
+                                key: _itemListKey,
+                                cart: cart,
+                                externalSearchQuery: widget.externalSearchQuery,
+                                viewAsChecked:
+                                    cart.isViewAs ? _viewAsChecked : null,
+                                onViewAsToggle: cart.isViewAs
+                                    ? _toggleViewAsChecked
+                                    : null,
+                                lineAvailability: _lineAvailability,
+                              ),
+                              railSlot: railSlot,
+                              bill: bill,
                             ),
                           ),
                           const SizedBox(width: 16),
@@ -1035,14 +1111,17 @@ class _CartScreenState extends State<CartScreen> {
             ?unresolvedNote,
             ?unavailableChip,
             Expanded(
-              child: _ItemList(
-                key: _itemListKey,
-                cart: cart,
-                externalSearchQuery: widget.externalSearchQuery,
-                viewAsChecked: cart.isViewAs ? _viewAsChecked : null,
-                onViewAsToggle: cart.isViewAs ? _toggleViewAsChecked : null,
-                lineAvailability: _lineAvailability,
-                footers: scrollFooters,
+              child: _C2087CartBody(
+                rows: _ItemList(
+                  key: _itemListKey,
+                  cart: cart,
+                  externalSearchQuery: widget.externalSearchQuery,
+                  viewAsChecked: cart.isViewAs ? _viewAsChecked : null,
+                  onViewAsToggle: cart.isViewAs ? _toggleViewAsChecked : null,
+                  lineAvailability: _lineAvailability,
+                ),
+                railSlot: railSlot,
+                bill: bill,
               ),
             ),
             if (schemeSection != null) schemeSection,
@@ -1390,6 +1469,64 @@ int _editDistance(String a, String b) {
 
 // ─── Item list ────────────────────────────────────────────────────────────────
 
+/// CMD #2087 — the cart page below the banners: ROWS, then RAILS, then BILL.
+///
+/// The three used to be one ListView, and that is what made the rails move:
+/// adding a line, removing one, or a quantity tap that changed a row's height
+/// re-laid the whole list out and everything under the lines shifted.
+///
+/// Here the cart lines live in their OWN list, in a slot whose height depends
+/// only on the viewport — so the list scrolls internally as lines are added
+/// and the blocks beneath it never move. The rails and the bill are the page
+/// scroll's own children, full width, on the same 16px gutter the rows use.
+/// CMD #2087 — how tall the cart-lines slot is.
+///
+/// A FRACTION of the viewport, not a count of rows: the same screen gives the
+/// same answer whatever is in the basket, and THAT is what keeps the rails
+/// still when a line is added or removed. Public so the rule can be asserted
+/// without mounting a screen that needs five inherited states.
+class C2087CartBodyMetrics {
+  const C2087CartBodyMetrics._();
+
+  static const double rowsSlotFraction = 0.62;
+  static const double rowsSlotMin = 220;
+  static const double rowsSlotMax = 620;
+
+  static double rowsSlotFor(double viewportH) =>
+      (viewportH * rowsSlotFraction).clamp(rowsSlotMin, rowsSlotMax);
+}
+
+class _C2087CartBody extends StatelessWidget {
+  final Widget rows;
+  final Widget railSlot;
+  final Widget? bill;
+
+  const _C2087CartBody({
+    required this.rows,
+    required this.railSlot,
+    this.bill,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, vp) {
+        final slot = C2087CartBodyMetrics.rowsSlotFor(vp.maxHeight);
+        RenderLog.write('c2087_rows_slot', slot.toStringAsFixed(0));
+        return ListView(
+          physics: platformScrollPhysics(),
+          padding: EdgeInsets.zero,
+          children: [
+            SizedBox(height: slot, child: rows),
+            railSlot,
+            if (bill != null) bill!,
+          ],
+        );
+      },
+    );
+  }
+}
+
 class _ItemList extends StatefulWidget {
   final CartModel cart;
   final String? externalSearchQuery;
@@ -1401,11 +1538,9 @@ class _ItemList extends StatefulWidget {
   /// from cart_availability(). Empty until the first fetch answers.
   final Map<String, Availability> lineAvailability;
 
-  /// CMD #2014 — blocks that belong BELOW the items and INSIDE this scroll
-  /// (the bill summary card, then the suggested rail). They are trailing rows
-  /// of this ListView rather than siblings of it, which is what keeps them
-  /// scrolling with the page instead of pinning to an edge.
-  final List<Widget> footers;
+  // CMD #2087 — this list holds the cart LINES and nothing else. The bill and
+  // the rails used to be trailing rows of it; they are the page's own blocks
+  // now, so nothing below the lines moves when a line is added or removed.
   const _ItemList({
     super.key,
     required this.cart,
@@ -1413,7 +1548,6 @@ class _ItemList extends StatefulWidget {
     this.viewAsChecked,
     this.onViewAsToggle,
     this.lineAvailability = const {},
-    this.footers = const <Widget>[],
   });
 
   @override
@@ -1541,12 +1675,6 @@ class _ItemListState extends State<_ItemList> {
       if (_showRemoved) afterCount += removed.length;
     }
     if (showCompanions) afterCount += 1;
-    // CMD #2014 — the bill card and the suggested rail follow the companion
-    // rail, still inside this scroll. They only belong under the REAL list: a
-    // search that narrows the cart is not the moment to show a bill for the
-    // whole basket.
-    final footers = searchActive ? const <Widget>[] : widget.footers;
-    afterCount += footers.length;
 
     // CHANGE #639 — index of the first line the BACKEND flagged, so the
     // scroll-to target can be tagged as it is built.
@@ -1643,8 +1771,6 @@ class _ItemListState extends State<_ItemList> {
           }
           extra -= 1;
         }
-
-        if (extra >= 0 && extra < footers.length) return footers[extra];
 
         return const SizedBox();
       },
@@ -1843,6 +1969,11 @@ class _CartItemCard extends StatelessWidget {
                   quantity: cart.quantityOf(p.id),
                   cart: cart,
                   locked: line.qtyLocked,
+                  // CMD #2087 — the stepper is told WHOSE number it is holding.
+                  // While this is true the digit on screen is the customer's
+                  // own tap; the moment it goes false the server has answered,
+                  // and that answer is applied without a second roll.
+                  localIntent: cart.hasLocalIntent(p.id),
                   qtyText: cart.hasLocalIntent(p.id)
                       ? ''
                       : (stepper['qty_text'] ?? '').toString(),
@@ -2188,12 +2319,18 @@ class _CartStepper extends StatefulWidget {
   /// The NUMBER, from `items[].row.stepper.qty_text`.
   final String qtyText;
 
+  /// CMD #2087 — true while the digit shown is the customer's own unsent tap
+  /// (CartModel.hasLocalIntent). It is the only way this control can tell a
+  /// tap apart from the server's reply to that tap.
+  final bool localIntent;
+
   const _CartStepper({
     required this.product,
     required this.quantity,
     required this.cart,
     this.locked = false,
     this.qtyText = '',
+    this.localIntent = false,
   });
 
   @override
@@ -2203,9 +2340,33 @@ class _CartStepper extends StatefulWidget {
 class _CartStepperState extends State<_CartStepper> {
   bool _increasing = true;
 
+  /// CMD #2087 — THE FLICKER.
+  ///
+  /// One tap produced two animations. The first was right: the local echo
+  /// rolls the digit the instant the finger lifts. The second was the server
+  /// answering about a second later — cart_update_item() returns, the local
+  /// echo is dropped and `qty_text` (the SAME number, as the backend words it)
+  /// takes its place. The AnimatedSwitcher saw a new child and rolled the digit
+  /// again, so the stepper twitched a second after the customer had moved on.
+  ///
+  /// The server's value is applied SILENTLY: same place, no roll. Only a change
+  /// the customer just made animates.
+  bool _silent = false;
+
   @override
   void didUpdateWidget(_CartStepper old) {
     super.didUpdateWidget(old);
+    // The reply to a tap: the echo was on, now it is off. Whatever the server
+    // said — the number it acknowledged, or one it clamped — lands without a
+    // second animation.
+    _silent = c2087StepperSilent(
+      wasLocal: old.localIntent,
+      isLocal: widget.localIntent,
+      oldQty: old.quantity,
+      newQty: widget.quantity,
+      oldText: old.qtyText,
+      newText: widget.qtyText,
+    );
     if (widget.quantity != old.quantity) {
       _increasing = widget.quantity > old.quantity;
     }
@@ -2248,8 +2409,9 @@ class _CartStepperState extends State<_CartStepper> {
                     child: Center(
                       child: ClipRect(
                         child: AnimatedSwitcher(
-                          duration:
-                              Duration(milliseconds: Ds.motion.standardMs),
+                          duration: _silent
+                              ? Duration.zero
+                              : Duration(milliseconds: Ds.motion.standardMs),
                           transitionBuilder: (child, anim) {
                             final isNew =
                                 (child.key as ValueKey<String>).value ==
@@ -2496,6 +2658,84 @@ bool c572CtaEnabled(Map<String, dynamic> render) => _cta(render)['enabled'] != f
 
 // ─── Fixed checkout bar (narrow layout) ──────────────────────────────────────
 
+/// CMD #2087 — cart_place_gate(), as a value.
+///
+/// The screen must not read `state` to decide anything: `action` IS the
+/// instruction, and every word and route in the other fields is printed or
+/// opened verbatim. Keeping that as a parsed object rather than map lookups
+/// scattered through an async method is what makes it testable without a
+/// browser — and an action this build has never heard of is [isUnknown], which
+/// does nothing at all rather than guessing (the same forward-compat rule the
+/// home feed follows for an unknown layout).
+class C2087PlaceGate {
+  final String state;
+  final String action;
+  final String route;
+  final String anchor;
+  final String popupTitle;
+  final String popupBody;
+  final String popupDismiss;
+
+  const C2087PlaceGate({
+    required this.state,
+    required this.action,
+    required this.route,
+    required this.anchor,
+    required this.popupTitle,
+    required this.popupBody,
+    required this.popupDismiss,
+  });
+
+  static const C2087PlaceGate unreachable = C2087PlaceGate(
+      state: '', action: '', route: '', anchor: '',
+      popupTitle: '', popupBody: '', popupDismiss: '');
+
+  factory C2087PlaceGate.from(Map<String, dynamic> m) {
+    final popup =
+        (m['popup'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
+    return C2087PlaceGate(
+      state: (m['state'] ?? '').toString(),
+      action: (m['action'] ?? '').toString(),
+      route: (m['route'] ?? '').toString(),
+      anchor: (m['anchor'] ?? '').toString(),
+      popupTitle: (popup['title'] ?? '').toString(),
+      popupBody: (popup['body'] ?? '').toString(),
+      popupDismiss: (popup['dismiss'] ?? '').toString(),
+    );
+  }
+
+  bool get placesOrder => action == 'order';
+  bool get showsPopup => action == 'popup';
+  /// A route with nothing to open is not a route.
+  bool get opensRoute => action == 'route' && route.isNotEmpty;
+  bool get isUnknown => !placesOrder && !showsPopup && action != 'route';
+
+  /// What the render log records, so a live run says which of the five answers
+  /// the tap actually got.
+  String get logLine => '$state/$action';
+}
+
+/// CMD #2087 — should the quantity roll, or just change?
+///
+/// A tap rolls the digit. The server's reply to that tap — the same number, as
+/// the backend words it, about a second later — does not: it is applied in
+/// place. That one rule is the whole flicker fix, and it is here rather than
+/// inside the stepper's State so it can be tested without a frame.
+bool c2087StepperSilent({
+  required bool wasLocal,
+  required bool isLocal,
+  required int oldQty,
+  required int newQty,
+  required String oldText,
+  required String newText,
+}) {
+  // The echo was on and is now off: the server has answered.
+  if (wasLocal && !isLocal) return true;
+  // The same number, re-worded.
+  if (oldQty == newQty && oldText != newText) return true;
+  return false;
+}
+
 class _CheckoutBar extends StatelessWidget {
   final CartModel cart;
   final VoidCallback onPlaceOrder;
@@ -2599,9 +2839,15 @@ class _CheckoutBar extends StatelessWidget {
                       Row(
                         children: [
                           Expanded(
-                            child: GestureDetector(
-                              onTap: onPlaceOrder,
-                              child: Container(
+                            // CMD #2087 — the one handle on this screen a
+                            // browser journey can hold: the tap that asks
+                            // cart_place_gate() what this basket becomes.
+                            child: Semantics(
+                              button: true,
+                              identifier: 'cart_place_order',
+                              child: GestureDetector(
+                                onTap: onPlaceOrder,
+                                child: Container(
                                 padding:
                                     const EdgeInsets.symmetric(vertical: 15),
                                 decoration: BoxDecoration(
@@ -2633,6 +2879,7 @@ class _CheckoutBar extends StatelessWidget {
                                     ),
                                   ],
                                 ),
+                              ),
                               ),
                             ),
                           ),

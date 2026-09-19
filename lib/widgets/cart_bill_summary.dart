@@ -293,10 +293,12 @@ class _Amount extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (row.isText) {
-      // A sentence, right-aligned like every other value, in the secondary
-      // colour so it reads as an answer rather than a number. It wraps before
-      // it ever pushes the label off a 320px screen.
-      return Flexible(
+      // CMD #2087 — a sentence, flush RIGHT like every amount in this column.
+      // It was Flexible, which lets the text box shrink to its own width and
+      // sit wherever the row put it: "Confirmed on bill" ended up floating in
+      // the middle of the card while every amount beside it was hard right.
+      // Expanded makes the box fill the column, so textAlign actually lands it.
+      return Expanded(
         child: Text(row.value,
             style: style.copyWith(
                 color: Ds.c.textSecondary, fontWeight: FontWeight.w500),

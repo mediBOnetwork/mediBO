@@ -1151,6 +1151,12 @@ class CartModel extends ChangeNotifier {
   Map<String, dynamic> get railBlock =>
       (_cart['rail'] as Map?)?.cast<String, dynamic>() ?? const {};
 
+  /// CMD #2087 — the second rail, "You may also like". Same shape as
+  /// [railBlock] and the same rule: `has` is the BACKEND's verdict, so a
+  /// basket with no co-purchase history draws nothing rather than a guess.
+  Map<String, dynamic> get alsoLikeBlock =>
+      (_cart['also_like'] as Map?)?.cast<String, dynamic>() ?? const {};
+
   /// CHANGE #636 — the floating cart pill, rendered entirely by cart_render().
   ///
   /// `show` is the BACKEND's answer to "is there a pill right now?". The app

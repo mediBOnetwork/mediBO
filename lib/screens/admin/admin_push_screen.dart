@@ -27,6 +27,10 @@ class _AdminPushScreenState extends State<AdminPushScreen> {
   static const _configKeys = <String>[
     'project_id', 'sender_id', 'api_key', 'app_id',
     'web_api_key', 'web_app_id', 'vapid_key', 'android_package',
+    // CMD #2100 — the partner app (in.medibo.partner) registers against its
+    // own Firebase Android app; until this id is filled the partner flavor's
+    // push_config_get() answers android_ready:false and FCM stays off there.
+    'partner_app_id', 'partner_package',
   ];
 
   @override

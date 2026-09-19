@@ -18,6 +18,17 @@ if (hasReleaseKeystore) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
+// CMD #2100 — the PARTNER flavor (in.medibo.partner) signs with its OWN upload
+// keystore: android/key.partner.properties + upload-keystore-partner.jks, both
+// gitignored and both restored from the Vault (ANDROID_PARTNER_UPLOAD_KEYSTORE_B64
+// / ANDROID_PARTNER_KEY_PROPERTIES) by ~/mediBO-runner/restore_keystore.sh partner.
+val partnerKeystoreProperties = Properties()
+val partnerKeystorePropertiesFile = rootProject.file("key.partner.properties")
+val hasPartnerKeystore = partnerKeystorePropertiesFile.exists()
+if (hasPartnerKeystore) {
+    partnerKeystoreProperties.load(FileInputStream(partnerKeystorePropertiesFile))
+}
+
 android {
     namespace = "in.medibo.app"
     compileSdk = 36
@@ -57,6 +68,44 @@ android {
                 storePassword = keystoreProperties["storePassword"] as String
             }
         }
+        if (hasPartnerKeystore) {
+            create("partner") {
+                keyAlias = partnerKeystoreProperties["keyAlias"] as String
+                keyPassword = partnerKeystoreProperties["keyPassword"] as String
+                storeFile = partnerKeystoreProperties["storeFile"]?.let { rootProject.file(it) }
+                storePassword = partnerKeystoreProperties["storePassword"] as String
+            }
+        }
+    }
+
+    // ── TWO APPS, ONE CODEBASE (CMD #2100) ──────────────────────────────────
+    // 'customer' is today's app, byte-for-byte: same applicationId, versions,
+    // icon and upload key (it keeps the staff code too — web serves all roles).
+    // 'partner' is mediBO Partner: its own applicationId, version numbers,
+    // launcher icon (android/app/src/partner/res) and upload keystore. Every
+    // build names its flavor: `flutter build appbundle --flavor partner`.
+    // The signing config lives on the FLAVOR (a build-type signingConfig would
+    // override it for both), so the release build type below sets none.
+    flavorDimensions += listOf("app")
+    productFlavors {
+        create("customer") {
+            dimension = "app"
+            isDefault = true
+            resValue("string", "app_name", "mediBO")
+            if (hasReleaseKeystore) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+        create("partner") {
+            dimension = "app"
+            applicationId = "in.medibo.partner"
+            versionCode = 1
+            versionName = "1.0.0"
+            resValue("string", "app_name", "mediBO Partner")
+            if (hasPartnerKeystore) {
+                signingConfig = signingConfigs.getByName("partner")
+            }
+        }
     }
 
     buildTypes {
@@ -65,11 +114,10 @@ android {
             // configures cleanly, but the gradle.taskGraph guard below HARD-FAILS
             // any *Release assemble/bundle before it can produce a debug-signed
             // release artifact (see the 1.1.0 signature-mismatch incident).
-            signingConfig = if (hasReleaseKeystore) {
-                signingConfigs.getByName("release")
-            } else {
-                signingConfigs.getByName("debug")
-            }
+            // CMD #2100 — no signingConfig here: each product flavor above
+            // carries its own upload key. A flavor whose keystore is absent
+            // falls back to AGP's debug signing, which the taskGraph guard
+            // below refuses for every *Release assemble/bundle/package task.
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -93,7 +141,25 @@ gradle.taskGraph.whenReady {
             (t.name.startsWith("assemble") || t.name.startsWith("bundle") ||
                 t.name.startsWith("package"))
     }
-    if (buildingRelease && !hasReleaseKeystore &&
+    // CMD #2100 — per flavor: a Partner release needs the partner keystore, a
+    // Customer release the original one. Task names carry the flavor.
+    val buildingPartner = allTasks.any { t ->
+        t.name.contains("PartnerRelease") &&
+            (t.name.startsWith("assemble") || t.name.startsWith("bundle") ||
+                t.name.startsWith("package"))
+    }
+    val buildingCustomer = allTasks.any { t ->
+        t.name.contains("CustomerRelease") &&
+            (t.name.startsWith("assemble") || t.name.startsWith("bundle") ||
+                t.name.startsWith("package"))
+    }
+    if (buildingPartner && !hasPartnerKeystore &&
+        System.getenv("ALLOW_DEBUG_SIGNING") != "1") {
+        throw GradleException(
+            "\n❌  PARTNER RELEASE BUILD REFUSED: android/key.partner.properties is missing.\n" +
+                "    Restore it with ~/mediBO-runner/restore_keystore.sh partner and retry.\n")
+    }
+    if (buildingRelease && (buildingCustomer || !buildingPartner) && !hasReleaseKeystore &&
         System.getenv("ALLOW_DEBUG_SIGNING") != "1") {
         throw GradleException(
             "\n❌  RELEASE BUILD REFUSED: android/key.properties is missing.\n" +

@@ -37,11 +37,25 @@ set -euo pipefail
 # app-signing key, so a phone that installed from the Play Store reports a
 # DIFFERENT, equally correct fingerprint. Never "fix" a build to match what a
 # Play install reports — see CHANGE #283.
-EXPECT_SHA1="${2:-CB:88:BD:C5:2B:90:15:04:CD:58:3D:45:B0:69:7D:1E:58:40:60:55}"
+EXPECT_SHA1_CUSTOMER="CB:88:BD:C5:2B:90:15:04:CD:58:3D:45:B0:69:7D:1E:58:40:60:55"
+# CMD #2100 — the PARTNER app (in.medibo.partner) has its OWN upload key
+# (android/upload-keystore-partner.jks, alias medibo-partner, generated
+# 2026-09-19 and vaulted as ANDROID_PARTNER_UPLOAD_KEYSTORE_B64). Play will
+# match the partner listing's uploads against THIS certificate; the customer
+# key above must never sign a partner artifact, nor the reverse.
+EXPECT_SHA1_PARTNER="D3:7A:65:0A:20:23:40:0B:3D:77:B4:6B:BD:44:3E:07:79:F0:DF:FF"
+# The second argument is a FLAVOR (customer | partner), a raw SHA-1 override,
+# or absent (customer). MEDIBO_FLAVOR in the environment is the same switch.
+case "${2:-${MEDIBO_FLAVOR:-customer}}" in
+  partner)  EXPECT_SHA1="$EXPECT_SHA1_PARTNER" ;;
+  customer) EXPECT_SHA1="$EXPECT_SHA1_CUSTOMER" ;;
+  *)        EXPECT_SHA1="$2" ;;
+esac
 
 # `verify_signing.sh --expected` prints that fingerprint and exits. Every other
 # script in the lane reads it from here instead of pasting the hex again — one
 # copy of the expected identity, so a key rotation is a one-line change.
+# `verify_signing.sh --expected [flavor]` prints the fingerprint for that flavor.
 if [ "${1:-}" = "--expected" ]; then
   printf '%s\n' "$EXPECT_SHA1"
   exit 0

@@ -37,7 +37,10 @@ import time
 import jwt
 import requests
 
-PKG = "in.medibo.app"
+# CMD #2100 — two apps, one lane. publish_play.sh exports MEDIBO_PACKAGE for the
+# flavor it is shipping (in.medibo.app = customer, in.medibo.partner = partner);
+# play_ops.py reads this same constant, so one env var moves the whole lane.
+PKG = os.environ.get("MEDIBO_PACKAGE", "in.medibo.app")
 AUD = "https://oauth2.googleapis.com/token"
 SCOPE = "https://www.googleapis.com/auth/androidpublisher"
 API = "https://androidpublisher.googleapis.com/androidpublisher/v3"

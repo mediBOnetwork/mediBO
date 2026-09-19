@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../build_info.dart';
 import '../utils/render_log.dart';
 import '../widgets/update_bar.dart';
 import 'app_update_feed.dart';
@@ -88,7 +89,10 @@ class AndroidUpdateBar with WidgetsBindingObserver {
     final state = playState(play);
     final res = await AppUpdateFeed.fetch(
       platform: AppUpdateFeed.pAndroid,
-      installedVersion: '$kAndroidVersionCode',
+      // CMD #2100 — each flavor reports ITS versionCode; the backend names the
+      // matching release (platform 'android' or 'android_partner').
+      installedVersion:
+          '${isPartnerFlavor ? kPartnerAndroidVersionCode : kAndroidVersionCode}',
       platformState: state,
       platformVersion: play['versionCode']?.toString(),
     );

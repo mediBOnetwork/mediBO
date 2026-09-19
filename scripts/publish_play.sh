@@ -10,6 +10,13 @@
 #                                # declaration (FGS, full-screen intent) can be
 #                                # answered in Console; promote the code after
 #   bash scripts/publish_play.sh --tracks     # only read Play's live track state
+#   bash scripts/publish_play.sh --now --flavor partner          # CMD #2100: the
+#                                # PARTNER app (in.medibo.partner) — own package,
+#                                # keystore, version line and Play listing
+#   bash scripts/publish_play.sh --now --flavor both             # customer, then partner
+#   bash scripts/publish_play.sh --build-only --flavor partner   # AAB + universal APK
+#                                # into release assets, NOTHING sent to Play (the
+#                                # first partner upload is Om's, in the Console)
 #
 # CHANGE #281 — a queued row now carries a KIND, and this script serves all three:
 #   publish  build + sign + upload the current code to `track` (Om's "Test now"
@@ -66,16 +73,21 @@ export PATH="$JAVA_HOME/bin:$HOME/flutter/bin:$PATH"
 # owns it and prints it with --expected, so the keystore preflight below and the
 # artifact gate in section 3 both read ONE copy — a key rotation is a one-line
 # change in that script and nothing else in the lane silently goes stale.
-EXPECT_SHA1=$(bash scripts/verify_signing.sh --expected) || EXPECT_SHA1=""
-[ -n "$EXPECT_SHA1" ] || {
-  echo "publish_play: scripts/verify_signing.sh --expected did not answer — refusing to build" >&2
-  exit 1
-}
 ABIS="arm64-v8a,armeabi-v7a,x86_64"       # the full 3-ABI bundle from #278
 
+# ── TWO APPS, ONE LANE (CMD #2100) ──────────────────────────────────────────
+# customer = in.medibo.app (today's app; every default below is unchanged),
+# partner  = in.medibo.partner (mediBO Partner). The flavor decides the Gradle
+# product flavor, the upload keystore, the expected signing certificate, the
+# Play package, the app_releases platform key ('android' / 'android_partner')
+# and the Dart versionCode constant. `--flavor both` runs this script twice.
+FLAVOR="${MEDIBO_FLAVOR:-customer}"; BUILD_ONLY=""
 TRACK="production"; MODE="serve"; DRAFT=""; NOT_FOR_REVIEW=""; REUSE_AAB=""
+ORIG_ARGS=("$@")
 while [ $# -gt 0 ]; do
   case "$1" in
+    --flavor)  FLAVOR="${2:?--flavor needs customer|partner|both}"; shift ;;
+    --build-only) BUILD_ONLY="1"; MODE="now" ;;
     --now)     MODE="now" ;;
     --tracks)  MODE="tracks" ;;
     --track)   TRACK="${2:?--track needs a value}"; shift ;;
@@ -100,8 +112,34 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+if [ "$FLAVOR" = "both" ]; then
+  # customer first (today's listing), then partner. Each run takes the lock.
+  rc=0
+  for f in customer partner; do
+    args=(); skip=""
+    for a in "${ORIG_ARGS[@]}"; do
+      if [ -n "$skip" ]; then skip=""; continue; fi
+      case "$a" in --flavor) skip=1 ;; *) args+=("$a") ;; esac
+    done
+    MEDIBO_FLAVOR="$f" bash "$0" "${args[@]}" || rc=$?
+  done
+  exit $rc
+fi
+case "$FLAVOR" in
+  customer) PKG="in.medibo.app";     PLAT="android";         KS_PROPS="android/key.properties" ;;
+  partner)  PKG="in.medibo.partner"; PLAT="android_partner"; KS_PROPS="android/key.partner.properties" ;;
+  *) echo "publish_play: unknown flavor $FLAVOR (customer|partner|both)" >&2; exit 2 ;;
+esac
+export MEDIBO_FLAVOR="$FLAVOR" MEDIBO_PACKAGE="$PKG"
+FLAVOR_CAP="$(printf '%s' "$FLAVOR" | sed 's/^./\U&/')"
+EXPECT_SHA1=$(bash scripts/verify_signing.sh --expected "$FLAVOR") || EXPECT_SHA1=""
+[ -n "$EXPECT_SHA1" ] || {
+  echo "publish_play: scripts/verify_signing.sh --expected $FLAVOR did not answer — refusing to build" >&2
+  exit 1
+}
+
 mkdir -p "$(dirname "$LOG")"
-log() { echo "[$(date -u +%FT%TZ)] $*" | tee -a "$LOG"; }
+log() { echo "[$(date -u +%FT%TZ)] [$FLAVOR] $*" | tee -a "$LOG"; }
 tail_log() { tail -c 2000 "$LOG" 2>/dev/null; }
 
 # ── ONE PUBLISHER AT A TIME (CHANGE #287) ───────────────────────────────────
@@ -116,7 +154,12 @@ tail_log() { tail -c 2000 "$LOG" 2>/dev/null; }
 # The lock is held for the whole run through FD 9. A tick that cannot take it
 # exits 0 and says so — a skipped tick is correct behaviour, not an error.
 exec 9>"$RUNNER/.play.lock"
-if ! flock -n 9; then
+if [ -n "$BUILD_ONLY" ]; then
+  # CMD #2100 — a build-only run is an explicit request, not a timer tick:
+  # wait for the lane instead of skipping (the timer's refresh holds it for
+  # seconds; a stalled credential read for a minute or two).
+  flock -w 1800 9 || { echo '{"ok":false,"error":"publish_play lock busy for 30 min"}'; exit 1; }
+elif ! flock -n 9; then
   log "another publish_play run holds the lock — skipping this tick"
   echo '{"ok":true,"skipped":"locked"}'
   exit 0
@@ -175,6 +218,63 @@ $body}" --arg t "$(tail_log)" \
 umask 077
 SA=$(mktemp /dev/shm/play_sa.XXXX.json)
 RAW=$(mktemp /dev/shm/play_sa_raw.XXXX)
+
+# ── CMD #2100: --build-only ─────────────────────────────────────────────────
+# Build the signed AAB + a UNIVERSAL APK for the flavor, run both artifact
+# gates, copy them into ~/mediBO-runner/releases/<flavor>/ and upload them to
+# the app-releases bucket under <flavor>/. No Play credential, no queue row,
+# no app_releases row (phones must not be told about a build Play has not
+# shipped), no Test Lab. Prints one JSON line with paths, versionName and
+# versionCode. The version is the one in the tree — nothing is bumped.
+if [ -n "$BUILD_ONLY" ]; then
+  if [ ! -f "$KS_PROPS" ]; then
+    MEDIBO_REPO="$REPO" bash "$RUNNER/restore_keystore.sh" "$FLAVOR" >>"$LOG" 2>&1 \
+      || die "cannot restore the $FLAVOR upload keystore from the Vault"
+  fi
+  read -r CODE NAME < <(bash scripts/bump_android_version.sh "$FLAVOR" --current)
+  AAB="build/app/outputs/bundle/${FLAVOR}Release/app-${FLAVOR}-release.aab"
+  APK="build/app/outputs/flutter-apk/app-${FLAVOR}-release.apk"
+  rm -f "$AAB" "$APK"; mkdir -p /dev/shm/gtmp
+  log "build-only: $FLAVOR $NAME ($CODE) — flutter build appbundle --release --flavor $FLAVOR …"
+  flutter build appbundle --release --flavor "$FLAVOR" \
+    "--dart-define=SENTRY_RELEASE=medibo-${FLAVOR}@${NAME}" "--dart-define=SENTRY_DIST=${CODE}" >>"$LOG" 2>&1 \
+    || die "the $FLAVOR AAB build failed" "$(tail -c 2500 "$LOG")"
+  [ -f "$AAB" ] || die "the build produced no AAB at $AAB"
+  python3 scripts/check_16kb.py "$AAB" --abis "$ABIS" >>"$LOG" 2>&1 \
+    || die "16 KB page-size / ABI gate failed on the $FLAVOR AAB" "$(tail -c 1500 "$LOG")"
+  bash scripts/verify_signing.sh "$AAB" "$FLAVOR" >>"$LOG" 2>&1 \
+    || die "the $FLAVOR AAB failed the signing gate" "$(tail -c 1500 "$LOG")"
+  log "AAB gates passed; flutter build apk --release --flavor $FLAVOR (universal) …"
+  flutter build apk --release --flavor "$FLAVOR" \
+    "--dart-define=SENTRY_RELEASE=medibo-${FLAVOR}@${NAME}" "--dart-define=SENTRY_DIST=${CODE}" >>"$LOG" 2>&1 \
+    || die "the $FLAVOR universal APK build failed" "$(tail -c 2500 "$LOG")"
+  [ -f "$APK" ] || die "the build produced no APK at $APK"
+  python3 scripts/check_16kb.py "$APK" --abis "$ABIS" >>"$LOG" 2>&1 \
+    || die "16 KB page-size / ABI gate failed on the $FLAVOR APK" "$(tail -c 1500 "$LOG")"
+  bash scripts/verify_signing.sh "$APK" "$FLAVOR" >>"$LOG" 2>&1 \
+    || die "the $FLAVOR APK failed the signing gate" "$(tail -c 1500 "$LOG")"
+  OUTDIR="$RUNNER/releases/$FLAVOR"; mkdir -p "$OUTDIR"
+  A_OUT="$OUTDIR/medibo-${FLAVOR}-${NAME}-${CODE}.aab"; K_OUT="$OUTDIR/medibo-${FLAVOR}-${NAME}-${CODE}-universal.apk"
+  cp -f "$AAB" "$A_OUT"; cp -f "$APK" "$K_OUT"
+  source "$RUNNER/runner.env"
+  S_URL="${PROD_SUPABASE_URL:-$SUPABASE_URL}"; S_KEY="${PROD_SERVICE_ROLE_KEY:-$SERVICE_ROLE_KEY}"
+  _put() { # <file> <path> <content-type> → public URL or ""
+    local signed
+    signed=$(curl -fsS -X POST "$S_URL/storage/v1/object/upload/sign/app-releases/$2" \
+               -H "apikey: $S_KEY" -H "Authorization: Bearer $S_KEY" \
+               -H "Content-Type: application/json" -H "x-upsert: true" -d '{}' 2>>"$LOG" | jq -r '.url // empty' 2>/dev/null)
+    [ -n "$signed" ] && curl -fsS -X PUT "$S_URL/storage/v1$signed" -H "Content-Type: $3" \
+         --data-binary "@$1" >>"$LOG" 2>&1 && echo "$S_URL/storage/v1/object/public/app-releases/$2"
+  }
+  A_URL=$(_put "$A_OUT" "$FLAVOR/$(basename "$A_OUT")" "application/octet-stream" || true)
+  K_URL=$(_put "$K_OUT" "$FLAVOR/$(basename "$K_OUT")" "application/vnd.android.package-archive" || true)
+  log "build-only done: $A_OUT ($(stat -c%s "$A_OUT") b) · $K_OUT ($(stat -c%s "$K_OUT") b)"
+  jq -nc --arg f "$FLAVOR" --arg p "$PKG" --arg n "$NAME" --arg c "$CODE" --arg a "$A_OUT" --arg k "$K_OUT" \
+     --arg au "$A_URL" --arg ku "$K_URL" --arg sha "$EXPECT_SHA1" \
+     '{ok:true,build_only:true,flavor:$f,package:$p,version_name:$n,version_code:($c|tonumber),
+       aab:$a,apk:$k,aab_url:$au,apk_url:$ku,upload_key_sha1:$sha}'
+  exit 0
+fi
 sa_ok() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["type"]=="service_account"' "$1" 2>/dev/null; }
 
 CRED_WHY=""
@@ -218,7 +318,11 @@ refresh_tracks() {
     # empty payload, and writes every status change to app_release_play_log.
     # The timer runs this every ~2 min, so review clearing is picked up within
     # one interval with no extra cron.
-    sync=$("$DEVCMD" rpc app_release_play_sync "$(cat "$o.rpc")" 2>/dev/null || true)
+    # CMD #2100 — the sync is per app: the partner listing's tracks update the
+    # 'android_partner' release rows, never the customer's.
+    jq -c --arg p "$PLAT" '{p_tracks:.tracks, p_platform:$p}' "$o" > "$o.sync"
+    sync=$("$DEVCMD" rpc app_release_play_sync "$(cat "$o.sync")" 2>/dev/null || true)
+    rm -f "$o.sync"
     if [ "$(jq -r '.ok // false' <<<"$sync" 2>/dev/null)" = "true" ]; then
       log "update prompt: offering $(jq -r '.published_name // "nothing"' <<<"$sync") ($(jq -r '.published_code // "-"' <<<"$sync")) · production=$(jq -r '.live_status // "?"' <<<"$sync") · $(jq -r '.transitions // 0' <<<"$sync") transition(s)"
       # CMD #1956 — the release row records what PLAY reports, never what the
@@ -329,23 +433,23 @@ if [ "$KIND" = "promote" ]; then
 fi
 
 # ── 1. keystore (build path only) ───────────────────────────────────────────
-if [ ! -f android/key.properties ]; then
-  log "key.properties absent — restoring the upload keystore from the Vault"
+if [ ! -f "$KS_PROPS" ]; then
+  log "$KS_PROPS absent — restoring the $FLAVOR upload keystore from the Vault"
   # CHANGE #1801 — the lane runs from a main WORKTREE (~/mediBO is whatever
   # branch a worker left checked out, and #1801 found it without this script at
   # all). restore_keystore.sh defaulted to $HOME/mediBO, so it would restore the
   # keystore into a tree nobody is building and this one would still die.
-  MEDIBO_REPO="$REPO" bash "$RUNNER/restore_keystore.sh" >>"$LOG" 2>&1 \
-    || die "cannot restore the upload keystore from the Vault (ANDROID_UPLOAD_KEYSTORE_B64)"
+  MEDIBO_REPO="$REPO" bash "$RUNNER/restore_keystore.sh" "$FLAVOR" >>"$LOG" 2>&1 \
+    || die "cannot restore the $FLAVOR upload keystore from the Vault"
 fi
-STORE=$(sed -n 's/^storeFile=//p' android/key.properties | head -1)
-ALIAS=$(sed -n 's/^keyAlias=//p'  android/key.properties | head -1)
+STORE=$(sed -n 's/^storeFile=//p' "$KS_PROPS" | head -1)
+ALIAS=$(sed -n 's/^keyAlias=//p'  "$KS_PROPS" | head -1)
 KS_SHA1=$(keytool -list -v -keystore "android/$STORE" -alias "$ALIAS" \
-            -storepass "$(sed -n 's/^storePassword=//p' android/key.properties | head -1)" 2>/dev/null \
+            -storepass "$(sed -n 's/^storePassword=//p' "$KS_PROPS" | head -1)" 2>/dev/null \
           | sed -n 's/.*SHA1: //p' | head -1)
 [ -n "$KS_SHA1" ] || die "the upload keystore is unreadable (wrong alias or store password)"
 [ "$KS_SHA1" = "$EXPECT_SHA1" ] \
-  || die "WRONG SIGNING KEY: keystore SHA-1 $KS_SHA1 is not the upload certificate Play expects for in.medibo.app ($EXPECT_SHA1). Refusing to build an unpublishable artifact."
+  || die "WRONG SIGNING KEY: keystore SHA-1 $KS_SHA1 is not the upload certificate Play expects for $PKG ($EXPECT_SHA1). Refusing to build an unpublishable artifact."
 log "upload key verified ($KS_SHA1)"
 
 # ── 2. version — ONE bump, code and name together (CMD #1956) ───────────────
@@ -362,8 +466,9 @@ progress building '{}'
 MAX=$(python3 scripts/play_publish.py maxcode --sa "$SA" 2>>"$LOG" | jq -r '.highest_version_code // empty')
 [ -n "$MAX" ] || die "could not read the published version codes from Play (see the log for the API error)"
 
-CUR_CODE=$(grep -oP 'versionCode = \K\d+' android/app/build.gradle.kts | head -1)
-CUR_NAME=$(grep -oP 'versionName = "\K[^"]+' android/app/build.gradle.kts | head -1)
+# CMD #2100 — per flavor: the customer line lives in defaultConfig, the
+# partner line in its product flavor block. One helper reads and writes both.
+read -r CUR_CODE CUR_NAME < <(bash scripts/bump_android_version.sh "$FLAVOR" --current)
 
 # next_version — the backend decides, Play's highest code is the input.
 # Prints "<code> <name>". A backend that cannot answer is fatal: guessing here
@@ -371,7 +476,7 @@ CUR_NAME=$(grep -oP 'versionName = "\K[^"]+' android/app/build.gradle.kts | head
 next_version() {
   local reply code name
   reply=$("$DEVCMD" rpc app_release_next_version \
-            "$(jq -nc --argjson m "$MAX" '{p_platform:"android",p_play_max_code:$m}')" 2>>"$LOG")
+            "$(jq -nc --arg p "$PLAT" --argjson m "$MAX" '{p_platform:$p,p_play_max_code:$m}')" 2>>"$LOG")
   [ "$(jq -r '.ok // false' <<<"$reply")" = "true" ] \
     || die "app_release_next_version() refused to name the next release — $(jq -rc '.' <<<"$reply" | head -c 200)"
   code=$(jq -r '.version_code' <<<"$reply")
@@ -389,15 +494,10 @@ next_version() {
 bump_version() {
   local code="$1" name="$2"
   if [ "$CUR_CODE" != "$code" ] || [ "$CUR_NAME" != "$name" ]; then
-    sed -i "s/versionCode = .*/versionCode = $code/; s/versionName = \".*\"/versionName = \"$name\"/" \
-      android/app/build.gradle.kts
-    sed -i "s/const int kAndroidVersionCode = .*/const int kAndroidVersionCode = $code;/" \
-      lib/services/app_update_feed.dart
+    # CMD #2100 — the flavor's own Gradle block + Dart constant, verified inside.
+    bash scripts/bump_android_version.sh "$FLAVOR" "$code" "$name" >>"$LOG" 2>&1 \
+      || die "version bump did not apply to every file — refusing to build out of lockstep"
   fi
-  grep -q "versionCode = $code" android/app/build.gradle.kts \
-    && grep -q "versionName = \"$name\"" android/app/build.gradle.kts \
-    && grep -q "kAndroidVersionCode = $code;" lib/services/app_update_feed.dart \
-    || die "version bump did not apply to every file — refusing to build out of lockstep"
 }
 
 if [ "$CUR_CODE" = "$((MAX + 1))" ]; then
@@ -415,7 +515,7 @@ progress building "$(jq -nc --arg n "$NAME" --argjson c "$CODE" '{version_name:$
 bump_version "$CODE" "$NAME"
 
 # ── 3. the signed bundle + the #278 gates ───────────────────────────────────
-AAB="build/app/outputs/bundle/release/app-release.aab"
+AAB="build/app/outputs/bundle/${FLAVOR}Release/app-${FLAVOR}-release.aab"
 REUSED=""
 if [ -n "$REUSE_AAB" ] && [ -f "$AAB" ] && [ "$CUR_CODE" = "$CODE" ] \
    && [ "$AAB" -nt android/app/build.gradle.kts ]; then
@@ -424,8 +524,8 @@ if [ -n "$REUSE_AAB" ] && [ -f "$AAB" ] && [ "$CUR_CODE" = "$CODE" ] \
 else
   rm -f "$AAB"
   mkdir -p /dev/shm/gtmp
-  log "flutter build appbundle --release …"
-  if ! flutter build appbundle --release >>"$LOG" 2>&1; then
+  log "flutter build appbundle --release --flavor $FLAVOR …"
+  if ! flutter build appbundle --release --flavor "$FLAVOR" >>"$LOG" 2>&1; then
     die "the AAB build failed" "$(tail -c 2500 "$LOG")"
   fi
 fi
@@ -446,7 +546,7 @@ log "16 KB + ABI gate passed ($ABIS)"
 # single signer against the fingerprint above, and asks jarsigner whether that
 # signature actually COVERS the file — a certificate-only read happily passes a
 # bundle something was appended to after signing (#283).
-bash scripts/verify_signing.sh "$AAB" >>"$LOG" 2>&1 \
+bash scripts/verify_signing.sh "$AAB" "$FLAVOR" >>"$LOG" 2>&1 \
   || die "the built AAB failed the signing gate — Play would reject this upload" "$(tail -c 1500 "$LOG")"
 log "AAB signature verified against the upload certificate"
 
@@ -464,7 +564,7 @@ TL_CMD="${MEDIBO_CMD_ID:-$(git branch --show-current 2>/dev/null | grep -oE '(^|
 progress building '{"review_status":"Firebase Test Lab: building the instrumentation APKs and running the matrix (one virtual device, one API level, <=10 min)"}'
 TL_LINE=$(bash scripts/android_testlab.sh run ${TL_CMD:+--cmd "$TL_CMD"} --release "$REL_ID" \
             --commit "$TL_COMMIT" --version-code "$CODE" --version-name "$NAME" --track "$TRACK" \
-            --worker publish_play.sh 2>>"$LOG") || true
+            --flavor "$FLAVOR" --worker publish_play.sh 2>>"$LOG") || true
 log "${TL_LINE:-TESTLAB error — android_testlab.sh printed nothing}"
 TL_GATE=$("$DEVCMD" rpc android_testlab_gate "$(jq -nc --arg t "$TRACK" --arg c "$TL_COMMIT" --argjson v "$CODE" \
             '{p_track:$t,p_kind:"publish",p_commit:$c,p_version_code:$v}')" 2>>"$LOG")
@@ -518,14 +618,14 @@ fi
 # The direct-download APK is arm64-only (~38 MB); a fat APK is ~110 MB and these
 # are pharmacies on mobile data. It passes the SAME two artifact gates as the
 # bundle — 16 KB alignment and the signing fingerprint — before it is uploaded.
-APK="build/app/outputs/flutter-apk/app-release.apk"
+APK="build/app/outputs/flutter-apk/app-${FLAVOR}-release.apk"
 APK_URL=""
 rm -f "$APK"
-log "flutter build apk --release --target-platform android-arm64 …"
-if flutter build apk --release --target-platform android-arm64 >>"$LOG" 2>&1 && [ -f "$APK" ]; then
+log "flutter build apk --release --flavor $FLAVOR --target-platform android-arm64 …"
+if flutter build apk --release --flavor "$FLAVOR" --target-platform android-arm64 >>"$LOG" 2>&1 && [ -f "$APK" ]; then
   if ! python3 scripts/check_16kb.py "$APK" --abis arm64-v8a >>"$LOG" 2>&1; then
     log "WARNING: the APK failed the 16 KB gate; not publishing it"
-  elif ! bash scripts/verify_signing.sh "$APK" >>"$LOG" 2>&1; then
+  elif ! bash scripts/verify_signing.sh "$APK" "$FLAVOR" >>"$LOG" 2>&1; then
     # CHANGE #285. Nothing used to stand between this build and the storage
     # upsert: the AAB was fingerprint-checked in section 3, but the APK — the
     # one people sideload, and the one that must install OVER the copy already
@@ -550,7 +650,7 @@ if flutter build apk --release --target-platform android-arm64 >>"$LOG" 2>&1 && 
     #      the AAB), while the signed PUT is not.
     S_URL="${PROD_SUPABASE_URL:-$SUPABASE_URL}"
     S_KEY="${PROD_SERVICE_ROLE_KEY:-$SERVICE_ROLE_KEY}"
-    P="medibo-$NAME.apk"
+    P="medibo-$NAME.apk"; [ "$FLAVOR" = partner ] && P="partner/medibo-partner-$NAME.apk"
     SIGNED=$(curl -fsS -X POST "$S_URL/storage/v1/object/upload/sign/app-releases/$P" \
                -H "apikey: $S_KEY" -H "Authorization: Bearer $S_KEY" \
                -H "Content-Type: application/json" -H "x-upsert: true" \
@@ -564,8 +664,8 @@ if flutter build apk --release --target-platform android-arm64 >>"$LOG" 2>&1 && 
       # nothing reads it; app_update_check runs against production. Write the
       # row the phone actually reads, through the prod-routed RPC.
       ar=$("$DEVCMD" rpc app_release_publish "$(jq -nc --arg n "$NAME" \
-             --argjson c "${PLAY_CODE:-0}" --arg u "$APK_URL" --arg no "$NOTES" \
-             '{p_version_name:$n,p_version_code:$c,p_apk_url:$u,p_notes:$no}')" 2>/dev/null)
+             --argjson c "${PLAY_CODE:-0}" --arg u "$APK_URL" --arg no "$NOTES" --arg p "$PLAT" \
+             '{p_version_name:$n,p_version_code:$c,p_apk_url:$u,p_notes:$no,p_platform:$p}')" 2>/dev/null)
       if [ "$(jq -r '.ok // false' <<<"$ar" 2>/dev/null)" = "true" ]; then
         log "app_releases published on production: $NAME ($PLAY_CODE)"
       else

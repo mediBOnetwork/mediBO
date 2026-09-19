@@ -10,12 +10,15 @@
 //      backend sent (app_settings.catalogue_landing), not a palette written in
 //      Dart. A tile whose payload carries no gradient falls back to the brand
 //      token — it never invents a colour and it never draws nothing.
-//   2. THE PREVIEW IS RANKED AND WORDED IN SQL. The tile prints the items in
-//      payload ORDER, prints their labels verbatim, and draws NOTHING for a
-//      `kind` this build does not know — the same forward-compatible silence
-//      the home feed gives an unknown layout.
-//   3. FOUR TILES ARE ONE GRID. Every tile is the same height, whatever its
-//      preview holds, and no label or count is ellipsised.
+//   2. A TILE IS TWO BACKEND SENTENCES AND NOTHING ELSE (CMD #2088). The
+//      entity line and the products line arrive written, zone-scoped and
+//      Indian-grouped; the tile prints them verbatim. The preview strip that
+//      used to sit under them — the company letter discs, the sample salts,
+//      the sample uses, the ANTI INFECTIVES chip — is GONE, and a payload
+//      that still carries one draws none of it. A pre-#2088 payload with only
+//      `count_label` still gets its entity line.
+//   3. FOUR TILES ARE ONE GRID. Every tile is the same height, at 360px and
+//      412px, and neither line is ellipsised.
 //   4. THE RAIL IS THE STOREFRONT CARD. Top selling draws CompactProductCard,
 //      unchanged — one product card in this app, not three — and its NOTE is
 //      the backend saying which ranking this is. An empty block draws nothing.
@@ -39,6 +42,8 @@ Map<String, dynamic> _door(
   String label, {
   Map<String, dynamic>? gradient,
   Map<String, dynamic>? preview,
+  String entity = 'Companies 1,247 available',
+  String products = 'Products 38,904 available',
 }) => {
       'key': key,
       'kind': key,
@@ -46,8 +51,12 @@ Map<String, dynamic> _door(
       'label': label,
       'icon_key': 'store',
       'icon_letter': label.substring(0, 1),
-      'count_label': '18,563 companies',
+      'count_label': entity,
+      'entity_label': entity,
+      'products_label': products,
       if (gradient != null) 'gradient': gradient,
+      // CMD #2088 — a preview may still arrive from an older cached payload.
+      // It must draw nothing; the tests below prove exactly that.
       if (preview != null) 'preview': preview,
     };
 
@@ -144,11 +153,15 @@ void main() {
     });
 
     testWidgets('a payload with no gradient still draws a tile', (tester) async {
-      final doors = [CatDoor.fromMap(_door('salts', 'Salt'))];
+      final doors = [
+        CatDoor.fromMap(_door('salts', 'Salt',
+            entity: 'Salts 8,120 available',
+            products: 'Products 21,455 available')),
+      ];
       await _pump(tester,
           CatalogueTiles(title: 'Browse by', doors: doors, onTap: (_) {}));
-      expect(find.text('Salt'), findsOneWidget);
-      expect(find.text('18,563 companies'), findsOneWidget);
+      expect(find.text('Salts 8,120 available'), findsOneWidget);
+      expect(find.text('Products 21,455 available'), findsOneWidget);
     });
 
     testWidgets('tapping a tile hands back the door the backend sent',
@@ -157,64 +170,92 @@ void main() {
       final doors = [CatDoor.fromMap(_door('companies', 'Company'))];
       await _pump(tester,
           CatalogueTiles(title: '', doors: doors, onTap: (d) => tapped = d));
-      await tester.tap(find.text('Company'));
+      await tester.tap(find.text('Companies 1,247 available'));
       await tester.pump();
       expect(tapped?.key, 'companies');
       expect(tapped?.tab, 'companies');
     });
   });
 
-  group('the preview is ranked and worded in SQL', () {
-    testWidgets('chips print in payload order, verbatim', (tester) async {
+  // CMD #2088 — the tile is TWO SENTENCES. Both are written, counted and
+  // grouped in SQL against the viewer's zone; the tile is a printer.
+  group('a tile is two backend sentences', () {
+    testWidgets('both lines print verbatim, in payload order', (tester) async {
       final doors = [
-        CatDoor.fromMap(_door('browse', 'Category',
-            preview: _preview('chips', ['PAIN', 'GASTRO', 'CARDIAC']))),
+        CatDoor.fromMap(_door('conditions', 'Condition',
+            entity: 'Conditions 1,04,210 available',
+            products: 'Products 47,910 available')),
       ];
-      // Wide enough that all three chips are built: the property under test
-      // is the ORDER they arrive in, not how many fit on a 360px tile.
       await _pump(tester,
-          CatalogueTiles(title: '', doors: doors, onTap: (_) {}), width: 800);
-      final x = (String s) => tester.getTopLeft(find.text(s)).dx;
-      expect(x('PAIN') < x('GASTRO'), isTrue,
-          reason: 'payload order, never a client-side sort');
-      expect(x('GASTRO') < x('CARDIAC'), isTrue);
+          CatalogueTiles(title: '', doors: doors, onTap: (_) {}));
+      expect(find.text('Conditions 1,04,210 available'), findsOneWidget);
+      expect(find.text('Products 47,910 available'), findsOneWidget);
+      // The entity line is above the products line, because that is the order
+      // the backend named them in — not a rule written here.
+      expect(
+          tester.getTopLeft(find.text('Conditions 1,04,210 available')).dy <
+              tester.getTopLeft(find.text('Products 47,910 available')).dy,
+          isTrue);
     });
 
-    testWidgets('logos draw the backend letter, not the label', (tester) async {
+    testWidgets('the tile prints no third line of its own', (tester) async {
+      final doors = [
+        CatDoor.fromMap(_door('conditions', 'Condition',
+            entity: 'Conditions 41 available',
+            products: 'Products 63 available')),
+      ];
+      await _pump(tester,
+          CatalogueTiles(title: '', doors: doors, onTap: (_) {}));
+      // 'Condition' is the door's routing label; the TILE shows the two
+      // sentences and nothing else, so the bare label is never painted.
+      expect(find.text('Condition'), findsNothing);
+      expect(find.byType(Text), findsNWidgets(2));
+    });
+
+    testWidgets('a preview left on an old payload draws nothing',
+        (tester) async {
       final doors = [
         CatDoor.fromMap(_door('companies', 'Company',
             preview: _preview('logos', ['Alkem', 'Cipla', 'Mankind', 'Sun']))),
-      ];
-      await _pump(tester,
-          CatalogueTiles(title: '', doors: doors, onTap: (_) {}));
-      for (final l in ['A', 'C', 'M', 'S']) {
-        expect(find.text(l), findsOneWidget);
-      }
-      expect(find.text('Alkem'), findsNothing,
-          reason: 'a logo disc prints the letter the backend derived');
-    });
-
-    testWidgets('names print two popular labels', (tester) async {
-      final doors = [
         CatDoor.fromMap(_door('salts', 'Salt',
+            entity: 'Salts 401 available',
+            products: 'Products 703 available',
             preview: _preview('names', ['Paracetamol', 'Ibuprofen']))),
+        CatDoor.fromMap(_door('browse', 'Category',
+            entity: 'Categories 21 available',
+            products: 'Products 642 available',
+            preview: _preview('chips', ['ANTI INFECTIVES', 'GASTRO']))),
       ];
       await _pump(tester,
-          CatalogueTiles(title: '', doors: doors, onTap: (_) {}));
-      expect(find.text('Paracetamol'), findsOneWidget);
-      expect(find.text('Ibuprofen'), findsOneWidget);
+          CatalogueTiles(title: '', doors: doors, onTap: (_) {}), width: 800);
+      // The four company letter discs, the two sample salts and the ANTI
+      // INFECTIVES chip: every one of them previewed the WHOLE catalogue
+      // under a count that is now about one zone.
+      for (final gone in ['A', 'C', 'M', 'S']) {
+        expect(find.text(gone), findsNothing);
+      }
+      expect(find.text('Paracetamol'), findsNothing);
+      expect(find.text('Ibuprofen'), findsNothing);
+      expect(find.text('ANTI INFECTIVES'), findsNothing);
+      expect(tester.takeException(), isNull);
     });
 
-    testWidgets('an unknown preview kind draws nothing and does not throw',
+    testWidgets('a pre-#2088 payload still gets its entity line',
         (tester) async {
       final doors = [
-        CatDoor.fromMap(_door('salts', 'Salt',
-            preview: _preview('carousel_v9', ['Paracetamol']))),
+        CatDoor.fromMap({
+          'key': 'companies',
+          'kind': 'companies',
+          'tab': 'companies',
+          'label': 'Company',
+          'icon_key': 'store',
+          'icon_letter': 'C',
+          'count_label': '18,563 companies',
+        }),
       ];
       await _pump(tester,
           CatalogueTiles(title: '', doors: doors, onTap: (_) {}));
-      expect(find.text('Salt'), findsOneWidget);
-      expect(find.text('Paracetamol'), findsNothing);
+      expect(find.text('18,563 companies'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   });
@@ -224,14 +265,16 @@ void main() {
       testWidgets('every tile is the same height at ${w.toInt()}px', (tester) async {
         final doors = [
           CatDoor.fromMap(_door('companies', 'Company',
-              gradient: _grad('#0E6B3A', '#1B7A43'),
-              preview: _preview('logos', ['Alkem', 'Cipla', 'Mankind', 'Sun']))),
+              gradient: _grad('#0E6B3A', '#1B7A43'))),
           CatDoor.fromMap(_door('salts', 'Salt',
-              preview: _preview('names', ['Paracetamol', 'Ibuprofen']))),
-          CatDoor.fromMap(_door('conditions', 'Use',
-              preview: _preview('names', ['Fever']))),
+              entity: 'Salts 1,06,571 available',
+              products: 'Products 3,43,545 available')),
+          CatDoor.fromMap(_door('conditions', 'Condition',
+              entity: 'Conditions 41 available',
+              products: 'Products 63 available')),
           CatDoor.fromMap(_door('browse', 'Category',
-              preview: _preview('chips', ['PAIN', 'GASTRO', 'CARDIAC']))),
+              entity: 'Categories 21 available',
+              products: 'Products 642 available')),
         ];
         await _pump(tester,
             CatalogueTiles(title: 'Browse by', doors: doors, onTap: (_) {}),
@@ -249,17 +292,15 @@ void main() {
       });
     }
 
-    testWidgets('no label or count is ellipsised', (tester) async {
-      final doors = [
-        CatDoor.fromMap(_door('companies', 'Company',
-            preview: _preview('logos', ['Alkem']))),
-      ];
+    testWidgets('neither line is ellipsised', (tester) async {
+      final doors = [CatDoor.fromMap(_door('companies', 'Company'))];
       await _pump(tester,
           CatalogueTiles(title: '', doors: doors, onTap: (_) {}));
-      final label = tester.widget<Text>(find.text('Company'));
-      final count = tester.widget<Text>(find.text('18,563 companies'));
-      expect(label.overflow, isNot(TextOverflow.ellipsis));
-      expect(count.overflow, isNot(TextOverflow.ellipsis));
+      final entity = tester.widget<Text>(find.text('Companies 1,247 available'));
+      final products =
+          tester.widget<Text>(find.text('Products 38,904 available'));
+      expect(entity.overflow, isNot(TextOverflow.ellipsis));
+      expect(products.overflow, isNot(TextOverflow.ellipsis));
     });
   });
 

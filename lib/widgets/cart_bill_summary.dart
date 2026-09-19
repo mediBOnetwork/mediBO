@@ -134,11 +134,12 @@ class CartBillSummary extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      // CMD #2079 — the bill runs the full width of the scroll. It is the
-      // last block on the page and the one the customer reads a total off;
-      // an inset card made it look like one more suggestion band.
+      // CMD #2099 — the card sits on the SAME left/right gutter as the cart
+      // item rows and the Place order button: 16px, the page's own margin.
+      // #2079 ran it edge to edge, which read as a band bolted to the screen
+      // rather than the last card of the same column of cards.
       margin: EdgeInsets.fromLTRB(
-          Ds.space(0), Ds.space.x12, Ds.space(0), Ds.space.x8),
+          Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x8),
       padding: EdgeInsets.symmetric(
           horizontal: Ds.space.x16, vertical: Ds.space.x16),
       decoration: BoxDecoration(

@@ -313,10 +313,17 @@ void main() {
   // scroll OFFSET — when the list grows by a row, the page moves by exactly
   // that row, so everything under the lines stays under the same pixel.
   group('6 — the page compensates; nothing under the lines moves', () {
+    // CMD #2099 REPLACES #2090's reading of maxScrollExtent. The max extent
+    // moves for three reasons that are not a cart row — a bill line appearing
+    // BELOW the rails, a banner appearing above the scroll, a rail payload
+    // landing a frame later — and each of those made the page jump by its own
+    // height. The compensation is now the measured height of the block ABOVE
+    // the rails, so it answers the only question that matters: how far did the
+    // rails get pushed down?
     test('growing by a row moves the page by exactly that row', () {
       expect(
         C2090ScrollComp.shift(
-            oldMax: 400, newMax: 488, isScrolling: false, velocity: 0),
+            oldAbove: 400, newAbove: 488, isScrolling: false, velocity: 0),
         88,
       );
     });
@@ -324,20 +331,43 @@ void main() {
     test('removing a row reverses it, to the pixel', () {
       expect(
         C2090ScrollComp.shift(
-            oldMax: 488, newMax: 400, isScrolling: false, velocity: 0),
+            oldAbove: 488, newAbove: 400, isScrolling: false, velocity: 0),
         -88,
+      );
+    });
+
+    test('a bill row appearing BELOW the rails moves nothing', () {
+      // The block above the rails did not change: the ~35px a bill line is
+      // must not travel to the top of the page.
+      expect(
+        C2090ScrollComp.shift(
+            oldAbove: 400, newAbove: 400, isScrolling: false, velocity: 0),
+        0,
+      );
+    });
+
+    test('nothing measured yet is not a correction', () {
+      expect(
+        C2090ScrollComp.shift(
+            oldAbove: null, newAbove: 400, isScrolling: false, velocity: 0),
+        0,
+      );
+      expect(
+        C2090ScrollComp.shift(
+            oldAbove: 400, newAbove: null, isScrolling: false, velocity: 0),
+        0,
       );
     });
 
     test('a finger or a fling owns the page — no correction under it', () {
       expect(
         C2090ScrollComp.shift(
-            oldMax: 400, newMax: 488, isScrolling: true, velocity: 0),
+            oldAbove: 400, newAbove: 488, isScrolling: true, velocity: 0),
         0,
       );
       expect(
         C2090ScrollComp.shift(
-            oldMax: 400, newMax: 488, isScrolling: false, velocity: 120),
+            oldAbove: 400, newAbove: 488, isScrolling: false, velocity: 120),
         0,
       );
     });
@@ -345,7 +375,7 @@ void main() {
     test('sub-pixel dimension noise is not a row', () {
       expect(
         C2090ScrollComp.shift(
-            oldMax: 400, newMax: 400.4, isScrolling: false, velocity: 0),
+            oldAbove: 400, newAbove: 400.4, isScrolling: false, velocity: 0),
         0,
       );
     });
@@ -372,6 +402,18 @@ void main() {
       const p = C2090StillPhysics();
       expect(p.applyTo(const ClampingScrollPhysics()),
           isA<C2090StillPhysics>());
+    });
+
+    test('the anchor a physics is built with survives composition', () {
+      final a = C2090Anchor();
+      final p = C2090StillPhysics(anchor: a);
+      expect((p.applyTo(const ClampingScrollPhysics()) as C2090StillPhysics)
+          .anchor, same(a));
+    });
+
+    test('no anchor means no guess: the physics defers to its parent', () {
+      const p = C2090StillPhysics();
+      expect(p.anchor, isNull);
     });
   });
 

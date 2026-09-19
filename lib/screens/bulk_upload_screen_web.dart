@@ -3017,7 +3017,10 @@ class _UploadCard extends StatelessWidget {
                               Expanded(
                                 child: SizedBox(
                                   height: 52,
-                                  child: FilledButton.icon(
+                                  child: Semantics(
+                                    identifier: 'bulk_upload_camera',
+                                    button: true,
+                                    child: FilledButton.icon(
                                     onPressed: onCamera,
                                     icon: const Icon(Icons.camera_alt_outlined, size: 18),
                                     label: Text(c('bulk_upload_screen_web.camera'),
@@ -3030,13 +3033,17 @@ class _UploadCard extends StatelessWidget {
                                       elevation: 0,
                                     ),
                                   ),
+                                  ),
                                 ),
                               ),
                               const SizedBox(width: 12),
                               Expanded(
                                 child: SizedBox(
                                   height: 52,
-                                  child: FilledButton.icon(
+                                  child: Semantics(
+                                    identifier: 'bulk_upload_file',
+                                    button: true,
+                                    child: FilledButton.icon(
                                     onPressed: onPickFile,
                                     icon: const Icon(Icons.upload_file_outlined, size: 18),
                                     label: Text(c('bulk_upload_screen_web.upload_file'),
@@ -3048,6 +3055,7 @@ class _UploadCard extends StatelessWidget {
                                           borderRadius: BorderRadius.circular(10)),
                                       elevation: 0,
                                     ),
+                                  ),
                                   ),
                                 ),
                               ),
@@ -3754,7 +3762,10 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                   SizedBox(
                     width: double.infinity,
                     height: 48,
-                    child: FilledButton(
+                    child: Semantics(
+                      identifier: 'bulk_upload_add_to_cart',
+                      button: true,
+                      child: FilledButton(
                       onPressed: canAdd ? () => widget.onAddToCart() : null,
                       style: FilledButton.styleFrom(
                         backgroundColor: const Color(0xFF16A34A),
@@ -3764,6 +3775,7 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                       child: widget.addingToCart
                           ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                           : Text(c('bulk_upload_screen_web.add_matched_to_cart'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                    ),
                     ),
                   ),
                 ],

@@ -114,18 +114,28 @@ Map<String, dynamic> _landing() => {
       'trail': _trail([_crumb('Catalogue', tab: 'home', current: true)]),
       'landing': {'show_recent': true, 'show_tabs': true, 'show_tree': false},
       'doors': [
+        // CMD #2088 — two zone-scoped sentences per tile, and 'Use' is
+        // 'Condition' now. The tile prints the sentences, never the label.
         {'key': 'companies', 'kind': 'companies', 'tab': 'companies',
          'label': 'Company', 'icon_key': 'store', 'icon_letter': 'C',
-         'count_label': '18,563 companies'},
+         'count_label': 'Companies 1,247 available',
+         'entity_label': 'Companies 1,247 available',
+         'products_label': 'Products 38,904 available'},
         {'key': 'salts', 'kind': 'salts', 'tab': 'salts',
          'label': 'Salt', 'icon_key': 'science', 'icon_letter': 'S',
-         'count_label': '1,06,571 salts'},
+         'count_label': 'Salts 9,418 available',
+         'entity_label': 'Salts 9,418 available',
+         'products_label': 'Products 38,102 available'},
         {'key': 'conditions', 'kind': 'conditions', 'tab': 'conditions',
-         'label': 'Use', 'icon_key': 'medication', 'icon_letter': 'U',
-         'count_label': '2,41,900 products'},
+         'label': 'Condition', 'icon_key': 'medication', 'icon_letter': 'U',
+         'count_label': 'Conditions 312 available',
+         'entity_label': 'Conditions 312 available',
+         'products_label': 'Products 21,004 available'},
         {'key': 'browse', 'kind': 'tree', 'tab': 'browse',
          'label': 'Category', 'icon_key': 'book', 'icon_letter': 'K',
-         'count_label': '3,35,273 products'},
+         'count_label': 'Categories 21 available',
+         'entity_label': 'Categories 21 available',
+         'products_label': 'Products 37,655 available'},
       ],
     };
 
@@ -470,11 +480,21 @@ void main() {
         'catalogue_home': [_landing()],
       });
 
-      for (final label in const ['Company', 'Salt', 'Use', 'Category']) {
-        expect(find.text(label), findsOneWidget, reason: '\$label is a tile');
+      // CMD #2088 — a tile IS its two zone sentences; the routing label is
+      // never painted on it.
+      for (final line in const [
+        'Companies 1,247 available',
+        'Products 38,904 available',
+        'Salts 9,418 available',
+        'Conditions 312 available',
+        'Categories 21 available',
+      ]) {
+        expect(find.text(line), findsOneWidget, reason: '$line is a tile line');
       }
-      expect(find.text('18,563 companies'), findsOneWidget,
-          reason: 'the count line is the backend string, printed in full');
+      for (final gone in const ['Company', 'Salt', 'Use', 'Condition']) {
+        expect(find.text(gone), findsNothing,
+            reason: '$gone is a routing label, not a tile line');
+      }
       expect(find.byType(CatalogueAlphabetRail), findsNothing,
           reason: 'the strip belongs to a chosen list, and none is chosen');
       expect(rpc.called('catalogue_tree'), isFalse,
@@ -488,7 +508,7 @@ void main() {
         'catalogue_home': [_landing()],
         'catalogue_companies': [_companies()],
       });
-      await tester.tap(find.text('Company'));
+      await tester.tap(find.text('Companies 1,247 available'));
       await tester.pumpAndSettle();
 
       expect(rpc.called('catalogue_companies'), isTrue,
@@ -516,7 +536,7 @@ void main() {
 
       expect(find.byType(CatalogueAlphabetRail), findsNothing,
           reason: 'back on the landing the strip is gone, not stale');
-      expect(find.text('Company'), findsOneWidget,
+      expect(find.text('Companies 1,247 available'), findsOneWidget,
           reason: 'the tiles are back — Company is a tile again, not a crumb');
     });
   });

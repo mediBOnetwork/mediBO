@@ -425,7 +425,10 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
           'rail=0');
       RenderLog.write('c2020_catalogue_landing',
           'tiles=${_home?.doors.length ?? 0};'
-          'previews=${_home?.doors.where((d) => !d.preview.isEmpty).length ?? 0};'
+          // CMD #2088 — `previews` is gone and `lines` replaces it: a tile is
+          // proven by the two zone lines it printed, not by a preview strip
+          // that no longer exists.
+          'lines=${_home?.doors.where((d) => d.entityLabel.isNotEmpty && d.productsLabel.isNotEmpty).length ?? 0};'
           'top=${_home?.topSelling.items.length ?? 0};'
           'promo=${(_home?.promo.has ?? false) ? 1 : 0};'
           'chips=${_home?.chips.length ?? 0};'
@@ -1097,7 +1100,19 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
         SliverList.separated(
           itemCount: _rows.length,
           separatorBuilder: (_, _) => Divider(height: 1, color: Ds.c.divider),
-          itemBuilder: (context, i) => _BrowseRow(row: _rows[i], onTap: () => _tapRow(_rows[i])),
+          // CMD #2088 — a row that arrived with a `group_label` opens its
+          // group with that sentence. Zone-available entities come first and
+          // the rest sit below, so the number on the tile and the number at
+          // the top of this list are the same number.
+          itemBuilder: (context, i) => _rows[i].groupLabel.isEmpty
+              ? _BrowseRow(row: _rows[i], onTap: () => _tapRow(_rows[i]))
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _BrowseGroupHeader(label: _rows[i].groupLabel),
+                    _BrowseRow(row: _rows[i], onTap: () => _tapRow(_rows[i])),
+                  ],
+                ),
         ),
         if (b.hasProducts && _rows.isNotEmpty)
           SliverToBoxAdapter(
@@ -1536,6 +1551,25 @@ class _TrailBar extends StatelessWidget {
       ),
     );
   }
+}
+
+/// CMD #2088 — the divider that opens a group of rows.
+///
+/// The sentence and its number are the backend's (`cat_group_label`), the same
+/// pair the product grids have printed since #1909. This widget appears only
+/// because a row arrived carrying one.
+class _BrowseGroupHeader extends StatelessWidget {
+  final String label;
+  const _BrowseGroupHeader({required this.label});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: double.infinity,
+        color: Ds.c.bg,
+        padding: EdgeInsets.fromLTRB(
+            Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x8),
+        child: Text(label, style: Ds.t.caption),
+      );
 }
 
 class _BrowseRow extends StatelessWidget {

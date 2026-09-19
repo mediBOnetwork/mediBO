@@ -106,15 +106,24 @@ Map<String, dynamic> _home({
       'doors_title': 'Browse by',
       'doors': doors ??
           [
+            // CMD #2088 — each tile is two zone-scoped sentences, written by
+            // catalogue_browse_tiles(). Nothing here is a number this screen
+            // could have derived.
             {'key': 'companies', 'kind': 'companies', 'tab': 'companies',
              'label': 'Company', 'icon_key': 'store', 'icon_letter': 'C',
-             'count_label': '18,563 companies'},
+             'count_label': 'Companies 1,247 available',
+             'entity_label': 'Companies 1,247 available',
+             'products_label': 'Products 38,904 available'},
             {'key': 'salts', 'kind': 'salts', 'tab': 'salts',
              'label': 'Salt', 'icon_key': 'science', 'icon_letter': 'S',
-             'count_label': '1,06,571 salts'},
+             'count_label': 'Salts 9,418 available',
+             'entity_label': 'Salts 9,418 available',
+             'products_label': 'Products 38,102 available'},
             {'key': 'browse', 'kind': 'tree', 'tab': 'browse',
              'label': 'Category', 'icon_key': 'book', 'icon_letter': 'K',
-             'count_label': '3,35,273 products'},
+             'count_label': 'Categories 21 available',
+             'entity_label': 'Categories 21 available',
+             'products_label': 'Products 37,655 available'},
           ],
       'recent_viewed': {
         'has': recentHas,
@@ -323,7 +332,7 @@ void main() {
     });
   });
 
-  group('the three doors are the payload\'s', () {
+  group('the four tiles are the payload\'s', () {
     testWidgets('label, count and glyph letter all print verbatim',
         (tester) async {
       await _pump(tester, queued: {
@@ -331,13 +340,12 @@ void main() {
         'catalogue_tree': [_treeRoot()],
       });
       expect(find.text('Browse by'), findsOneWidget);
-      expect(find.text('Company'), findsOneWidget);
-      expect(find.text('Salt'), findsOneWidget);
-      expect(find.text('Category'), findsOneWidget);
-      // The counts are sentences, not numbers this screen could derive.
-      expect(find.text('18,563 companies'), findsOneWidget);
-      expect(find.text('1,06,571 salts'), findsOneWidget);
-      expect(find.text('3,35,273 products'), findsWidgets);
+      // CMD #2088 — the tile IS its two sentences. Both counts are the
+      // viewer's zone, both are written in SQL, both print verbatim.
+      expect(find.text('Companies 1,247 available'), findsOneWidget);
+      expect(find.text('Products 38,904 available'), findsOneWidget);
+      expect(find.text('Salts 9,418 available'), findsOneWidget);
+      expect(find.text('Categories 21 available'), findsOneWidget);
     });
 
     testWidgets('a payload with no doors draws none, and does not throw',
@@ -347,7 +355,7 @@ void main() {
         'catalogue_tree': [_treeRoot()],
       });
       expect(find.text('Browse by'), findsNothing);
-      expect(find.text('Company'), findsNothing);
+      expect(find.text('Companies 1,247 available'), findsNothing);
       expect(tester.takeException(), isNull);
     });
 
@@ -358,7 +366,7 @@ void main() {
         'catalogue_tree': [_treeRoot()],
         'catalogue_companies': [_companies()],
       });
-      await tester.tap(find.text('Company'));
+      await tester.tap(find.text('Companies 1,247 available'));
       await tester.pumpAndSettle();
       expect(rpc.count('catalogue_companies'), 1,
           reason: 'the door carried tab:companies — the screen must not guess');

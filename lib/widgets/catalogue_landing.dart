@@ -30,13 +30,22 @@ Color? catHex(String raw) {
   return v == null ? null : Color(v);
 }
 
-/// CMD #2020 — the four Browse-by tiles: Company · Salt · Use · Category.
+/// CMD #2088 — the four Browse-by tiles: Company · Salt · Condition · Category.
 ///
-/// Two across and two down, each one a rounded gradient card with a large
-/// glyph, its name, its count and the preview the backend attached to it. The
-/// height is fixed for all four so the grid is a grid — and the count line is
-/// allowed to wrap inside it rather than ellipsise, because a tile that hides
-/// the number it exists to show is the truncation DESIGN.md forbids.
+/// Two across and two down, each one a rounded gradient card carrying a glyph
+/// and exactly TWO lines: how many of that entity the viewer's zone can sell,
+/// and how many products sit behind them. Both sentences, both numbers and
+/// their Indian grouping are `catalogue_browse_tiles()`'s — this widget picks
+/// no word and adds up nothing.
+///
+/// What is NOT here any more (CMD #2088): the four company letter discs, the
+/// two sample salts, the two sample uses and the ANTI INFECTIVES chip. They
+/// previewed the WHOLE catalogue under a count that is now about one zone, so
+/// every one of them was an offer the zone could not keep.
+///
+/// The height is derived from the type tokens and the viewer's text scale, so
+/// the 2×2 stays a grid at 320px and at any accessibility size, and each line
+/// is given its own share of it — nothing inside can overflow the tile.
 class CatalogueTiles extends StatelessWidget {
   final String title;
   final List<CatDoor> doors;
@@ -51,32 +60,20 @@ class CatalogueTiles extends StatelessWidget {
 
   static const double _glyphBox = 40;
   static const double _glyph = 24;
-  static const double _disc = 26;
   static const int _perRow = 2;
 
-  /// The tile height, DERIVED from the type tokens and the viewer's own text
-  /// scale rather than frozen at a number. Every tile in the grid is given
-  /// exactly this height, so the 2×2 is a grid at any width and at any
-  /// accessibility text size — and because each block inside the tile is given
-  /// its own share of it, nothing inside can overflow it either.
   static double lineOf(BuildContext context, double size) =>
       MediaQuery.textScalerOf(context).scale(size) * Ds.t.lineHeight;
 
-  static double previewHeight(BuildContext context) {
-    final cap = lineOf(context, Ds.t.captionSize);
-    return [_disc, cap * 2, cap + Ds.space.x8]
-        .reduce((a, b) => a > b ? a : b);
-  }
-
+  /// Padding + glyph + gap + the two lines, each allowed to wrap to two rows
+  /// so a long word never has to be cut on a 320px phone.
   static double tileHeight(BuildContext context) =>
       Ds.space.x16 * 2 +
       _glyphBox +
-      Ds.space.x8 +
-      lineOf(context, Ds.t.subtitleSize) +
+      Ds.space.x12 +
+      lineOf(context, Ds.t.subtitleSize) * 2 +
       Ds.space.x4 +
-      lineOf(context, Ds.t.captionSize) * 2 +
-      Ds.space.x8 +
-      previewHeight(context);
+      lineOf(context, Ds.t.captionSize) * 2;
 
   @override
   Widget build(BuildContext context) {
@@ -123,137 +120,62 @@ class CatalogueTiles extends StatelessWidget {
     final from = catHex(d.gradient.from) ?? Ds.c.brand;
     final to = catHex(d.gradient.to) ?? Ds.c.brand;
     final on = catHex(d.gradient.on) ?? Ds.c.surface;
-    return Material(
-      color: Colors.transparent,
-      borderRadius: Ds.r.rCard,
-      child: Ink(
-        decoration: BoxDecoration(
-          borderRadius: Ds.r.rCard,
-          gradient: LinearGradient(
-            colors: [from, to],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
+    return Semantics(
+      identifier: 'cat_tile_${d.key}',
+      button: true,
+      label: d.entityLabel,
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: Ds.r.rCard,
+        child: Ink(
+          decoration: BoxDecoration(
+            borderRadius: Ds.r.rCard,
+            gradient: LinearGradient(
+              colors: [from, to],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
           ),
-        ),
-        child: InkWell(
-          onTap: () => onTap(d),
-          borderRadius: Ds.r.rCard,
-          child: Padding(
-            padding: EdgeInsets.all(Ds.space.x16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                NavGlyph(row: d.glyphRow, box: _glyphBox, glyph: _glyph, color: on),
-                SizedBox(height: Ds.space.x8),
-                // The backend's words, printed whole. The name is scaled down
-                // rather than cut when a tile is too narrow for it — an
-                // ellipsis on a one-word title is the truncation DESIGN.md
-                // forbids, and so is a count that hides its own number.
-                SizedBox(
-                  height: lineOf(context, Ds.t.subtitleSize),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.centerLeft,
-                      child: Text(d.label, style: Ds.t.subtitle.copyWith(color: on)),
+          child: InkWell(
+            onTap: () => onTap(d),
+            borderRadius: Ds.r.rCard,
+            child: Padding(
+              padding: EdgeInsets.all(Ds.space.x16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  NavGlyph(
+                      row: d.glyphRow, box: _glyphBox, glyph: _glyph, color: on),
+                  SizedBox(height: Ds.space.x12),
+                  // Line 1 — the entity and its zone count, printed whole.
+                  SizedBox(
+                    height: lineOf(context, Ds.t.subtitleSize) * 2,
+                    child: Align(
+                      alignment: Alignment.topLeft,
+                      child: Text(d.entityLabel,
+                          maxLines: 2,
+                          style: Ds.t.subtitle.copyWith(color: on)),
                     ),
                   ),
-                ),
-                SizedBox(height: Ds.space.x4),
-                SizedBox(
-                  height: lineOf(context, Ds.t.captionSize) * 2,
-                  child: Align(
-                    alignment: Alignment.topLeft,
-                    child: Text(d.countLabel,
-                        maxLines: 2,
-                        style:
-                            Ds.t.caption.copyWith(color: on.withValues(alpha: 0.86))),
+                  SizedBox(height: Ds.space.x4),
+                  // Line 2 — the products behind them.
+                  SizedBox(
+                    height: lineOf(context, Ds.t.captionSize) * 2,
+                    child: Align(
+                      alignment: Alignment.topLeft,
+                      child: Text(d.productsLabel,
+                          maxLines: 2,
+                          style: Ds.t.caption
+                              .copyWith(color: on.withValues(alpha: 0.86))),
+                    ),
                   ),
-                ),
-                SizedBox(height: Ds.space.x8),
-                SizedBox(
-                  height: previewHeight(context),
-                  child: _preview(context, d.preview, from, on),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
       ),
     );
-  }
-
-  /// 'logos' → letter discs · 'chips' → tinted pills · 'names' → plain lines.
-  /// A kind this build cannot draw renders nothing, the same silence the home
-  /// feed gives an unknown layout. Each shape SCROLLS rather than overflowing:
-  /// a narrow phone shortens the preview, it never breaks the tile.
-  Widget _preview(BuildContext context, CatPreview p, Color from, Color on) {
-    if (p.isEmpty) return const SizedBox.shrink();
-    switch (p.kind) {
-      case 'logos':
-        return ListView(
-          scrollDirection: Axis.horizontal,
-          physics: const ClampingScrollPhysics(),
-          children: [
-            for (final it in p.items)
-              Container(
-                width: _disc,
-                height: _disc,
-                margin: EdgeInsets.only(right: Ds.space.x4),
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: catHex(it.tone) ?? on,
-                  shape: BoxShape.circle,
-                ),
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(it.letter, style: Ds.t.caption.copyWith(color: from)),
-                ),
-              ),
-          ],
-        );
-      case 'chips':
-        return ListView(
-          scrollDirection: Axis.horizontal,
-          physics: const ClampingScrollPhysics(),
-          children: [
-            for (final it in p.items)
-              Container(
-                margin: EdgeInsets.only(right: Ds.space.x4),
-                padding: EdgeInsets.symmetric(
-                    horizontal: Ds.space.x8, vertical: Ds.space.x4),
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: catHex(it.tone) ?? on,
-                  borderRadius: Ds.r.rChip,
-                ),
-                child: Text(it.label,
-                    maxLines: 1, style: Ds.t.caption.copyWith(color: from)),
-              ),
-          ],
-        );
-      case 'names':
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            for (final it in p.items)
-              SizedBox(
-                height: lineOf(context, Ds.t.captionSize),
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerLeft,
-                  child: Text(it.label,
-                      maxLines: 1,
-                      style: Ds.t.caption.copyWith(color: on.withValues(alpha: 0.86))),
-                ),
-              ),
-          ],
-        );
-      default:
-        return const SizedBox.shrink();
-    }
   }
 }
 

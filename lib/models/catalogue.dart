@@ -283,11 +283,20 @@ class CatRow {
   final String label;
   final String countLabel;
   final String letter;
+
+  /// CMD #2088 — the divider this row opens, or '' for every row that opens
+  /// none. The backend puts the sentence ("Available in your zone (1,247)")
+  /// on the first row of each group and leaves it empty on the rest, so the
+  /// list prints a heading exactly where one arrived and never decides where
+  /// a group starts.
+  final String groupLabel;
+
   const CatRow({
     required this.key,
     required this.label,
     required this.countLabel,
     required this.letter,
+    this.groupLabel = '',
   });
 
   static CatRow fromMap(Map<String, dynamic> m) => CatRow(
@@ -295,6 +304,7 @@ class CatRow {
         label: (m['label'] ?? '').toString(),
         countLabel: (m['count_label'] ?? '').toString(),
         letter: (m['letter'] ?? '').toString(),
+        groupLabel: (m['group_label'] ?? '').toString(),
       );
 }
 
@@ -630,10 +640,10 @@ class CatFilterState {
 // empty scope prints and the label on a pack variant are all backend strings.
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// One of the three entry doors under the search bar: Company · Salt ·
-/// Category. `iconKey`/`iconLetter` follow the nav-registry convention (#349)
-/// — a key this build can draw wins, the letter is the honest fallback, and
-/// neither is chosen here.
+/// One of the four Browse-by tiles: Company · Salt · Condition · Category.
+/// `iconKey`/`iconLetter` follow the nav-registry convention (#349) — a key
+/// this build can draw wins, the letter is the honest fallback, and neither is
+/// chosen here.
 class CatDoor {
   final String key;
   final String kind;
@@ -648,11 +658,15 @@ class CatDoor {
   /// change draws exactly what it drew before.
   final CatGradient gradient;
 
-  /// CMD #2020 — the four logos / three chips / two names under the title. The
-  /// backend ranked them and worded them; [CatPreview.kind] says which of the
-  /// three shapes to draw, and an unknown kind draws nothing rather than
-  /// guessing.
-  final CatPreview preview;
+  /// CMD #2088 — the tile's two lines, both written by `catalogue_browse_tiles`
+  /// and both scoped to the viewer's zone: the entity count ("Companies 1,247
+  /// available") and the products behind it ("Products 38,904 available").
+  /// The preview block that used to sit under them — four letter discs, two
+  /// sample salts, two sample uses, one ANTI INFECTIVES chip — is gone with
+  /// CMD #2088: it previewed the whole catalogue under a number that is now
+  /// about one zone.
+  final String entityLabel;
+  final String productsLabel;
 
   const CatDoor({
     required this.key,
@@ -662,8 +676,9 @@ class CatDoor {
     required this.iconKey,
     required this.iconLetter,
     required this.countLabel,
+    this.entityLabel = '',
+    this.productsLabel = '',
     this.gradient = CatGradient.none,
-    this.preview = CatPreview.none,
   });
 
   static CatDoor fromMap(Map<String, dynamic> m) => CatDoor(
@@ -674,8 +689,12 @@ class CatDoor {
         iconKey: (m['icon_key'] ?? '').toString(),
         iconLetter: (m['icon_letter'] ?? '').toString(),
         countLabel: (m['count_label'] ?? '').toString(),
+        // A payload from before CMD #2088 sent only `count_label`; it becomes
+        // the entity line and the tile simply has no second line.
+        entityLabel:
+            (m['entity_label'] ?? m['count_label'] ?? '').toString(),
+        productsLabel: (m['products_label'] ?? '').toString(),
         gradient: CatGradient.fromMap(m['gradient']),
-        preview: CatPreview.fromMap(m['preview']),
       );
 
   /// The map [NavGlyph] reads. Handing it the payload's own keys keeps the
@@ -954,61 +973,9 @@ class CatGradient {
   }
 }
 
-/// One item of a tile preview: a company, a class, a salt or a use. It carries
-/// its label, the letter the backend derived for a logo disc, a tint and its
-/// own count sentence — four strings, no arithmetic.
-class CatPreviewItem {
-  final String key;
-  final String label;
-  final String letter;
-  final String tone;
-  final String countLabel;
-
-  const CatPreviewItem({
-    required this.key,
-    required this.label,
-    required this.letter,
-    required this.tone,
-    required this.countLabel,
-  });
-
-  static CatPreviewItem fromMap(Object? raw) {
-    final m = raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
-    return CatPreviewItem(
-      key: (m['key'] ?? '').toString(),
-      label: (m['label'] ?? '').toString(),
-      letter: (m['letter'] ?? '').toString(),
-      tone: (m['tone'] ?? '').toString(),
-      countLabel: (m['count_label'] ?? '').toString(),
-    );
-  }
-}
-
-/// The preview block under a tile's title. [kind] is 'logos' | 'chips' |
-/// 'names'; a kind this build cannot draw is skipped in silence, the same
-/// forward-compatibility the home feed gives an unknown layout.
-class CatPreview {
-  final String kind;
-  final bool has;
-  final List<CatPreviewItem> items;
-
-  const CatPreview({required this.kind, required this.has, required this.items});
-  static const CatPreview none = CatPreview(kind: '', has: false, items: []);
-
-  bool get isEmpty => !has || items.isEmpty;
-
-  static CatPreview fromMap(Object? raw) {
-    final m = raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
-    return CatPreview(
-      kind: (m['kind'] ?? '').toString(),
-      has: m['has'] == true,
-      items: ((m['items'] as List?) ?? const [])
-          .map(CatPreviewItem.fromMap)
-          .where((i) => i.label.isNotEmpty)
-          .toList(growable: false),
-    );
-  }
-}
+// CMD #2088 — CatPreviewItem and CatPreview are deleted with the preview
+// strip they modelled. The tile is two backend sentences now; nothing on the
+// landing ranks, tints or samples the catalogue any more.
 
 /// `catalogue_home().top_selling` — the horizontal rail under the tiles.
 ///

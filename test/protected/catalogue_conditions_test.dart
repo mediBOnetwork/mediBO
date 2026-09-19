@@ -298,8 +298,9 @@ void main() {
         'catalogue_home': [_catHome()],
         'catalogue_tree': [_catTree()],
       });
-      expect(find.text('Use'), findsWidgets);
-      expect(find.text('18,402 products'), findsOneWidget);
+      // CMD #2088 — the door is proven by ITS two zone lines.
+      expect(find.text('Conditions 312 available'), findsOneWidget);
+      expect(find.text('Products 18,402 available'), findsOneWidget);
       expect(rpc.called('catalogue_conditions'), isFalse);
     });
 
@@ -310,7 +311,7 @@ void main() {
         'catalogue_tree': [_catTree()],
         'catalogue_conditions': [_catConditions()],
       });
-      await t.tap(find.text('Use').first);
+      await t.tap(find.text('Conditions 312 available'));
       await t.pumpAndSettle();
 
       expect(rpc.called('catalogue_conditions'), isTrue);
@@ -360,18 +361,29 @@ Map<String, dynamic> _catHome() => {
       'zone': _catZone(),
       'doors_title': 'Browse by',
       'doors': [
+        // CMD #2088 — every tile is two zone-scoped sentences, and the third
+        // door is 'Condition' now. The tile prints the sentences; the label is
+        // what the breadcrumb and the routing use.
         {'key': 'companies', 'kind': 'companies', 'tab': 'companies',
          'label': 'Company', 'icon_key': 'store', 'icon_letter': 'C',
-         'count_label': '3,118 companies'},
+         'count_label': 'Companies 3,118 available',
+         'entity_label': 'Companies 3,118 available',
+         'products_label': 'Products 41,004 available'},
         {'key': 'salts', 'kind': 'salts', 'tab': 'salts',
          'label': 'Salt', 'icon_key': 'science', 'icon_letter': 'S',
-         'count_label': '41,209 salts'},
+         'count_label': 'Salts 41,209 available',
+         'entity_label': 'Salts 41,209 available',
+         'products_label': 'Products 40,880 available'},
         {'key': 'conditions', 'kind': 'conditions', 'tab': 'conditions',
-         'label': 'Use', 'icon_key': 'medication', 'icon_letter': 'U',
-         'count_label': '18,402 products'},
+         'label': 'Condition', 'icon_key': 'medication', 'icon_letter': 'U',
+         'count_label': 'Conditions 312 available',
+         'entity_label': 'Conditions 312 available',
+         'products_label': 'Products 18,402 available'},
         {'key': 'browse', 'kind': 'tree', 'tab': 'browse',
          'label': 'Category', 'icon_key': 'book', 'icon_letter': 'K',
-         'count_label': '2,52,760 products'},
+         'count_label': 'Categories 21 available',
+         'entity_label': 'Categories 21 available',
+         'products_label': 'Products 2,52,760 available'},
       ],
       'tabs': <Map<String, dynamic>>[],
       'recent_viewed': {'has': false, 'title': '', 'items': <Map<String, dynamic>>[]},

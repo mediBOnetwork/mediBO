@@ -1,3 +1,6 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/services.dart' show appFlavor;
+
 // CHANGE #657 — the identity of the JAVASCRIPT THAT IS RUNNING.
 //
 // Everything else that answers "which build is this?" reads the DOM: the
@@ -19,6 +22,30 @@
 // define. Every consumer must treat empty as "no build identity" and fall back,
 // never as a mismatch.
 const String kBuiltChange = String.fromEnvironment('MEDIBO_CHANGE');
+
+// CMD #2100 — WHICH APP IS THIS. Two Android flavors share this codebase:
+// 'customer' (in.medibo.app, today's app) and 'partner' (in.medibo.partner,
+// mediBO Partner). `--flavor <name>` at build time sets Flutter's own
+// [appFlavor]; the web build has none and is 'web'. It is sent on EVERY
+// request as the `x-medibo-flavor` header (attached once, in main.dart) and
+// nothing in Dart branches on it — the backend reads it (app_flavor()) and
+// answers per app: the role home, the update bar's release, the FCM app id.
+const String kFlavorHeader = 'x-medibo-flavor';
+
+/// The partner app's own versionCode. MUST stay in lockstep with the partner
+/// flavor in android/app/build.gradle.kts — scripts/publish_play.sh
+/// --flavor partner bumps both, exactly as kAndroidVersionCode is bumped for
+/// the customer app.
+const int kPartnerAndroidVersionCode = 1;
+
+/// 'customer' | 'partner' | 'web'. Never null, never empty.
+String get appFlavorName {
+  final f = appFlavor;
+  if (f != null && f.isNotEmpty) return f;
+  return kIsWeb ? 'web' : 'customer';
+}
+
+bool get isPartnerFlavor => appFlavorName == 'partner';
 
 /// True when this bundle carries a real build identity (a release build made by
 /// deploy.sh), so a version comparison against it means something.

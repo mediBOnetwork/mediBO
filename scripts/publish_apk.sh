@@ -13,7 +13,9 @@ set -euo pipefail
 
 VER="${1:?usage: publish_apk.sh <version-name> <notify-secret>}"
 SECRET="${2:?usage: publish_apk.sh <version-name> <notify-secret>}"
-APK="build/app/outputs/flutter-apk/app-release.apk"
+# CMD #2100 — flavored build outputs: app-<flavor>-release.apk (default customer).
+FLAVOR="${MEDIBO_FLAVOR:-customer}"
+APK="build/app/outputs/flutter-apk/app-${FLAVOR}-release.apk"
 FN="https://swojhmarmaijkshsbeih.supabase.co/functions/v1/apk-upload-url"
 
 [ -f "$APK" ] || { echo "no APK at $APK — run flutter build apk --release first" >&2; exit 1; }

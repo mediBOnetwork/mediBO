@@ -63,6 +63,7 @@ rpc() { "$DEVCMD" rpc "$1" "$2" 2>>"$LOG"; }
 
 # ── args ──────────────────────────────────────────────────────────────────────
 MODE="${1:-}"; shift || true
+FLAVOR="${MEDIBO_FLAVOR:-customer}"
 CMDS=(); REL=""; COMMIT=""; VCODE=""; VNAME=""; TRACK=""; REHEARSAL=false; WORKER="${AGENT:-$(hostname)}"; KIND="publish"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -75,6 +76,8 @@ while [ $# -gt 0 ]; do
     --track)        TRACK="${2:-}"; shift ;;
     --kind)         KIND="${2:-publish}"; shift ;;
     --worker)       WORKER="${2:-}"; shift ;;
+    # CMD #2100 — which product flavor to build and run (customer | partner).
+    --flavor)       FLAVOR="${2:-customer}"; shift ;;
     --rehearsal)    REHEARSAL=true ;;
     --help|-h)      sed -n '2,32p' "$0"; exit 0 ;;
     *) echo "android_testlab: unknown argument $1" >&2; exit 2 ;;
@@ -294,15 +297,18 @@ if ! pick_device; then
 fi
 
 # ── 3. the two APKs (under the build semaphore) ───────────────────────────────
-APP="build/app/outputs/flutter-apk/app-debug.apk"
-TEST="build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
+# CMD #2100 — flavored outputs: app-<flavor>-debug.apk and the androidTest APK
+# under its flavor directory; the Gradle task carries the flavor in its name.
+APP="build/app/outputs/flutter-apk/app-${FLAVOR}-debug.apk"
+TEST="build/app/outputs/apk/androidTest/${FLAVOR}/debug/app-${FLAVOR}-debug-androidTest.apk"
+FLAVOR_TASK="$(printf '%s' "$FLAVOR" | sed 's/^./\U&/')"
 build_apks() {
   rm -f "$APP" "$TEST"
   mkdir -p /dev/shm/gtmp
-  flutter build apk --debug -t "$TARGET" \
+  flutter build apk --debug --flavor "$FLAVOR" -t "$TARGET" \
     "--dart-define=TESTLAB_PLAN=$PLAN_CSV" "--dart-define=TESTLAB_RUN_ID=$RUN_ID" \
     "--dart-define=TESTLAB_OUT=$PULL_DIR" >>"$LOG" 2>&1 || return 1
-  ( cd android && ./gradlew -q app:assembleAndroidTest -Ptarget="$REPO/$TARGET" \
+  ( cd android && ./gradlew -q "app:assemble${FLAVOR_TASK}DebugAndroidTest" -Ptarget="$REPO/$TARGET" \
       -Pdart-defines="$(printf 'TESTLAB_PLAN=%s' "$PLAN_CSV" | base64 -w0),$(printf 'TESTLAB_RUN_ID=%s' "$RUN_ID" | base64 -w0),$(printf 'TESTLAB_OUT=%s' "$PULL_DIR" | base64 -w0)" ) >>"$LOG" 2>&1 || return 1
   [ -f "$APP" ] && [ -f "$TEST" ]
 }

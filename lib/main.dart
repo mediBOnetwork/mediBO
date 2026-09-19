@@ -42,6 +42,9 @@ import 'screens/partner/partner_scorecard_card.dart';
 import 'screens/admin/partner_audit_log_screen.dart';
 import 'screens/admin/settlement_screen.dart'; // /admin/settlement
 import 'screens/home_shell.dart';
+import 'screens/partner_app_block_screen.dart'; // CMD #2100
+import 'services/app_home_state.dart'; // CMD #2100
+import 'build_info.dart'; // CMD #2100 — kFlavorHeader / appFlavorName
 import 'screens/public/inquiry_form_screen.dart';
 import 'screens/delivery/agency_dispatch_screen.dart'; // C704: /agency/dispatch
 import 'screens/public/stock_update_form_screen.dart'; // C639: /stock-update/<token>
@@ -356,6 +359,10 @@ void main() {
       await Supabase.initialize(
         url: SupabaseConfig.url,
         anonKey: SupabaseConfig.anonKey,
+        // CMD #2100 — every RPC, table read, storage and edge call names the
+        // app it came from (customer | partner | web). The backend's
+        // app_flavor() reads it; nothing in Dart does.
+        headers: {kFlavorHeader: appFlavorName},
         // CHANGE #473 — RPC breadcrumbs. Wrapping the one client every RPC
         // already uses records the function name, status and duration of each
         // call with no change at a single call site. It reads the URL and the
@@ -1607,11 +1614,33 @@ class _AppRootState extends State<_AppRoot> {
         if (widget.auth.isAuthenticated) {
           widget.auth.checkForcedLogout();
         }
-        // CHANGE #657 — the root renders the surface my_session() named, and
-        // there is no longer a partner branch to take. #653 made super admin,
-        // admin and partner ONE interface; the per-feature View/Write matrix
-        // and the zone lock are what differ, and both live in the backend.
-        return HomeShell();
+        // CMD #2100 — the BACKEND picks the role home. app_home() reads the
+        // flavor header and the session's role; on the partner app a
+        // customer account gets 'blocked' plus the "Use the mediBO app"
+        // screen, verbatim. Every other answer renders HomeShell exactly as
+        // before (#657: my_session() names the surface, one interface).
+        AppHomeState.instance.sync(signedIn: widget.auth.isAuthenticated);
+        return ListenableBuilder(
+          listenable: AppHomeState.instance,
+          builder: (context, _) {
+            final block = AppHomeState.instance.block;
+            if (block != null) {
+              return PartnerAppBlockScreen(
+                payload: block,
+                onSignOut: () async {
+                  await widget.auth.signOut();
+                  AppHomeState.instance.reset();
+                },
+              );
+            }
+            // CHANGE #657 — the root renders the surface my_session() named,
+            // and there is no longer a partner branch to take. #653 made
+            // super admin, admin and partner ONE interface; the per-feature
+            // View/Write matrix and the zone lock are what differ, and both
+            // live in the backend.
+            return HomeShell();
+          },
+        );
       },
     );
   }

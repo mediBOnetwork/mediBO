@@ -75,6 +75,49 @@ part of '../home_shell.dart';
 /// value in between is real — this is a position, not a state.
 final ValueNotifier<double> shellHeaderCollapse = ValueNotifier<double>(0);
 
+/// CMD #2080 — the SAME travel, read as a fraction, for the chrome at the
+/// other end of the screen.
+///
+/// The bottom nav hides on the same finger, over the same distance, with the
+/// same hysteresis and the same settle as the header band — because it is not
+/// a second driver reading the same scrolls, it is this one's number in a
+/// second unit. 0 = the whole bar is showing, 1 = it is entirely off the
+/// bottom. Publishing a FRACTION rather than a pixel count is what lets the
+/// bar measure its own height (it is a system bar plus a gesture inset, not a
+/// token) while still travelling in lockstep with a band whose height is one.
+final ValueNotifier<double> shellNavHide = ValueNotifier<double>(0);
+
+/// The one accumulator both pieces of chrome are derived from, in band pixels.
+///
+/// It is deliberately NOT `shellHeaderCollapse.value` any more: that notifier
+/// is now a PUBLISHED view of this number (zero on a tab that keeps its
+/// header), and a view cannot also be the place the driver adds pixels to.
+double _hide = 0;
+
+/// Does the tab currently on screen collapse its header / hide its nav?
+/// Set on every notification by the shell's own verdict, so a tab change needs
+/// no reset beyond the one [shellHeaderBandShow] already does.
+bool _bandOn = true;
+bool _navOn = false;
+
+/// Writes [_hide] out to whichever chrome this tab actually has. A
+/// `ValueNotifier` no-ops on an unchanged value, so this is free to call on
+/// every frame and on every enable flip.
+void _publishChrome() {
+  final double h = Ds.touch.headerBand;
+  shellHeaderCollapse.value = _bandOn ? _hide : 0;
+  if (!_navOn || h <= 0) {
+    shellNavHide.value = 0;
+    return;
+  }
+  final double t = _hide / h;
+  shellNavHide.value = t < 0
+      ? 0
+      : t > 1
+          ? 1
+          : t;
+}
+
 /// Is any of the band still showing? Derived, never stored: a second source of
 /// truth is how a scroll-linked header starts snapping again.
 bool get shellHeaderBandShowing =>
@@ -86,11 +129,12 @@ bool get shellHeaderBandShowing =>
 double _bandDeepest = 0;
 
 void _bandSet(double v) {
-  if (shellHeaderCollapse.value == v) return;
-  shellHeaderCollapse.value = v;
+  _hide = v;
+  _publishChrome();
   if (v > _bandDeepest) {
     _bandDeepest = v;
     RenderLog.write('c2030_band_px', v.round());
+    RenderLog.write('c2080_nav_pct', (shellNavHide.value * 100).round());
   }
 }
 
@@ -141,8 +185,16 @@ void shellHeaderBandShow() {
 
 /// Feeds [shellHeaderCollapse] from the FINGER, 1:1 — and from nothing else.
 /// Always returns false: this listens, it never swallows a notification.
-bool shellHeaderScroll(ScrollNotification n, bool enabled) {
-  if (!enabled) {
+bool shellHeaderScroll(ScrollNotification n, bool enabled, {bool nav = false}) {
+  // CMD #2080 — which chrome this tab has. The band belongs to Home and the
+  // Catalogue; the bottom nav belongs to every customer tab, so the two
+  // answers are separate and BOTH of them are the shell's, not this file's.
+  if (_bandOn != enabled || _navOn != nav) {
+    _bandOn = enabled;
+    _navOn = nav;
+    _publishChrome();
+  }
+  if (!enabled && !nav) {
     shellHeaderBandShow();
     return false;
   }
@@ -257,7 +309,7 @@ bool shellHeaderScroll(ScrollNotification n, bool enabled) {
   _bandDir = spend > 0 ? 1.0 : -1.0;
 
   // 1:1, both directions, inside the band's own height.
-  double v = shellHeaderCollapse.value + spend;
+  double v = _hide + spend;
   if (v < 0) v = 0;
   if (v > h) v = h;
   _bandSet(v);
@@ -274,7 +326,7 @@ void _bandFinishGesture() {
   _bandDragging = false;
   _bandPending = 0;
   final double h = Ds.touch.headerBand;
-  final double from = shellHeaderCollapse.value;
+  final double from = _hide;
   final double to = _bandDir > 0
       ? h
       : _bandDir < 0

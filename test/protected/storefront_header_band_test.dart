@@ -541,11 +541,18 @@ void main() {
       expect(catalogue, isNot(contains('shellHeaderCollapse')),
           reason: 'the Catalogue grew its own header controller instead of '
               'riding the shell it already lives in');
-      expect(shell,
-          contains('shellHeaderScroll(n, !isAdmin && shellHeaderBandTab(_index))'),
+      // CMD #2080 — the call now carries the shell's SECOND verdict (does
+      // this tab hide its bottom bar) as a named argument, so the exact text
+      // moved. What is held down is unchanged: the one driver is still fed
+      // straight from the page scroll, still with the band's own tab rule,
+      // and still without a builder between it and the IndexedStack.
+      expect(shell, contains('shellHeaderScroll('),
           reason: 'the shell stopped feeding the one band from the page '
               'scroll, or wrapped it in something that can rebuild the '
               'IndexedStack');
+      expect(shell, contains('!isAdmin && shellHeaderBandTab(_index)'),
+          reason: 'the band lost the shell verdict that says which tabs own '
+              'it');
     });
 
     test('the Catalogue keeps its own rows OUTSIDE the scroll view', () {

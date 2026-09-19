@@ -36,7 +36,7 @@ const String kFlavorHeader = 'x-medibo-flavor';
 /// flavor in android/app/build.gradle.kts — scripts/publish_play.sh
 /// --flavor partner bumps both, exactly as kAndroidVersionCode is bumped for
 /// the customer app.
-const int kPartnerAndroidVersionCode = 1;
+const int kPartnerAndroidVersionCode = 2;
 
 /// 'customer' | 'partner' | 'web'. Never null, never empty.
 String get appFlavorName {

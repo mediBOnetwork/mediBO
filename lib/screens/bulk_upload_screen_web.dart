@@ -5,7 +5,6 @@ import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
@@ -22,6 +21,7 @@ import '../utils/download_bytes.dart' as dl;
 import '../app_state.dart';
 import '../config/api_keys.dart';
 import '../models/product.dart';
+import '../services/ocr_edge_client.dart';
 import '../services/ui_copy.dart';
 import '../user_state.dart';
 import '../util.dart';
@@ -1351,9 +1351,6 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     throw lastError!;
   }
 
-  static const _ocrEdgeFn =
-      'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/gemini-ocr';
-
   Future<List<Map<String, dynamic>>> _callGeminiOnce(
       String rawContent, {int attempt = 0}) async {
     final isPdf = rawContent.startsWith('PDF_BYTES:');
@@ -1380,17 +1377,15 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       prompt = _geminiTextPrompt(rawContent);
     }
 
-    final Map<String, dynamic> requestBody = {
-      'image_base64': imageBase64,
-      'mime_type': mimeType,
-      'prompt': prompt,
-    };
-
-    final response = await http.post(
-      Uri.parse(_ocrEdgeFn),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode(requestBody),
-    ).timeout(const Duration(seconds: 60));
+    // CMD #2082 — through the Supabase functions client so the session JWT
+    // (Authorization) and apikey always reach the gateway. A bare http.post
+    // here was rejected with 401 UNAUTHORIZED_NO_AUTH_HEADER.
+    final response = await OcrEdge.call(
+      imageBase64: imageBase64,
+      mimeType: mimeType,
+      prompt: prompt,
+      timeout: const Duration(seconds: 60),
+    );
 
     debugPrint('[OCR] HTTP ${response.statusCode} — body(200)=${response.statusCode == 200 ? response.body.substring(0, response.body.length.clamp(0, 400)) : response.body}');
     if (response.statusCode != 200) {
@@ -2388,17 +2383,14 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       if (cropBytes == null) return null;
       final base64Data = base64Encode(cropBytes);
 
-      final response = await http.post(
-        Uri.parse(_ocrEdgeFn),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'image_base64': base64Data,
-          'mime_type': 'image/jpeg',
-          'prompt': 'This is a crop of ONE handwritten medicine name from a pharmacy '
-              'order list. Read and return ONLY the medicine name as plain text. '
-              'Best guess if unclear. No JSON, no explanation.',
-        }),
-      ).timeout(const Duration(seconds: 30));
+      final response = await OcrEdge.call(
+        imageBase64: base64Data,
+        mimeType: 'image/jpeg',
+        prompt: 'This is a crop of ONE handwritten medicine name from a pharmacy '
+            'order list. Read and return ONLY the medicine name as plain text. '
+            'Best guess if unclear. No JSON, no explanation.',
+        timeout: const Duration(seconds: 30),
+      );
 
       if (response.statusCode != 200) return null;
       final data = jsonDecode(response.body) as Map<String, dynamic>;

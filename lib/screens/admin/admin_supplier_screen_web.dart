@@ -6,7 +6,6 @@ import 'package:archive/archive.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../services/live_feed.dart';
@@ -31,6 +30,7 @@ import '../../services/admin_date_scope.dart'; // CHANGE #545
 import '../../services/admin_zone_scope.dart'; // CHANGE #609
 import '../../services/date_labels.dart'; // CHANGE #548
 import '../../fulfill/readiness_header_block.dart';
+import '../../services/ocr_edge_client.dart';
 import '../../services/ui_copy.dart';
 import '../../widgets/backend_chip.dart'; // CHANGE #606
 import '../../widgets/backend_table.dart'; // CHANGE #607
@@ -46,8 +46,6 @@ import 'admin_supplier_page.dart'; // CHANGE #753 — the supplier page
 import 'admin_add_medicine_screen.dart';
 import 'unmapped_companies_screen.dart';
 
-const _ocrEdgeFn =
-    'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/gemini-ocr';
 
 // A picked file's name + bytes — replaces the web-only html.File across the
 // import dialogs so they compile on Android (file_pick_io returns this shape).
@@ -6056,11 +6054,10 @@ class _SupCsvImportDialogState extends State<_SupCsvImportDialog> {
 
       final idxMap = <int, String>{};
       try {
-        final resp = await http.post(
-          Uri.parse(_ocrEdgeFn),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({'image_base64': '', 'mime_type': 'text/plain', 'prompt': prompt}),
-        ).timeout(const Duration(seconds: 20));
+        final resp = await OcrEdge.call(
+          prompt: prompt,
+          timeout: const Duration(seconds: 20),
+        );
         if (resp.statusCode == 200) {
           final txt = (jsonDecode(resp.body) as Map<String, dynamic>)['text'] as String? ?? '';
           final jm = RegExp(r'\[[\s\S]*\]').firstMatch(txt);
@@ -6441,15 +6438,12 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
         'Return ONLY a JSON object (no markdown fences):\n'
         '{"headers":["col1","col2"],"rows":[["v1","v2"],...]}\n'
         'Use empty string "" for missing headers. Include all data rows.';
-    final resp = await http.post(
-      Uri.parse(_ocrEdgeFn),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'image_base64': b64,
-        'mime_type': isImage ? mime : pdfMime,
-        'prompt': prompt,
-      }),
-    ).timeout(const Duration(seconds: 60));
+    final resp = await OcrEdge.call(
+      imageBase64: b64,
+      mimeType: isImage ? mime : pdfMime,
+      prompt: prompt,
+      timeout: const Duration(seconds: 60),
+    );
     if (resp.statusCode != 200) throw Exception('OCR API error (HTTP ${resp.statusCode})');
     final txt = (jsonDecode(resp.body) as Map<String, dynamic>)['text'] as String? ?? '';
     if (txt.isEmpty) throw Exception('Empty response from OCR service');
@@ -6511,11 +6505,10 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
         'Serial numbers = ignore. Infer from header AND samples.\n\n';
     final idxMap = <int, String>{};
     try {
-      final resp = await http.post(
-        Uri.parse(_ocrEdgeFn),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'image_base64': '', 'mime_type': 'text/plain', 'prompt': '${basePrompt}Columns:\n${jsonEncode(entries)}\n\nReturn ONLY a JSON array: [{"index":0,"mapped_to":"supplier_name"},...]'}),
-      ).timeout(const Duration(seconds: 30));
+      final resp = await OcrEdge.call(
+        prompt: '${basePrompt}Columns:\n${jsonEncode(entries)}\n\nReturn ONLY a JSON array: [{"index":0,"mapped_to":"supplier_name"},...]',
+        timeout: const Duration(seconds: 30),
+      );
       if (resp.statusCode == 200) {
         final txt = (jsonDecode(resp.body) as Map<String, dynamic>)['text'] as String? ?? '';
         final jm = RegExp(r'\[[\s\S]*\]').firstMatch(txt);
@@ -7423,15 +7416,11 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
       if (mounted && _mappingMode == 'ai') setState(() => _aiStage = 'gemini');
     });
     try {
-      final token = Supabase.instance.client.auth.currentSession?.accessToken ?? '';
-      final resp = await http.post(
-        Uri.parse('https://swojhmarmaijkshsbeih.supabase.co/functions/v1/match-companies'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({'supplier_id': widget.supplierId}),
-      ).timeout(const Duration(seconds: 90));
+      final resp = await EdgeFn.postJson(
+        'match-companies',
+        {'supplier_id': widget.supplierId},
+        timeout: const Duration(seconds: 90),
+      );
 
       if (!mounted) return;
       if (resp.statusCode != 200) {
@@ -7605,12 +7594,11 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
   Future<void> _mapRowAi(int ri) async {
     setState(() => _rowMappingMode[ri] = 'ai');
     try {
-      final token = Supabase.instance.client.auth.currentSession?.accessToken ?? '';
-      final resp = await http.post(
-        Uri.parse('https://swojhmarmaijkshsbeih.supabase.co/functions/v1/match-companies'),
-        headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'},
-        body: jsonEncode({'supplier_id': widget.supplierId}),
-      ).timeout(const Duration(seconds: 90));
+      final resp = await EdgeFn.postJson(
+        'match-companies',
+        {'supplier_id': widget.supplierId},
+        timeout: const Duration(seconds: 90),
+      );
       if (!mounted) return;
       if (resp.statusCode != 200) {
         showToast(context, cf('admin_supplier.toast_match_failed_code', {'a': '${resp.statusCode}'}), isError: true);
@@ -9153,15 +9141,12 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
           '  confidence = high if certain, medium if likely, low if unrecognizable.\n'
           'STEP 4: Verify array.length === tile count. If not, add missing entries with confidence=low.\n'
           'Use "" for missing scalar fields. companies=[] if no company section exists.';
-      final resp = await http.post(
-        Uri.parse(_ocrEdgeFn),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'image_base64': b64,
-          'mime_type': _mimeFor(ext),
-          'prompt': prompt,
-        }),
-      ).timeout(const Duration(seconds: 60));
+      final resp = await OcrEdge.call(
+        imageBase64: b64,
+        mimeType: _mimeFor(ext),
+        prompt: prompt,
+        timeout: const Duration(seconds: 60),
+      );
       if (resp.statusCode != 200) throw Exception('OCR API error (HTTP ${resp.statusCode})');
       final txt = (jsonDecode(resp.body) as Map<String, dynamic>)['text'] as String? ?? '';
       final jm = RegExp(r'\{[\s\S]*\}').firstMatch(txt);
@@ -9679,15 +9664,12 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
         final f = widget.files[i];
         final ext = f.name.toLowerCase().split('.').last;
         final bytes = await _readBytes(f);
-        final resp = await http.post(
-          Uri.parse(_ocrEdgeFn),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'image_base64': base64Encode(bytes),
-            'mime_type': _mimeFor(ext),
-            'prompt': _prompt,
-          }),
-        ).timeout(const Duration(seconds: 60));
+        final resp = await OcrEdge.call(
+          imageBase64: base64Encode(bytes),
+          mimeType: _mimeFor(ext),
+          prompt: _prompt,
+          timeout: const Duration(seconds: 60),
+        );
         if (resp.statusCode != 200) throw Exception('OCR error on image ${i + 1} (HTTP ${resp.statusCode})');
         final txt = (jsonDecode(resp.body) as Map<String, dynamic>)['text'] as String? ?? '';
         final jm = RegExp(r'\{[\s\S]*\}').firstMatch(txt);

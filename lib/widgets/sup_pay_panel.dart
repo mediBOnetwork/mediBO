@@ -8,9 +8,9 @@ import 'dart:convert';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/date_labels.dart';
+import '../services/ocr_edge_client.dart';
 import '../services/ui_copy.dart';
 import 'date_label_text.dart';
 import '../utils/render_log.dart';
@@ -22,9 +22,6 @@ import 'upi_pay_sheet.dart';
 import '../services/idempotency.dart';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-
-const _kOcrUrl =
-    'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/gemini-ocr';
 
 const _kUpiPrompt =
     'This is a UPI payment success screenshot (PhonePe/GPay/Paytm/BHIM/bank). '
@@ -160,15 +157,12 @@ class _SupPayPanelState extends State<SupPayPanel> {
       // OCR
       Map<String, dynamic> ocrMap = {};
       try {
-        final resp = await http.post(
-          Uri.parse(_kOcrUrl),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'image_base64': base64Encode(bytes),
-            'mime_type': contentType,
-            'prompt': _kUpiPrompt,
-          }),
-        ).timeout(const Duration(seconds: 60));
+        final resp = await OcrEdge.call(
+          imageBase64: base64Encode(bytes),
+          mimeType: contentType,
+          prompt: _kUpiPrompt,
+          timeout: const Duration(seconds: 60),
+        );
         if (resp.statusCode == 200) {
           var txt = (jsonDecode(resp.body) as Map<String, dynamic>)['text'] as String? ?? '';
           txt = txt.trim()

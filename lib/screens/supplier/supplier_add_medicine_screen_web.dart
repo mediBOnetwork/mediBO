@@ -5,17 +5,15 @@ import 'dart:html' as html;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../design_tokens.dart';
+import '../../services/ocr_edge_client.dart';
 import '../../services/ui_copy.dart';
-import '../../supabase_config.dart';
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
 import '../../widgets/ds_tone.dart';
 
-const _kOcrEdgeFn = 'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/gemini-ocr';
 
 class SupplierAddMedicineScreen extends StatefulWidget {
   const SupplierAddMedicineScreen({super.key});
@@ -379,14 +377,7 @@ class _AddSchemeTabState extends State<_AddSchemeTab> {
         'Extract a list of medicine schemes from this image. '
         'For each item return JSON: {"product_name":"<verbatim>","order_qty":<number or null>,"free_qty":<number or null>}. '
         'Return ONLY a JSON array. Never expand abbreviations or normalise names.';
-      final resp = await http.post(
-        Uri.parse(_kOcrEdgeFn),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ${SupabaseConfig.anonKey}',
-        },
-        body: jsonEncode({'image_base64': b64, 'prompt': prompt}),
-      );
+      final resp = await OcrEdge.call(imageBase64: b64, prompt: prompt);
       if (!mounted) return;
       if (resp.statusCode != 200) throw Exception('OCR error ${resp.statusCode}');
       final body = jsonDecode(resp.body) as Map;

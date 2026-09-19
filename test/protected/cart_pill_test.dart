@@ -23,11 +23,17 @@
 //   5. A thumb with no image renders the placeholder icon INSIDE the square —
 //      never a blank white box.
 //
-//   6. The pill is ONE 56px line whose width HUGS its content (CMD #2043):
-//      never wider than the viewport at 320 / 360 / 412 / 480 px, never a
-//      fraction OF the viewport, and a one-item pill is narrower than a
-//      thirteen-item one at the same width. Count and CTA share one baseline —
-//      there is no second line to fall onto.
+//   6. CMD #2081 changes the shape deliberately: the pill is now
+//      [CartPill.kHeight] tall and about [CartPill.kWidthFactor] of the SCREEN
+//      wide (floored at [CartPill.kMinWidth] so a 320px phone still fits two
+//      thumbnails, two lines and a chevron), centred, and never wider than the
+//      room it was handed at 320 / 360 / 412 / 480 px. The two facts are now
+//      STACKED — 'View cart' above, the count below — so the hairline divider
+//      that separated them on one line is gone.
+//
+//   6e. The lines come from `lines[]` in payload order and the '+N' bubble
+//      exists only when the backend said `has_more`. Dart does not subtract a
+//      thumb count from an item count to make '+2'.
 //
 //   7. WHICH page floats the pill is the nav registry's answer
 //      (`customer_nav().slots[].cart_pill`), never a page number in Dart. The
@@ -63,6 +69,7 @@ Map<String, dynamic> _payload({
   required String itemsLabel,
   String cta = 'View cart',
   List<Map<String, dynamic>> thumbs = const [],
+  String moreLabel = '',
 }) =>
     {
       'items': const [],
@@ -70,10 +77,20 @@ Map<String, dynamic> _payload({
       'render': {
         'pill': {
           'show': show,
+          'identifier': 'cart_pill',
           'items_label': itemsLabel,
           'cta': cta,
+          // CMD #2081 — the two stacked lines, exactly as cart_pill_block()
+          // emits them: [0] the strong line, [1] the count under it.
+          'lines': [
+            {'key': 'cta', 'text': cta},
+            {'key': 'count', 'text': itemsLabel},
+          ],
           'thumbs': thumbs,
           'thumb_count': thumbs.length,
+          'has_more': moreLabel.isNotEmpty,
+          'more_label': moreLabel,
+          'a11y': '$cta, $itemsLabel',
         },
       },
     };
@@ -235,7 +252,7 @@ void main() {
   // widths below are therefore pessimistic on purpose — a pill that fits with
   // this font fits with any real one.
 
-  testWidgets('6. one 56px line, never wider than the phone, at every phone',
+  testWidgets('6. one ${CartPill.kHeight}px bar, never wider than the phone',
       (tester) async {
     for (final w in <double>[320, 360, 412, 480]) {
       final cart = await _loaded(_payload(
@@ -249,14 +266,17 @@ void main() {
       expect(size.width, lessThanOrEqualTo(w),
           reason: 'the pill overflowed at ${w}px');
       expect(size.height, CartPill.kHeight,
-          reason: 'one line, ${CartPill.kHeight}px, at every width');
+          reason: 'one bar, ${CartPill.kHeight}px, at every width');
       expect(tester.takeException(), isNull,
           reason: 'no overflow exception at ${w}px');
     }
   });
 
-  testWidgets('6b. a label too long for the phone scales — it never overflows',
+  testWidgets('6b. a label too long for the phone never overflows the bar',
       (tester) async {
+    // CMD #2081 — the bar is a fixed rectangle now, so a long backend label
+    // ellipsises INSIDE it instead of scaling the whole pill down. Either way
+    // the promise is the same: no pixel leaves the screen and no row overflows.
     final cart = await _loaded(_payload(
       show: true,
       itemsLabel: '13 items in your basket right now',
@@ -265,55 +285,133 @@ void main() {
     await _pump(tester, cart, width: 320);
     final size = tester.getSize(find.byKey(const Key('c2029_pill')));
     expect(size.width, lessThanOrEqualTo(320),
-        reason: 'no word may be clipped and no pixel may leave the screen');
-    expect(size.height, lessThanOrEqualTo(CartPill.kHeight));
+        reason: 'no pixel may leave the screen');
+    expect(size.height, CartPill.kHeight);
     expect(tester.takeException(), isNull);
+    expect(find.text('13 items in your basket right now'), findsOneWidget,
+        reason: 'the label is still the backend string, ellipsised not rebuilt');
   });
 
-  testWidgets('6c. the width HUGS the content — it is not a slice of the screen',
+  testWidgets('6c. the width is a stable slice of the screen, always centred',
       (tester) async {
-    // CMD #2043 — #2029 sized the pill at 60% of the viewport with a 248px
-    // floor, which is how it ended up lying across two rows of product cards.
-    // Two carts at the SAME width must produce two different pills, and the
-    // same cart must produce the same pill on a bigger phone.
+    // CMD #2081 — Blinkit's bar does NOT change width as items go in, so the
+    // same phone gives the same rectangle whatever the basket holds. It is
+    // still never the whole screen (cards sit beside it) and still centred,
+    // and it still grows with a bigger phone rather than with a longer label.
     final short = await _loaded(_payload(
       show: true, itemsLabel: '1 item', cta: 'Cart', thumbs: [_thumb('a')]));
     await _pump(tester, short, width: 480);
-    final shortW = tester.getSize(find.byKey(const Key('c2029_pill'))).width;
+    final shortRect = tester.getRect(find.byKey(const Key('c2029_pill')));
 
     final long = await _loaded(_payload(
       show: true,
       itemsLabel: '13 items',
       cta: 'Cart',
       thumbs: [_thumb('a'), _thumb('b')],
+      moreLabel: '+11',
     ));
     await _pump(tester, long, width: 480);
-    final longW = tester.getSize(find.byKey(const Key('c2029_pill'))).width;
+    final longRect = tester.getRect(find.byKey(const Key('c2029_pill')));
 
-    expect(shortW, lessThan(longW),
-        reason: 'one item and one thumbnail need less room than thirteen');
-    expect(longW, lessThan(480),
+    expect(longRect.width, closeTo(shortRect.width, 0.5),
+        reason: 'adding items must not resize the bar');
+    expect(longRect.width, lessThan(480),
         reason: 'the pill must not span the screen — cards sit under it');
+    expect(longRect.center.dx, closeTo(240, 1), reason: 'centred');
 
     await _pump(tester, long, width: 600);
-    final wideW = tester.getSize(find.byKey(const Key('c2029_pill'))).width;
-    expect(wideW, closeTo(longW, 0.5),
-        reason: 'the same cart is the same pill on a bigger phone');
+    final wide = tester.getSize(find.byKey(const Key('c2029_pill'))).width;
+    expect(wide, greaterThan(longRect.width),
+        reason: 'a bigger phone gets a proportionally bigger bar');
   });
 
-  testWidgets('6d. count and CTA are on ONE line', (tester) async {
+  testWidgets('6e. the floor is what makes 320px fit', (tester) async {
+    // 60% of 320 is less than two thumbnails, two lines and a chevron need.
+    final cart = await _loaded(_payload(
+      show: true,
+      itemsLabel: '13 items',
+      thumbs: [_thumb('a'), _thumb('b')],
+      moreLabel: '+11',
+    ));
+    await _pump(tester, cart, width: 320);
+    final w = tester.getSize(find.byKey(const Key('c2029_pill'))).width;
+    expect(w, greaterThanOrEqualTo(320 * CartPill.kWidthFactor));
+    expect(w, lessThanOrEqualTo(320), reason: 'and still inside the screen');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('6d. the two facts are STACKED, CTA above the count',
+      (tester) async {
+    // CMD #2081 — the shape this change is about. 'View cart' is the strong
+    // line, the count sits under it, both left-aligned on one column, and the
+    // hairline that separated them on a single line is gone.
     final cart = await _loaded(_payload(
       show: true,
       itemsLabel: '13 items',
       thumbs: [_thumb('a'), _thumb('b')],
     ));
-    await _pump(tester, cart, width: 480);
-    final count = tester.getCenter(find.text('13 items'));
-    final cta = tester.getCenter(find.text('View cart'));
-    expect(count.dy, closeTo(cta.dy, 1.0),
-        reason: 'a second text line is the shape #2043 removed');
-    expect(cta.dx, greaterThan(count.dx),
-        reason: 'left to right: thumbs, count, divider, CTA, chevron');
+    await _pump(tester, cart, width: 412);
+    final cta = tester.getTopLeft(find.text('View cart'));
+    final count = tester.getTopLeft(find.text('13 items'));
+    expect(count.dy, greaterThan(cta.dy),
+        reason: 'the count is BELOW the CTA — that is the stack');
+    expect(count.dx, closeTo(cta.dx, 1.0),
+        reason: 'both lines share one left edge');
+    expect(find.byIcon(Icons.chevron_right), findsOneWidget,
+        reason: 'one chevron, and no separator bar anywhere');
+  });
+
+  testWidgets('6f. the lines are the payload, in payload order',
+      (tester) async {
+    final cart = await _loaded(_payload(
+      show: true, itemsLabel: '4 Artikel', cta: 'Basket ansehen',
+      thumbs: [_thumb('a'), _thumb('b')]));
+    await _pump(tester, cart, width: 412);
+    expect(find.text('Basket ansehen'), findsOneWidget);
+    expect(find.text('4 Artikel'), findsOneWidget);
+    expect(find.text('View cart'), findsNothing,
+        reason: 'a Dart literal would survive a non-English payload');
+    expect(tester.getTopLeft(find.text('4 Artikel')).dy,
+        greaterThan(tester.getTopLeft(find.text('Basket ansehen')).dy));
+  });
+
+  testWidgets('6g. the +N bubble is the backend flag, never a local count',
+      (tester) async {
+    final more = await _loaded(_payload(
+      show: true,
+      itemsLabel: '13 items',
+      thumbs: [_thumb('a'), _thumb('b')],
+      moreLabel: '+11',
+    ));
+    await _pump(tester, more, width: 412);
+    expect(find.byKey(const Key('c2081_pill_more')), findsOneWidget);
+    expect(find.text('+11'), findsOneWidget,
+        reason: 'printed verbatim — 13 minus 2 is done in SQL');
+
+    // has_more:false — no bubble, even with a basket that obviously holds more.
+    final none = await _loaded(_payload(
+      show: true,
+      itemsLabel: '13 items',
+      thumbs: [_thumb('a'), _thumb('b')],
+    ));
+    await _pump(tester, none, width: 412);
+    expect(find.byKey(const Key('c2081_pill_more')), findsNothing);
+    expect(find.textContaining('+'), findsNothing);
+  });
+
+  testWidgets('6h. the whole pill is one named tap target', (tester) async {
+    final cart = await _loaded(_payload(
+      show: true, itemsLabel: '2 items', thumbs: [_thumb('a')]));
+    await _pump(tester, cart, width: 412);
+    final named = tester
+        .widgetList<Semantics>(find.descendant(
+            of: find.byType(CartPill), matching: find.byType(Semantics)))
+        .map((w) => w.properties)
+        .where((p) => (p.identifier ?? '').isNotEmpty)
+        .toList();
+    expect(named, isNotEmpty, reason: 'the payload names the target');
+    expect(named.first.identifier, 'cart_pill');
+    expect(named.first.label, 'View cart, 2 items');
   });
 
   testWidgets('8. which page floats the pill is the registry, not a number',

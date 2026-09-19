@@ -64,7 +64,7 @@ class BottomStackMetrics {
   static double get slot => Ds.touch.listRowMinHeight;
 
   /// The air between the pill and the bar slot.
-  static double get gap => Ds.space.x16;
+  static double get gap => Ds.space.x12;
 
   /// The pill slot. The pill itself is one data row tall and animates in and
   /// out INSIDE this box, so an empty cart leaves the box exactly as tall.

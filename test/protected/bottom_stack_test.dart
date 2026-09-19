@@ -84,10 +84,20 @@ Map<String, dynamic> _cartPayload({required bool show}) => {
       'render': {
         'pill': {
           'show': show,
+          'identifier': 'cart_pill',
           'items_label': '3 items',
           'cta': 'View cart',
+          // CMD #2081 — cart_pill_block() emits the two STACKED lines; the
+          // pill prints those, so the fixture carries them.
+          'lines': const [
+            {'key': 'cta', 'text': 'View cart'},
+            {'key': 'count', 'text': '3 items'},
+          ],
           'thumbs': show ? [_thumb('a'), _thumb('b')] : const [],
           'thumb_count': show ? 2 : 0,
+          'has_more': show,
+          'more_label': show ? '+1' : '',
+          'a11y': 'View cart, 3 items',
         },
       },
     };
@@ -314,7 +324,8 @@ void main() {
                   BottomStackMetrics.slot,
               0.001));
       expect(BottomStackMetrics.slot, Ds.touch.listRowMinHeight);
-      expect(BottomStackMetrics.gap, Ds.space.x16);
+      expect(BottomStackMetrics.gap, Ds.space.x12,
+          reason: "CMD #2081 — the pill sits 12px above the bar slot");
       expect(BottomStackMetrics.pill, CartPill.kHeight);
     });
 

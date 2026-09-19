@@ -6,22 +6,25 @@ import '../design_tokens.dart';
 import '../utils/render_log.dart';
 import 'product_image.dart';
 
-/// CMD #2043 — the floating "View cart" pill, back to its original shape.
+/// CMD #2081 — the floating "View cart" pill, in the Blinkit shape.
 ///
-/// #2029 kept the right idea (show WHAT is in the cart, not just a count) and
-/// the wrong geometry: a 90px two-line card 60% of the viewport wide, which on
-/// a 360px phone sat across two rows of product cards. The thumbnails stay;
-/// the shape goes back to what it was — ONE 56px line, hugging its own
-/// content, centred, floating just above the bottom nav.
+/// One solid dark-green full-radius pill, [kHeight] tall and about
+/// [kWidthFactor] of the screen wide (never narrower than [kMinWidth], never
+/// wider than the room it is handed), centred over the bottom stack. Left: the
+/// overlapping ringed thumbnails, then the backend's "+N" bubble when the
+/// basket holds more than they show. Middle: TWO STACKED LINES. Right: one
+/// chevron inside a subtle circle. There is no separator bar any more — #2043
+/// needed one because both facts shared a single line, and they no longer do.
 ///
 /// Everything it SAYS still comes from `cart_render().render.pill`: whether to
-/// appear at all (`show`), the count wording (`items_label` — the backend
-/// pluralises, never Dart), the CTA (`cta`) and the thumbnail stack (`thumbs`,
-/// in DRAW order: [0] behind, [1] the most recently added item on top). The
-/// app does not count the cart, does not pick "the first image" and does not
-/// decide what an item without a picture looks like — an empty url makes
-/// [ProductImage] paint the same grey placeholder tile the product cards use,
-/// which is the answer to "no image", never an empty circle.
+/// appear at all (`show`), the two stacked lines (`lines`, in DRAW order — the
+/// backend pluralises and words them, never Dart), the thumbnail stack
+/// (`thumbs`, [0] behind and the most recently added item on top) and the
+/// overflow bubble (`has_more` / `more_label`). The app does not count the
+/// cart, does not pick "the first image", does not work out what "+2" means
+/// and does not decide what an item without a picture looks like — an empty
+/// url makes [ProductImage] paint the same grey placeholder tile the product
+/// cards use, which is the answer to "no image", never an empty circle.
 ///
 /// This is the only widget in the storefront chrome that reads the cart, so a
 /// cart write repaints the pill and nothing else.
@@ -31,24 +34,34 @@ class CartPill extends StatelessWidget {
 
   /// Geometry. Named so no bare number is written into a layout call and the
   /// whole shape can be re-proportioned in one place.
-  ///
-  /// The pill is a single 56px line and its width HUGS its content — there is
-  /// no width factor and no minimum any more, because both of those were ways
-  /// of deciding the width from the viewport instead of from what is in it.
-  static const double kHeight = 56;
+  static const double kHeight = 64;
   static const double kThumb = 40;
   static const double kThumbRing = 2;
 
-  /// How far the second (newest) thumbnail is pushed right of the first, so
-  /// two overlapping circles still read as two.
+  /// How far each further circle is pushed right of the one before it, so
+  /// overlapping tiles still read as separate tiles.
   static const double kThumbOverlap = 14;
   static const double kPadLeft = 12;
-  static const double kPadRight = 16;
-  static const double kDividerWidth = 1;
-  static const double kDividerHeight = 20;
-  static const double kDividerAlpha = 0.34;
-  static const double kItemsSize = 16;
+  static const double kPadRight = 12;
+
+  /// The pill is a proportion of the screen, not of its content: Blinkit's
+  /// shape is a fixed bar, and a bar that changed width every time an item
+  /// was added would be the thing the eye follows instead of the basket.
+  static const double kWidthFactor = 0.6;
+
+  /// …with a floor, because 60% of a 320px phone is less than two thumbnails,
+  /// two lines and a chevron need. Below ~400px the floor wins and the pill
+  /// simply reads a little wider. It is still clamped to the room it was
+  /// handed, so it can never reach the screen edges.
+  static const double kMinWidth = 240;
+
+  /// The chevron's circle, and the glyph inside it.
+  static const double kChevronBox = 32;
   static const double kChevron = 20;
+  static const double kChevronAlpha = 0.18;
+
+  /// The second line is the quieter of the two.
+  static const double kSubAlpha = 0.85;
   static const double kShadowElevation = 6;
   static const double kShadowAlpha = 0.24;
 
@@ -94,10 +107,13 @@ class CartPill extends StatelessWidget {
     final cart = AppState.of(context);
     final show = cart.pillShow;
     final thumbs = cart.pillThumbs;
+    final more = cart.pillHasMore ? cart.pillMoreLabel : '';
     if (show) {
       try {
         RenderLog.write('c2029_cart_pill',
             'items=${cart.pillItemsLabel}|thumbs=${thumbs.length}');
+        RenderLog.write('c2081_cart_pill',
+            'lines=${cart.pillLines.length}|thumbs=${thumbs.length}|more=$more');
       } catch (_) {}
     }
 
@@ -110,31 +126,38 @@ class CartPill extends StatelessWidget {
         child: AnimatedOpacity(
           duration: Ds.motion.standard,
           opacity: show ? 1 : 0,
-          // The pill sizes itself to its row; the Center is what keeps it in
-          // the middle of whatever width the shell hands it, and the padding
-          // is the only thing that stops a very long count from reaching the
-          // screen edges on a 320px phone.
+          // The Center keeps the pill in the middle of whatever width the
+          // stack hands it; the padding is what stops it reaching the screen
+          // edges on a 320px phone.
           child: Padding(
             padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-            child: Center(
-              // The Row sizes itself to its own content (unbounded, inside the
-              // FittedBox), which is what "hugs" means here. The FittedBox is
-              // the only concession to a narrow phone: a backend label long
-              // enough to reach the screen edges scales the whole pill down in
-              // proportion rather than clipping a word or overflowing.
-              child: FittedBox(
-                key: const Key('c2029_pill'),
-                fit: BoxFit.scaleDown,
-                child: SizedBox(
-                  height: kHeight,
-                  // Nothing is printed when the backend says there is no pill.
-                  // An empty label is still a Text, and a hidden pill must
-                  // leave no widget on the page it floats over — the product
-                  // page proves it (`find.text('')` there is an assertion that
-                  // the page prints no blank captions of its own).
-                  child: show ? _pill(cart, thumbs) : const SizedBox.shrink(),
-                ),
-              ),
+            child: LayoutBuilder(
+              builder: (context, box) {
+                // 60% of the SCREEN (the padding above is added back), floored
+                // so the content always fits and capped at the room available:
+                // 320 / 360 / 412 / 480 all land inside their own screen with
+                // nothing wrapped and nothing clipped.
+                final screen = box.maxWidth + Ds.space.x16 * 2;
+                final floor =
+                    kMinWidth > box.maxWidth ? box.maxWidth : kMinWidth;
+                final width =
+                    (screen * kWidthFactor).clamp(floor, box.maxWidth);
+                return Center(
+                  child: SizedBox(
+                    key: const Key('c2029_pill'),
+                    width: width,
+                    height: kHeight,
+                    // Nothing is printed when the backend says there is no
+                    // pill. An empty label is still a Text, and a hidden pill
+                    // must leave no widget on the page it floats over — the
+                    // product page proves it (`find.text('')` there is an
+                    // assertion that the page prints no blank captions).
+                    child: show
+                        ? _pill(cart, thumbs, more)
+                        : const SizedBox.shrink(),
+                  ),
+                );
+              },
             ),
           ),
         ),
@@ -142,78 +165,116 @@ class CartPill extends StatelessWidget {
     );
   }
 
-  Widget _pill(CartModel cart, List<Map<String, dynamic>> thumbs) {
+  Widget _pill(
+      CartModel cart, List<Map<String, dynamic>> thumbs, String moreLabel) {
     final radius = BorderRadius.circular(kHeight / 2);
     return Material(
-      color: Ds.c.brand,
+      color: Ds.c.brandDark,
       borderRadius: radius,
       elevation: kShadowElevation,
       shadowColor: Colors.black.withValues(alpha: kShadowAlpha),
       child: InkWell(
         borderRadius: radius,
         onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.only(left: kPadLeft, right: kPadRight),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _ThumbStack(thumbs: thumbs),
-              SizedBox(width: Ds.space.x12),
-              // Backend copy, both of them, on ONE line.
-              _line(
-                cart.pillItemsLabel,
-                Ds.t.body.copyWith(
-                  color: Colors.white,
-                  fontSize: kItemsSize,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              SizedBox(width: Ds.space.x12),
-              _divider(),
-              SizedBox(width: Ds.space.x12),
-              _line(cart.pillCta, Ds.t.body.copyWith(color: Colors.white)),
-              SizedBox(width: Ds.space.x4),
-              const Icon(Icons.chevron_right,
-                  color: Colors.white, size: kChevron),
-            ],
+        child: Semantics(
+          identifier: cart.pillIdentifier,
+          label: cart.pillA11y,
+          button: true,
+          child: Padding(
+            padding: const EdgeInsets.only(left: kPadLeft, right: kPadRight),
+            child: Row(
+              children: [
+                _ThumbStack(thumbs: thumbs, moreLabel: moreLabel),
+                SizedBox(width: Ds.space.x12),
+                // The two stacked lines, both backend copy.
+                Expanded(child: _Lines(lines: cart.pillLines)),
+                SizedBox(width: Ds.space.x8),
+                const _Chevron(),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
-
-  /// Backend copy, rendered verbatim on one line. It is never wrapped and
-  /// never ellipsised: the pill is as wide as its words, and the FittedBox
-  /// above is what keeps that promise on a 320px phone.
-  Widget _line(String text, TextStyle style) =>
-      Text(text, maxLines: 1, softWrap: false, style: style);
-
-  /// The hairline between the count and the CTA. Two facts on one line need
-  /// something between them, and a rule is quieter than a gap wide enough to
-  /// read as one.
-  Widget _divider() => SizedBox(
-        width: kDividerWidth,
-        height: kDividerHeight,
-        child: ColoredBox(
-          color: Colors.white.withValues(alpha: kDividerAlpha),
-        ),
-      );
 }
 
-/// The one or two overlapping thumbnails. One item draws one circle; the
-/// backend decides how many there are and in which order they stack.
-class _ThumbStack extends StatelessWidget {
-  final List<Map<String, dynamic>> thumbs;
-  const _ThumbStack({required this.thumbs});
+/// The two stacked lines, printed in the payload's own order: [0] is the
+/// strong one, the rest sit under it. Nothing here knows what they say, and
+/// nothing here counts anything.
+class _Lines extends StatelessWidget {
+  final List<Map<String, dynamic>> lines;
+  const _Lines({required this.lines});
 
   @override
   Widget build(BuildContext context) {
-    if (thumbs.isEmpty) {
+    final rows = <Widget>[];
+    for (var i = 0; i < lines.length; i++) {
+      final text = (lines[i]['text'] ?? '').toString();
+      if (text.isEmpty) continue;
+      rows.add(Text(
+        text,
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.ellipsis,
+        style: i == 0
+            ? Ds.t.body.copyWith(
+                color: Colors.white, fontWeight: FontWeight.w700)
+            : Ds.t.caption.copyWith(
+                color: Colors.white.withValues(alpha: CartPill.kSubAlpha)),
+      ));
+    }
+    if (rows.isEmpty) return const SizedBox.shrink();
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: rows,
+    );
+  }
+}
+
+/// One chevron inside a subtle circle. #2043's hairline divider is gone with
+/// the single line it separated.
+class _Chevron extends StatelessWidget {
+  const _Chevron();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: CartPill.kChevronBox,
+      height: CartPill.kChevronBox,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: CartPill.kChevronAlpha),
+        shape: BoxShape.circle,
+      ),
+      child: const Icon(Icons.chevron_right,
+          color: Colors.white, size: CartPill.kChevron),
+    );
+  }
+}
+
+/// The one or two overlapping thumbnails, and the backend's "+N" bubble when
+/// the basket holds more than they show. One item draws one circle; the
+/// backend decides how many there are, in which order they stack, and whether
+/// there is an overflow at all.
+class _ThumbStack extends StatelessWidget {
+  final List<Map<String, dynamic>> thumbs;
+
+  /// `more_label`, verbatim — '' when `has_more` was false. The count inside
+  /// it was worked out in SQL; this widget only prints it.
+  final String moreLabel;
+  const _ThumbStack({required this.thumbs, this.moreLabel = ''});
+
+  @override
+  Widget build(BuildContext context) {
+    final slots = thumbs.length + (moreLabel.isEmpty ? 0 : 1);
+    if (slots == 0) {
       return const SizedBox(width: CartPill.kThumb, height: CartPill.kThumb);
     }
-    final steps = thumbs.length - 1;
     return SizedBox(
-      width: CartPill.kThumb + CartPill.kThumbOverlap * steps,
+      width: CartPill.kThumb + CartPill.kThumbOverlap * (slots - 1),
       height: CartPill.kThumb,
       child: Stack(
         children: [
@@ -223,6 +284,13 @@ class _ThumbStack extends StatelessWidget {
               left: CartPill.kThumbOverlap * i,
               top: 0,
               child: _tile(thumbs[i]),
+            ),
+          if (moreLabel.isNotEmpty)
+            Positioned(
+              key: const Key('c2081_pill_more'),
+              left: CartPill.kThumbOverlap * thumbs.length,
+              top: 0,
+              child: _bubble(moreLabel),
             ),
         ],
       ),
@@ -248,6 +316,37 @@ class _ThumbStack extends StatelessWidget {
         height: inner,
         fit: BoxFit.cover,
         radius: BorderRadius.circular(inner / 2),
+      ),
+    );
+  }
+
+  /// The overflow bubble: the same ringed circle as a thumbnail, so the row
+  /// reads as one strip, carrying the backend's own string.
+  Widget _bubble(String label) {
+    return Container(
+      width: CartPill.kThumb,
+      height: CartPill.kThumb,
+      padding: const EdgeInsets.all(CartPill.kThumbRing),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        shape: BoxShape.circle,
+      ),
+      child: DecoratedBox(
+        decoration: BoxDecoration(color: Ds.c.brand, shape: BoxShape.circle),
+        child: Center(
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Padding(
+              padding: EdgeInsets.all(Ds.space.x4),
+              child: Text(
+                label,
+                maxLines: 1,
+                style: Ds.t.caption.copyWith(
+                    color: Colors.white, fontWeight: FontWeight.w700),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

@@ -1203,6 +1203,23 @@ class CartModel extends ChangeNotifier {
           .map((m) => m.cast<String, dynamic>())
           .toList(growable: false);
 
+  /// CMD #2081 — the rest of the Blinkit-shaped pill, all of it decided in
+  /// SQL. `lines` are the two stacked lines in DRAW order, `has_more` /
+  /// `more_label` are the overflow bubble (the app never subtracts a thumb
+  /// count from an item count to make "+2"), `a11y` is the screen-reader
+  /// sentence and `identifier` is the tap target's stable name — so a journey
+  /// and a test name the same thing the app names.
+  List<Map<String, dynamic>> get pillLines =>
+      ((pill['lines'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((m) => m.cast<String, dynamic>())
+          .toList(growable: false);
+
+  bool get pillHasMore => pill['has_more'] == true;
+  String get pillMoreLabel => (pill['more_label'] ?? '').toString();
+  String get pillA11y => (pill['a11y'] ?? '').toString();
+  String get pillIdentifier => (pill['identifier'] ?? '').toString();
+
   /// #355 — the one figure the customer pays, as the SERVER computed it: the
   /// trade payable (taxable + GST) over the lines that have a trade rate.
   /// `grand_total` in the render block and `net_payable` at the top level are

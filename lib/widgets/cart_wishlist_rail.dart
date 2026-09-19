@@ -54,9 +54,11 @@ class CartWishlistRail extends StatelessWidget {
     );
   }
 
-  /// The card width the storefront rails use. Kept as a named constant so the
-  /// reserved height below cannot drift from the card that fills it.
-  static const double cardW = 156;
+  /// CMD #2090 — the card width is the STOREFRONT's own number, not a second
+  /// one typed here. 156 was close to [CompactProductCard.railWidth] and not
+  /// equal to it, so a cart rail card was three per cent narrower than the
+  /// same card on the home feed.
+  static const double cardW = CompactProductCard.railWidth;
 
   // CMD #2087 — the rail occupies a CONSTANT height. Every gap below is a
   // named constant and [extent] is their sum, so the fixed slot this rail

@@ -325,10 +325,14 @@ class _Amount extends StatelessWidget {
           ),
         if (row.struckValue.isNotEmpty && row.freeLabel.isNotEmpty)
           SizedBox(width: Ds.space.x8),
+        // CMD #2090 — the backend's word for free is the BRAND green, the same
+        // token the "Advance to pay" amount above Place order prints in. It
+        // was Ds.c.success, a second, lighter green that made one screen
+        // carry two greens for the same good news.
         if (row.freeLabel.isNotEmpty)
           Text(row.freeLabel,
               style: style.copyWith(
-                  color: Ds.c.success, fontWeight: FontWeight.w700)),
+                  color: Ds.c.brand, fontWeight: FontWeight.w700)),
       ],
     );
   }

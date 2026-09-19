@@ -1018,12 +1018,12 @@ class _CartScreenState extends State<CartScreen> {
     if (alsoLike != null) {
       RenderLog.write('c2087_also_like_cards', alsoLike.items.length);
     }
-    // CMD #2087 — the rails LEAVE the item list. They used to be trailing rows
-    // of the very ListView the cart lines live in, so every add and every
-    // remove re-laid that list out and the rails moved under the finger. They
-    // are a slot of their own now, at a constant height; the cart rows grow in
-    // their own list above it and the bill answers below it.
-    final railSlot = CartRailSlot(rails: [rail, alsoLike]);
+    // CMD #2090 — the two rails are the page's own blocks, in the order the
+    // spec names: the wishlist rail first, "You may also like" second, and
+    // the bill after both. A rail the backend had nothing for is skipped —
+    // never drawn as an empty band. Nothing below them moves when a line is
+    // added or removed: see [C2090ScrollComp].
+    final rails = CartRailSlot.blocks([rail, alsoLike]);
     RenderLog.write('c2079_cart_blocks',
         'rail=${rail?.items.length ?? 0};bill=${bill?.rows.length ?? 0}'
         ';also=${alsoLike?.items.length ?? 0};order=rows_rails_bill');
@@ -1056,7 +1056,7 @@ class _CartScreenState extends State<CartScreen> {
                             // else. The item count and the advance used to be
                             // repeated here, three centimetres above the list
                             // that shows them and again above Place order.
-                            child: _C2087CartBody(
+                            child: _C2090CartBody(
                               rows: _ItemList(
                                 key: _itemListKey,
                                 cart: cart,
@@ -1068,7 +1068,7 @@ class _CartScreenState extends State<CartScreen> {
                                     : null,
                                 lineAvailability: _lineAvailability,
                               ),
-                              railSlot: railSlot,
+                              rails: rails,
                               bill: bill,
                             ),
                           ),
@@ -1111,7 +1111,7 @@ class _CartScreenState extends State<CartScreen> {
             ?unresolvedNote,
             ?unavailableChip,
             Expanded(
-              child: _C2087CartBody(
+              child: _C2090CartBody(
                 rows: _ItemList(
                   key: _itemListKey,
                   cart: cart,
@@ -1120,7 +1120,7 @@ class _CartScreenState extends State<CartScreen> {
                   onViewAsToggle: cart.isViewAs ? _toggleViewAsChecked : null,
                   lineAvailability: _lineAvailability,
                 ),
-                railSlot: railSlot,
+                rails: rails,
                 bill: bill,
               ),
             ),
@@ -1469,60 +1469,124 @@ int _editDistance(String a, String b) {
 
 // ─── Item list ────────────────────────────────────────────────────────────────
 
-/// CMD #2087 — the cart page below the banners: ROWS, then RAILS, then BILL.
+/// CMD #2090 — HOW THE PAGE STAYS STILL WITHOUT HIDING THE BASKET.
 ///
-/// The three used to be one ListView, and that is what made the rails move:
-/// adding a line, removing one, or a quantity tap that changed a row's height
-/// re-laid the whole list out and everything under the lines shifted.
+/// CMD #2087 kept the rails still by locking the cart lines into a
+/// fixed-height inner scroller. It worked, and it cost the thing the screen is
+/// for: a basket of nine lines showed four, behind a second scrollbar, and the
+/// rest were simply not on the page. The list is FULL HEIGHT again and there
+/// is exactly ONE scroll on this screen.
 ///
-/// Here the cart lines live in their OWN list, in a slot whose height depends
-/// only on the viewport — so the list scrolls internally as lines are added
-/// and the blocks beneath it never move. The rails and the bill are the page
-/// scroll's own children, full width, on the same 16px gutter the rows use.
-/// CMD #2087 — how tall the cart-lines slot is.
+/// The stillness now comes from the scroll OFFSET rather than from a box.
+/// When a rail's ADD appends a row, the content above the rails grows by that
+/// row's height; the page is moved by exactly the same amount, so the rails
+/// and the bill stay under the same pixel. Removing a row reverses it.
 ///
-/// A FRACTION of the viewport, not a count of rows: the same screen gives the
-/// same answer whatever is in the basket, and THAT is what keeps the rails
-/// still when a line is added or removed. Public so the rule can be asserted
-/// without mounting a screen that needs five inherited states.
-class C2087CartBodyMetrics {
-  const C2087CartBodyMetrics._();
+/// It is done in [ScrollPhysics.adjustPositionForNewDimensions], which Flutter
+/// calls DURING the layout that changed the height — so the correction lands
+/// in the same frame as the growth and there is no frame in which anything
+/// moved. A post-frame jumpTo would have shown one.
+class C2090ScrollComp {
+  const C2090ScrollComp._();
 
-  static const double rowsSlotFraction = 0.62;
-  static const double rowsSlotMin = 220;
-  static const double rowsSlotMax = 620;
+  /// Sub-pixel dimension noise (an image settling, a font landing) is not a
+  /// row and is not compensated.
+  static const double minDelta = 1;
 
-  static double rowsSlotFor(double viewportH) =>
-      (viewportH * rowsSlotFraction).clamp(rowsSlotMin, rowsSlotMax);
+  /// How far the page must move so everything below the cart lines stays put.
+  ///
+  /// Pure on purpose: the rule is asserted without mounting a screen that
+  /// needs five inherited states and a live Supabase client.
+  static double shift({
+    required double oldMax,
+    required double newMax,
+    required bool isScrolling,
+    required double velocity,
+  }) {
+    // A finger or a fling owns the page while it is moving; correcting under
+    // it would fight the gesture.
+    if (isScrolling || velocity != 0) return 0;
+    final d = newMax - oldMax;
+    if (d.abs() < minDelta) return 0;
+    return d;
+  }
+
+  /// The offset to settle on, clamped to what the scrollable can actually do.
+  static double settle({
+    required double pixels,
+    required double shift,
+    required double minExtent,
+    required double maxExtent,
+  }) =>
+      (pixels + shift).clamp(minExtent, maxExtent);
 }
 
-class _C2087CartBody extends StatelessWidget {
+/// The page scroll of the cart, with [C2090ScrollComp] applied.
+class C2090StillPhysics extends ScrollPhysics {
+  const C2090StillPhysics({super.parent});
+
+  @override
+  C2090StillPhysics applyTo(ScrollPhysics? ancestor) =>
+      C2090StillPhysics(parent: buildParent(ancestor));
+
+  @override
+  double adjustPositionForNewDimensions({
+    required ScrollMetrics oldPosition,
+    required ScrollMetrics newPosition,
+    required bool isScrolling,
+    required double velocity,
+  }) {
+    final base = super.adjustPositionForNewDimensions(
+      oldPosition: oldPosition,
+      newPosition: newPosition,
+      isScrolling: isScrolling,
+      velocity: velocity,
+    );
+    final d = C2090ScrollComp.shift(
+      oldMax: oldPosition.maxScrollExtent,
+      newMax: newPosition.maxScrollExtent,
+      isScrolling: isScrolling,
+      velocity: velocity,
+    );
+    if (d == 0) return base;
+    return C2090ScrollComp.settle(
+      pixels: base,
+      shift: d,
+      minExtent: newPosition.minScrollExtent,
+      maxExtent: newPosition.maxScrollExtent,
+    );
+  }
+}
+
+/// CMD #2090 — the cart page below the banners, in ONE scroll:
+/// ROWS (all of them, full height) → WISHLIST rail → YOU MAY ALSO LIKE rail →
+/// BILL details.
+class _C2090CartBody extends StatelessWidget {
   final Widget rows;
-  final Widget railSlot;
+  final List<Widget> rails;
   final Widget? bill;
 
-  const _C2087CartBody({
+  const _C2090CartBody({
     required this.rows,
-    required this.railSlot,
+    required this.rails,
     this.bill,
   });
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, vp) {
-        final slot = C2087CartBodyMetrics.rowsSlotFor(vp.maxHeight);
-        RenderLog.write('c2087_rows_slot', slot.toStringAsFixed(0));
-        return ListView(
-          physics: platformScrollPhysics(),
-          padding: EdgeInsets.zero,
-          children: [
-            SizedBox(height: slot, child: rows),
-            railSlot,
-            if (bill != null) bill!,
-          ],
-        );
-      },
+    RenderLog.write(
+      'c2090_cart_layout',
+      'rows=full;rails=${rails.length}'
+      ';order=rows_rails_bill;bill=${bill != null ? 1 : 0};scroll=page_only',
+    );
+    return ListView(
+      physics: C2090StillPhysics(parent: platformScrollPhysics()),
+      padding: EdgeInsets.zero,
+      children: [
+        rows,
+        ...rails,
+        if (bill != null) bill!,
+      ],
     );
   }
 }
@@ -1562,37 +1626,28 @@ class _ItemListState extends State<_ItemList> {
 
   /// CHANGE #639 — used to bring the first line cart_render() flagged into
   /// view when place_order_v2() refuses the cart.
-  final ScrollController _scrollController = ScrollController();
+
   final GlobalKey _firstUnavailableKey = GlobalKey();
 
   @override
   void dispose() {
-    _scrollController.dispose();
     super.dispose();
   }
 
   /// Scrolls to the first unavailable line. Which line that is comes from the
   /// payload's own flag — this never re-derives availability.
   ///
-  /// Two steps because the list is lazily built: an approximate jump first, so
-  /// the target actually gets built when it started far off-screen, then
-  /// ensureVisible on the real element to land it exactly.
+  /// CMD #2090 — one step: the list is a full-height column inside the page
+  /// scroll, so the flagged row is already built and ensureVisible on the page
+  /// scrollable is all it takes.
   Future<void> scrollToFirstUnavailable() async {
     final lines = _filteredLines;
     final idx = lines.indexWhere((l) => l.unavailable);
     if (idx < 0) return;
 
-    if (_scrollController.hasClients) {
-      const approxCardExtent = 132.0;
-      final target = (idx * approxCardExtent)
-          .clamp(0.0, _scrollController.position.maxScrollExtent);
-      await _scrollController.animateTo(
-        target,
-        duration: const Duration(milliseconds: 320),
-        curve: Curves.easeOutCubic,
-      );
-    }
-    if (!mounted) return;
+    // CMD #2090 — there is no inner scroller to aim at any more, and no lazy
+    // build to work around: every row of the list is built, so the flagged
+    // row's element always exists and the page scroll can land on it directly.
     await WidgetsBinding.instance.endOfFrame;
     if (!mounted) return;
     final ctx = _firstUnavailableKey.currentContext;
@@ -1623,9 +1678,10 @@ class _ItemListState extends State<_ItemList> {
     final searchActive = _effectiveQuery.trim().isNotEmpty;
 
     if (searchActive && filtered.isEmpty) {
-      return ListView(
-        physics: platformScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+      // CMD #2090 — a block of the page, not a second scroller.
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
         children: [
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 32),
@@ -1693,14 +1749,18 @@ class _ItemListState extends State<_ItemList> {
         ';strike=${filtered.where((l) => l.rowMap('price')['has_strike'] == true).length}'
         ';discount=${filtered.where((l) => l.rowMap('price')['has_discount'] == true).length}');
 
-    return ListView.builder(
-      physics: platformScrollPhysics(),
-      controller: _scrollController,
+    // CMD #2090 — ALL the rows, at full height, inside the page scroll. This
+    // was a ListView.builder in a fixed-height slot, which is what hid items
+    // behind a second scrollbar; the row count a basket has is small enough
+    // that building it as a column costs nothing and hides nothing.
+    final int total = filtered.length + afterCount;
+    return Padding(
       padding: EdgeInsets.symmetric(
           horizontal: Ds.space.x16, vertical: Ds.space.x8),
-      cacheExtent: 400,
-      itemCount: filtered.length + afterCount,
-      itemBuilder: (context, i) {
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: List<Widget>.generate(total, (i) {
         if (i < filtered.length) {
           final line = filtered[i];
           // CMD #2013 — no card, no border, no shadow: a hairline between
@@ -1772,8 +1832,9 @@ class _ItemListState extends State<_ItemList> {
           extra -= 1;
         }
 
-        return const SizedBox();
-      },
+        return const SizedBox.shrink();
+        }),
+      ),
     );
   }
 }
@@ -2810,7 +2871,9 @@ class _CheckoutBar extends StatelessWidget {
                   ),
                 if (selectedTotal == null)
                   C572CartNotice(render: cart.render, onAction: onNoticeAction),
-                const SizedBox(height: 12),
+                // CMD #2090 — the ONE gap between the Advance line and Place
+                // order, on the design scale rather than as a literal 12.
+                SizedBox(height: Ds.space.x12),
                 // Place Order (auth-gated)
                 Builder(builder: (ctx) {
                   final auth = UserState.of(ctx);
@@ -3720,9 +3783,11 @@ class C2013SummaryRow extends StatelessWidget {
     RenderLog.write('c2013_cart_summary',
         'items=$itemsValue;advance=${hasAdvance ? advance : ''}');
 
-    return Padding(
-      padding: EdgeInsets.only(bottom: Ds.space.x12),
-      child: Row(
+    // CMD #2090 — NO bottom padding here. This row's own 12px stacked on the
+    // 12px the checkout bar puts above Place order, and the empty space the
+    // KYC chip used to occupy sat between them: 24px of nothing under the
+    // Advance line. The single gap above the button is the whole spacing now.
+    return Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         // spaceBetween, not a Spacer: a Spacer is a flex child and takes its
         // share of the free width in the same pass as the two halves, so the
@@ -3779,7 +3844,6 @@ class C2013SummaryRow extends StatelessWidget {
             ),
           ],
         ],
-      ),
     );
   }
 }

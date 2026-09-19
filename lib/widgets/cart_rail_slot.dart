@@ -35,6 +35,17 @@ class CartRailSlot extends StatelessWidget {
   /// disagree.
   static const double railExtent = CartWishlistRail.extent;
 
+  /// CMD #2090 — the rails as the PAGE's own blocks, in payload order.
+  ///
+  /// The cart no longer stacks them inside a slot of its own: they are two
+  /// children of the one page scroll, each still at its constant height, so
+  /// a rail with three cards and one with ten occupy the same band. A rail
+  /// the backend had nothing for contributes no block at all.
+  static List<Widget> blocks(List<CartWishlistRail?> rails) => [
+        for (final r in rails.whereType<CartWishlistRail>())
+          SizedBox(height: railExtent, child: ClipRect(child: r)),
+      ];
+
   @override
   Widget build(BuildContext context) {
     final shown = rails.whereType<CartWishlistRail>().toList(growable: false);

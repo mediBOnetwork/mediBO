@@ -1,0 +1,48 @@
+{
+  "client": [
+    {
+      "api_key": [
+        {
+          "current_key": "AIzaSyCVfEweLfVbHVyAiNXAtuznt1S3m83jl0s"
+        }
+      ],
+      "client_info": {
+        "android_client_info": {
+          "package_name": "in.medibo.app"
+        },
+        "mobilesdk_app_id": "1:582317556056:android:07a3b7f92535f92354252d"
+      },
+      "oauth_client": [],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "api_key": [
+        {
+          "current_key": "AIzaSyCVfEweLfVbHVyAiNXAtuznt1S3m83jl0s"
+        }
+      ],
+      "client_info": {
+        "android_client_info": {
+          "package_name": "in.medibo.partner"
+        },
+        "mobilesdk_app_id": "1:582317556056:android:adf22a86579c9f2254252d"
+      },
+      "oauth_client": [],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1",
+  "project_info": {
+    "project_id": "medibo-23aee",
+    "project_number": "582317556056",
+    "storage_bucket": "medibo-23aee.firebasestorage.app"
+  }
+}

@@ -16,7 +16,8 @@ import 'compact_product_card.dart';
 import 'product_card_grid.dart';
 import 'customer_surface_widgets.dart'; // CHANGE #745 — the home chip strip
 import 'product_image.dart';
-import 'bottom_stack.dart'; // CMD #2051 — bottomStackHeight
+import 'bottom_stack.dart'; // CMD #2091 — bottomStackLiveOf
+import 'update_bar.dart'; // CMD #2091 — the chrome's own controller
 
 /// CHANGE #637 — the sectioned customer home feed.
 ///
@@ -138,12 +139,15 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
   /// bottom nav, so the stack sitting ON that nav (the update-bar slot, and
   /// the cart pill above it) is the only thing left to scroll clear of.
   ///
-  /// It is a CONSTANT. #2051 measured it and re-published it, which meant this
-  /// list re-padded — and the content above it jumped — every time the bar
-  /// arrived, a cart emptied or the update sentence took a second line. The
-  /// slot is reserved whether or not there is an update, so there is one
-  /// number, right on the first frame, that never changes.
-  double get _updateBarClearance => bottomStackHeight;
+  /// CMD #2091 — the room the chrome is ACTUALLY taking, not the ceiling.
+  /// #2051 measured it and re-published it, which is what made the feed re-pad
+  /// every time a sentence took a second line; #2066 replaced that with a
+  /// constant and left the feed ending 116 px above the nav on every day with
+  /// no update pending and an empty cart. This is neither: two booleans read
+  /// from the same place the stack reads them, so the feed ends where the
+  /// chrome does — and changes only when the chrome itself appears or goes.
+  double _updateBarClearance(BuildContext context) =>
+      bottomStackLiveOf(context, pill: true).height;
 
   @override
   void didUpdateWidget(covariant HomeSectionsView old) {
@@ -173,11 +177,18 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
 
   @override
   void dispose() {
+    appUpdateBar.removeListener(_onChrome);
     _payload?.removeListener(_onPayload);
     _payload?.dispose();
     _homeFeedOffset = _scroll.hasClients ? _scroll.offset : _homeFeedOffset;
     _scroll.dispose();
     super.dispose();
+  }
+
+  /// An update arrived or was dismissed: the chrome changed height, so the
+  /// room this feed holds back for it changed with it (#2091).
+  void _onChrome() {
+    if (mounted) setState(() {});
   }
 
   /// The controller moved: adopt its payload if it has one, and always adopt
@@ -208,6 +219,10 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
   @override
   void initState() {
     super.initState();
+    // CMD #2091 — the feed's end padding is the chrome's LIVE height, so this
+    // State has to hear the one input that is not a dependency of its build:
+    // the update controller. The cart and the viewport arrive on their own.
+    appUpdateBar.addListener(_onChrome);
     // Instant paint from the memo, then ALWAYS refetch in the background so a
     // backend change (counts, delivery time, section order) shows on the next
     // open rather than being pinned to a stale cache. Scroll offset survives
@@ -476,7 +491,7 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
         // only thing left to clear is the chrome sitting ON that nav; the
         // number is the stack's own measured height, 0 while it is down, so
         // the footer stops exactly at the real end of the page otherwise.
-        padding: EdgeInsets.only(bottom: _updateBarClearance),
+        padding: EdgeInsets.only(bottom: _updateBarClearance(context)),
         // CHANGE #678a — build two screens ahead of the viewport.
         //
         // The default builds a section only as its top edge arrives, so the

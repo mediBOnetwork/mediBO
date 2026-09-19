@@ -431,29 +431,40 @@ void main() {
           reason: 'one renderer: the reserved slot of the bottom stack');
     });
 
-    test('the cart pill and the home feed both clear the ONE constant', () {
+    test('the cart pill and the home feed both clear the ONE stack', () {
       // CMD #2051 — the pill does not clear the bar by being lifted an agreed
       // number of pixels; it clears it by being ABOVE it in one column.
-      // CMD #2066 — and the feed pads by that column's CONSTANT height rather
-      // than by a number the column measures and republishes, which is what
-      // made the content above it jump every time the chrome changed shape.
+      // CMD #2066 — and the feed pads by that column's own answer rather than
+      // by a number the column MEASURES and republishes, which is what made
+      // the content above it jump every time a sentence took a second line.
+      // CMD #2091 — that answer is now the chrome's LIVE height, which is 0
+      // when nothing is in the stack; it was the ceiling before, and the feed
+      // ended 116 px above the nav on every day with no update and an empty
+      // cart. Still one source, still nothing measured: two booleans, read
+      // where the stack itself reads them.
       expect(
           _src('lib/screens/shell/shell_bottom_bars.dart')
               .contains('StorefrontBottomStack('),
           isTrue);
       expect(
           _src('lib/widgets/home_sections_view.dart')
-              .contains('padding: EdgeInsets.only(bottom: _updateBarClearance)'),
+              .contains('padding: EdgeInsets.only(bottom: _updateBarClearance(context))'),
           isTrue);
       expect(
           _src('lib/widgets/home_sections_view.dart')
-              .contains('=> bottomStackHeight'),
+              .contains('bottomStackLiveOf(context, pill: true).height'),
           isTrue);
-      // …and it does not listen to it, because there is nothing to hear.
+      // …and it still does not listen to a published HEIGHT, because no child
+      // publishes one. What it hears is the update controller — a state, not
+      // a measurement.
       expect(
           _src('lib/widgets/home_sections_view.dart')
               .contains('bottomStackHeight.addListener'),
           isFalse);
+      expect(
+          _src('lib/widgets/home_sections_view.dart')
+              .contains('appUpdateBar.addListener(_onChrome)'),
+          isTrue);
     });
 
     testWidgets('at 412 px it still fits and the sentence is never clipped away',

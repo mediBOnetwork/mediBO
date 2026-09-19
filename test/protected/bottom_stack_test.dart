@@ -15,17 +15,24 @@
 //      each screen's own Stack, and a published number holding them apart) is
 //      what let the bar cover the pill on Home and the Catalogue.
 //
-//   2. EVERY POSITION IS STATIC. The bar's slot is ALWAYS reserved and always
-//      exactly one data row tall: no update pending means an empty transparent
-//      box of the same height. So the pill's rectangle is IDENTICAL with a bar
-//      and without one, on a shell and on a pushed route — it never moves, and
-//      a backend `bottom_gap` cannot move it either.
+//   2. EVERY HEIGHT IS A STATE, NEVER A MEASUREMENT (CMD #2091). A slot is the
+//      size named in [BottomStackMetrics] when the thing that belongs in it is
+//      showing, and 0 when it is not — decided by two booleans (an update is
+//      pending on a shell with a nav; the cart payload says there is a pill)
+//      and by nothing a child publishes. So a line-wrap, a longer sentence or
+//      a wider phone still cannot move anything, which is #2066's point, while
+//      an EMPTY stack takes no room at all, which is #2091's. A backend
+//      `bottom_gap` still cannot lift the bar.
 //
-//   3. EVERY LIST PADS BY A CONSTANT. [bottomStackHeight] is pill + gap + slot
-//      and nothing else; [BottomStackSpacer] is that number as a box. It is
-//      right on the FIRST frame and it never changes, so content above the
-//      chrome cannot jump. #2051 measured and re-published it — that is
-//      exactly what made lists re-pad when the bar arrived or a cart emptied.
+//   3. A LIST PADS BY WHAT THE CHROME IS ACTUALLY TAKING. [bottomStackHeight]
+//      is the CEILING — pill + gap + slot; what a page holds back is
+//      [BottomStackLiveMetrics.height], read through [BottomStackSpacer] and
+//      [BottomStackClearance], which is 0 when the stack is empty. Before
+//      #2091 a staff page reserved a whole bar slot on every day with no
+//      update pending, and that dead white band above the bottom nav was on
+//      every admin, super-admin and partner screen in the app. Both sides
+//      travel on ONE token (`Ds.motion.sheet`), so a dismissed bar leaves no
+//      gap behind it.
 //
 //   4. THE BAR RENDERS ONLY WHERE THERE IS A BOTTOM NAV. The shell answers
 //      that question by having one; the stack asks the Scaffold it is mounted
@@ -229,8 +236,26 @@ void main() {
     });
   });
 
-  group('2. every position is static', () {
-    testWidgets('the bar arriving does NOT move the pill', (t) async {
+  group('2. every height is a state, never a measurement', () {
+    testWidgets('no update pending: the bar slot is GONE, not empty',
+        (t) async {
+      final cart = await _cart(show: true);
+      await _pump(t, _host(cart));
+
+      // The slot is the thing #2091 changed: it used to be a 56 px
+      // transparent box holding room for a bar that was not there.
+      expect(t.getSize(find.byKey(kBarSlotKey)).height, closeTo(0, 0.5),
+          reason: 'an empty slot takes no room — this is the blank strip');
+
+      // …so the pill floats on its own air, one gap above the nav.
+      final screen = t.getSize(find.byType(MaterialApp));
+      final navTop = screen.height - _navHeight;
+      final slot = t.getRect(find.byKey(kPillSlotKey));
+      expect(navTop - slot.bottom, closeTo(BottomStackMetrics.gap, 0.5));
+    });
+
+    testWidgets('the bar arriving lifts the pill by exactly the slot it '
+        'opened', (t) async {
       final cart = await _cart(show: true);
       await _pump(t, _host(cart));
 
@@ -241,27 +266,31 @@ void main() {
       await t.pumpAndSettle();
       expect(find.byType(UpdateBar), findsOneWidget);
 
-      expect(t.getRect(find.byKey(const Key('c2029_pill'))), before,
-          reason: 'the slot was already reserved — nothing may shift');
+      final after = t.getRect(find.byKey(const Key('c2029_pill')));
+      expect(before.top - after.top, closeTo(BottomStackMetrics.slot, 0.5),
+          reason: 'the pill rides up on the slot that opened under it — one '
+              'slot, not a number two widgets keep equal');
+      expect(after.left, before.left,
+          reason: 'nothing about the pill itself changed');
     });
 
-    testWidgets('the empty slot is exactly as tall as the bar would be',
+    testWidgets('and dismissing it gives every one of those pixels back',
         (t) async {
       final cart = await _cart(show: true);
       await _pump(t, _host(cart));
+      final atRest = t.getRect(find.byKey(const Key('c2029_pill')));
 
-      // No update: the pill slot's bottom edge is one gap + one empty bar
-      // slot above the top of the nav.
-      final slot = t.getRect(find.byKey(kPillSlotKey));
-      final screen = t.getSize(find.byType(MaterialApp));
-      final navTop = screen.height - _navHeight;
-      expect(navTop - slot.bottom,
-          closeTo(BottomStackMetrics.gap + BottomStackMetrics.slot, 0.5),
-          reason: 'the reserved slot is there even with nothing in it');
-      expect(find.byKey(kBarSlotKey), findsOneWidget,
-          reason: 'the bar slot is mounted with nothing in it');
-      expect(t.getRect(find.byKey(kBarSlotKey)).height,
-          closeTo(BottomStackMetrics.slot, 0.5));
+      appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
+      await t.pumpAndSettle();
+      expect(find.byType(UpdateBar), findsOneWidget);
+
+      appUpdateBar.hide();
+      await t.pumpAndSettle();
+
+      expect(find.byType(UpdateBar), findsNothing);
+      expect(t.getSize(find.byKey(kBarSlotKey)).height, closeTo(0, 0.5),
+          reason: 'no leftover gap after the x — the slot closes with it');
+      expect(t.getRect(find.byKey(const Key('c2029_pill'))), atRest);
     });
 
     testWidgets('an empty cart leaves the slot exactly where it was',
@@ -314,8 +343,8 @@ void main() {
     });
   });
 
-  group('3. every list pads by a constant', () {
-    test('the constant is pill + gap + slot, and nothing else', () {
+  group('3. a list pads by what the chrome is actually taking', () {
+    test('the CEILING is pill + gap + slot, and nothing else', () {
       expect(
           bottomStackHeight,
           closeTo(
@@ -329,19 +358,39 @@ void main() {
       expect(BottomStackMetrics.pill, CartPill.kHeight);
     });
 
-    testWidgets('the spacer is that number on the FIRST frame', (t) async {
+    testWidgets('an empty stack is reserved ZERO, on the FIRST frame',
+        (t) async {
       await t.pumpWidget(MaterialApp(
           home: Scaffold(
         bottomNavigationBar: const SizedBox(height: _navHeight),
         body: const Center(child: BottomStackSpacer()),
       )));
-      // One pump: no post-frame measurement, no second frame needed.
+      // One pump: no post-frame measurement, no animation to settle into.
+      // Nothing is in the stack, so nothing is held back for it — this is the
+      // blank strip #2091 removes, measured at its source.
       expect(t.getSize(find.byType(BottomStackSpacer)).height,
-          closeTo(bottomStackHeight, 0.5));
+          closeTo(0, 0.5));
     });
 
-    testWidgets('the bar appearing does not change what a list pads by',
+    testWidgets('a full stack is reserved the ceiling, on the FIRST frame',
         (t) async {
+      final cart = await _cart(show: true);
+      appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
+      await t.pumpWidget(MaterialApp(
+        home: Scaffold(
+          bottomNavigationBar: const SizedBox(height: _navHeight),
+          body: AppState(
+            cart: cart,
+            child: const Center(child: BottomStackSpacer()),
+          ),
+        ),
+      ));
+      expect(t.getSize(find.byType(BottomStackSpacer)).height,
+          closeTo(bottomStackHeight, 0.5),
+          reason: 'pill + its air + the bar slot, right on the first frame');
+    });
+
+    testWidgets('the bar appearing is exactly what a list pads by', (t) async {
       final cart = await _cart(show: true);
       await _pump(
         t,
@@ -368,8 +417,20 @@ void main() {
       final before = t.getSize(find.byType(BottomStackSpacer)).height;
       appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
       await t.pumpAndSettle();
-      expect(t.getSize(find.byType(BottomStackSpacer)).height, before,
-          reason: 'a list that re-pads is a list whose content jumps');
+      final withBar = t.getSize(find.byType(BottomStackSpacer)).height;
+      expect(withBar - before, closeTo(BottomStackMetrics.slot, 0.5),
+          reason: 'the room a list holds back is the room the chrome took');
+
+      // …and the slot the stack opened is the same number, which is the whole
+      // point of reading it in one place.
+      expect(t.getSize(find.byKey(kBarSlotKey)).height,
+          closeTo(withBar - before, 0.5));
+
+      appUpdateBar.hide();
+      await t.pumpAndSettle();
+      expect(t.getSize(find.byType(BottomStackSpacer)).height,
+          closeTo(before, 0.5),
+          reason: 'and it is given back — no leftover gap after dismiss');
     });
 
     testWidgets('a page may add its own air on top of the chrome', (t) async {
@@ -378,8 +439,9 @@ void main() {
         bottomNavigationBar: const SizedBox(height: _navHeight),
         body: Center(child: BottomStackSpacer(extra: Ds.space.x24)),
       )));
+      // The page's own air is the page's, chrome or no chrome.
       expect(t.getSize(find.byType(BottomStackSpacer)).height,
-          closeTo(bottomStackHeight + Ds.space.x24, 0.5));
+          closeTo(Ds.space.x24, 0.5));
     });
   });
 
@@ -397,11 +459,11 @@ void main() {
       expect(find.text('App update available'), findsNothing);
     });
 
-    testWidgets('and the pill is at exactly the same height there', (t) async {
+    testWidgets('and with no update pending the pill is at exactly the same '
+        'height there', (t) async {
       final cart = await _cart(show: true);
 
       await _pump(t, _host(cart, hasNav: true));
-      appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
       await t.pumpAndSettle();
       final onShell = t.getRect(find.byKey(const Key('c2029_pill')));
       final screen = t.getSize(find.byType(MaterialApp));
@@ -416,7 +478,9 @@ void main() {
       expect(find.text('View cart'), findsOneWidget,
           reason: 'the pill still floats on a product page');
       expect(liftPushed, closeTo(liftOnShell, 0.5),
-          reason: 'the reserved slot keeps the pill at one height everywhere');
+          reason: 'the pill floats on its own air, which is the same air on '
+              'both — a shell has no bar slot open either when there is no '
+              'update pending (CMD #2091)');
     });
 
     testWidgets('the shell decides, not a screen name', (t) async {
@@ -673,28 +737,79 @@ void main() {
               'and not something the ListView would have done anyway');
     });
 
-    testWidgets('the clearance is a CONSTANT — an update arriving moves '
-        'nothing', (t) async {
+    // ── CMD #2091 — THE BLANK STRIP ──────────────────────────────────────
+    //
+    // #2070 reserved the bar's room on every staff page and reserved it
+    // ALWAYS. An update is pending for minutes a month, so what an admin,
+    // a super admin and a partner actually saw on every screen, all the rest
+    // of the time, was a dead white band above their bottom nav.
+    testWidgets('no update pending: a staff page runs down to the nav — no '
+        'blank strip', (t) async {
       final cart = await _cart(show: false);
       await _pump(t, staffHost(cart, staff: true));
 
-      final before = await scrolledToLastRow(t);
+      final row = await scrolledToLastRow(t);
+      final screen = t.getSize(find.byType(MaterialApp));
+      expect(row.bottom, closeTo(screen.height - _navHeight, 0.5),
+          reason: 'nothing is in the stack, so nothing is held back for it');
+      expect(find.byType(UpdateBar), findsNothing);
+      expect(t.getSize(find.byKey(kBarSlotKey)).height, closeTo(0, 0.5));
+    });
+
+    testWidgets('the clearance is the bar\'s room — taken when it arrives, '
+        'given back when it goes', (t) async {
+      final cart = await _cart(show: false);
+      await _pump(t, staffHost(cart, staff: true));
+
+      final screen = t.getSize(find.byType(MaterialApp));
+      final navTop = screen.height - _navHeight;
+
+      // How much room the host is holding back: the gap between the end of
+      // the page (its last row, scrolled fully into view) and the nav.
+      Future<double> heldBack() async =>
+          navTop - (await scrolledToLastRow(t)).bottom;
+
+      expect(await heldBack(), closeTo(0, 0.5),
+          reason: 'nothing pending, nothing held back');
+
       appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
       await t.pumpAndSettle();
-      final after = t.getRect(find.byKey(lastRow));
+      expect(await heldBack(), closeTo(BottomStackMetrics.slot, 0.5),
+          reason: 'exactly the slot that opened, never more');
+      final bar = t.getRect(find.byType(UpdateBar));
+      expect(t.getRect(find.byKey(lastRow)).bottom,
+          lessThanOrEqualTo(bar.top + 0.5),
+          reason: 'and the row still clears the bar (spec 3)');
 
-      expect(after, before,
-          reason: 'the bar slot is reserved whether or not an update is '
-              'pending, so content above it cannot jump');
+      // The x. #2091's second half: the room comes back with it.
+      appUpdateBar.hide();
+      await t.pumpAndSettle();
+      expect(await heldBack(), closeTo(0, 0.5),
+          reason: 'no leftover gap after dismiss');
     });
 
     testWidgets('it reserves the BAR slot, not the pill a staff page never '
         'floats', (t) async {
+      final cart = await _cart(show: true);
+      await _pump(t, staffHost(cart, staff: true));
+      appUpdateBar.show(onUpdate: () {}, payload: _barPayload);
+      await t.pumpAndSettle();
+
+      final row = await scrolledToLastRow(t);
+      final screen = t.getSize(find.byType(MaterialApp));
+      final held = (screen.height - _navHeight) - row.bottom;
+      expect(held, closeTo(bottomBarOnlyHeight, 0.5),
+          reason: 'a surface with no pill must not pay for the pill slot, '
+              'even with a full cart underneath it');
+
+      // And the two ceilings still say what they always said.
       expect(bottomBarOnlyHeight, BottomStackMetrics.slot);
-      expect(bottomStackHeight,
-          BottomStackMetrics.pill + BottomStackMetrics.gap + BottomStackMetrics.slot);
-      expect(bottomBarOnlyHeight, lessThan(bottomStackHeight),
-          reason: 'a surface with no pill must not pay for the pill slot');
+      expect(
+          bottomStackHeight,
+          BottomStackMetrics.pill +
+              BottomStackMetrics.gap +
+              BottomStackMetrics.slot);
+      expect(bottomBarOnlyHeight, lessThan(bottomStackHeight));
     });
 
     testWidgets('a wide staff shell with no nav paints no bar and owes no '

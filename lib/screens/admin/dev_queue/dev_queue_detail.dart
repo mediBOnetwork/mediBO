@@ -8,6 +8,8 @@ import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
 import '../../../widgets/payment_proof_image.dart';
 import 'dev_queue_common.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
 import 'dev_queue_android.dart';
 import 'restart_safety.dart';
 import 'dev_queue_image_tray.dart';
@@ -188,6 +190,14 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
                 // refuses to let this row close without one. has:false on a
                 // command that never asked for a build, so it costs nothing.
                 AndroidReleaseCard(row: _row, onOpen: _open),
+                // CMD #2076 — the Firebase Test Lab verdict for that release, with
+                // the video / logcat / screenshots pulled off the device. has:false
+                // on a command that never ran one, so it costs nothing.
+                TestLabCard(
+                    row: _row,
+                    onOpen: _open,
+                    signer: _signProof,
+                    onRefresh: () => _load(silent: true)),
                 if (_status == 'needs_input') _needsInputBanner(),
                 if (_row['is_waiting'] == true) _waitingBanner(),
                 // CHANGE #1856 — the cost of the waiting, whether or not the
@@ -849,6 +859,11 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
             icon: Icons.android);
     }
   }
+
+  /// CMD #2076 — dev-cmd-proofs is a private bucket; a proof link is a
+  /// signed URL minted under the signed-in session, like PaymentProofImage.
+  Future<String> _signProof(String bucket, String path) =>
+      Supabase.instance.client.storage.from(bucket).createSignedUrl(path, 3600);
 
   Future<void> _open(String url) async {
     final uri = Uri.tryParse(url);

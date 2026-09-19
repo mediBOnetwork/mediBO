@@ -90,3 +90,5 @@ dev_cause_rule
 dev_build_constraint
 dev_build_constraint_hit
 dev_build_proposal
+# CMD #2076 — the Firebase Test Lab run ledger sits next to dev_commands / play_release
+android_testlab_run

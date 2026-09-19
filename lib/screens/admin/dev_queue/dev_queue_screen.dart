@@ -12,6 +12,7 @@ import 'dev_queue_bulk_add.dart';
 import 'dev_queue_detail.dart';
 import 'dev_queue_control.dart';
 import 'dev_queue_ops.dart';
+import 'dev_queue_android.dart';
 import 'dev_queue_gcp.dart';
 import 'dev_queue_qa.dart';
 import 'dev_queue_questions.dart';
@@ -788,6 +789,14 @@ class _Row extends StatelessWidget {
             tone: androidTone(android),
             icon: Icons.android,
             spinning: android == 'building'),
+      // CMD #2076 — the Firebase Test Lab verdict, the backend's chip string
+      // and tone (testlab_chip / testlab_tone); absent when no run exists.
+      if (testLabChipOf(row).isNotEmpty)
+        ToneChip(
+            label: testLabChipOf(row),
+            tone: toneByName(testLabToneOf(row)),
+            icon: Icons.science_outlined,
+            spinning: (row['testlab_status'] ?? '').toString() == 'running'),
       if (row['has_tokens'] == true)
         ToneChip(
             label: '${row['tokens_display'] ?? ''} · ${row['cost_display'] ?? ''}',

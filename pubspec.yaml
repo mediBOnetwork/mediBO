@@ -97,6 +97,10 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  # CMD #2076 — the Firebase Test Lab gate (integration_test/android_gate_test.dart);
+  # a dev dependency, so the release AAB never carries it.
+  integration_test:
+    sdk: flutter
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is

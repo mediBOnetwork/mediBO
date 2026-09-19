@@ -293,6 +293,14 @@ fi
 # something he never saw, which is the whole failure this button prevents.
 if [ "$KIND" = "promote" ]; then
   [ -n "$SRC_CODE" ] || die "promote row #$REL_ID carries no source version code"
+  # CMD #2076 — nothing is rebuilt here, so nothing can be re-tested here: the
+  # bundle on Play is the one the internal publish ran through Test Lab, and
+  # the gate finds that run by version code. No green run, no Production.
+  TL_GATE=$("$DEVCMD" rpc android_testlab_gate "$(jq -nc --arg t "$TRACK" --argjson v "$SRC_CODE" \
+              '{p_track:$t,p_kind:"promote",p_version_code:$v}')" 2>>"$LOG")
+  TL_REASON=$(jq -r '.reason // "android_testlab_gate did not answer"' <<<"$TL_GATE" 2>/dev/null)
+  [ "$(jq -r '.allowed // false' <<<"$TL_GATE" 2>/dev/null)" = "true" ] || die "$TL_REASON"
+  log "Test Lab gate: $TL_REASON"
   progress uploading '{}'
   log "promoting version code $SRC_CODE: ${FROM_TRACK:-internal} → $TRACK"
   PO=$(mktemp /dev/shm/promo.XXXX); PE=$(mktemp /dev/shm/promo_err.XXXX)
@@ -441,6 +449,31 @@ log "16 KB + ABI gate passed ($ABIS)"
 bash scripts/verify_signing.sh "$AAB" >>"$LOG" 2>&1 \
   || die "the built AAB failed the signing gate — Play would reject this upload" "$(tail -c 1500 "$LOG")"
 log "AAB signature verified against the upload certificate"
+
+# ── 3b. CMD #2076 — Firebase Test Lab: the Android-only code has to RUN ──────
+# The two artifact gates above prove the bytes; nothing so far has executed a
+# single Kotlin plugin. scripts/android_testlab.sh builds the instrumentation
+# APKs from THIS tree, makes one blocking gcloud call on one virtual device and
+# records the verdict on the run ledger (and on the command row when the
+# release belongs to one). Then android_testlab_gate() — the backend — says
+# whether a Production upload may proceed. Any other track is not gated, but
+# the run is still made and recorded, so a later promote inherits the verdict.
+# The gate reads the ledger, never this script's exit code.
+TL_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "")
+TL_CMD="${MEDIBO_CMD_ID:-$(git branch --show-current 2>/dev/null | grep -oE '(^|[^0-9])cmd-?[0-9]+' | grep -oE '[0-9]+' | head -1)}"
+progress building '{"review_status":"Firebase Test Lab: building the instrumentation APKs and running the matrix (one virtual device, one API level, <=10 min)"}'
+TL_LINE=$(bash scripts/android_testlab.sh run ${TL_CMD:+--cmd "$TL_CMD"} --release "$REL_ID" \
+            --commit "$TL_COMMIT" --version-code "$CODE" --version-name "$NAME" --track "$TRACK" \
+            --worker publish_play.sh 2>>"$LOG") || true
+log "${TL_LINE:-TESTLAB error — android_testlab.sh printed nothing}"
+TL_GATE=$("$DEVCMD" rpc android_testlab_gate "$(jq -nc --arg t "$TRACK" --arg c "$TL_COMMIT" --argjson v "$CODE" \
+            '{p_track:$t,p_kind:"publish",p_commit:$c,p_version_code:$v}')" 2>>"$LOG")
+TL_REASON=$(jq -r '.reason // "android_testlab_gate did not answer"' <<<"$TL_GATE" 2>/dev/null)
+if [ "$(jq -r '.allowed // false' <<<"$TL_GATE" 2>/dev/null)" != "true" ]; then
+  die "$TL_REASON" "$TL_LINE"
+fi
+log "Test Lab gate: $TL_REASON"
+progress building "$(jq -nc --arg r "$TL_REASON" '{review_status:$r}')"
 
 # ── 4. Play: upload → notes → full rollout → commit ─────────────────────────
 progress uploading "$(jq -nc --argjson b "$AAB_BYTES" '{aab_bytes:($b|tostring)}')"

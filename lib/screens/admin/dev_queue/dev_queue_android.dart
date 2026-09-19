@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../design_tokens.dart';
+import '../../../services/ui_copy.dart';
 import '../../../utils/render_log.dart';
 import 'dev_queue_common.dart';
 
@@ -124,6 +125,238 @@ class AndroidReleaseCard extends StatelessWidget {
                           Ds.t.body.copyWith(color: toneByName('warning').fg)),
                 ),
               ]),
+            ),
+          ],
+        ]),
+      ),
+    );
+  }
+}
+
+// ── CMD #2076 — the Firebase Test Lab verdict ────────────────────────────────
+//
+// The web build never runs the Kotlin plugins, so an Android release is gated
+// on one Test Lab matrix (scripts/android_testlab.sh). Everything below is a
+// PRINTER of `dev_cmd_get(id).testlab` (the detail block) and of the
+// `testlab_chip` / `testlab_tone` pair on the list row: status labels, the
+// device line, the per-check labels and their ok/failed words, the proof
+// labels and the blocker all arrive from the backend. Nothing is derived from
+// the status string here — a status of 'passed' with a label of 'Green,
+// allegedly' prints 'Green, allegedly' (test/protected/android_testlab_gate_test.dart).
+
+/// The row's chip text, or '' when the command has no Test Lab verdict.
+String testLabChipOf(Map<String, dynamic> row) =>
+    (row['testlab_chip'] ?? '').toString();
+
+/// The row's chip tone name; the backend's word, 'neutral' when absent.
+String testLabToneOf(Map<String, dynamic> row) =>
+    (row['testlab_tone'] ?? 'neutral').toString();
+
+class TestLabRun {
+  final Map<String, dynamic> block;
+  const TestLabRun(this.block);
+
+  factory TestLabRun.fromRow(Map<String, dynamic> row) => TestLabRun(
+      row['testlab'] is Map
+          ? Map<String, dynamic>.from(row['testlab'] as Map)
+          : const <String, dynamic>{});
+
+  bool get has => block['has'] == true;
+  String get title => (block['title'] ?? '').toString();
+  String get status => (block['status'] ?? '').toString();
+  String get label => (block['label'] ?? '').toString();
+  String get tone => (block['tone'] ?? 'neutral').toString();
+  String get sub => (block['sub'] ?? '').toString();
+  String get detail => (block['detail'] ?? '').toString();
+  String get url => (block['url'] ?? '').toString();
+  String get urlLabel => (block['url_label'] ?? '').toString();
+  String get checksTitle => (block['checks_title'] ?? '').toString();
+  String get proofsTitle => (block['proofs_title'] ?? '').toString();
+
+  List<Map<String, dynamic>> _list(String key) =>
+      ((block[key] as List?) ?? const [])
+          .whereType<Map>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+
+  /// [{key,label,ok,status,tone,detail}] — one row per check, payload order.
+  List<Map<String, dynamic>> get checks => _list('checks');
+
+  /// [{kind,label,path,bucket}] — the evidence pulled off the device.
+  List<Map<String, dynamic>> get proofs => _list('proofs');
+}
+
+/// Turns a private-bucket object into a URL the screen can open. The screen
+/// owns Supabase; the card only knows a bucket and a path.
+typedef ProofSigner = Future<String> Function(String bucket, String path);
+
+class TestLabCard extends StatelessWidget {
+  final Map<String, dynamic> row;
+  final void Function(String url)? onOpen;
+  final ProofSigner? signer;
+
+  /// The header's tap: the screen re-reads its row (dev_cmd_get). A Test Lab
+  /// matrix runs for minutes, so the verdict is refreshed in place instead of
+  /// leaving the screen. Null makes the header inert (list previews, tests).
+  final Future<void> Function()? onRefresh;
+  const TestLabCard(
+      {super.key, required this.row, this.onOpen, this.signer, this.onRefresh});
+
+  IconData _proofIcon(String kind) {
+    switch (kind) {
+      case 'video':
+        return Icons.videocam_outlined;
+      case 'logcat':
+        return Icons.receipt_long_outlined;
+      case 'screenshot':
+        return Icons.image_outlined;
+      default:
+        return Icons.data_object;
+    }
+  }
+
+  IconData _checkIcon(Map<String, dynamic> c) {
+    final ok = c['ok'];
+    if (ok == true) return Icons.check_circle_outline;
+    if (ok == false) return Icons.cancel_outlined;
+    return Icons.radio_button_unchecked;
+  }
+
+  Future<void> _openProof(Map<String, dynamic> p) async {
+    final path = (p['path'] ?? '').toString();
+    final bucket = (p['bucket'] ?? 'dev-cmd-proofs').toString();
+    if (path.isEmpty || onOpen == null) return;
+    if (signer == null) return;
+    final url = await signer!(bucket, path);
+    if (url.isNotEmpty) onOpen!(url);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = TestLabRun.fromRow(row);
+    if (!t.has) {
+      RenderLog.write('c2076_testlab_block', 0);
+      return const SizedBox.shrink();
+    }
+    RenderLog.write('c2076_testlab_block', 1);
+    final tone = toneByName(t.tone);
+    final hasUrl = t.url.isNotEmpty && t.urlLabel.isNotEmpty;
+
+    return Padding(
+      padding: EdgeInsets.only(top: Ds.space.x12),
+      child: DqCard(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // The header is the refresh door (Semantics identifier
+          // dq_testlab_refresh — the feature journey taps it): the screen
+          // re-reads the row, the card re-prints whatever came back.
+          Semantics(
+            identifier: 'dq_testlab_refresh',
+            button: onRefresh != null,
+            label: c('dev_queue.testlab_refresh'),
+            child: InkWell(
+              onTap: onRefresh == null ? null : () => onRefresh!(),
+              borderRadius: Ds.r.rButton,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: Ds.space.x48),
+                child: Row(children: [
+                  Icon(Icons.science_outlined, size: Ds.space.x16, color: kTextLo),
+                  SizedBox(width: Ds.space.x8),
+                  Expanded(
+                    child: Text(t.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Ds.t.subtitle),
+                  ),
+                  ToneChip(label: t.label, tone: tone),
+                  if (onRefresh != null) ...[
+                    SizedBox(width: Ds.space.x8),
+                    Icon(Icons.refresh,
+                        size: Ds.space.x16, color: Ds.c.textSecondary),
+                  ],
+                ]),
+              ),
+            ),
+          ),
+          if (t.sub.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x8),
+            Text(t.sub, style: Ds.t.caption),
+          ],
+          if (t.detail.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x8),
+            Text(t.detail, style: Ds.t.body),
+          ],
+          if (t.checks.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x16),
+            if (t.checksTitle.isNotEmpty)
+              Text(t.checksTitle,
+                  style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+            for (final c in t.checks)
+              Padding(
+                padding: EdgeInsets.only(top: Ds.space.x8),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Icon(_checkIcon(c),
+                      size: Ds.space.x16,
+                      color: toneByName((c['tone'] ?? 'neutral').toString()).fg),
+                  SizedBox(width: Ds.space.x8),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text((c['label'] ?? '').toString(), style: Ds.t.body),
+                      if ((c['detail'] ?? '').toString().isNotEmpty) ...[
+                        SizedBox(height: Ds.space.x4),
+                        Text((c['detail'] ?? '').toString(), style: Ds.t.caption),
+                      ],
+                    ]),
+                  ),
+                  SizedBox(width: Ds.space.x8),
+                  ToneChip(
+                      label: (c['status'] ?? '').toString(),
+                      tone: toneByName((c['tone'] ?? 'neutral').toString())),
+                ]),
+              ),
+          ],
+          if (t.proofs.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x16),
+            if (t.proofsTitle.isNotEmpty)
+              Text(t.proofsTitle,
+                  style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+            SizedBox(height: Ds.space.x4),
+            Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x8, children: [
+              for (final p in t.proofs)
+                InkWell(
+                  onTap: () => _openProof(p),
+                  borderRadius: Ds.r.rButton,
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(
+                        vertical: Ds.space.x8, horizontal: Ds.space.x4),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(_proofIcon((p['kind'] ?? '').toString()),
+                          size: Ds.space.x16, color: Ds.c.brand),
+                      SizedBox(width: Ds.space.x4),
+                      Text((p['label'] ?? '').toString(),
+                          style: Ds.t.body.copyWith(color: Ds.c.brand)),
+                    ]),
+                  ),
+                ),
+            ]),
+          ],
+          if (hasUrl) ...[
+            SizedBox(height: Ds.space.x8),
+            InkWell(
+              onTap: onOpen == null ? null : () => onOpen!(t.url),
+              borderRadius: Ds.r.rButton,
+              child: Padding(
+                padding: EdgeInsets.symmetric(vertical: Ds.space.x8),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.open_in_new, size: Ds.space.x16, color: Ds.c.brand),
+                  SizedBox(width: Ds.space.x8),
+                  Flexible(
+                    child: Text(t.urlLabel,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Ds.t.body.copyWith(color: Ds.c.brand)),
+                  ),
+                ]),
+              ),
             ),
           ],
         ]),

@@ -24,6 +24,9 @@ import 'payment_devices_section.dart';
 
 String _s(Object? v) => v == null ? '' : v.toString().trim();
 
+Map<String, dynamic> _map(Object? v) =>
+    v is Map ? Map<String, dynamic>.from(v) : const <String, dynamic>{};
+
 List<Map<String, dynamic>> _rows(Object? v) => v is List
     ? v.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList()
     : const [];
@@ -109,6 +112,10 @@ class _PaymentAlertsScreenState extends State<PaymentAlertsScreen> {
   String _retryLabel = '';
   String _filter = '';
   String _busy = '';
+  /// Which switch is mid-flight. One at a time: the screen reloads after each
+  /// save, because the backend recomputes the count line and the allow-list.
+  String _switching = '';
+  bool _appsOpen = false;
 
   Future<Map<String, dynamic>> _call(
     String fn,
@@ -210,6 +217,51 @@ class _PaymentAlertsScreenState extends State<PaymentAlertsScreen> {
     }
   }
 
+  /// One app on or off. The patch is the id and the flag — the same shape the
+  /// parser screen sends — and the screen reloads so the count line, the
+  /// device allow-list and the switch all come back from the backend.
+  Future<void> _setApp(Map<String, dynamic> app, bool on) async {
+    final key = 'app_${_s(app['id'])}';
+    setState(() => _switching = key);
+    Map<String, dynamic> res;
+    try {
+      res = await _call('payment_alert_rule_save', {
+        'p_patch': {'id': app['id'], 'enabled': on},
+      });
+    } catch (e) {
+      res = <String, dynamic>{'ok': false, 'message': e.toString()};
+    }
+    if (!mounted) return;
+    setState(() => _switching = '');
+    _toast(res);
+    await _load();
+  }
+
+  Future<void> _setUtr(bool on) async {
+    setState(() => _switching = 'utr');
+    Map<String, dynamic> res;
+    try {
+      res = await _call('payment_alert_utr_set', {'p_on': on});
+    } catch (e) {
+      res = <String, dynamic>{'ok': false, 'message': e.toString()};
+    }
+    if (!mounted) return;
+    setState(() => _switching = '');
+    _toast(res);
+    await _load();
+  }
+
+  /// The backend's own word for what just happened, or nothing.
+  void _toast(Map<String, dynamic> res) {
+    final msg = _s(res['toast']).isNotEmpty
+        ? _s(res['toast'])
+        : _s(res['message']).isNotEmpty
+            ? _s(res['message'])
+            : _s(res['error']);
+    if (msg.isEmpty) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
   @override
   Widget build(BuildContext context) {
     final filters = _rows(_payload['filters']);
@@ -255,6 +307,32 @@ class _PaymentAlertsScreenState extends State<PaymentAlertsScreen> {
                 padding: EdgeInsets.only(bottom: Ds.space.x16),
                 child: Text(_s(_payload['count_label']), style: Ds.t.caption),
               ),
+            // CMD #2093 — what is collecting the money, before anything about
+            // what was heard. Both lines are the backend's.
+            if (_map(_payload['header']).isNotEmpty) ...[
+              _CollectionHeader(block: _map(_payload['header'])),
+              SizedBox(height: Ds.space.x12),
+            ],
+            // CMD #2093 — the switch that killed the ₹50,000 PhonePe ad.
+            if (_map(_payload['utr']).isNotEmpty) ...[
+              _UtrCard(
+                block: _map(_payload['utr']),
+                busy: _switching == 'utr',
+                onChanged: _setUtr,
+              ),
+              SizedBox(height: Ds.space.x12),
+            ],
+            // CMD #2093 — which apps this phone is even allowed to read.
+            if (_map(_payload['apps']).isNotEmpty) ...[
+              _AppsCard(
+                block: _map(_payload['apps']),
+                open: _appsOpen,
+                switching: _switching,
+                onToggleOpen: () => setState(() => _appsOpen = !_appsOpen),
+                onChanged: _setApp,
+              ),
+              SizedBox(height: Ds.space.x12),
+            ],
             // CMD #2050 — the Devices section. Nothing fed this queue before
             // it existed: payment_alert_device had zero rows because no screen
             // ever paired a phone. Drawn ABOVE the queue so an empty queue is
@@ -736,6 +814,298 @@ class _Skeleton extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+// ── CMD #2093: the header, the UTR switch and the app picker ─────────────────
+//
+// Three blocks, one rule between them: nothing below decides anything. The
+// mode, the UPI id, the hint under the switch, the group headings, the order
+// of the apps and the count line all arrive finished in the payload. A switch
+// here sends a flag and redraws whatever comes back.
+
+/// What is collecting the money right now: the mode, and the UPI id it lands on.
+class _CollectionHeader extends StatelessWidget {
+  const _CollectionHeader({required this.block});
+
+  final Map<String, dynamic> block;
+
+  @override
+  Widget build(BuildContext context) {
+    final upi = _s(block['upi_value']);
+    RenderLog.write('c2093_mode_header', 1);
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(Ds.space.x16),
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        boxShadow: Ds.elevation.e1,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // At 360 px the mode pill and the title do not always share a line,
+          // so they wrap instead of squeezing the pill to nothing.
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: Ds.space.x8,
+            runSpacing: Ds.space.x8,
+            children: [
+              Text(_s(block['title']), style: Ds.t.caption),
+              _StatusPill(
+                label: _s(block['mode_label']),
+                tone: _s(block['mode_tone']),
+              ),
+            ],
+          ),
+          SizedBox(height: Ds.space.x12),
+          Text(_s(block['upi_label']), style: Ds.t.caption),
+          SizedBox(height: Ds.space.x4),
+          Text(
+            upi,
+            style: block['has_upi'] == true ? Ds.t.subtitle : Ds.t.body,
+          ),
+          if (_s(block['upi_name']).isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(_s(block['upi_name']), style: Ds.t.caption),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// "Look for UTR". On, a credit with no reference number never reaches the
+/// queue — the hint under it says which of the two states is in force, and
+/// that sentence is the backend's, not a Dart ternary over two literals.
+class _UtrCard extends StatelessWidget {
+  const _UtrCard({
+    required this.block,
+    required this.busy,
+    required this.onChanged,
+  });
+
+  final Map<String, dynamic> block;
+  final bool busy;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final on = block['on'] == true;
+    final canEdit = block['can_edit'] == true;
+    RenderLog.write('c2093_utr_toggle', on ? 1 : 0);
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(Ds.space.x16),
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        boxShadow: Ds.elevation.e1,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(child: Text(_s(block['title']), style: Ds.t.subtitle)),
+              SizedBox(width: Ds.space.x12),
+              SizedBox(
+                height: 44,
+                child: Center(
+                  child: busy
+                      ? const SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Semantics(
+                          identifier: 'pay_alert_utr_switch',
+                          child: Switch(
+                            value: on,
+                            onChanged: canEdit ? onChanged : null,
+                          ),
+                        ),
+                ),
+              ),
+            ],
+          ),
+          if (_s(block['hint']).isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(_s(block['hint']), style: Ds.t.caption),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Every app rule with a switch, in the backend's order: the merchant apps
+/// that hear a real shop payment first, then the banks, then the personal apps
+/// that also announce ads and chats. A group heading is drawn when the kind
+/// changes — Dart never sorts and never names a group itself.
+class _AppsCard extends StatelessWidget {
+  const _AppsCard({
+    required this.block,
+    required this.open,
+    required this.switching,
+    required this.onToggleOpen,
+    required this.onChanged,
+  });
+
+  final Map<String, dynamic> block;
+  final bool open;
+  final String switching;
+  final VoidCallback onToggleOpen;
+  final void Function(Map<String, dynamic> app, bool on) onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final apps = _rows(block['rows']);
+    final canEdit = block['can_edit'] == true;
+    RenderLog.write('c2093_app_rows', apps.length);
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(Ds.space.x16),
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        boxShadow: Ds.elevation.e1,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Semantics(
+            identifier: 'pay_alert_apps_header',
+            child: InkWell(
+              onTap: onToggleOpen,
+              borderRadius: Ds.r.rButton,
+              // A MINIMUM of 44, never a fixed 44: two lines of text at a
+              // large system font size are taller than the touch floor, and a
+              // fixed box clips them instead of growing.
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(minHeight: 44),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(_s(block['title']), style: Ds.t.subtitle),
+                          if (_s(block['count_label']).isNotEmpty)
+                            Text(_s(block['count_label']), style: Ds.t.caption),
+                        ],
+                      ),
+                    ),
+                    Icon(open ? Icons.expand_less : Icons.expand_more),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          if (open) ...[
+            if (_s(block['hint']).isNotEmpty) ...[
+              SizedBox(height: Ds.space.x8),
+              Text(_s(block['hint']), style: Ds.t.caption),
+            ],
+            SizedBox(height: Ds.space.x8),
+            if (apps.isEmpty)
+              Text(_s(block['empty_label']), style: Ds.t.body)
+            else
+              // The heading is drawn where the payload's OWN order changes
+              // kind. Dart reads the boundary; it never creates one.
+              for (var i = 0; i < apps.length; i++) ...[
+                if (i == 0 ||
+                    _s(apps[i]['kind_label']) != _s(apps[i - 1]['kind_label'])) ...[
+                  SizedBox(height: i == 0 ? Ds.space.x4 : Ds.space.x16),
+                  Text(_s(apps[i]['kind_label']), style: Ds.t.caption),
+                  SizedBox(height: Ds.space.x4),
+                ],
+                _AppRow(
+                  app: apps[i],
+                  canEdit: canEdit && apps[i]['can_edit'] == true,
+                  busy: switching == 'app_${_s(apps[i]['id'])}',
+                  onChanged: (on) => onChanged(apps[i], on),
+                ),
+              ],
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _AppRow extends StatelessWidget {
+  const _AppRow({
+    required this.app,
+    required this.canEdit,
+    required this.busy,
+    required this.onChanged,
+  });
+
+  final Map<String, dynamic> app;
+  final bool canEdit;
+  final bool busy;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final on = app['enabled'] == true;
+    return ConstrainedBox(
+      // A FLOOR of 56, not a fixed height: the row carries two lines of text
+      // and still has to leave a 44 px target for the switch inside it, and at
+      // a large system font size those two lines are taller than 56.
+      constraints: const BoxConstraints(minHeight: 56),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _s(app['label']),
+                  style: Ds.t.body,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  _s(app['package_name']),
+                  style: Ds.t.caption,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+          SizedBox(width: Ds.space.x8),
+          Text(
+            _s(app['state_label']),
+            style: Ds.t.caption.copyWith(color: payAlertTone(_s(app['state_tone']))),
+          ),
+          SizedBox(
+            height: 44,
+            child: Center(
+              child: busy
+                  ? const SizedBox(
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Semantics(
+                      identifier: 'pay_alert_app_${_s(app['id'])}',
+                      child: Switch(
+                        value: on,
+                        onChanged: canEdit ? onChanged : null,
+                      ),
+                    ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

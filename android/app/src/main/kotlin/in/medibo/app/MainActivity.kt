@@ -162,6 +162,19 @@ class MainActivity : FlutterActivity() {
                         )
                         result.success(true)
                     }
+                    // CMD #2093 — the phone notification for a credit. Both
+                    // strings arrive worded from payment_alert_speak_pull; the
+                    // id is the speak row's, so the same payment never posts
+                    // twice and a re-pull replaces rather than stacks.
+                    "notify" -> {
+                        PaymentListener.notifyPayment(
+                            applicationContext,
+                            call.argument<Int>("id") ?: 0,
+                            call.argument<String>("title") ?: "",
+                            call.argument<String>("body") ?: "",
+                        )
+                        result.success(true)
+                    }
                     else -> result.notImplemented()
                 }
             }

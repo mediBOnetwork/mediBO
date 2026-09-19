@@ -72,7 +72,7 @@ android {
             create("partner") {
                 keyAlias = partnerKeystoreProperties["keyAlias"] as String
                 keyPassword = partnerKeystoreProperties["keyPassword"] as String
-                storeFile = partnerKeystoreProperties["storeFile"]?.let { file(it) }
+                storeFile = partnerKeystoreProperties["storeFile"]?.let { rootProject.file(it) }
                 storePassword = partnerKeystoreProperties["storePassword"] as String
             }
         }

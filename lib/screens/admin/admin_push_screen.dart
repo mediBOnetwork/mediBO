@@ -119,7 +119,22 @@ class _AdminPushScreenState extends State<AdminPushScreen> {
     final d = _data;
     return Scaffold(
       backgroundColor: Ds.c.bg,
-      appBar: AppBar(title: Text(d?['title'] as String? ?? '')),
+      appBar: AppBar(
+        title: Text(d?['title'] as String? ?? ''),
+        actions: [
+          // CMD #2102 — reload straight from push_config_get(); the Semantics
+          // id is what feat-2102 taps on the branch preview and on medibo.in.
+          Semantics(
+            identifier: 'push_admin_refresh',
+            button: true,
+            child: IconButton(
+              tooltip: d?['refresh_label'] as String? ?? '',
+              icon: const Icon(Icons.refresh),
+              onPressed: _loading ? null : _load,
+            ),
+          ),
+        ],
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null

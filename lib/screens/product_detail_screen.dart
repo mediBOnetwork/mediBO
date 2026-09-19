@@ -25,16 +25,17 @@ import 'compare_screen.dart';
 
 typedef WishlistToggle = Future<WishlistResult> Function(String productId);
 
-/// CMD #2073 — ONE type for the company, the pack line, the MRP and the sale
-/// price.
+/// CMD #2073 — ONE type for the pack line, the MRP and the sale price.
+/// CMD #2095 — and that type is now `Ds.t.body`, the SAME token the Product
+/// overview card prints its right-hand values in ("Melphalan (50mg)").
 ///
 /// They used to be four treatments in a column an inch tall: an uppercase
 /// tracked caption, a plain caption, a struck caption and a heading-sized
-/// number on a plate. The spec asks for one font, one size, one weight, and
-/// `Ds.t.bodyStrong` IS that pair of tokens (type.body.size at
-/// type.subtitle.weight), so the whole block still follows a token change with
-/// no deploy. Only the ink differs, which is what tells the four apart.
-TextStyle _pdpLine(Color color) => Ds.t.bodyStrong.copyWith(color: color);
+/// number on a plate. #2073 made them one size; this makes them one WEIGHT
+/// too, so the page has exactly one body treatment and the emphasis left on
+/// the screen is the ink, not the stroke. One token, so a type change still
+/// moves the whole block with no deploy.
+TextStyle _pdpLine(Color color) => Ds.t.body.copyWith(color: color);
 
 /// CHANGE #636 — the full-page product detail screen (PDP).
 ///
@@ -595,7 +596,6 @@ class _TitleBlock extends StatelessWidget {
     final chipLabel = t.has ? t.formChip.label : data.formChip;
     final packLine = t.has ? t.packLine.label : data.packLabel;
     final name = t.has && t.name.isNotEmpty ? t.name : data.name;
-    final company = t.has && t.company.isNotEmpty ? t.company : data.company;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -637,13 +637,12 @@ class _TitleBlock extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           style: Ds.t.title,
         ),
-        if (company.isNotEmpty) ...[
-          SizedBox(height: Ds.space.x4),
-          Text(
-            company.toUpperCase(),
-            style: _pdpLine(Ds.c.textSecondary),
-          ),
-        ],
+        // CMD #2095 — the company line that sat here is GONE. It repeated the
+        // "Marketer" row of the Product overview card two screens further
+        // down, and it pushed the one fact a buyer reads next — the pack —
+        // away from the name it belongs to. The pack line now sits directly
+        // under the name; `title.company` is still in the payload and is still
+        // printed, once, in the overview card.
         if (packLine.isNotEmpty) ...[
           SizedBox(height: Ds.space.x4),
           Text(
@@ -995,15 +994,13 @@ class _PriceRow extends StatelessWidget {
             ),
           ),
         ],
-        // CHANGE #174 — the trade breakdown behind that margin: what the
-        // pharmacy is billed (PTR), the scheme it was captured with, and the
-        // tax split. Every row is a backend string; this widget prints pairs
-        // and nothing else. Absent in mrp_only mode, so a product with no
-        // captured pricing looks exactly as it did before.
-        if (pr != null && (pr.hasPtr || pr.gst != null)) ...[
-          SizedBox(height: Ds.space.x12),
-          _TradeBreakdown(pricing: pr),
-        ],
+        // CMD #2095 — CHANGE #174's trade breakdown (PTR, scheme, the GST
+        // split and the net line) is GONE from this page, and so is the
+        // "Net ₹ · GST %" line the backend used to send under the sale price.
+        // The numbers it printed were the ones the catalogue is least sure of;
+        // the page now shows the two prices it can stand behind and nothing
+        // else. `pricing.gst` is untouched in the payload — the cards and the
+        // cart still read it.
       ],
     );
   }
@@ -1144,73 +1141,6 @@ class _BuyControl extends StatelessWidget {
 }
 
 /// PTR + scheme + GST split, printed verbatim from the `pricing` block.
-class _TradeBreakdown extends StatelessWidget {
-  final Pricing pricing;
-  const _TradeBreakdown({required this.pricing});
-
-  @override
-  Widget build(BuildContext context) {
-    final gst = pricing.gst;
-    final rows = <({String label, String value})>[
-      if (pricing.hasPtr)
-        (label: pricing.ptrCaption, value: pricing.ptrDisplay),
-      if (pricing.schemeText.isNotEmpty)
-        (label: 'Scheme', value: pricing.schemeText),
-      if (gst != null) ...gst.lines,
-    ];
-    if (rows.isEmpty) return const SizedBox.shrink();
-
-    return Container(
-      padding: EdgeInsets.all(Ds.space.x12),
-      decoration: BoxDecoration(
-        color: Brand.field,
-        borderRadius: BorderRadius.circular(Rad.card),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (gst != null && gst.title.isNotEmpty) ...[
-            Text(gst.title, style: AppType.t2.copyWith(color: Brand.inkMuted)),
-            const SizedBox(height: 8),
-          ],
-          for (final r in rows) ...[
-            Padding(
-              padding: EdgeInsets.only(bottom: Ds.space.x4),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(r.label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppType.b3.copyWith(color: Brand.inkSub)),
-                  ),
-                  const SizedBox(width: 12),
-                  // Numbers right-aligned, as every money column in the app is.
-                  Text(r.value,
-                      style: AppType.b3
-                          .copyWith(fontWeight: FontWeight.w600)),
-                ],
-              ),
-            ),
-          ],
-          if (gst != null && gst.netDisplay.isNotEmpty)
-            Row(
-              children: [
-                Expanded(
-                  child: Text(pricing.netCaption,
-                      style: AppType.t2.copyWith(color: Brand.inkMuted)),
-                ),
-                const SizedBox(width: 12),
-                Text(gst.netDisplay,
-                    style: AppType.l4.copyWith(fontWeight: FontWeight.w800)),
-              ],
-            ),
-        ],
-      ),
-    );
-  }
-}
-
 /// CMD #1826 — one tone word → one pair of colours. The ONLY place the band's
 /// colour is decided, and it reads `tone`, never `band` or the sub-line.
 Color _toneBg(String tone) => switch (tone) {

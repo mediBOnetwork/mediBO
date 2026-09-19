@@ -457,9 +457,11 @@ void main() {
       await _pump(tester, _payload());
 
       expect(find.text('Alkacel 100mg Injection'), findsOneWidget);
-      // Twice on purpose: the header line AND the overview's Manufacturer row.
-      // Both are the payload's own string; neither is composed here.
-      expect(find.text('CELON LABORATORIES LTD'), findsNWidgets(2));
+      // CMD #2095 — ONCE, not twice. The company used to be printed under the
+      // name AND as the overview's Manufacturer row; the line under the name
+      // is gone, so a second copy of this string on the page means the
+      // duplicate came back.
+      expect(find.text('CELON LABORATORIES LTD'), findsOneWidget);
       expect(find.text('Vial of 1 Injection'), findsOneWidget);
       expect(find.text('Vial'), findsOneWidget);
     });
@@ -1056,8 +1058,8 @@ void main() {
     Map<String, dynamic> withTitle(Map<String, dynamic> title) =>
         _payload()..['title'] = title;
 
-    testWidgets('the pill, the name, the company and ONE pack line, all from '
-        'the title block', (tester) async {
+    testWidgets('the pill, the name and ONE pack line, all from the title '
+        'block — and no company line (CMD #2095)', (tester) async {
       await _pump(
           tester,
           withTitle({
@@ -1069,7 +1071,10 @@ void main() {
           }));
 
       expect(find.text('Azithral 500 Tablet'), findsOneWidget);
-      expect(find.text('ALEMBIC LTD'), findsOneWidget);
+      // CMD #2095 — title.company is still in the payload and the model still
+      // carries it; the PAGE no longer prints it under the name. The pack line
+      // sits directly under the name instead.
+      expect(find.text('ALEMBIC LTD'), findsNothing);
       expect(find.byKey(const ValueKey('pdp-form-chip')), findsOneWidget);
       expect(find.text('Strip'), findsOneWidget);
       expect(find.text('Strip of 5 tablets'), findsOneWidget);

@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:pharma_b2b/utils/toast.dart';
@@ -1495,18 +1497,32 @@ class C2090ScrollComp {
 
   /// How far the page must move so everything below the cart lines stays put.
   ///
+  /// CMD #2099 — the delta is the height of the content ABOVE the rails, not
+  /// the scrollable's maxScrollExtent. #2090 read the max extent, which moves
+  /// for three reasons that are NOT a cart row: a bill row appearing under
+  /// the rails, a banner appearing above the scroll (the viewport shrinks),
+  /// and a rail payload arriving a frame later. Each of those made the page
+  /// jump by its own height — the ~35px a bill row is — which is exactly what
+  /// a wishlist ADD does that a "You may also like" ADD did not: it lands a
+  /// row AND a new bill line in two separate layouts. Measuring the block
+  /// above the rails compensates the growth that actually pushed them down,
+  /// and nothing else.
+  ///
   /// Pure on purpose: the rule is asserted without mounting a screen that
   /// needs five inherited states and a live Supabase client.
   static double shift({
-    required double oldMax,
-    required double newMax,
+    required double? oldAbove,
+    required double? newAbove,
     required bool isScrolling,
     required double velocity,
   }) {
     // A finger or a fling owns the page while it is moving; correcting under
     // it would fight the gesture.
     if (isScrolling || velocity != 0) return 0;
-    final d = newMax - oldMax;
+    // Nothing has been measured yet (first layout): there is no previous
+    // height to compare against, so there is nothing to correct.
+    if (oldAbove == null || newAbove == null) return 0;
+    final d = newAbove - oldAbove;
     if (d.abs() < minDelta) return 0;
     return d;
   }
@@ -1521,13 +1537,79 @@ class C2090ScrollComp {
       (pixels + shift).clamp(minExtent, maxExtent);
 }
 
+/// CMD #2099 — the one number the compensation is computed from: the laid-out
+/// height of everything ABOVE the rails (the cart rows block).
+///
+/// [above] is written by [_C2090AboveProbe] during layout, before the viewport
+/// reports its content dimensions; [settled] is what the physics has already
+/// corrected for. The pair is deliberately mutable and deliberately tiny — it
+/// is read once per layout and never rebuilt.
+class C2090Anchor {
+  /// The height the probe measured in the layout that is running now.
+  double? above;
+
+  /// Growth measured above the rails that the page has not yet been moved by.
+  /// It is spent by the physics during the SAME layout, or discarded at the
+  /// end of the frame — a correction that could not be spent then can never be
+  /// spent later, because by the next frame the page has already been seen.
+  double pending = 0;
+}
+
+/// Records the laid-out height of the block above the rails into a
+/// [C2090Anchor]. It draws nothing and changes no layout of its own.
+class _C2090AboveProbe extends SingleChildRenderObjectWidget {
+  final C2090Anchor anchor;
+  const _C2090AboveProbe({required this.anchor, required Widget super.child});
+
+  @override
+  _RenderC2090AboveProbe createRenderObject(BuildContext context) =>
+      _RenderC2090AboveProbe(anchor);
+
+  @override
+  void updateRenderObject(
+      BuildContext context, _RenderC2090AboveProbe renderObject) {
+    renderObject.anchor = anchor;
+  }
+}
+
+class _RenderC2090AboveProbe extends RenderProxyBox {
+  _RenderC2090AboveProbe(this.anchor);
+  C2090Anchor anchor;
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    final previous = anchor.above;
+    anchor.above = size.height;
+    if (previous == null) return;
+    final d = C2090ScrollComp.shift(
+      oldAbove: previous,
+      newAbove: size.height,
+      isScrolling: false,
+      velocity: 0,
+    );
+    if (d == 0) return;
+    anchor.pending += d;
+    // The viewport reports its content dimensions immediately after this
+    // layout, which is the one moment the correction can land. Whatever is
+    // still unspent when the frame ends is dropped rather than carried into
+    // an unrelated layout — that carry is how a stale delta becomes a jump.
+    SchedulerBinding.instance.addPostFrameCallback((_) => anchor.pending = 0);
+  }
+}
+
 /// The page scroll of the cart, with [C2090ScrollComp] applied.
 class C2090StillPhysics extends ScrollPhysics {
-  const C2090StillPhysics({super.parent});
+  /// CMD #2099 — the measured height of the block above the rails. Null in the
+  /// pure tests and in any caller that has no probe: the physics then behaves
+  /// exactly like its parent, never guessing a correction.
+  final C2090Anchor? anchor;
+
+  const C2090StillPhysics({super.parent, this.anchor});
 
   @override
   C2090StillPhysics applyTo(ScrollPhysics? ancestor) =>
-      C2090StillPhysics(parent: buildParent(ancestor));
+      C2090StillPhysics(parent: buildParent(ancestor), anchor: anchor);
 
   @override
   double adjustPositionForNewDimensions({
@@ -1542,13 +1624,16 @@ class C2090StillPhysics extends ScrollPhysics {
       isScrolling: isScrolling,
       velocity: velocity,
     );
-    final d = C2090ScrollComp.shift(
-      oldMax: oldPosition.maxScrollExtent,
-      newMax: newPosition.maxScrollExtent,
-      isScrolling: isScrolling,
-      velocity: velocity,
-    );
+    final a = anchor;
+    if (a == null) return base;
+    // A finger or a fling owns the page while it is moving; correcting under
+    // it would fight the gesture, so the delta is left to expire.
+    if (isScrolling || velocity != 0) return base;
+    final d = a.pending;
+    a.pending = 0;
     if (d == 0) return base;
+    RenderLog.write('c2099_still_shift',
+        'above=${a.above?.toStringAsFixed(0)};d=${d.toStringAsFixed(0)}');
     return C2090ScrollComp.settle(
       pixels: base,
       shift: d,
@@ -1561,7 +1646,12 @@ class C2090StillPhysics extends ScrollPhysics {
 /// CMD #2090 — the cart page below the banners, in ONE scroll:
 /// ROWS (all of them, full height) → WISHLIST rail → YOU MAY ALSO LIKE rail →
 /// BILL details.
-class _C2090CartBody extends StatelessWidget {
+///
+/// CMD #2099 — the children are laid out EVERY frame (a Column in one scroll
+/// view, not a lazy list), so the probe that measures the block above the
+/// rails is never stale: a lazily-dropped rows sliver was a layout the
+/// compensation could not see.
+class _C2090CartBody extends StatefulWidget {
   final Widget rows;
   final List<Widget> rails;
   final Widget? bill;
@@ -1573,20 +1663,36 @@ class _C2090CartBody extends StatelessWidget {
   });
 
   @override
+  State<_C2090CartBody> createState() => _C2090CartBodyState();
+}
+
+class _C2090CartBodyState extends State<_C2090CartBody> {
+  /// One anchor per mounted cart page, so the height measured by the probe and
+  /// the height the physics corrects against cannot drift apart.
+  final C2090Anchor _anchor = C2090Anchor();
+
+  @override
   Widget build(BuildContext context) {
     RenderLog.write(
       'c2090_cart_layout',
-      'rows=full;rails=${rails.length}'
-      ';order=rows_rails_bill;bill=${bill != null ? 1 : 0};scroll=page_only',
+      'rows=full;rails=${widget.rails.length}'
+      ';order=rows_rails_bill;bill=${widget.bill != null ? 1 : 0}'
+      ';scroll=page_only;comp=above_probe',
     );
-    return ListView(
-      physics: C2090StillPhysics(parent: platformScrollPhysics()),
+    return SingleChildScrollView(
+      physics: C2090StillPhysics(
+          parent: platformScrollPhysics(), anchor: _anchor),
       padding: EdgeInsets.zero,
-      children: [
-        rows,
-        ...rails,
-        if (bill != null) bill!,
-      ],
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Everything the rails sit under. Its height IS the compensation.
+          _C2090AboveProbe(anchor: _anchor, child: widget.rows),
+          ...widget.rails,
+          if (widget.bill != null) widget.bill!,
+        ],
+      ),
     );
   }
 }

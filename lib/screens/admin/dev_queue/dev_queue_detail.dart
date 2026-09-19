@@ -193,7 +193,11 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
                 // CMD #2076 — the Firebase Test Lab verdict for that release, with
                 // the video / logcat / screenshots pulled off the device. has:false
                 // on a command that never ran one, so it costs nothing.
-                TestLabCard(row: _row, onOpen: _open, signer: _signProof),
+                TestLabCard(
+                    row: _row,
+                    onOpen: _open,
+                    signer: _signProof,
+                    onRefresh: () => _load(silent: true)),
                 if (_status == 'needs_input') _needsInputBanner(),
                 if (_row['is_waiting'] == true) _waitingBanner(),
                 // CHANGE #1856 — the cost of the waiting, whether or not the

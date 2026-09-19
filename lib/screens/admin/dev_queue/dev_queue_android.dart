@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../design_tokens.dart';
+import '../../../services/ui_copy.dart';
 import '../../../utils/render_log.dart';
 import 'dev_queue_common.dart';
 
@@ -193,7 +194,13 @@ class TestLabCard extends StatelessWidget {
   final Map<String, dynamic> row;
   final void Function(String url)? onOpen;
   final ProofSigner? signer;
-  const TestLabCard({super.key, required this.row, this.onOpen, this.signer});
+
+  /// The header's tap: the screen re-reads its row (dev_cmd_get). A Test Lab
+  /// matrix runs for minutes, so the verdict is refreshed in place instead of
+  /// leaving the screen. Null makes the header inert (list previews, tests).
+  final Future<void> Function()? onRefresh;
+  const TestLabCard(
+      {super.key, required this.row, this.onOpen, this.signer, this.onRefresh});
 
   IconData _proofIcon(String kind) {
     switch (kind) {
@@ -239,15 +246,37 @@ class TestLabCard extends StatelessWidget {
       padding: EdgeInsets.only(top: Ds.space.x12),
       child: DqCard(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Icon(Icons.science_outlined, size: Ds.space.x16, color: kTextLo),
-            SizedBox(width: Ds.space.x8),
-            Expanded(
-              child: Text(t.title,
-                  maxLines: 1, overflow: TextOverflow.ellipsis, style: Ds.t.subtitle),
+          // The header is the refresh door (Semantics identifier
+          // dq_testlab_refresh — the feature journey taps it): the screen
+          // re-reads the row, the card re-prints whatever came back.
+          Semantics(
+            identifier: 'dq_testlab_refresh',
+            button: onRefresh != null,
+            label: c('dev_queue.testlab_refresh'),
+            child: InkWell(
+              onTap: onRefresh == null ? null : () => onRefresh!(),
+              borderRadius: Ds.r.rButton,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: Ds.space.x48),
+                child: Row(children: [
+                  Icon(Icons.science_outlined, size: Ds.space.x16, color: kTextLo),
+                  SizedBox(width: Ds.space.x8),
+                  Expanded(
+                    child: Text(t.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Ds.t.subtitle),
+                  ),
+                  ToneChip(label: t.label, tone: tone),
+                  if (onRefresh != null) ...[
+                    SizedBox(width: Ds.space.x8),
+                    Icon(Icons.refresh,
+                        size: Ds.space.x16, color: Ds.c.textSecondary),
+                  ],
+                ]),
+              ),
             ),
-            ToneChip(label: t.label, tone: tone),
-          ]),
+          ),
           if (t.sub.isNotEmpty) ...[
             SizedBox(height: Ds.space.x8),
             Text(t.sub, style: Ds.t.caption),

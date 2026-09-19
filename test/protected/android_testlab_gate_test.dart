@@ -160,6 +160,37 @@ void main() {
     expect(toneByName(testLabToneOf({'testlab_tone': 'danger'})), same(toneByName('error')));
   });
 
+  testWidgets('the header is the refresh door: dq_testlab_refresh asks the screen to re-read the row',
+      (tester) async {
+    final handle = tester.ensureSemantics();
+    var refreshed = 0;
+    await tester.pumpWidget(_host(TestLabCard(
+        row: {'testlab': _block()},
+        onRefresh: () async {
+          refreshed++;
+        })));
+    await tester.pumpAndSettle();
+    final door = find.bySemanticsIdentifier('dq_testlab_refresh');
+    expect(door, findsOneWidget);
+    await tester.tap(door);
+    await tester.pumpAndSettle();
+    expect(refreshed, 1);
+    // the tap never fabricates a verdict — the card still prints the payload
+    expect(find.text('Firebase Test Lab'), findsOneWidget);
+    handle.dispose();
+  });
+
+  testWidgets('without a refresh callback the header is inert and draws no refresh glyph',
+      (tester) async {
+    final handle = tester.ensureSemantics();
+    await tester.pumpWidget(_host(TestLabCard(row: {'testlab': _block()})));
+    await tester.pumpAndSettle();
+    await tester.tap(find.bySemanticsIdentifier('dq_testlab_refresh'));
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.refresh), findsNothing);
+    handle.dispose();
+  });
+
   testWidgets('an unknown tone in the block stays neutral, never guessed from status', (tester) async {
     await tester.pumpWidget(_host(TestLabCard(row: {'testlab': _block(status: 'failed', tone: 'plaid')})));
     await tester.pump();

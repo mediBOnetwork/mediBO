@@ -380,20 +380,37 @@ class PaymentListenerService {
     _speakVolume = (res['volume'] as num?)?.toInt() ?? 100;
     final rows = (res['rows'] as List?) ?? const [];
     if (rows.isEmpty) return 0;
-    if (_speakOn) {
-      for (final r in rows.whereType<Map>()) {
-        final line = '${r['message'] ?? ''}';
-        if (line.isEmpty) continue;
+    var notified = 0;
+    for (final r in rows.whereType<Map>()) {
+      // CMD #2093 — the notification fires for EVERY accepted credit, mute or
+      // not: a phone on silent still has to show that the money arrived. Both
+      // strings are the backend's (notify_title / notify_body).
+      final body = '${r['notify_body'] ?? ''}';
+      if (body.isNotEmpty) {
         try {
-          await _ch.invokeMethod<bool>('speak', <String, dynamic>{
-            'text': line,
-            'volume': _speakVolume,
+          await _ch.invokeMethod<bool>('notify', <String, dynamic>{
+            'id': (r['id'] as num?)?.toInt() ?? 0,
+            'title': '${r['notify_title'] ?? ''}',
+            'body': body,
           });
+          notified++;
         } catch (_) {
-          // No TTS engine on this handset: the Money card still shows the line.
+          // An OEM that refuses the post still gets the spoken line.
         }
       }
+      if (!_speakOn) continue;
+      final line = '${r['message'] ?? ''}';
+      if (line.isEmpty) continue;
+      try {
+        await _ch.invokeMethod<bool>('speak', <String, dynamic>{
+          'text': line,
+          'volume': _speakVolume,
+        });
+      } catch (_) {
+        // No TTS engine on this handset: the Money card still shows the line.
+      }
     }
+    RenderLog.write('c2093_pay_notified', notified);
     RenderLog.write('c1931_listener_spoke', rows.length);
     _bump();
     return rows.length;

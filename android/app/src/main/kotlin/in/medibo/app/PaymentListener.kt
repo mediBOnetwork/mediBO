@@ -1,6 +1,9 @@
 package `in`.medibo.app
 
 import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -275,6 +278,59 @@ object PaymentListener {
                 }
                 pending.clear()
             }
+        }
+    }
+
+    // ── the phone notification ──────────────────────────────────────────────
+    // CMD #2093 — speaking is not enough: a phone on silent, or one with no
+    // TTS engine, announced nothing at all. Every accepted credit now also
+    // posts a normal Android notification whose TITLE and BODY are the
+    // backend's words (payment_alert_speak.notify_title / notify_body),
+    // carried down by payment_alert_speak_pull and passed through verbatim.
+    private const val CHANNEL_ID = "medibo_payments"
+
+    private fun channel(ctx: Context): NotificationManager {
+        val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val existing = nm.getNotificationChannel(CHANNEL_ID)
+            if (existing == null) {
+                nm.createNotificationChannel(
+                    NotificationChannel(
+                        CHANNEL_ID,
+                        // The channel's own name is the one string Android
+                        // shows in its settings list; it is not per-payment
+                        // copy and cannot come down with a payment.
+                        "Payments received",
+                        NotificationManager.IMPORTANCE_HIGH,
+                    ),
+                )
+            }
+        }
+        return nm
+    }
+
+    /** Post one payment notification. [title] and [body] are already worded. */
+    fun notifyPayment(ctx: Context, id: Int, title: String, body: String) {
+        if (body.isBlank()) return
+        try {
+            val nm = channel(ctx)
+            val open = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)
+            val pi = if (open == null) null else PendingIntent.getActivity(
+                ctx, 0, open,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            val n = Notification.Builder(ctx, CHANNEL_ID)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setStyle(Notification.BigTextStyle().bigText(body))
+                .setSmallIcon(ctx.applicationInfo.icon)
+                .setAutoCancel(true)
+                .also { b -> if (pi != null) b.setContentIntent(pi) }
+                .build()
+            nm.notify(id, n)
+        } catch (_: Throwable) {
+            // A handset that refuses the post still gets the spoken line and
+            // the row on the Payment alerts screen.
         }
     }
 

@@ -66,6 +66,7 @@ import 'screens/admin/admin_scope_audit_screen.dart'; // /admin/scope-audit
 import 'screens/admin/dev_queue/cron_health_screen.dart';
 import 'screens/supplier/supplier_account_page.dart';
 import 'screens/admin/dev_queue/dev_queue_screen.dart'; // /admin/dev-queue
+import 'screens/admin/payment_alerts_screen.dart'; // /admin/payment-alerts
 import 'screens/admin/test_mode_screen.dart';  // /admin/test-mode (#573)
 import 'screens/admin/admin_delivery_extras_screen.dart'; // /admin/delivery-programme
 import 'screens/pharmacy/pharmacy_owner_screen.dart';
@@ -139,6 +140,13 @@ final Map<String, WidgetBuilder> kAppRoutes = <String, WidgetBuilder>{
   // for anyone who is not an admin. The tappable way in is still
   // Admin ▸ More ▸ Feature gaps.
   '/admin/feature-gaps': (_) => buildFeatureGapsScreen(),
+  // CMD #2093 — Payment alerts gets a real address, for the reason the Dev
+  // Queue got one in #1197: the screen was reachable ONLY by tapping a tile
+  // (Money ▸ Payment alerts), so no headless verifier could open it and every
+  // change to it shipped without a screenshot of the screen it changed. It
+  // guards nothing — payment_alerts_screen() answers on the caller's own role
+  // and the screen renders its refusal.
+  '/admin/payment-alerts': (_) => const PaymentAlertsScreen(),
   // CHANGE #1197 — the Dev Queue gets a real URL.
   //
   // It was reachable ONLY by tapping a tile in the admin shell, so

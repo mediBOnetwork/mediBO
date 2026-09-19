@@ -31,9 +31,21 @@
 //      STACKED — 'View cart' above, the count below — so the hairline divider
 //      that separated them on one line is gone.
 //
-//   6e. The lines come from `lines[]` in payload order and the '+N' bubble
-//      exists only when the backend said `has_more`. Dart does not subtract a
-//      thumb count from an item count to make '+2'.
+//   6e. The lines come from `lines[]` in payload order.
+//
+//   6g. CMD #2089 — THERE IS NO '+N' BUBBLE ANY MORE. The second line already
+//      says 'N items', so the circle beside the thumbnails was the same number
+//      twice and the widest thing in a pill #2089 makes narrower. The widget
+//      no longer knows how to draw one: a stale cached payload that still
+//      carries has_more/'+11' renders the thumbnails and nothing else.
+//
+//   6i. CMD #2089 — THE SHAPE IS THE PAYLOAD'S. `ui.color_token` names a
+//      `design.colors` key (brand = the primary green the Place-order button
+//      uses, never brandDark and never a hex in Dart), and `ui.height`,
+//      `ui.width_factor`, `ui.min_width`, `ui.thumb` and the chevron sizes are
+//      numbers the backend sent. Re-proportioning the pill is an UPDATE to
+//      storefront_ui_label, not a deploy. The `CartPill.k*` constants are only
+//      what the frame before the first payload draws.
 //
 //   7. WHICH page floats the pill is the nav registry's answer
 //      (`customer_nav().slots[].cart_pill`), never a page number in Dart. The
@@ -48,6 +60,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pharma_b2b/app_state.dart';
+import 'package:pharma_b2b/design_tokens.dart';
 import 'package:pharma_b2b/models/cart_model.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/widgets/cart_pill.dart';
@@ -62,6 +75,23 @@ Map<String, dynamic> _thumb(String id, {String image = ''}) => {
       'has_image': image.isNotEmpty,
     };
 
+/// CMD #2089 — the `ui` block cart_pill_block() ships today, verbatim from the
+/// migration's own defaults. Every pumped pill gets it unless a test is
+/// deliberately proving the no-payload fallback.
+const _defaultUi = <String, dynamic>{
+  'color_token': 'brand',
+  'height': 48,
+  'width_factor': 0.55,
+  'min_width': 190,
+  'max_thumbs': 2,
+  'thumb': 30,
+  'thumb_overlap': 11,
+  'chevron_box': 26,
+  'chevron': 18,
+  'pad_left': 8,
+  'pad_right': 10,
+};
+
 /// Mirrors cart_pill_block(): every string and the whole thumb list arrive
 /// already decided.
 Map<String, dynamic> _payload({
@@ -70,6 +100,7 @@ Map<String, dynamic> _payload({
   String cta = 'View cart',
   List<Map<String, dynamic>> thumbs = const [],
   String moreLabel = '',
+  Map<String, dynamic>? ui = _defaultUi,
 }) =>
     {
       'items': const [],
@@ -88,9 +119,16 @@ Map<String, dynamic> _payload({
           ],
           'thumbs': thumbs,
           'thumb_count': thumbs.length,
+          // CMD #2089 — cart_pill_block() now emits these FALSE/empty always.
+          // Tests that pass a moreLabel are deliberately feeding the widget a
+          // payload shaped like the old one, to prove it draws no bubble.
           'has_more': moreLabel.isNotEmpty,
           'more_label': moreLabel,
           'a11y': '$cta, $itemsLabel',
+          // CMD #2089 — the shape, exactly as the backend sends it. `ui` is
+          // omitted entirely when [ui] is null, which is the pre-payload case
+          // the widget's own constants answer.
+          if (ui != null) 'ui': ui,
         },
       },
     };
@@ -375,28 +413,98 @@ void main() {
         greaterThan(tester.getTopLeft(find.text('Basket ansehen')).dy));
   });
 
-  testWidgets('6g. the +N bubble is the backend flag, never a local count',
-      (tester) async {
-    final more = await _loaded(_payload(
+  testWidgets('6g. CMD #2089 — there is no +N bubble, not even from a stale '
+      'payload', (tester) async {
+    // The old shape, fed to the new widget: has_more true and a '+11' label,
+    // exactly what a payload cached before this change still carries. The
+    // count is already on line two, so the circle is not drawn — and the
+    // string is not printed ANYWHERE, which is what stops it reappearing as
+    // a label someone tucks beside the thumbnails later.
+    final stale = await _loaded(_payload(
       show: true,
       itemsLabel: '13 items',
       thumbs: [_thumb('a'), _thumb('b')],
       moreLabel: '+11',
     ));
-    await _pump(tester, more, width: 412);
-    expect(find.byKey(const Key('c2081_pill_more')), findsOneWidget);
-    expect(find.text('+11'), findsOneWidget,
-        reason: 'printed verbatim — 13 minus 2 is done in SQL');
-
-    // has_more:false — no bubble, even with a basket that obviously holds more.
-    final none = await _loaded(_payload(
-      show: true,
-      itemsLabel: '13 items',
-      thumbs: [_thumb('a'), _thumb('b')],
-    ));
-    await _pump(tester, none, width: 412);
-    expect(find.byKey(const Key('c2081_pill_more')), findsNothing);
+    await _pump(tester, stale, width: 412);
+    expect(find.byKey(const Key('c2081_pill_more')), findsNothing,
+        reason: 'the bubble is gone — the second line already says 13 items');
+    expect(find.text('+11'), findsNothing);
     expect(find.textContaining('+'), findsNothing);
+    expect(find.text('13 items'), findsOneWidget,
+        reason: 'the count the bubble duplicated is still exactly here, once');
+    expect(tester.takeException(), isNull);
+
+    // …and two thumbnails, nothing else, whatever the basket holds.
+    expect(find.byKey(const Key('c2029_pill_thumb_0')), findsOneWidget);
+    expect(find.byKey(const Key('c2029_pill_thumb_1')), findsOneWidget);
+    expect(find.byKey(const Key('c2029_pill_thumb_2')), findsNothing);
+  });
+
+  testWidgets('6i. CMD #2089 — the colour is a TOKEN the backend named',
+      (tester) async {
+    // brand, not brandDark: the same green the primary buttons use. The widget
+    // resolves the NAME through the token layer, so ui_design_set() recolours
+    // the pill with everything else and no hex is written here or there.
+    final cart = await _loaded(_payload(
+      show: true, itemsLabel: '2 items', thumbs: [_thumb('a')]));
+    await _pump(tester, cart, width: 412);
+    final mat = tester.widget<Material>(find.descendant(
+        of: find.byKey(const Key('c2029_pill')),
+        matching: find.byType(Material)));
+    expect(mat.color, Ds.c.brand,
+        reason: 'the mediBO brand green, from design.colors.brand');
+    expect(mat.color, isNot(Ds.c.brandDark));
+
+    // …and the backend can say otherwise without a deploy.
+    final dark = await _loaded(_payload(
+      show: true,
+      itemsLabel: '2 items',
+      thumbs: [_thumb('a')],
+      ui: {..._defaultUi, 'color_token': 'brandDark'},
+    ));
+    await _pump(tester, dark, width: 412);
+    expect(
+        tester
+            .widget<Material>(find.descendant(
+                of: find.byKey(const Key('c2029_pill')),
+                matching: find.byType(Material)))
+            .color,
+        Ds.c.brandDark);
+  });
+
+  testWidgets('6j. CMD #2089 — height and width come from the payload',
+      (tester) async {
+    // The shipped shape: 48 tall, 55% of the screen.
+    final cart = await _loaded(_payload(
+      show: true, itemsLabel: '2 items', thumbs: [_thumb('a'), _thumb('b')]));
+    await _pump(tester, cart, width: 412);
+    final r = tester.getRect(find.byKey(const Key('c2029_pill')));
+    expect(r.height, 48, reason: 'ui.height, and smaller than #2081\'s 64');
+    expect(r.width, closeTo(412 * 0.55, 0.5), reason: 'ui.width_factor');
+
+    // A shorter pill is a config edit, and it moves nothing else: the stack
+    // reserved CartPill.kHeight either way.
+    final short = await _loaded(_payload(
+      show: true,
+      itemsLabel: '2 items',
+      thumbs: [_thumb('a')],
+      ui: {..._defaultUi, 'height': 40, 'width_factor': 0.5},
+    ));
+    await _pump(tester, short, width: 412);
+    final s = tester.getRect(find.byKey(const Key('c2029_pill')));
+    expect(s.height, 40);
+    expect(s.width, closeTo(412 * 0.5, 0.5));
+    expect(tester.takeException(), isNull);
+
+    // No `ui` at all — the frame before the first payload — draws the same
+    // shape from the widget's own constants rather than nothing.
+    final bare = await _loaded(_payload(
+      show: true, itemsLabel: '2 items', thumbs: [_thumb('a')], ui: null));
+    await _pump(tester, bare, width: 412);
+    final b = tester.getRect(find.byKey(const Key('c2029_pill')));
+    expect(b.height, CartPill.kHeight);
+    expect(b.width, closeTo(412 * CartPill.kWidthFactor, 0.5));
   });
 
   testWidgets('6h. the whole pill is one named tap target', (tester) async {

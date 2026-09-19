@@ -30,9 +30,12 @@
 //      block all draw NOTHING; a rail draws the backend's title and the number
 //      of cards it was sent, in payload order.
 //
-//   6. THE CART ROWS SLOT IS A FUNCTION OF THE VIEWPORT, NOT OF THE BASKET.
-//      The same screen gives the same slot height whatever is in the cart,
-//      which is why adding or removing a line cannot move the rails.
+//   6. CMD #2090 — THE PAGE COMPENSATES; THERE IS NO SLOT. The fixed-height
+//      rows slot #2087 introduced hid half the basket behind a second
+//      scrollbar. The list is full height inside ONE page scroll, and when it
+//      grows or shrinks by a row the page moves by exactly that row — so the
+//      rails and the bill stay under the same pixel without anything being
+//      hidden. A finger on the page owns it; sub-pixel noise is not a row.
 //
 // SCOPE NOTE: CartScreen needs five inherited states and a live Supabase client
 // to mount, so per CLAUDE.md this file asserts the DECISIONS (the parsed gate,
@@ -304,23 +307,105 @@ void main() {
     });
   });
 
-  group('6 — the rows slot is the viewport, never the basket', () {
-    test('the same screen always gives the same slot', () {
-      final a = C2087CartBodyMetrics.rowsSlotFor(740);
-      final b = C2087CartBodyMetrics.rowsSlotFor(740);
-      expect(a, b);
+  // CMD #2090 REPLACES #2087's rule 6. The fixed-height rows slot is GONE:
+  // it kept the rails still by hiding half the basket behind a second
+  // scrollbar. The cart is one page scroll again, and the stillness is the
+  // scroll OFFSET — when the list grows by a row, the page moves by exactly
+  // that row, so everything under the lines stays under the same pixel.
+  group('6 — the page compensates; nothing under the lines moves', () {
+    test('growing by a row moves the page by exactly that row', () {
+      expect(
+        C2090ScrollComp.shift(
+            oldMax: 400, newMax: 488, isScrolling: false, velocity: 0),
+        88,
+      );
     });
 
-    test('it is clamped, so a tiny or huge viewport still behaves', () {
-      expect(C2087CartBodyMetrics.rowsSlotFor(100),
-          C2087CartBodyMetrics.rowsSlotMin);
-      expect(C2087CartBodyMetrics.rowsSlotFor(5000),
-          C2087CartBodyMetrics.rowsSlotMax);
+    test('removing a row reverses it, to the pixel', () {
+      expect(
+        C2090ScrollComp.shift(
+            oldMax: 488, newMax: 400, isScrolling: false, velocity: 0),
+        -88,
+      );
     });
 
-    test('a taller phone gives the rows more room, monotonically', () {
-      expect(C2087CartBodyMetrics.rowsSlotFor(640),
-          lessThan(C2087CartBodyMetrics.rowsSlotFor(880)));
+    test('a finger or a fling owns the page — no correction under it', () {
+      expect(
+        C2090ScrollComp.shift(
+            oldMax: 400, newMax: 488, isScrolling: true, velocity: 0),
+        0,
+      );
+      expect(
+        C2090ScrollComp.shift(
+            oldMax: 400, newMax: 488, isScrolling: false, velocity: 120),
+        0,
+      );
+    });
+
+    test('sub-pixel dimension noise is not a row', () {
+      expect(
+        C2090ScrollComp.shift(
+            oldMax: 400, newMax: 400.4, isScrolling: false, velocity: 0),
+        0,
+      );
+    });
+
+    test('the settled offset never leaves the scrollable', () {
+      expect(
+        C2090ScrollComp.settle(
+            pixels: 10, shift: -88, minExtent: 0, maxExtent: 500),
+        0,
+      );
+      expect(
+        C2090ScrollComp.settle(
+            pixels: 480, shift: 88, minExtent: 0, maxExtent: 500),
+        500,
+      );
+      expect(
+        C2090ScrollComp.settle(
+            pixels: 100, shift: 88, minExtent: 0, maxExtent: 500),
+        188,
+      );
+    });
+
+    test('the physics carries the rule, and composes', () {
+      const p = C2090StillPhysics();
+      expect(p.applyTo(const ClampingScrollPhysics()),
+          isA<C2090StillPhysics>());
+    });
+  });
+
+  // CMD #2090 — the rail card is the STOREFRONT's card, at the storefront's
+  // own width. 156 was a second number that quietly disagreed with it.
+  group('the rail card is the storefront card', () {
+    test('the cart rail takes its width from the card, not from itself', () {
+      expect(CartWishlistRail.cardW, CompactProductCard.railWidth);
+    });
+
+    test('the rails are PAGE blocks, in payload order', () {
+      void open(_) {}
+      final wish = CartWishlistRail.fromPayload(
+          _railPayload(has: true, title: 'Your wishlist', count: 2), open);
+      final also = CartWishlistRail.fromPayload(
+          _railPayload(has: true, title: 'You may also like', count: 3), open);
+      final blocks = CartRailSlot.blocks(<CartWishlistRail?>[wish, also]);
+      // Two blocks, wishlist FIRST — the order the payload arrived in, never
+      // a client sort and never the bill sneaking between them.
+      expect(blocks.length, 2);
+      final titles = blocks
+          .map((b) => ((b as SizedBox).child as ClipRect).child
+              as CartWishlistRail)
+          .map((r) => r.title)
+          .toList();
+      expect(titles, <String>['Your wishlist', 'You may also like']);
+      // Each still reserves the rail's ONE constant band.
+      for (final b in blocks) {
+        expect((b as SizedBox).height, CartRailSlot.railExtent);
+      }
+    });
+
+    test('a rail the backend had nothing for contributes no block', () {
+      expect(CartRailSlot.blocks(<CartWishlistRail?>[null, null]), isEmpty);
     });
   });
 

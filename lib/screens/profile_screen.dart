@@ -9,7 +9,7 @@ import '../models/user_profile.dart';
 import '../services/ui_copy.dart';
 import '../utils/render_log.dart';
 import '../view_as_state.dart';
-import 'auth/business_details_screen.dart';
+import 'auth/one_registration_screen.dart';
 import 'admin/view_as_picker_dialog.dart';
 import 'customer/profile_account_menu.dart'; // CHANGE #745 — the registry menu
 import '../services/customer_surfaces.dart'; // CHANGE #745
@@ -358,19 +358,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           SizedBox(
                             height: 44,
                             child: FilledButton(
-                              onPressed: () {
-                                final user = authUser;
-                                if (user == null) return;
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => BusinessDetailsScreen(
-                                      userId: user.id,
-                                      phone: user.phone ?? '',
-                                      email: user.email ?? '',
-                                    ),
-                                  ),
-                                );
-                              },
+                              // CMD #2112 — ONE registration screen. This
+                              // button used to push the self-signup form,
+                              // while an imported shop was sent somewhere else
+                              // entirely; the two drifted for a year. Both
+                              // doors are this screen now, and it resumes from
+                              // whatever is already saved.
+                              onPressed: () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => const OneRegistrationScreen(),
+                                ),
+                              ),
                               style: FilledButton.styleFrom(
                                 backgroundColor: const Color(0xFF1B5E20),
                                 shape: RoundedRectangleBorder(

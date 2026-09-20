@@ -24,6 +24,15 @@ class DeviceLocation {
     return null;
   }
 
+  /// CMD #2112 — the accuracy-seeking variant. Same contract as [current] on
+  /// this platform: there is no browser Geolocation, so there is no fix.
+  static Future<DeviceFix?> best({
+    Duration window = const Duration(seconds: 8),
+    double goodEnoughMetres = 25,
+  }) async {
+    return null;
+  }
+
   /// Native fallback: nothing to watch, so no subscription is created. Returns
   /// null (the caller stores it in a nullable StreamSubscription and guards it).
   static StreamSubscription? watch(

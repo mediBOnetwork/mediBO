@@ -167,6 +167,24 @@ class AdaptiveMap extends StatefulWidget {
   /// existing map screens byte-identical.
   final void Function(double lat, double lng)? onCenterChanged;
 
+  /// CMD #2112 — the provider this surface REQUIRES, or null for "whichever
+  /// the backend picked".
+  ///
+  /// The shop pin on the registration form is Google Maps only: two different
+  /// base maps behind one field is how a shop set its pin on OSM tiles that
+  /// disagreed with the Google map every admin then looked at it on. When the
+  /// requirement is not met — a platform whose `map_config` has no Google key
+  /// for it — [unavailableState] is drawn INSTEAD of the map. Nothing falls
+  /// back to tiles.
+  ///
+  /// It is not a Dart decision: the value arrives in the backend's own schema
+  /// (`customer_form_schema().geo.provider`) and is passed straight through.
+  final String? requireProvider;
+
+  /// What to draw when [requireProvider] cannot be met. The caller supplies
+  /// its screen's backend copy; this file writes no user-facing string.
+  final Widget? unavailableState;
+
   const AdaptiveMap({
     super.key,
     this.pins = const [],
@@ -183,6 +201,8 @@ class AdaptiveMap extends StatefulWidget {
     this.emptyOverlay = false,
     this.logKey = 'c634_map',
     this.onCenterChanged,
+    this.requireProvider,
+    this.unavailableState,
   });
 
   @override
@@ -238,6 +258,14 @@ class _AdaptiveMapState extends State<AdaptiveMap> {
               return SizedBox(height: widget.height, child: empty);
             }
           }
+        }
+
+        // CMD #2112 — a surface that REQUIRES Google gets Google or gets the
+        // backend's sentence. It never gets tiles.
+        if (widget.requireProvider == 'google' && !cfg.usesGoogleJs) {
+          RenderLog.write('c2112_map_google_required', 'unavailable');
+          final alt = widget.unavailableState;
+          return _shell(child: alt ?? (_configEmpty(cfg) ?? const SizedBox.shrink()));
         }
 
         final map = cfg.usesGoogleJs

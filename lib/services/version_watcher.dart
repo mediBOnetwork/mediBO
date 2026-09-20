@@ -322,14 +322,6 @@ class VersionWatcher {
     _showBanner();
   }
 
-  Future<void> _dismiss(String platform) async {
-    await AppUpdateFeed.markDismissed(platform);
-    updateBar.hide();
-    // The bar was taken down, not the update: the next check must be free to
-    // raise it again the moment the backend stops calling it dismissed.
-    _handled = false;
-  }
-
   void _reload() {
     // Swap the pill to the updating label and stop taking taps: one reload,
     // however many times the button is pressed.
@@ -363,13 +355,9 @@ class VersionWatcher {
     // Belt and braces: a MaterialBanner left over from a previous build (or a
     // hot reload across this change) must not linger at the top.
     messengerKey.currentState?.clearMaterialBanners();
-    updateBar.show(
-      onUpdate: onUpdate ?? _reload,
-      payload: _payload,
-      // CMD #2065 — Later, remembered under THIS platform's key. A phone that
-      // postponed the Android update has said nothing about this browser.
-      onDismiss: () => _dismiss(platform),
-    );
+    // CMD #2112 — no Later, on any platform. The bar is up until the app is
+    // on the new build.
+    updateBar.show(onUpdate: onUpdate ?? _reload, payload: _payload);
     try {
       RenderLog.write('c286_update_prompt_shown', 'surface=bottom_bar');
     } catch (_) {}

@@ -20,6 +20,7 @@ import 'inquiry_lock_state.dart';
 import 'url_sync.dart' show captureInitialPath;
 import 'services/crash_reporting.dart'; // CHANGE #473
 import 'services/android_update_bar.dart';
+import 'services/registration_bar.dart';
 import 'services/version_watcher.dart';
 import 'utils/render_log.dart';
 import 'utils/responsive_audit.dart';
@@ -603,6 +604,10 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
   final InquiryLockModel _inquiryLock = InquiryLockModel();
   bool _viewAsRestored = false;
 
+  /// CMD #2112 — the last signed-in state the registration-bar driver was
+  /// told about, so a rebuild does not re-ask on every notification.
+  bool? _regBarSignedIn;
+
   @override
   void initState() {
     super.initState();
@@ -658,6 +663,17 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
     try {
       CrashReporting.setRole(_auth.session.role);
     } catch (_) {}
+    // CMD #2112 — the registration bar follows the account. It rides the same
+    // slot as the update bar and is raised by the backend's own answer
+    // (`customer_registration_bar()`), so this only has to say WHEN to ask:
+    // whenever auth has resolved, and again on every change of account.
+    if (!_auth.loading) {
+      final signedIn = _auth.isAuthenticated;
+      if (signedIn != _regBarSignedIn) {
+        _regBarSignedIn = signedIn;
+        RegistrationBarDriver.instance.onAuth(signedIn: signedIn);
+      }
+    }
     // Run once when auth fully resolves (loading=false means role is set too).
     if (_viewAsRestored) return;
     if (_auth.loading) return;
@@ -755,6 +771,7 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _viewAs.removeListener(_onViewAsChanged);
+    RegistrationBarDriver.instance.stop();
     _auth.removeListener(_onAuthChanged);
     UiCopy.revision.removeListener(_onCopyChanged);
     _cart.dispose();

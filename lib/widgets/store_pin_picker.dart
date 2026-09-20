@@ -16,6 +16,17 @@
 // the refusal when location is off, the "pin set" line — arrives inside
 // customer_form_schema().geo and is printed verbatim. The only numbers it
 // produces are the two the map itself reports.
+//
+// CMD #2112 — GOOGLE MAPS ONLY, AND A FIX WORTH PINNING.
+//  • `geo.provider` ('google') is a REQUIREMENT passed to [AdaptiveMap]. A
+//    platform whose map_config has no Google key for it gets the backend's
+//    `unavailable_label` and the current-location button; it never gets OSM
+//    tiles. Two different base maps behind one field is how a pin set here
+//    disagreed with the map an admin then checked it on.
+//  • The fix is [DeviceLocation.best], not the first answer the browser has.
+//    `getCurrentPosition` returns the wifi/cell estimate the moment it has
+//    one — hundreds of metres out — and a shop door dropped on that looks
+//    exactly like a working map.
 import 'package:flutter/material.dart';
 
 import '../design_tokens.dart';
@@ -94,7 +105,9 @@ class _StorePinPickerState extends State<StorePinPicker> {
     });
     DeviceFix? fix;
     try {
-      fix = await DeviceLocation.current();
+      // The most accurate reading the device can give inside a few seconds,
+      // not the first one it happens to have cached.
+      fix = await DeviceLocation.best();
     } catch (_) {
       fix = null;
     }
@@ -111,6 +124,8 @@ class _StorePinPickerState extends State<StorePinPicker> {
     });
     if (fix != null) _emit();
     RenderLog.write('c1888_pin_device', fix == null ? 'denied' : 'ok');
+    RenderLog.write('c2112_pin_accuracy',
+        fix?.accuracy?.round().toString() ?? 'none');
   }
 
   void _emit() {
@@ -148,6 +163,9 @@ class _StorePinPickerState extends State<StorePinPicker> {
               logKey: 'c1888_pin_map',
               borderRadius: Ds.r.rCard,
               onCenterChanged: _onCentre,
+              // The backend's requirement, passed through. Not a Dart choice.
+              requireProvider: _s('provider').isEmpty ? null : _s('provider'),
+              unavailableState: _unavailable(),
             ),
             // The pin does not move — the map does. Its tip sits on the exact
             // centre of the viewport, which is the point being reported.
@@ -165,6 +183,16 @@ class _StorePinPickerState extends State<StorePinPicker> {
                 left: Ds.space.x8,
                 top: Ds.space.x8,
                 child: _pill(_s('locating_label'), Ds.c.infoSoft),
+              )
+            // The one instruction the pin needs, and it is the backend's. It
+            // stands down the moment a point is set, so it never sits on top
+            // of the map a shop is reading.
+            else if (!has && _s('drag_hint').isNotEmpty)
+              Positioned(
+                left: Ds.space.x8,
+                right: Ds.space.x8,
+                top: Ds.space.x8,
+                child: _pill(_s('drag_hint'), Ds.c.infoSoft),
               ),
           ]),
         ),
@@ -195,10 +223,25 @@ class _StorePinPickerState extends State<StorePinPicker> {
     ]);
   }
 
+  /// Drawn INSTEAD of the map when the platform has no Google key. The pin can
+  /// still be set — the current-location button below is the same button —
+  /// and no tile server is ever reached for it.
+  Widget _unavailable() {
+    final line = _s('unavailable_label');
+    if (line.isEmpty) return const SizedBox.shrink();
+    return Container(
+      color: Ds.c.bg,
+      alignment: Alignment.center,
+      padding: EdgeInsets.all(Ds.space.x16),
+      child: Text(line, style: Ds.t.caption, textAlign: TextAlign.center),
+    );
+  }
+
   Widget _pill(String text, Color bg) => Container(
         padding: EdgeInsets.symmetric(
             horizontal: Ds.space.x8, vertical: Ds.space.x4),
         decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rChip),
-        child: Text(text, style: Ds.t.caption),
+        child: Text(text, style: Ds.t.caption, maxLines: 2,
+            overflow: TextOverflow.ellipsis),
       );
 }

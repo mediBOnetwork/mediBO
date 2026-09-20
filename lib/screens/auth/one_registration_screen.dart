@@ -13,10 +13,13 @@
 // `customer_registration_submit(values, skips)` — saves the profile, the
 // uploads and the "I don't have this" answers together, and the sentence it
 // prints afterwards is the backend's too.
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../design_tokens.dart';
+import '../../services/registration_bar.dart';
 import '../../utils/render_log.dart';
 import '../../widgets/customer_registration_form.dart';
 import '../../widgets/registration_documents_section.dart';
@@ -218,6 +221,10 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
       RenderLog.write('c2061_submit',
           res['docs_pending'] == true ? 'docs_pending' : 'complete');
       widget.onSaved?.call();
+      // CMD #2112 — the bar in the bottom stack is the same ask as this form,
+      // so it re-reads the backend the moment the form does. A registration
+      // that just completed must not leave "Registration pending" on screen.
+      unawaited(RegistrationBarDriver.instance.refresh());
       await _load();
     } catch (_) {
       if (!mounted) return;

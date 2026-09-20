@@ -8,6 +8,7 @@ import '../../user_state.dart';
 import '../../widgets/delete_account_section.dart';
 import '../admin/loyalty_admin_screen.dart';
 import '../admin/nav_registry_view.dart' show navIcon, navIconResolves;
+import '../auth/one_registration_screen.dart';
 import '../notifications_inbox_screen.dart';
 import '../orders_screen.dart';
 import '../profile_screen.dart';
@@ -48,6 +49,12 @@ Widget? customerMenuScreen(String routeKey) => switch (routeKey) {
       'cust_profile_home' => const ProfileScreen(),
       'cust_notifications' => const NotificationsInboxScreen(),
       'cust_rewards' => const RewardsScreen(),
+      // CMD #2112 — Complete / resume registration, from the profile
+      // dropdown. The row is synthesised by `customer_surfaces()` for exactly
+      // as long as something is owed (a fresh account with no pharmacy row
+      // included), so there is no registry row to go stale behind it — and it
+      // opens the SAME screen the bar and Home open.
+      'cust_registration' => const OneRegistrationScreen(),
       _ => null,
     };
 

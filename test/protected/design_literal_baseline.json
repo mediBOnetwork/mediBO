@@ -52,7 +52,7 @@
   "lib/screens/auth/login_screen.dart": 1,
   "lib/screens/auth/login_view.dart": 51,
   "lib/screens/auth/otp_screen.dart": 24,
-  "lib/screens/bulk_upload_screen_web.dart": 306,
+  "lib/screens/bulk_upload_screen_web.dart": 281,
   "lib/screens/cart_screen.dart": 97,
   "lib/screens/code_resolver_page.dart": 19,
   "lib/screens/company_screen.dart": 7,

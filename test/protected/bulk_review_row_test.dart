@@ -1,4 +1,4 @@
-// PROTECTED — CMD #2113.
+// PROTECTED — CMD #2113, extended by CMD #2115.
 //
 // See CLAUDE.md: runs before EVERY deploy; editable only by a CHANGE that
 // deliberately changes bulk-review-row behaviour, never to make an unrelated
@@ -20,10 +20,26 @@
 // one that says a viewer may not see a trade rate is the SAME field as the one
 // that says "₹31.50" — `card_price.price_display`. Nothing here may type a
 // price, a pack sentence, "Available", "Unavailable" or "PTR" as a fallback.
+//
+// CMD #2115 changed the SHAPE the row prints, and this file changes with it
+// because that is exactly what it exists to hold down. The selected match and
+// every alternative now print the SAME four lines — name, the quantity
+// sentence, the price block, the state badge — so the two grey pack badges and
+// the company line are gone from the phone. The payload still carries
+// pack_type_label / pack_qty_label / pack_line (the web panel and other
+// callers read them), and the tests below still hold them verbatim: a shape
+// change is not a licence to start shortening a pack in Dart again.
+//
+// The new line is the one this command added: "17 strip" is
+// `bulk.qty_line` — a BACKEND template — with the row's number and the
+// product's own `qty_unit` substituted. Dart may substitute; it may not
+// compose. A test that accepts "17 strip" built by string interpolation would
+// let the unit word, its order and its spacing quietly move back into the app.
 
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pharma_b2b/models/product.dart';
+import 'package:pharma_b2b/services/ui_copy.dart';
 
 /// One candidate exactly as `bulk_match_items()` sends it.
 ///
@@ -46,7 +62,10 @@ Map<String, dynamic> _candidate({
       'pack_size': 'strip of 10 tablets',
       'pack_type_label': packType,
       'pack_qty_label': packQty,
-      'pack_line': [packType, packQty].where((s) => s.isNotEmpty).join(', '),
+          'pack_line': [packType, packQty].where((s) => s.isNotEmpty).join(', '),
+      // CMD #2115 — the unit word the quantity sentence is built from,
+      // lowercased in Postgres from pack_type.
+      'qty_unit': packType.toLowerCase(),
       'mrp': '31.50',
       'gst_percent': 12,
       'buyable': available,
@@ -103,8 +122,11 @@ void main() {
         () {
       final p = Product.fromBulkMatch(_candidate());
 
-      // The selected row prints these as two separate grey badges; the
-      // alternative rows print the joined line. Both are the backend's.
+      // The phone row stopped printing these at CMD #2115 (one four-line
+      // shape, no pack badges), but the payload still carries them for the
+      // web panel — and it carries them VERBATIM. The moment one of these
+      // becomes an abbreviation again, some surface is describing a pack the
+      // catalogue does not.
       expect(p.packTypeLabel, 'Strip');
       expect(p.packQtyLabel, '10 tablets in 1 strip');
       expect(p.packLine, 'Strip, 10 tablets in 1 strip');
@@ -220,6 +242,64 @@ void main() {
       expect(after.pricing?.cardPrice?.hasPtr, isFalse);
       expect(after.pricing?.cardPrice?.ptrDisplay, '');
       expect(after.pricing?.cardPrice?.priceDisplay, 'PTR');
+    });
+  });
+
+  // ── CMD #2115 — the quantity sentence and the picker's payload ─────────────
+  group('bulk review row v2 — the quantity line is the backend\'s sentence', () {
+    setUp(() {
+      // The row reads exactly these two keys. They are seeded, never defaulted
+      // in the widget: an app that can print "17 strip" with no copy loaded is
+      // an app that has the sentence written down somewhere in Dart.
+      UiCopy.debugSet({
+        'bulk.qty_line': '{qty} {unit}',
+        'bulk.qty_picker_title': 'Quantity',
+      });
+    });
+
+    test('qty_unit arrives verbatim and is never derived from the pack', () {
+      final p = Product.fromBulkMatch(_candidate());
+      expect(p.qtyUnit, 'strip');
+
+      // It is its OWN field. Deriving it from pack_qty ("10 tablets in 1
+      // strip") or from packSize is how the row would start disagreeing with
+      // the catalogue about what a unit is.
+      final bottle = Product.fromBulkMatch(_candidate(packType: 'Bottle'));
+      expect(bottle.qtyUnit, 'bottle');
+    });
+
+    test('the sentence is the template, with the number substituted', () {
+      final p = Product.fromBulkMatch(_candidate());
+      expect(cf('bulk.qty_line', {'qty': '17', 'unit': p.qtyUnit}), '17 strip');
+      expect(cf('bulk.qty_line', {'qty': '1', 'unit': p.qtyUnit}), '1 strip');
+    });
+
+    test('the word order belongs to the backend, not to Dart', () {
+      // The whole point of the template: a copy UPDATE moves the unit in front
+      // of the number and the row follows, with no deploy. An interpolated
+      // "\$qty \$unit" in the widget could never do this.
+      UiCopy.debugSet({'bulk.qty_line': '{unit} x {qty}'});
+      final p = Product.fromBulkMatch(_candidate());
+      expect(cf('bulk.qty_line', {'qty': '17', 'unit': p.qtyUnit}), 'strip x 17');
+    });
+
+    test('no template means no sentence — never an invented one', () {
+      UiCopy.debugSet({});
+      expect(cf('bulk.qty_line', {'qty': '17', 'unit': 'strip'}), '');
+    });
+
+    test('a restored session still knows its unit', () {
+      final before = Product.fromBulkMatch(_candidate());
+      final after = Product.fromJson(before.toJson());
+      expect(after.qtyUnit, 'strip');
+    });
+
+    test('a payload with no unit prints no unit, not a guessed one', () {
+      final raw = _candidate()..remove('qty_unit');
+      final p = Product.fromBulkMatch(raw);
+      expect(p.qtyUnit, '');
+      // cf() strips the slot rather than leaving "17 {unit}" or "17 " on screen.
+      expect(cf('bulk.qty_line', {'qty': '17', 'unit': p.qtyUnit}), '17');
     });
   });
 }

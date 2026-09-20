@@ -176,7 +176,18 @@ class CustomerSurfaces {
   /// the header sheet drew a name with nothing under it. An unbound service
   /// with a signed-in user has no answer to keep, so it asks for one.
   static void syncIdentity() {
-    final uid = Supabase.instance.client.auth.currentUser?.id;
+    // Asking who is signed in must never be the thing that throws: this runs
+    // from a surface's initState, and `Supabase.instance` ASSERTS that boot
+    // got as far as initialising it. The old `if (!_bound) return;` happened
+    // to short-circuit ahead of that assert; moving the read up exposed it and
+    // took 35 widget tests (and any boot where Supabase.initialize failed)
+    // down with it. Boot resilience rule: no instance = no identity to sync.
+    String? uid;
+    try {
+      uid = Supabase.instance.client.auth.currentUser?.id;
+    } catch (_) {
+      return;
+    }
     if (!_bound) {
       if (uid != null) load();
       return;

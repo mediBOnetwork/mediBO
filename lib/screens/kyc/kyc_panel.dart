@@ -273,6 +273,23 @@ class _KycPanelState extends State<KycPanel> {
 
     final items = _items;
     final grace = (_payload['state'] as Map?)?['grace_until'];
+    // CMD #2108 — the cards are taller now (the action button has its own
+    // row), so the panel can be taller than the box it is given. It scrolls
+    // ITSELF only when the host bounds its height; embedded in a scrolling
+    // account tab the height is unbounded and the host keeps the scrolling,
+    // because a SingleChildScrollView in unbounded space is an error, not a
+    // safety net.
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final body = _body(items, grace);
+        return constraints.maxHeight.isFinite
+            ? SingleChildScrollView(child: body)
+            : body;
+      },
+    );
+  }
+
+  Widget _body(List<Map<String, dynamic>> items, Object? grace) {
     return Padding(
       padding: EdgeInsets.all(Ds.space.x16),
       child: Column(

@@ -301,6 +301,8 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
       });
       _toTop();
       RenderLog.write('c2126_reg_step', 'step=$_step');
+      // The bar reads the same saved draft, so it re-reads after every step.
+      unawaited(RegistrationBarDriver.instance.refresh());
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -335,6 +337,9 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
   }
 
   void _browse() {
+    // Leaving the flow: the bar in the bottom stack re-reads the backend so a
+    // finished registration never leaves "Registration pending" on screen.
+    unawaited(RegistrationBarDriver.instance.refresh());
     if (widget.embedded) {
       Navigator.of(context).maybePop();
       return;
@@ -607,7 +612,7 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
           Expanded(
             flex: 2,
             child: Semantics(
-              identifier: 'reg_continue',
+              identifier: 'reg_primary',
               button: true,
               child: SizedBox(
                 height: Ds.touch.minTarget,

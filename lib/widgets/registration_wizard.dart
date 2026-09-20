@@ -143,7 +143,7 @@ class RegistrationDoneView extends StatelessWidget {
         ),
         SizedBox(height: Ds.space.x24),
         Semantics(
-          identifier: 'reg_done_browse',
+          identifier: 'reg_primary',
           button: true,
           child: SizedBox(
             width: double.infinity,

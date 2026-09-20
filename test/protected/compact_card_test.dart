@@ -219,14 +219,18 @@ void main() {
       await _pump(tester, _row());
 
       expect(find.text('Alkacel 100mg Injection'), findsOneWidget);
-      // #1895 — the chip in the row under the plate takes pack_type_label…
+      // CHANGED BY CMD #2118 — ONE pack label per card. The row under the
+      // plate used to repeat the pack TYPE ("Vial") while the badge ON the
+      // plate already said "1.0 Injection in 1 vial": the same fact twice.
+      // The sentence stays, the chip is gone, and the row is the add control
+      // alone.
       expect(
         find.text('Vial'),
-        findsOneWidget,
-        reason: 'the chip beside the ADD control is pack_type_label',
+        findsNothing,
+        reason: 'pack_type_label is no longer a second label on the card',
       );
-      // …and the plate's own footer strip takes pack_qty_label, VERBATIM: the
-      // long stored sentence, not the shortened '1 injection' badge.
+      // The plate's badge takes pack_qty_label, VERBATIM: the long stored
+      // sentence, not the shortened '1 injection' badge.
       expect(
         find.text('1.0 Injection in 1 vial'),
         findsOneWidget,
@@ -251,7 +255,8 @@ void main() {
       await _pump(tester, r);
 
       expect(find.text('ZZ qty label'), findsOneWidget);
-      expect(find.text('ZZtype'), findsOneWidget);
+      // CHANGED BY CMD #2118 — one pack label, and it is the sentence.
+      expect(find.text('ZZtype'), findsNothing);
       expect(find.text('Vial of 1 Injection'), findsNothing);
     });
 
@@ -267,8 +272,9 @@ void main() {
       expect(find.byType(Chip), findsNothing);
       expect(find.text('1.0 Injection in 1 vial'), findsNothing);
       expect(find.text('Vial of 1 Injection'), findsNothing);
-      // the one-word type still prints in the row beside the ADD control
-      expect(find.text('Vial'), findsOneWidget);
+      // CHANGED BY CMD #2118 — no pack label at all now: the sentence is
+      // empty and the type chip that used to cover for it is gone.
+      expect(find.text('Vial'), findsNothing);
       expect(tester.takeException(), isNull);
     });
 
@@ -815,20 +821,21 @@ void main() {
       final nameLeft = tester
           .getTopLeft(find.text('Alkacel 100mg Injection'))
           .dx;
-      // CMD #1926 — the pack-type chip moved INSIDE the frame, so it is inset
-      // by the frame's hairline, the frame's own padding and the chip's
-      // padding. It is still hard LEFT; it is simply left inside a box. What
+      // CHANGED BY CMD #2118 — the pack-type chip is gone (one pack label per
+      // card), so the label this pins is the pack SENTENCE badge lying on the
+      // plate. It is still hard LEFT; it is simply left inside a box. What
       // this pins is unchanged: it is nowhere near the middle of the card.
-      final chipLeft = tester.getTopLeft(find.text('Vial')).dx;
+      final chipLeft =
+          tester.getTopLeft(find.text('1.0 Injection in 1 vial')).dx;
       expect(
         chipLeft,
         lessThan(nameLeft + 24),
-        reason: 'the pack type chip is left-aligned inside the frame',
+        reason: 'the pack badge is left-aligned inside the frame',
       );
       expect(
         chipLeft,
         lessThan(100 / 2),
-        reason: 'the chip is not centred — #274 shipped that once',
+        reason: 'the badge is not centred — #274 shipped that once',
       );
       expect(
         tester.getTopLeft(find.text('MRP')).dx,
@@ -904,7 +911,7 @@ void main() {
   // three back. These tests pin the correction so a later "tidy-up" cannot
   // quietly float the row out of the frame again.
   group('CMD #1926 — the frame is one block', () {
-    testWidgets('the pack-type chip and ADD sit INSIDE the bordered frame', (
+    testWidgets('the pack badge and ADD sit INSIDE the bordered frame', (
       tester,
     ) async {
       await _pump(tester, _row());
@@ -932,7 +939,9 @@ void main() {
       final frameRect = tester.getRect(frameBox);
 
       // The two things the spec names must lie within the frame's bounds.
-      final chipRect = tester.getRect(find.text('Vial'));
+      // CHANGED BY CMD #2118 — the pack TAG is the sentence badge on the
+      // plate; the second, duplicate pack chip in the action row is gone.
+      final chipRect = tester.getRect(find.text('1.0 Injection in 1 vial'));
       final addRect = tester.getRect(find.text('ADD'));
       expect(chipRect.top, greaterThanOrEqualTo(frameRect.top));
       expect(

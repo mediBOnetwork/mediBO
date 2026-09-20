@@ -792,16 +792,11 @@ class _SectionBlock extends StatelessWidget {
             // search-prefill fallback is gone: it existed only because no
             // company listing existed yet, and a name search was never the
             // same thing as a company filter.
-            HomeSectionLayout.brandGrid => _TileGrid(
-              tiles: section.tiles,
-              crossAxisCount: 3,
-              centered: true,
-              tinted: false,
-              valueOf: (t) => t.key,
-              onTap: (key) => Navigator.of(
-                context,
-              ).pushNamed('/company/${Uri.encodeComponent(key)}'),
-            ),
+            // CMD #2118 — the same tiles, with a filter box pinned under the
+            // heading. Typing narrows the grid SERVER-SIDE, so a buyer who
+            // knows the maker never scrolls a twelve-tile sample looking for
+            // it.
+            HomeSectionLayout.brandGrid => CompanyFilterGrid(section: section),
             // Unreachable: unknown layouts are dropped at parse time. Kept so
             // this switch stays exhaustive if the enum grows.
             HomeSectionLayout.unknown => const SizedBox.shrink(),
@@ -1481,4 +1476,174 @@ class _SkeletonHeader extends StatelessWidget {
       ],
     ),
   );
+}
+
+
+/// CMD #2118 — "Shop by company", with a filter box.
+///
+/// The twelve tiles the home payload carries are a SAMPLE of a few thousand
+/// makers, so the section could only ever answer "is my company one of the
+/// twelve?". The box asks `storefront_company_search` instead: matching,
+/// ranking, the count sentence, the placeholder and the nothing-matched line
+/// are all the backend's, and this widget swaps one list of tiles for another.
+class CompanyFilterGrid extends StatefulWidget {
+  final HomeSection section;
+
+  /// Test seam — supply rows instead of calling the RPC.
+  final Future<CompanyHits> Function(String q)? search;
+
+  const CompanyFilterGrid({super.key, required this.section, this.search});
+
+  @override
+  State<CompanyFilterGrid> createState() => _CompanyFilterGridState();
+}
+
+class _CompanyFilterGridState extends State<CompanyFilterGrid> {
+  final _ctrl = TextEditingController();
+  Timer? _debounce;
+
+  /// The block's own copy (hint, nothing-matched line), fetched once with an
+  /// empty term. Never typed here.
+  CompanyHits _copy = CompanyHits.none;
+  CompanyHits _hits = CompanyHits.none;
+  String _q = '';
+  bool _loading = false;
+
+  /// Long enough that a phone keyboard does not fire a request per letter,
+  /// short enough that "tor" feels instant.
+  static const Duration _wait = Duration(milliseconds: 220);
+
+  Future<CompanyHits> Function(String) get _search =>
+      widget.search ?? (q) => MedicineRepository().fetchCompanyHits(q);
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCopy();
+  }
+
+  Future<void> _loadCopy() async {
+    try {
+      final c = await _search('');
+      if (mounted) setState(() => _copy = c);
+    } catch (_) {
+      // No copy means no placeholder — the box still works, and the app has
+      // no word of its own to put there.
+    }
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _onChanged(String v) {
+    _debounce?.cancel();
+    final q = v.trim();
+    if (q.isEmpty) {
+      setState(() {
+        _q = '';
+        _hits = CompanyHits.none;
+        _loading = false;
+      });
+      return;
+    }
+    setState(() {
+      _q = q;
+      _loading = true;
+    });
+    _debounce = Timer(_wait, () async {
+      final hits = await _search(q);
+      if (!mounted || _q != q) return;
+      setState(() {
+        _hits = hits;
+        _loading = false;
+      });
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final filtering = _q.isNotEmpty;
+    final tiles = filtering
+        ? [
+            for (final r in _hits.rows)
+              HomeTile(label: r.label, countLabel: r.countLabel, key: r.key),
+          ]
+        : widget.section.tiles;
+
+    RenderLog.write('c2118_company_filter',
+        'q=$_q;tiles=${tiles.length}');
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+          child: Semantics(
+            identifier: 'company_filter_box',
+            textField: true,
+            child: TextField(
+              controller: _ctrl,
+              onChanged: _onChanged,
+              textInputAction: TextInputAction.search,
+              style: Ds.t.body,
+              decoration: InputDecoration(
+                isDense: true,
+                filled: true,
+                fillColor: Ds.c.surface,
+                hintText: _copy.hint,
+                hintStyle: Ds.t.body.copyWith(color: Ds.c.textSecondary),
+                prefixIcon: Icon(Icons.search, color: Ds.c.textSecondary),
+                suffixIcon: !filtering
+                    ? null
+                    : IconButton(
+                        icon: Icon(Icons.close, color: Ds.c.textSecondary),
+                        onPressed: () {
+                          _ctrl.clear();
+                          _onChanged('');
+                        },
+                      ),
+                contentPadding: EdgeInsets.symmetric(
+                    horizontal: Ds.space.x12, vertical: Ds.space.x12),
+                border: OutlineInputBorder(
+                  borderRadius: Ds.r.rButton,
+                  borderSide: BorderSide(color: Ds.c.divider),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: Ds.r.rButton,
+                  borderSide: BorderSide(color: Ds.c.divider),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: Ds.r.rButton,
+                  borderSide: BorderSide(color: Ds.c.brand),
+                ),
+              ),
+            ),
+          ),
+        ),
+        SizedBox(height: Ds.space.x16),
+        if (filtering && tiles.isEmpty)
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+            child: Text(
+              _loading ? '' : _copy.emptyLabel,
+              style: Ds.t.caption,
+            ),
+          )
+        else
+          _TileGrid(
+            tiles: tiles,
+            crossAxisCount: 3,
+            centered: true,
+            tinted: false,
+            valueOf: (t) => t.key,
+            onTap: (key) => Navigator.of(context)
+                .pushNamed('/company/${Uri.encodeComponent(key)}'),
+          ),
+      ],
+    );
+  }
 }

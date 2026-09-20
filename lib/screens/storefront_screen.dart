@@ -13,6 +13,7 @@ import '../data/storefront_labels.dart';
 import '../design_tokens.dart';
 import '../models/product.dart';
 import '../models/search_page.dart';
+import '../models/storefront_p3.dart' show CompanyHits;
 import '../services/ui_copy.dart';
 import '../services/payload_cache.dart';
 import '../theme.dart';
@@ -20,6 +21,7 @@ import '../util.dart';
 import '../utils/render_log.dart';
 import '../widgets/bottom_stack.dart';
 import '../widgets/animations.dart';
+import '../widgets/company_hits_block.dart';
 import '../widgets/compact_product_card.dart';
 import '../widgets/product_card_grid.dart';
 import '../widgets/search_surface.dart';
@@ -157,6 +159,10 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   // "Showing 0 of 32133". Null only on the outage fallback, which prints
   // nothing rather than a number it made up.
   String? _showingLabel;
+
+  /// CMD #2118 — the Companies block that rides above the results on a search.
+  /// It is the payload's, first page only; [CompanyHits.none] draws nothing.
+  CompanyHits _companies = CompanyHits.none;
 
   /// CHANGE #174 — the sort control, exactly as the backend sent it.
   /// [_sortOptions] empty means there is no control to draw (no viewer margin,
@@ -445,6 +451,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       _pageNetworkError = false;
       _buyableCategoryTotal = null;
       _showingLabel = null;
+      _companies = CompanyHits.none;
       _emptyLabel = null;
       _sortOptions = const [];
       _moreLabel = '';
@@ -572,6 +579,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
           ..clear()
           ..addAll(page);
         _showingLabel = pageResult.showingLabel;
+        _companies = pageResult.companies;
         _emptyLabel = pageResult.emptyLabel;
         _moreLabel = pageResult.moreLabel ?? '';
         _endLabel = pageResult.endLabel ?? '';
@@ -948,6 +956,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
                 items: _items,
                 categoryTotal: _categoryTotal(),
                 showingLabel: _showingLabel,
+                companies: _companies,
                 emptyLabel: _emptyLabel,
                 sortOptions: _sortOptions,
                 onSortSelected: _onSortSelected,
@@ -1347,6 +1356,10 @@ class _ProductsSection extends StatelessWidget {
   final String? showingLabel;
   final String? emptyLabel;
 
+  /// CMD #2118 — the matched companies, above the medicine results. The
+  /// section renders them; `storefront_search_page` chose them.
+  final CompanyHits companies;
+
   /// CHANGE #174 — the sort chips, straight from the payload. Empty draws no
   /// control at all: a storefront with no trade pricing looks exactly as it
   /// did before #174 shipped.
@@ -1378,6 +1391,7 @@ class _ProductsSection extends StatelessWidget {
     required this.categoryTotal,
     required this.showingLabel,
     required this.emptyLabel,
+    required this.companies,
     required this.sortOptions,
     required this.onSortSelected,
     required this.query,
@@ -1423,6 +1437,13 @@ class _ProductsSection extends StatelessWidget {
     // the one flag every card in this list shares; the backend's availability
     // verdict governs the disabled state and the chip/cart split identically.
     final cart = AppState.of(context);
+    // CMD #2118 — the canvas cannot be clicked by a browser tool, so the block
+    // reports itself: how many company rows this build actually painted above
+    // the results, for the term it painted them for.
+    if (searching) {
+      RenderLog.write('c2118_company_rows',
+          'q=${query.trim()};rows=${companies.has ? companies.rows.length : 0}');
+    }
     if (items.isNotEmpty) {
       // CHANGE #553 — count from the backend's verdict, not from a local
       // supplier_count comparison.
@@ -1452,6 +1473,17 @@ class _ProductsSection extends StatelessWidget {
               ),
             ),
           ),
+        // CMD #2118 — a typed maker's name is answered by the maker, not by
+        // page 1 of its molecules. The block sits ABOVE the count line and
+        // above the grid, which is the whole point of it.
+        if (searching && companies.has) ...[
+          CompanyHitsBlock(
+            hits: companies,
+            onOpen: (h) => Navigator.of(context)
+                .pushNamed('/company/${Uri.encodeComponent(h.key)}'),
+          ),
+          SizedBox(height: Ds.space.x24),
+        ],
         if (searching)
           _SearchCountLine(label: _buildSubtitle())
         else

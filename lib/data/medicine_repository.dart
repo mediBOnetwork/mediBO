@@ -82,6 +82,11 @@ typedef FetchPageResult = ({
   // fold) is gone from the envelope and from here: a search page is `items`,
   // one entry per product, in the backend's own rank order.
   bool degraded,
+  // CMD #2118 — the Companies block that rides ABOVE the medicine results on
+  // a search. Matched, ranked and worded by `storefront_search_page`; the app
+  // never looks at a company name itself. [CompanyHits.none] is the backend
+  // saying there is no block (no term, a later page, or nothing matched).
+  CompanyHits companies,
 });
 
 /// CHANGE #553 — one product plus the backend's availability verdict, as
@@ -392,6 +397,9 @@ class MedicineRepository {
           .toList(growable: false),
       // A real envelope. Cacheable.
       degraded: false,
+      companies: env['companies'] is Map
+          ? CompanyHits.fromMap(Map<String, dynamic>.from(env['companies'] as Map))
+          : CompanyHits.none,
     );
   }
 
@@ -420,17 +428,44 @@ class MedicineRepository {
     String key, {
     int offset = 0,
     int limit = 24,
+    String q = '',
   }) async {
     try {
+      // CMD #2118 — "Search in this company". `p_q` is sent ONLY when there is
+      // a term: the 4-argument overload has no default, so the plain browse
+      // call keeps resolving to the 3-argument function it always did.
       final res = await _rpc('storefront_company_page', params: {
         'p_key': key,
         'p_offset': offset,
         'p_limit': limit,
+        if (q.trim().isNotEmpty) 'p_q': q.trim(),
       });
       if (res is! Map) return CompanyPage.failed;
       return CompanyPage.fromMap(Map<String, dynamic>.from(res));
     } catch (_) {
       return CompanyPage.failed;
+    }
+  }
+
+  /// CMD #2118 — the companies matching a typed term, for the "Shop by
+  /// company" filter box. The SAME rows, from the same RPC, that the search
+  /// envelope carries above the medicine results: matching, ranking and the
+  /// count sentence are all `storefront_company_search`'s.
+  ///
+  /// An EMPTY term is a legitimate call: it answers with no rows and with the
+  /// block's copy (the hint the box shows before anything is typed, the line
+  /// it shows when nothing matched), so those words live in `ui_copy` like
+  /// every other string and never in Dart.
+  Future<CompanyHits> fetchCompanyHits(String q, {int limit = 24}) async {
+    try {
+      final res = await _rpc('storefront_company_search', params: {
+        'p_q': q.trim(),
+        'p_limit': limit,
+      });
+      if (res is! Map) return CompanyHits.none;
+      return CompanyHits.fromMap(Map<String, dynamic>.from(res));
+    } catch (_) {
+      return CompanyHits.none;
     }
   }
 
@@ -989,6 +1024,7 @@ class MedicineRepository {
           sortOptions: const <Map<String, dynamic>>[],
           // Outage fallback — see [FetchPageResult.degraded].
           degraded: true,
+          companies: CompanyHits.none,
         );
       }
       // CMD #434 — a degraded page is NEVER cached. Caching it under the key
@@ -1073,6 +1109,7 @@ class MedicineRepository {
           sortOptions: const <Map<String, dynamic>>[],
           // Outage fallback — see [FetchPageResult.degraded].
           degraded: true,
+          companies: CompanyHits.none,
         );
         // CMD #434 — NOT cached. See [FetchPageResult.degraded].
         return result;
@@ -1115,6 +1152,7 @@ class MedicineRepository {
       // The non-buyable priority lane never had an envelope to begin with, so
       // it is not a fallback and stays cacheable.
       degraded: false,
+      companies: CompanyHits.none,
     );
     _cacheSet(_resultCache, cacheKey, result);
     return result;

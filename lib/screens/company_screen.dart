@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../data/medicine_repository.dart';
@@ -5,12 +7,17 @@ import '../design_tokens.dart';
 import '../models/product.dart';
 import '../models/shell_nav.dart';
 import '../models/storefront_p3.dart';
+import '../utils/render_log.dart';
 import '../widgets/animations.dart';
 import '../widgets/compact_product_card.dart';
 import '../widgets/product_card_grid.dart';
 import 'catalogue_screen.dart';
 
-typedef CompanyPageLoader = Future<CompanyPage> Function(String key, int offset);
+/// CMD #2118 — the third argument is the "Search in this company" term.
+/// Empty is the plain catalogue; the RPC, not this screen, decides what a term
+/// matches.
+typedef CompanyPageLoader =
+    Future<CompanyPage> Function(String key, int offset, String q);
 
 /// Test seam for the header's salt cloud (#799) — its own call, its own seam.
 typedef CompanySaltCloudLoader = Future<CompanySaltCloud> Function(String key);
@@ -49,6 +56,11 @@ class _CompanyScreenState extends State<CompanyScreen> {
 
   CompanyPage? _first;
   CompanySaltCloud _cloud = CompanySaltCloud.none;
+
+  /// CMD #2118 — the term in "Search in this company". It is sent to the RPC;
+  /// nothing is filtered here.
+  String _q = '';
+  Timer? _debounce;
   bool _loading = true;
   bool _loadingMore = false;
   bool _hasMore = false;
@@ -65,18 +77,43 @@ class _CompanyScreenState extends State<CompanyScreen> {
 
   @override
   void dispose() {
+    _debounce?.cancel();
     _scroll.removeListener(_onScroll);
     _scroll.dispose();
     super.dispose();
   }
 
+  /// CMD #2118 — every keystroke re-asks the BACKEND for this company's
+  /// products. Debounced so a phone keyboard does not fire a request a letter,
+  /// and guarded on the term so a slow answer to an old term cannot land.
+  void _onQuery(String v) {
+    _debounce?.cancel();
+    final q = v.trim();
+    setState(() => _q = q);
+    _debounce = Timer(const Duration(milliseconds: 260), () async {
+      final page = await _loader(widget.companyKey, 0, q);
+      if (!mounted || _q != q) return;
+      setState(() {
+        _first = page;
+        _items
+          ..clear()
+          ..addAll(page.items);
+        _seenIds
+          ..clear()
+          ..addAll(page.items.map((p) => p.id));
+        _hasMore = page.hasMore;
+        _nextOffset = page.offset + page.items.length;
+      });
+    });
+  }
+
   CompanyPageLoader get _loader =>
       widget.loader ??
-      (key, offset) => MedicineRepository()
-          .fetchCompanyPage(key, offset: offset, limit: _pageSize);
+      (key, offset, q) => MedicineRepository()
+          .fetchCompanyPage(key, offset: offset, limit: _pageSize, q: q);
 
   Future<void> _load() async {
-    final page = await _loader(widget.companyKey, 0);
+    final page = await _loader(widget.companyKey, 0, _q);
     if (!mounted) return;
     setState(() {
       _first = page;
@@ -110,7 +147,7 @@ class _CompanyScreenState extends State<CompanyScreen> {
     if (_loadingMore || !_hasMore) return;
     setState(() => _loadingMore = true);
 
-    final page = await _loader(widget.companyKey, _nextOffset);
+    final page = await _loader(widget.companyKey, _nextOffset, _q);
     if (!mounted) return;
 
     // De-duplicate by id. A repeated offset (double-fire near the boundary, or
@@ -159,138 +196,132 @@ class _CompanyScreenState extends State<CompanyScreen> {
                   items: _items,
                   scroll: _scroll,
                   loadingMore: _loadingMore,
+                  query: _q,
+                  onQuery: _onQuery,
                 ),
     );
   }
 }
 
-/// The company's identity, and the salts it makes. Every string is the
-/// payload's; the only thing decided here is how tall it is when open.
-class _CompanyHeader extends StatelessWidget {
+/// CMD #2118 — the company page, rebuilt.
+///
+/// What #799 shipped put the name in the pinned bar AND in the collapsing
+/// header underneath it, so an open page said the company's name twice, and
+/// the salt chips lived inside the part that collapses — which is why they
+/// were sliced in half by the first row of the grid on the way down.
+///
+/// Now: the name is in the bar and nowhere else. Under it, in the scroll and
+/// not in a collapsing box, sit the count sentence, "Search in this company",
+/// and the salts in a row with its own fixed height and its own padding. Every
+/// string is the payload's.
+class _Header extends StatelessWidget {
   final CompanyPage page;
   final CompanySaltCloud cloud;
-  const _CompanyHeader({required this.page, required this.cloud});
+  final String query;
+  final ValueChanged<String> onQuery;
 
-  static const double _expanded = 188;
-  static const double _logo = 44;
-  static const double _cloud = 32;
+  const _Header({
+    required this.page,
+    required this.cloud,
+    required this.query,
+    required this.onQuery,
+  });
+
+  /// The chips' band. Fixed, with padding above and below, so the row is a row
+  /// and not whatever is left between two other things.
+  static const double chipsH = 36;
 
   @override
-  Widget build(BuildContext context) => SliverAppBar(
-        pinned: true,
-        backgroundColor: Ds.c.surface,
-        surfaceTintColor: Ds.c.surface,
-        foregroundColor: Ds.c.text,
-        elevation: 0,
-        expandedHeight: cloud.has ? _expanded : _expanded - _cloud * 2,
-        leading: IconButton(
-          tooltip: page.backLabel,
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.of(context).maybePop(),
-        ),
-        title: Text(page.label,
-            maxLines: 1, overflow: TextOverflow.ellipsis, style: Ds.t.subtitle),
-        flexibleSpace: FlexibleSpaceBar(
-          collapseMode: CollapseMode.pin,
-          // The background is laid out at the EXPANDED height and then
-          // squeezed as the bar collapses, so it must be allowed to be too
-          // tall for a frame. A non-scrolling scroll view clips instead of
-          // throwing — the alternative is a 4px overflow stripe every time
-          // somebody scrolls a company page.
-          background: SafeArea(
-            child: SingleChildScrollView(
-              physics: const NeverScrollableScrollPhysics(),
-              child: Padding(
-              padding: EdgeInsets.fromLTRB(
-                  Ds.space.x16, Ds.space.x48, Ds.space.x16, Ds.space.x8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      // The logo box. There is no company artwork in the
-                      // catalogue, so the payload's own initial is the honest
-                      // mark — the same rule the nav registry follows.
-                      Container(
-                        width: _logo,
-                        height: _logo,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: Ds.c.bg,
-                          borderRadius: Ds.r.rCard,
-                          border: Border.all(color: Ds.c.divider),
-                        ),
-                        child: Text(page.iconLetter, style: Ds.t.title),
-                      ),
-                      SizedBox(width: Ds.space.x12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(page.label,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: Ds.t.title),
-                            if (page.countLabel.isNotEmpty)
-                              Text(page.countLabel, style: Ds.t.caption),
-                          ],
-                        ),
-                      ),
-                    ],
+  Widget build(BuildContext context) => Padding(
+        padding: EdgeInsets.fromLTRB(
+            Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (page.countLabel.isNotEmpty) ...[
+              Text(page.countLabel, style: Ds.t.caption),
+              SizedBox(height: Ds.space.x12),
+            ],
+            Semantics(
+              identifier: 'company_search_box',
+              textField: true,
+              child: TextField(
+                onChanged: onQuery,
+                textInputAction: TextInputAction.search,
+                style: Ds.t.body,
+                decoration: InputDecoration(
+                  isDense: true,
+                  filled: true,
+                  fillColor: Ds.c.surface,
+                  hintText: page.searchHint,
+                  hintStyle: Ds.t.body.copyWith(color: Ds.c.textSecondary),
+                  prefixIcon: Icon(Icons.search, color: Ds.c.textSecondary),
+                  contentPadding: EdgeInsets.symmetric(
+                      horizontal: Ds.space.x12, vertical: Ds.space.x12),
+                  border: OutlineInputBorder(
+                    borderRadius: Ds.r.rButton,
+                    borderSide: BorderSide(color: Ds.c.divider),
                   ),
-                  if (cloud.has) ...[
-                    SizedBox(height: Ds.space.x12),
-                    Text(cloud.title, style: Ds.t.caption),
-                    SizedBox(height: Ds.space.x8),
-                    SizedBox(
-                      height: _cloud,
-                      child: ListView.separated(
-                        scrollDirection: Axis.horizontal,
-                        itemCount: cloud.items.length,
-                        separatorBuilder: (_, _) => SizedBox(width: Ds.space.x8),
-                        itemBuilder: (context, i) => InkWell(
-                          // A salt in the cloud opens the catalogue's own salt
-                          // listing. Pushed directly with the route as a seed
-                          // rather than through a URL: the Catalogue is a page
-                          // of the shell's IndexedStack, and pushing a named
-                          // path would land on the shell's boot parse instead
-                          // of this salt.
-                          onTap: () => Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => _SaltListing(
-                                title: cloud.items[i].label,
-                                backLabel: page.backLabel,
-                                route: CatalogueRoute(
-                                    listKind: 'salt',
-                                    listKey: cloud.items[i].key),
-                              ),
-                            ),
-                          ),
-                          borderRadius: Ds.r.rChip,
-                          child: Container(
-                            padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
-                            alignment: Alignment.center,
-                            decoration: BoxDecoration(
-                              color: Ds.c.bg,
-                              borderRadius: Ds.r.rChip,
-                              border: Border.all(color: Ds.c.divider),
-                            ),
-                            child: Text(cloud.items[i].label,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: Ds.t.caption.copyWith(color: Ds.c.text)),
-                          ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: Ds.r.rButton,
+                    borderSide: BorderSide(color: Ds.c.divider),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: Ds.r.rButton,
+                    borderSide: BorderSide(color: Ds.c.brand),
+                  ),
+                ),
+              ),
+            ),
+            if (cloud.has) ...[
+              SizedBox(height: Ds.space.x16),
+              Text(cloud.title, style: Ds.t.caption),
+              SizedBox(height: Ds.space.x8),
+              SizedBox(
+                height: chipsH,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: cloud.items.length,
+                  separatorBuilder: (_, _) => SizedBox(width: Ds.space.x8),
+                  itemBuilder: (context, i) => InkWell(
+                    // A salt in the cloud opens the catalogue's own salt
+                    // listing. Pushed directly with the route as a seed rather
+                    // than through a URL: the Catalogue is a page of the
+                    // shell's IndexedStack, and pushing a named path would
+                    // land on the shell's boot parse instead of this salt.
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => _SaltListing(
+                          title: cloud.items[i].label,
+                          backLabel: page.backLabel,
+                          route: CatalogueRoute(
+                              listKind: 'salt', listKey: cloud.items[i].key),
                         ),
                       ),
                     ),
-                  ],
-                ],
+                    borderRadius: Ds.r.rChip,
+                    child: Container(
+                      padding:
+                          EdgeInsets.symmetric(horizontal: Ds.space.x12),
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: Ds.c.bg,
+                        borderRadius: Ds.r.rChip,
+                        border: Border.all(
+                            color: Ds.c.divider, width: Ds.space.hairline),
+                      ),
+                      child: Text(cloud.items[i].label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Ds.t.caption.copyWith(color: Ds.c.text)),
+                    ),
+                  ),
+                ),
               ),
-            ),
-          ),
-        ),
+            ],
+            SizedBox(height: Ds.space.x8),
+          ],
         ),
       );
 }
@@ -301,6 +332,8 @@ class _Body extends StatelessWidget {
   final List<Product> items;
   final ScrollController scroll;
   final bool loadingMore;
+  final String query;
+  final ValueChanged<String> onQuery;
 
   const _Body({
     required this.page,
@@ -308,41 +341,83 @@ class _Body extends StatelessWidget {
     required this.items,
     required this.scroll,
     required this.loadingMore,
+    required this.query,
+    required this.onQuery,
   });
 
   @override
   Widget build(BuildContext context) {
+    RenderLog.write('c2118_company_page',
+        'q=$query;items=${items.length};salts=${cloud.has ? cloud.items.length : 0}');
     return LayoutBuilder(
       builder: (context, c) {
-        // CMD #2044 — the column count is ProductCardGrid's, measured from the
-        // card, so this page cannot drift from Home, search or the catalogue.
+        final gridW = c.maxWidth - Ds.space.x16 * 2;
         return CustomScrollView(
           controller: scroll,
           slivers: [
-            _CompanyHeader(page: page, cloud: cloud),
-            SliverPadding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              sliver: SliverGrid(
-                gridDelegate: ProductCardGrid.delegateFor(c.maxWidth - 32),
-                delegate: SliverChildBuilderDelegate(
-                  (context, i) => CompactProductCard(
-                    product: items[i],
-                    onTap: () => Navigator.of(context)
-                        .pushNamed('/product/${items[i].id}'),
-                  ),
-                  childCount: items.length,
-                ),
+            SliverAppBar(
+              pinned: true,
+              backgroundColor: Ds.c.surface,
+              surfaceTintColor: Ds.c.surface,
+              foregroundColor: Ds.c.text,
+              elevation: 0,
+              leading: IconButton(
+                tooltip: page.backLabel,
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () => Navigator.of(context).maybePop(),
               ),
+              // CMD #2118 — the company's name, once on the page.
+              title: Text(page.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Ds.t.subtitle),
             ),
             SliverToBoxAdapter(
+              child: _Header(
+                page: page,
+                cloud: cloud,
+                query: query,
+                onQuery: onQuery,
+              ),
+            ),
+            if (items.isEmpty)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(
+                      Ds.space.x16, Ds.space.x24, Ds.space.x16, Ds.space.x24),
+                  child: Text(page.emptyLabel, style: Ds.t.caption),
+                ),
+              )
+            else
+              SliverPadding(
+                padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+                sliver: SliverGrid(
+                  // CMD #2118 — the card drops the maker's line here: the bar
+                  // above already says it, and the grid reserves the shorter
+                  // extent the card itself publishes.
+                  gridDelegate: ProductCardGrid.delegateFor(gridW,
+                      showManufacturer: false),
+                  delegate: SliverChildBuilderDelegate(
+                    (context, i) => CompactProductCard(
+                      product: items[i],
+                      showManufacturer: false,
+                      onTap: () => Navigator.of(context)
+                          .pushNamed('/product/${items[i].id}'),
+                    ),
+                    childCount: items.length,
+                  ),
+                ),
+              ),
+            SliverToBoxAdapter(
               child: SizedBox(
-                height: 72,
+                height: Ds.space.x48,
                 child: Center(
                   child: loadingMore
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
+                      ? SizedBox(
+                          width: Ds.space.x24,
+                          height: Ds.space.x24,
+                          child: const CircularProgressIndicator(
+                              strokeWidth: 2),
                         )
                       : const SizedBox.shrink(),
                 ),

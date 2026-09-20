@@ -393,10 +393,26 @@ class DsTouch {
   /// covering it. Backend token, so the offset is retunable with zero deploy.
   final double bottomBarGap;
 
+  /// CMD #2116 — the EXACT width of the action button on a bottom bar, in
+  /// logical pixels.
+  ///
+  /// The update bar, the registration bar and the login bar are one widget in
+  /// one box, and they still did not line up: the button was sized to its own
+  /// label, so `Login` drew a narrower box than `Continue` and the two bars
+  /// read as two different pieces of chrome stacked in the same slot. A width
+  /// the LABEL decides is a width that changes every time the backend rewords
+  /// the button — which is exactly the thing that is supposed to be free.
+  ///
+  /// So the box is a token and the word goes inside it. A longer word scales
+  /// down to fit rather than widening the button or ellipsing into `Updat…`,
+  /// and every bar in the slot is the same rectangle whatever it says.
+  final double barActionWidth;
+
   const DsTouch({
     required this.minTarget,
     required this.listRowMinHeight,
     required this.bottomBarGap,
+    required this.barActionWidth,
     required this.headerBand,
     required this.headerHysteresis,
     required this.headerSettleMs,
@@ -405,6 +421,10 @@ class DsTouch {
       minTarget: 44,
       listRowMinHeight: 56,
       bottomBarGap: 56,
+      // CMD #2116 — wide enough for the longest word the three bars send
+      // ("Update Now") at body-strong weight plus its side padding, and still
+      // leaving the sentence its share of a 360 px row.
+      barActionWidth: 120,
       // CMD #2037 — back to the height the header had before #2030 (a 40 px
       // avatar in 12 px of padding, top and bottom). #2030 made the band's
       // height and its scroll travel ONE number and set that number to 56,
@@ -424,6 +444,7 @@ class DsTouch {
         minTarget: Ds._num(m['minTarget'], f.minTarget),
         listRowMinHeight: Ds._num(m['listRowMinHeight'], f.listRowMinHeight),
         bottomBarGap: Ds._num(m['bottomBarGap'], f.bottomBarGap),
+        barActionWidth: Ds._num(m['barActionWidth'], f.barActionWidth),
         headerBand: Ds._num(m['headerBand'], f.headerBand),
         headerHysteresis:
             Ds._num(m['headerHysteresis'], f.headerHysteresis),

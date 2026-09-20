@@ -13,6 +13,8 @@ import 'services/fulfill_realtime.dart'; // C355: app-level realtime auth + subs
 import 'services/access.dart';
 import 'services/map_config.dart'; // C634: one backend-owned map config, session-cached
 import 'services/customer_surfaces.dart'; // C745: the customer menu's device cache
+import 'services/admin_zone_scope.dart'; // CMD #2116: the zone belongs to the credential
+import 'services/admin_date_scope.dart'; // CMD #2116: so does the active date
 import 'app_navigator.dart';
 import 'utils/render_log.dart';
 import 'services/registration_payload.dart';
@@ -120,6 +122,22 @@ class AuthNotifier extends ChangeNotifier {
   bool _initDone = false;
   // Set to true BEFORE calling auth.signOut() so the signedOut handler knows it's intentional.
   bool _explicitSignOut = false;
+
+  /// CMD #2116 — has this sign-out already put the user on the public home?
+  ///
+  /// A logout reaches [_clearAccountState] twice by design: once from
+  /// [signOut], which lands IMMEDIATELY so nothing waits on the network, and
+  /// again from the SDK's own `signedOut` event a moment later. Landing twice
+  /// would rebuild the root a second time for no reason, so the second pass
+  /// clears and does not navigate. Any adopted session clears the latch, which
+  /// is what makes logout -> login -> logout repeatable.
+  bool _landedSignedOut = false;
+
+  /// CMD #2116 — how long the credential teardown is allowed to take before
+  /// the app stops caring. It never gates the landing; it only stops a hung
+  /// SDK call from keeping the caller's `await signOut()` — and therefore its
+  /// button's spinner — alive forever.
+  static const Duration _signOutBudget = Duration(seconds: 4);
 
   AuthNotifier() {
     _sub = Supabase.instance.client.auth.onAuthStateChange.listen(_onAuthChange);
@@ -383,7 +401,15 @@ class AuthNotifier extends ChangeNotifier {
         state.event == AuthChangeEvent.tokenRefreshed;
     final hasSession = state.session != null ||
         Supabase.instance.client.auth.currentSession != null;
-    if (_loading && !(isSignIn && hasSession)) {
+    // CMD #2116 — A SIGN-OUT IS NEVER BLOCKED BY LOADING.
+    //
+    // The guard exists to stop half-resolved boot events from overwriting a
+    // session that is still being fetched. A `signedOut` is not that: it is
+    // the end of the session, and swallowing it left the app holding an
+    // account it no longer had, on a splash it could never leave. It goes
+    // through, and it resolves loading on its way past.
+    final isSignOut = state.event == AuthChangeEvent.signedOut;
+    if (_loading && !(isSignIn && hasSession) && !isSignOut) {
       RenderLog.write('auth55_event_blocked', '${state.event.name}_blocked_by_loading');
       return;
     }
@@ -490,6 +516,12 @@ class AuthNotifier extends ChangeNotifier {
     _session = AppSession.signedOut;
     _profileLoading = false;
     _sessionFetchError = false;
+    // CMD #2116 — AND THE APP IS NOT LOADING ANY MORE. A logout raised before
+    // boot had finished (or while a session fetch was still in flight) left
+    // this true, and the root's only answer to `loading` is the splash: the
+    // endless spinner a user saw instead of the public home was this one
+    // boolean.
+    _loading = false;
     _profileChannel?.unsubscribe();
     _profileChannel = null;
     // The WhatsApp force-logout live channel belongs to the credential that just
@@ -511,6 +543,11 @@ class AuthNotifier extends ChangeNotifier {
     // that just went away. The next login must never render through the
     // previous login's toggles.
     Access.instance.clear();
+    // CMD #2116: the zone and the date on the header picker are the previous
+    // credential's choices, and both scopes only ever ask the backend once.
+    // Left loaded, they are what the NEXT account's lists open on.
+    AdminZoneScope.instance.clear();
+    AdminDateScope.instance.clear();
     // CHANGE #745 (QA round 2): the customer's menu is cached ON THE DEVICE so
     // a failed refresh cannot empty the Account group. That cache is account
     // data — a code, a payment term, a points balance, a referral code — so it
@@ -523,6 +560,15 @@ class AuthNotifier extends ChangeNotifier {
     // order, the dev queue) stayed on screen for a user who no longer has it.
     // One place, so none of the nine logout buttons has to remember.
     RenderLog.write('c2114_logout_route', logoutRoute);
+    // CMD #2116 — ONCE PER SIGN-OUT. [signOut] lands before it touches the
+    // network and the SDK's own `signedOut` event arrives here afterwards;
+    // both must clear, only the first needs to navigate.
+    if (_landedSignedOut) {
+      RenderLog.write('c2116_logout_land', 'already');
+      return;
+    }
+    _landedSignedOut = true;
+    RenderLog.write('c2116_logout_land', logoutRoute.isEmpty ? '/' : logoutRoute);
     landOnRoute(logoutRoute);
   }
 
@@ -547,6 +593,11 @@ class AuthNotifier extends ChangeNotifier {
       }
 
       _session = next;
+      // CMD #2116 — a real account is on screen again, so the next logout is
+      // allowed to land. This is what makes account switching repeatable:
+      // logout -> public home -> Login -> a different account -> logout, with
+      // no reload and no app restart in between.
+      if (next.signedIn) _landedSignedOut = false;
       RenderLog.write('auth_role', next.role);
 
       // CMD #2059 — the registration surface is cached and this is the one
@@ -754,6 +805,28 @@ class AuthNotifier extends ChangeNotifier {
     throw const GisOneTapCancelled();
   }
 
+  /// CMD #2116 — LOGOUT LANDS FIRST, AND THEN TIDIES UP.
+  ///
+  /// It used to be the other way round: clear the registration surface, await
+  /// the SDK's `signOut`, and let the `signedOut` event it eventually emits do
+  /// the clearing and the landing. Every step of that chain is a network or a
+  /// storage call, and each one is a way for the landing never to happen —
+  /// an already-expired session that makes `signOut` throw, an offline device,
+  /// a storage read that never returns. When it did not happen the user was
+  /// left on a role-guarded screen they no longer had the role for, watching
+  /// the caller's spinner, with nothing left in the app able to move them.
+  ///
+  /// So the order is inverted and the network is no longer on the path:
+  ///
+  ///   1. clear every scrap of account state and REPLACE THE WHOLE STACK with
+  ///      the backend's public home (`my_session().logout_route`). This is
+  ///      synchronous — no await, nothing to fail, nothing to wait for.
+  ///   2. then retire the credential, each step bounded by [_signOutBudget]
+  ///      and swallowed on failure. A session that was already gone is not an
+  ///      error here; it is the desired end state, reached early.
+  ///
+  /// The caller's `await signOut()` therefore always returns, and where the
+  /// user is standing never depended on it.
   Future<void> signOut() async {
     _explicitSignOut = true;
     // CHANGE #563: forget the auto-selected account, so the next sign-in always
@@ -762,12 +835,33 @@ class AuthNotifier extends ChangeNotifier {
       RenderLog.write('c563_disable_auto', gisDisableAutoSelect() ? 'ok' : 'no_gis');
     } catch (_) {}
     RenderLog.write('auth54_signout', 'scope=local; reason=manual_logout');
+
+    // ── 1. LAND. Nothing below this line can keep the user where they were.
+    _clearAccountState();
+    notifyListeners();
+
+    // ── 2. Retire the credential. Bounded and best-effort, both of them.
     // CMD #2063 — the registration surface holds this account's identity and
     // its half-typed shop details, and it paints before any refresh. A device
     // that changes hands must not keep it. The BACKEND draft stays: it is the
     // account's own and it is what "reopening resumes" means.
-    await RegistrationSurface.clear();
-    await Supabase.instance.client.auth.signOut(scope: SignOutScope.local);
+    try {
+      await RegistrationSurface.clear().timeout(_signOutBudget);
+    } catch (_) {
+      RenderLog.write('c2116_signout_step', 'reg_surface_skipped');
+    }
+    try {
+      await Supabase.instance.client.auth
+          .signOut(scope: SignOutScope.local)
+          .timeout(_signOutBudget);
+      RenderLog.write('c2116_signout_step', 'credential_cleared');
+    } catch (_) {
+      // Already gone, offline, or the SDK never answered. The app is already
+      // on the public home with no account state left, which is exactly what
+      // a successful sign-out looks like.
+      RenderLog.write('c2116_signout_step', 'credential_already_gone');
+      _explicitSignOut = false;
+    }
   }
 
   @override

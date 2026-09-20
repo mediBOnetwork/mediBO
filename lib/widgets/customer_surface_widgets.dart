@@ -5,6 +5,9 @@ import '../design_tokens.dart';
 import '../screens/admin/nav_registry_view.dart' show navIcon;
 import '../screens/customer/profile_account_menu.dart' show customerMenuScreen;
 import '../services/customer_surfaces.dart';
+import '../services/ui_copy.dart';
+import '../user_state.dart';
+import 'animations.dart' show Shimmer, SkeletonBox;
 import 'notification_bell.dart' show NotifUnread;
 import '../utils/render_log.dart';
 
@@ -310,6 +313,12 @@ class _CustomerProfileDropdownState
     // The unread count is the dropdown's own badge now, so it is refreshed on
     // open rather than by a bell that is no longer on the header.
     NotifUnread.refresh();
+    // CMD #2108 — ask AGAIN on open. `ensureLoaded` fetches once per session,
+    // so a sheet opened after the boot fetch had failed (or after a sign-in
+    // that landed while the listener was detaching) was drawing an empty
+    // payload for the rest of the session: a sheet with a name on it and
+    // nothing under it, which is exactly what Om saw.
+    CustomerSurfaces.load();
   }
 
   @override
@@ -322,39 +331,168 @@ class _CustomerProfileDropdownState
             ? widget.title!.trim()
             : (payload['dropdown_title'] ?? '').toString();
         final caption = (payload['dropdown_caption'] ?? '').toString();
+
+        // CMD #2108 — the sheet renders EVERY row the backend placed here, by
+        // its own render_kind, the way the profile's Account group already
+        // did. Before this it built one shape only and threw away anything
+        // whose route_key had no Dart screen — which is every 'action' row,
+        // Logout included, because signing out is not a screen. A sheet that
+        // silently drops what the backend sent is the bug, not the payload.
+        final rows = <Widget>[];
+        var hasLogout = false;
+        for (final e in items) {
+          final kind = (e['render_kind'] ?? 'row').toString();
+          final label = (e['label'] ?? '').toString();
+          if (label.isEmpty) continue;
+          switch (kind) {
+            case 'action':
+              hasLogout = true;
+              rows.add(_DropdownLogout(label: label));
+              break;
+            case 'danger_zone':
+              // Deleting an account belongs on the profile page behind its own
+              // confirmation, never one tap inside a header sheet.
+              break;
+            default:
+              final row = _DropdownRow(entry: e);
+              if (row.opens == null) break; // forward compat: skip, never throw
+              rows.add(row);
+          }
+        }
+        // The same rule the Account group has carried since #745: a signed-in
+        // pharmacy the payload does not describe must still be able to sign
+        // out. The word is the backend's either way.
+        if (!hasLogout) {
+          rows.add(_DropdownLogout(label: c('profile.btn_logout')));
+        }
         RenderLog.write('c1914_profile_dropdown', items.length);
-        return Padding(
-          padding: EdgeInsets.fromLTRB(
-              Ds.space.x24, Ds.space.x16, Ds.space.x24, Ds.space.x24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Center(
-                child: Container(
-                  width: Ds.space.x32,
-                  height: Ds.space.x4,
-                  decoration: BoxDecoration(
-                    color: Ds.c.divider,
-                    borderRadius: Ds.r.rChip,
+        RenderLog.write('c2108_dropdown_rows', rows.length);
+
+        // Nothing has landed yet: a skeleton at the shape of the real rows,
+        // never a bare spinner and never a sheet that is only a name.
+        final loading = items.isEmpty && payload.isEmpty;
+
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+                Ds.space.x24, Ds.space.x16, Ds.space.x24, Ds.space.x24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Center(
+                  child: Container(
+                    width: Ds.space.x32,
+                    height: Ds.space.x4,
+                    decoration: BoxDecoration(
+                      color: Ds.c.divider,
+                      borderRadius: Ds.r.rChip,
+                    ),
                   ),
                 ),
-              ),
-              SizedBox(height: Ds.space.x16),
-              if (heading.isNotEmpty)
-                Text(heading,
-                    style: Ds.t.subtitle.copyWith(fontWeight: FontWeight.w700)),
-              if (caption.isNotEmpty) ...[
-                SizedBox(height: Ds.space.x4),
-                Text(caption,
-                    style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+                SizedBox(height: Ds.space.x16),
+                if (heading.isNotEmpty)
+                  Text(heading,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style:
+                          Ds.t.subtitle.copyWith(fontWeight: FontWeight.w700)),
+                if (caption.isNotEmpty) ...[
+                  SizedBox(height: Ds.space.x4),
+                  Text(caption,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+                ],
+                SizedBox(height: Ds.space.x16),
+                // A phone in landscape, or a payload that grows a fifth row,
+                // must scroll inside the sheet rather than overflow it.
+                Flexible(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: loading
+                          ? const [_DropdownSkeleton()]
+                          : rows,
+                    ),
+                  ),
+                ),
               ],
-              SizedBox(height: Ds.space.x16),
-              for (final e in items) _DropdownRow(entry: e),
-            ],
+            ),
           ),
         );
       },
+    );
+  }
+}
+
+/// The rows' own shape while the first answer is still in flight.
+class _DropdownSkeleton extends StatelessWidget {
+  const _DropdownSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return Shimmer(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var i = 0; i < 3; i++)
+            Padding(
+              padding: EdgeInsets.only(bottom: Ds.space.x8),
+              child: SkeletonBox(height: Ds.touch.minTarget + Ds.space.x8),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Logout, as a row of the same shape as every other row in the sheet.
+class _DropdownLogout extends StatelessWidget {
+  final String label;
+  const _DropdownLogout({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x8),
+      child: Semantics(
+        identifier: 'cust_dropdown_logout',
+        button: true,
+        child: InkWell(
+          borderRadius: Ds.r.rCard,
+          onTap: () async {
+            Navigator.of(context).pop();
+            await UserState.read(context).signOut();
+          },
+          child: Container(
+            constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+            padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x16, vertical: Ds.space.x12),
+            decoration: BoxDecoration(
+              color: Ds.c.surface,
+              borderRadius: Ds.r.rCard,
+              border: Border.all(color: Ds.c.divider),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.logout, size: 22, color: Ds.c.textSecondary),
+                SizedBox(width: Ds.space.x12),
+                Expanded(
+                  child: Text(label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Ds.t.body.copyWith(
+                          fontWeight: FontWeight.w600,
+                          color: Ds.c.textSecondary)),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -363,9 +501,15 @@ class _DropdownRow extends StatelessWidget {
   final Map<String, dynamic> entry;
   const _DropdownRow({required this.entry});
 
+  /// The screen this row opens, or null when this build of the app does not
+  /// know the backend's route key yet. The sheet asks BEFORE it adds the row,
+  /// so an unknown route is skipped instead of leaving an invisible gap.
+  Widget? get opens =>
+      customerMenuScreen((entry['route_key'] ?? '').toString());
+
   @override
   Widget build(BuildContext context) {
-    final screen = customerMenuScreen((entry['route_key'] ?? '').toString());
+    final screen = opens;
     if (screen == null) return const SizedBox.shrink();
     final label = (entry['label'] ?? '').toString();
     if (label.isEmpty) return const SizedBox.shrink();
@@ -375,7 +519,10 @@ class _DropdownRow extends StatelessWidget {
     final badge = (entry['badge'] ?? '').toString();
     return Padding(
       padding: EdgeInsets.only(bottom: Ds.space.x8),
-      child: InkWell(
+      child: Semantics(
+        identifier: 'cust_dropdown_${(entry['route_key'] ?? '').toString()}',
+        button: true,
+        child: InkWell(
         borderRadius: Ds.r.rCard,
         onTap: () {
           Navigator.of(context).pop();
@@ -433,6 +580,7 @@ class _DropdownRow extends StatelessWidget {
             ],
           ),
         ),
+      ),
       ),
     );
   }

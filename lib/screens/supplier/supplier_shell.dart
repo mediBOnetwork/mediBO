@@ -69,12 +69,29 @@ class _SupplierShellState extends State<SupplierShell> {
     c('supplier_shell.tab_disputes'),
   ];
 
+  /// CMD #2108 — the phone bar's own words. "Add Medicine" wrapped onto two
+  /// lines and spilled below a 360px bar; the bar draws ONE line now, so it
+  /// asks the backend for a word that fits instead of cutting one down here.
+  /// The long labels stay for the desktop tab bar, which has the room.
+  List<String> get _tabShortLabels => [
+    c('supplier_shell.tab_home_short'),
+    c('supplier_shell.tab_add_short'),
+    c('supplier_shell.tab_inquiry_short'),
+    c('supplier_shell.tab_orders_short'),
+    c('supplier_shell.tab_disputes_short'),
+  ];
+
   /// The bar is the tabs this login may READ, in their original order. The
   /// grade is the backend's; this file only asks.
   List<_NavItem> get _navItems => [
     for (var slot = 0; slot < _tabIcons.length; slot++)
       if (_tabFeature[slot] == null || _canRead(_tabFeature[slot]!))
-        _NavItem(icon: _tabIcons[slot], label: _tabLabels[slot], slot: slot),
+        _NavItem(
+          icon: _tabIcons[slot],
+          label: _tabLabels[slot],
+          shortLabel: _tabShortLabels[slot],
+          slot: slot,
+        ),
   ];
 
   /// The feature key each tab index needs. Home is the shell itself and is
@@ -181,9 +198,13 @@ class _SupplierShellState extends State<SupplierShell> {
   /// CHANGE #402 — the three self-service surfaces, behind the header's menu.
   /// Each row appears only when the backend graded that feature readable, and
   /// each row's LABEL is the backend's own (so it is Hindi in Hindi).
-  void _openAccountSheet() {
+  /// CMD #2108 — the kebab sheet is now the ONLY place a supplier reads who
+  /// is signed in and the only way out. Both words are backend copy; the name
+  /// is the session's, printed on a line of its own that nothing truncates.
+  void _openAccountSheet(String supplierName) {
     final s = _session;
     final language = supplierMap(s?['language']);
+    final staffLabel = supplierStr(supplierMap(s), 'actor_label');
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Ds.c.surface,
@@ -191,9 +212,37 @@ class _SupplierShellState extends State<SupplierShell> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet)),
       ),
       builder: (sheetCtx) => SafeArea(
+        child: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // The identity line. Not a ListTile: it is not tappable, and a
+            // disabled ListTile still reads as a dead button on a phone.
+            Padding(
+              padding: EdgeInsets.fromLTRB(
+                  Ds.space.x16, Ds.space.x16, Ds.space.x16, Ds.space.x8),
+              child: Row(children: [
+                Icon(Icons.storefront_outlined, color: Ds.c.textSecondary),
+                SizedBox(width: Ds.space.x12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        staffLabel.isNotEmpty ? staffLabel : supplierName,
+                        style: Ds.t.subtitle,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      SizedBox(height: Ds.space.x4),
+                      Text(c('supplier_shell.menu_account_hint'),
+                          style: Ds.t.caption),
+                    ],
+                  ),
+                ),
+              ]),
+            ),
+            Divider(height: 1, color: Ds.c.divider),
             // CHANGE #850 — My Account: the supplier's own page, with every
             // tab the backend registry offers this login. The rows below it
             // stay where they were; each is also a tab inside it.
@@ -264,7 +313,24 @@ class _SupplierShellState extends State<SupplierShell> {
                 _openLanguageSheet();
               },
             ),
+            Divider(height: 1, color: Ds.c.divider),
+            // CMD #2108 — the logout icon left the 56px app bar and became a
+            // row here, where it has a label and a 48px target.
+            Semantics(
+              identifier: 'sup_menu_logout',
+              button: true,
+              child: ListTile(
+                leading: Icon(Icons.logout, color: Ds.c.danger),
+                title: Text(c('supplier_shell.menu_logout'),
+                    style: Ds.t.body.copyWith(color: Ds.c.danger)),
+                onTap: () {
+                  Navigator.pop(sheetCtx);
+                  UserState.read(context).signOut();
+                },
+              ),
+            ),
           ],
+        ),
         ),
       ),
     );
@@ -336,9 +402,17 @@ class _SupplierShellState extends State<SupplierShell> {
 
   @override
   Widget build(BuildContext context) {
-    final supplierName = widget.viewAsSupplierName
-        ?? UserState.of(context).supplierName
-        ?? c('supplier_shell.supplier_fallback_name');
+    // CMD #2108 — the name is the kebab sheet's first line now, so an EMPTY
+    // one is visible in a way it never was behind a truncated greeting. The
+    // `??` chain could not catch it: `supplierName` is non-nullable and an
+    // account with no name yet returns '', not null.
+    final sessionName = UserState.of(context).supplierName.trim();
+    final previewName = (widget.viewAsSupplierName ?? '').trim();
+    final supplierName = previewName.isNotEmpty
+        ? previewName
+        : (sessionName.isNotEmpty
+            ? sessionName
+            : c('supplier_shell.supplier_fallback_name'));
     final viewAsSupplierId = widget.viewAsSupplierId;
     final isDesktop = MediaQuery.of(context).size.width >= 900;
 
@@ -380,13 +454,12 @@ class _SupplierShellState extends State<SupplierShell> {
                   await _loadInbox();
                 }
               : null,
-          supplierName: supplierName,
           isDesktop: isDesktop,
-          staffLabel: supplierStr(supplierMap(_session), 'actor_label'),
-          onMenu: viewAsSupplierId == null ? _openAccountSheet : null,
-          onLogout: viewAsSupplierId == null
-              ? () => UserState.read(context).signOut()
-              : null, // no logout in preview mode
+          // View-As preview has no account sheet, and therefore no logout —
+          // an operator previewing a supplier must not sign that supplier out.
+          onMenu: viewAsSupplierId == null
+              ? () => _openAccountSheet(supplierName)
+              : null,
         ),
         // Attention banner
         if (showBanner)
@@ -442,11 +515,24 @@ class _NavItem {
   final IconData icon;
   final String label;
 
+  /// The one-line word the phone bar draws. Empty only if the backend has no
+  /// short key yet, in which case the bar falls back to the long label — a
+  /// render fallback, never a string composed here.
+  final String shortLabel;
+
   /// CHANGE #402 — the tab's position in the FULL five, kept even when the bar
   /// draws fewer of them. The badges key off this, so hiding a tab a staff
   /// login may not open can never move a badge onto the wrong icon.
   final int slot;
-  const _NavItem({required this.icon, required this.label, required this.slot});
+  const _NavItem({
+    required this.icon,
+    required this.label,
+    required this.slot,
+    this.shortLabel = '',
+  });
+
+  /// What the phone bar prints.
+  String get barLabel => shortLabel.isNotEmpty ? shortLabel : label;
 }
 
 // ── Header ────────────────────────────────────────────────────────────────────
@@ -458,22 +544,17 @@ class _SupplierHeader extends StatelessWidget {
   /// dispute. The count is the BACKEND's unread total, never counted here.
   final int inboxUnread;
   final VoidCallback? onInbox;
-  final String supplierName;
   final bool isDesktop;
-  final VoidCallback? onLogout;
 
-  /// CHANGE #402 — the backend's own "who is signed in" line for a STAFF
-  /// login, empty for the owner. Never composed here.
-  final String staffLabel;
+  /// CMD #2108 — the kebab. Logo, role chip, bell and this: four things on a
+  /// 56px bar, none of them flexible, so none of them can truncate. Who is
+  /// signed in and how to sign out live behind it.
   final VoidCallback? onMenu;
 
   const _SupplierHeader({
     this.inboxUnread = 0,
     this.onInbox,
-    required this.supplierName,
     required this.isDesktop,
-    required this.onLogout,
-    this.staffLabel = '',
     this.onMenu,
   });
 
@@ -503,18 +584,12 @@ class _SupplierHeader extends StatelessWidget {
             color: Ds.c.surface, fontWeight: FontWeight.w500,
           )),
         ),
+        // CMD #2108 — the greeting is gone. On a 360px phone it was the only
+        // flexible thing between the brand and three icons, so it was always
+        // the thing that truncated: "Hello, Shr…" next to a logout icon that
+        // sat one thumb-width from the bell. The supplier's full name now has
+        // a whole line to itself inside the kebab, where nothing truncates it.
         const Spacer(),
-        Flexible(
-          child: Text(
-            staffLabel.isNotEmpty
-                ? staffLabel
-                : cf('supplier_shell.greeting', {'name': supplierName}),
-            style: Ds.t.caption
-                .copyWith(color: Ds.c.surface, fontWeight: FontWeight.w500),
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-        SizedBox(width: Ds.space.x12),
         if (onInbox != null)
           InkWell(
             onTap: onInbox,
@@ -530,21 +605,16 @@ class _SupplierHeader extends StatelessWidget {
             ),
           ),
         if (onMenu != null)
-          InkWell(
-            onTap: onMenu,
-            borderRadius: Ds.r.rButton,
-            child: Padding(
-              padding: EdgeInsets.all(Ds.space.x4),
-              child: Icon(Icons.more_vert, color: Ds.c.surface, size: 20),
-            ),
-          ),
-        if (onLogout != null)
-          InkWell(
-            onTap: onLogout,
-            borderRadius: Ds.r.rButton,
-            child: Padding(
-              padding: EdgeInsets.all(Ds.space.x4),
-              child: Icon(Icons.logout, color: Ds.c.surface, size: 20),
+          Semantics(
+            identifier: 'sup_kebab',
+            button: true,
+            child: InkWell(
+              onTap: onMenu,
+              borderRadius: Ds.r.rButton,
+              child: Padding(
+                padding: EdgeInsets.all(Ds.space.x4),
+                child: Icon(Icons.more_vert, color: Ds.c.surface, size: 20),
+              ),
             ),
           ),
       ]),
@@ -692,10 +762,18 @@ class _MobileBottomNav extends StatelessWidget {
         color: Ds.c.surface,
         boxShadow: Ds.elevation.e2,
       ),
+      // CMD #2108 — top:false so the bar only ever pads the gesture inset at
+      // the BOTTOM; a SafeArea that also padded the top pushed the row up and
+      // clipped the labels on a notched phone.
       child: SafeArea(
+        top: false,
         child: SizedBox(
-          height: 60,
+          // One fixed row height for every tab, on every phone. 56 is the
+          // 44px touch minimum plus the icon/label rhythm, and it does not
+          // grow when a label is long — the label is one line now.
+          height: 56,
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: List.generate(items.length, (i) {
               final item = items[i];
               final selected = item.slot == index;
@@ -706,6 +784,7 @@ class _MobileBottomNav extends StatelessWidget {
                   onTap: () => onTap(item.slot),
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       Stack(clipBehavior: Clip.none, children: [
                         Icon(item.icon,
@@ -731,10 +810,23 @@ class _MobileBottomNav extends StatelessWidget {
                           ),
                       ]),
                       SizedBox(height: Ds.space.x4),
-                      Text(item.label,
-                        style: Ds.t.caption.copyWith(
-                          fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                          color: selected ? Ds.c.brand : Ds.c.textSecondary,
+                      // One line, always. It shrinks to fit a narrow column
+                      // before it is ever allowed to wrap or be clipped, so
+                      // every icon and every baseline stays on the same row.
+                      Padding(
+                        padding: EdgeInsets.symmetric(horizontal: Ds.space.x4),
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(item.barLabel,
+                            maxLines: 1,
+                            softWrap: false,
+                            overflow: TextOverflow.ellipsis,
+                            style: Ds.t.caption.copyWith(
+                              fontWeight:
+                                  selected ? FontWeight.w600 : FontWeight.w400,
+                              color: selected ? Ds.c.brand : Ds.c.textSecondary,
+                            ),
+                          ),
                         ),
                       ),
                     ],

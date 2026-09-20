@@ -109,6 +109,28 @@ class AdminDateScope {
     await refresh();
   }
 
+  /// CMD #2116 — the active date belongs to the CREDENTIAL that chose it.
+  /// Same reason as [AdminZoneScope.clear]: `ensureLoaded()` asks once, so a
+  /// date left loaded across a logout is the date the NEXT account's lists
+  /// open on.
+  void clear() {
+    final had = _loaded || _date != null || _options.isNotEmpty;
+    _date = null;
+    _today = null;
+    _label = null;
+    _longLabel = null;
+    _emptyLabel = null;
+    _isToday = true;
+    _isFuture = false;
+    _options = const [];
+    _calendar = const [];
+    _minDate = null;
+    _maxDate = null;
+    _loaded = false;
+    _inFlight = false;
+    if (had) _notify();
+  }
+
   /// Re-read the server's state. Called on screen focus/resume (so a
   /// backgrounded tab is never stale) and on every realtime event. Notifies
   /// listeners only when the effective date actually moved — a repaint-only

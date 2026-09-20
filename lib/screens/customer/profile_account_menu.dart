@@ -295,6 +295,11 @@ class _MenuRow extends StatelessWidget {
   }
 }
 
+/// CMD #2116 — the semantics address of the profile screen's Logout, so the
+/// feature journey can prove on medibo.in that a logout lands on the public
+/// home instead of spinning.
+const String kProfileLogoutActionId = 'c2116_profile_logout';
+
 /// Logout — a normal action, kept neutral (never red) and always ABOVE the
 /// delete zone, so a tap meant for one can never land on the other.
 class _LogoutButton extends StatelessWidget {
@@ -306,7 +311,15 @@ class _LogoutButton extends StatelessWidget {
     return Padding(
       padding: EdgeInsets.fromLTRB(
           Ds.space.x16, Ds.space.x16, Ds.space.x16, Ds.space.x8),
-      child: OutlinedButton.icon(
+      // CMD #2116 — a named node, so the browser journey can tap the logout
+      // this app actually ships rather than "the outlined button near the
+      // bottom". Landing is [AuthNotifier.signOut]'s own job now; the popUntil
+      // below is left only because a stack already reset to one route makes it
+      // a no-op, and a host that somehow kept a route would still be cleared.
+      child: Semantics(
+        identifier: kProfileLogoutActionId,
+        container: true,
+        child: OutlinedButton.icon(
         onPressed: () async {
           await UserState.read(context).signOut();
           if (context.mounted) {
@@ -321,6 +334,7 @@ class _LogoutButton extends StatelessWidget {
           shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
           minimumSize: Size.fromHeight(Ds.touch.minTarget),
         ),
+      ),
       ),
     );
   }

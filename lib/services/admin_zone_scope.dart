@@ -85,6 +85,27 @@ class AdminZoneScope {
     await refresh();
   }
 
+  /// CMD #2116 — the selected zone belongs to the CREDENTIAL that chose it.
+  ///
+  /// `ensureLoaded()` only ever hits the network once, so without this a
+  /// logout left the previous admin's zone, its label and its option list
+  /// loaded; the next account signed in, opened a list, and the picker said
+  /// nothing had changed. Sign-out forgets the answer so the next account is
+  /// asked from scratch.
+  void clear() {
+    final had = _loaded || _show || _options.isNotEmpty;
+    _show = false;
+    _canChange = false;
+    _title = '';
+    _selectedZoneId = null;
+    _selectedLabel = '';
+    _options = const [];
+    _empty = '';
+    _loaded = false;
+    _inFlight = false;
+    if (had) _notify();
+  }
+
   Future<void> refresh() async {
     if (_inFlight) return;
     _inFlight = true;

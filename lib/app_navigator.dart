@@ -29,7 +29,23 @@ void landOnRoute(String route) {
   try {
     nav.pushNamedAndRemoveUntil(target, (r) => false);
   } catch (_) {
-    // Never strand the user on a route their session no longer reaches.
+    // CMD #2116 — THE FALLBACK STILL HAS TO EMPTY THE STACK.
+    //
+    // Popping back to the first route was not a landing: the first route is
+    // whatever the app happened to open on, which after a deep link is a
+    // role-guarded screen the signed-out user cannot render — and on a stack
+    // one route deep it did nothing at all, which is how a logout could end
+    // with the previous account's page still on the glass.
+    //
+    // The app root is the one address that always exists (MaterialApp's own
+    // `home:`) and it is role-aware, so with no account behind it, it IS the
+    // public storefront.
+    try {
+      if (target != '/') {
+        nav.pushNamedAndRemoveUntil('/', (r) => false);
+        return;
+      }
+    } catch (_) {}
     if (nav.canPop()) nav.popUntil((r) => r.isFirst);
   }
 }

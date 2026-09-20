@@ -375,27 +375,56 @@ class _UpdateBarState extends State<UpdateBar> with SingleTickerProviderStateMix
     return Semantics(identifier: id, container: true, child: button);
   }
 
-  Widget _button() => FilledButton(
-        onPressed: (widget.updating || widget.downloaded) ? null : widget.onUpdate,
-        style: FilledButton.styleFrom(
-          backgroundColor: Ds.c.brand,
-          foregroundColor: Ds.c.surface,
-          disabledBackgroundColor: Ds.c.brandDark,
-          disabledForegroundColor: Ds.c.surface,
-          minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget),
-          // NOT x16: at 360 px the eight extra pixels come straight out of the
-          // sentence's share of the row, and #2028's mobile-first rule is that
-          // the CHROME gives way before the line does.
-          padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
-          // CMD #2037 — a rounded RECTANGLE, not a stadium: the same corner
-          // every primary button in the app wears.
-          shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
-          visualDensity: VisualDensity.standard,
-        ),
-        child: Text(
-          _label,
-          style: Ds.t.bodyStrong.copyWith(color: Ds.c.surface),
-          maxLines: 1,
+  /// CMD #2116 — ONE RECTANGLE, WHATEVER THE WORD IS.
+  ///
+  /// The button used to be sized by its own label, so the login bar's `Login`
+  /// drew a visibly narrower, differently-placed box than the registration
+  /// bar's `Continue`: the same widget in the same slot, and the two bars
+  /// still did not line up when a user saw them one after the other. A
+  /// label-sized button also means the backend cannot reword a button without
+  /// moving the chrome, which is the opposite of what a backend-owned string
+  /// is for.
+  ///
+  /// The box is now [DsTouch.barActionWidth] x [DsTouch.minTarget] exactly —
+  /// a token, so it is retunable with one `ui_design_set` and no deploy — and
+  /// the word is centred inside it. A word too long for the box scales down
+  /// (never ellipses, never widens): `Update Now`, `Continue`, `Login` and
+  /// the updating label all print in the identical rectangle.
+  Widget _button() => SizedBox(
+        width: Ds.touch.barActionWidth,
+        height: Ds.touch.minTarget,
+        child: FilledButton(
+          onPressed:
+              (widget.updating || widget.downloaded) ? null : widget.onUpdate,
+          style: FilledButton.styleFrom(
+            backgroundColor: Ds.c.brand,
+            foregroundColor: Ds.c.surface,
+            disabledBackgroundColor: Ds.c.brandDark,
+            disabledForegroundColor: Ds.c.surface,
+            // The SizedBox is the size. Zero here so the button can neither
+            // grow past the box for a long word nor sit smaller than it for a
+            // short one.
+            minimumSize: Size.zero,
+            maximumSize: Size.infinite,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            // NOT x16: at 360 px the eight extra pixels come straight out of
+            // the sentence's share of the row, and #2028's mobile-first rule
+            // is that the CHROME gives way before the line does.
+            padding: EdgeInsets.symmetric(horizontal: Ds.space.x8),
+            // CMD #2037 — a rounded RECTANGLE, not a stadium: the same corner
+            // every primary button in the app wears.
+            shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+            visualDensity: VisualDensity.standard,
+          ),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              _label,
+              style: Ds.t.bodyStrong.copyWith(color: Ds.c.surface),
+              maxLines: 1,
+              textAlign: TextAlign.center,
+            ),
+          ),
         ),
       );
 }

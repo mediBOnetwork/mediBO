@@ -266,3 +266,11 @@ begin
   return jsonb_build_object('status','ok','items', v_out);
 end;
 $function$;
+
+-- ── the picker's own states ──────────────────────────────────────────────────
+-- A popup that loads has two more things to say than its title, and neither may
+-- be typed in Dart.
+insert into public.ui_copy(key, value) values
+  ('bulk.qty_picker_error', '"Could not load quantities"'::jsonb),
+  ('bulk.qty_picker_retry', '"Retry"'::jsonb)
+on conflict (key) do nothing;

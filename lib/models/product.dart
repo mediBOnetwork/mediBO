@@ -732,6 +732,13 @@ class Product {
   /// so the two renderings can never drift apart. Empty means no pack at all.
   final String packLine;
 
+  /// CMD #2115 — `qty_unit`: the unit word this product is counted in
+  /// ("strip", "bottle"), lowercased in Postgres from MEDICINE.pack_type. The
+  /// review row's quantity sentence ("17 strip") is `bulk.qty_line` with this
+  /// word and the row's number substituted, so nothing in Dart abbreviates a
+  /// pack — that is what produced "10 tabl…".
+  final String qtyUnit;
+
   /// CMD #2113 — the rendered availability badge. Distinct from [availability],
   /// which is a CTA (a button and what it may do); this is a state word with
   /// its colours, for a list that reviews products instead of adding them.
@@ -843,6 +850,7 @@ class Product {
     this.packTypeLabel = '',
     this.packQtyLabel = '',
     this.packLine = '',
+    this.qtyUnit = '',
     this.availBadge,
     required this.mrp,
     required this.b2bPrice,
@@ -880,6 +888,7 @@ class Product {
     packTypeLabel: packTypeLabel,
     packQtyLabel: packQtyLabel,
     packLine: packLine,
+    qtyUnit: qtyUnit,
     availBadge: availBadge,
     mrp: mrp,
     b2bPrice: b2bPrice,
@@ -1078,6 +1087,7 @@ class Product {
     'packTypeLabel': packTypeLabel,
     'packQtyLabel': packQtyLabel,
     'packLine': packLine,
+    'qtyUnit': qtyUnit,
     'availBadge': availBadge?.toJson(),
     'mrp': mrp,
     'b2bPrice': b2bPrice,
@@ -1124,6 +1134,7 @@ class Product {
         (map['packSize'] as String?) ?? '',
       ),
       packLine: (map['packLine'] as String?) ?? '',
+      qtyUnit: (map['qtyUnit'] as String?) ?? '',
       availBadge: StateBadge.fromMap(map['availBadge']),
       mrp: (map['mrp'] as num?)?.toDouble() ?? 0.0,
       b2bPrice: (map['b2bPrice'] as num?)?.toDouble() ?? 0.0,
@@ -1177,6 +1188,8 @@ class Product {
       packTypeLabel: (m['pack_type_label'] as String?)?.trim() ?? packType,
       packQtyLabel: (m['pack_qty_label'] as String?)?.trim() ?? '',
       packLine: (m['pack_line'] as String?)?.trim() ?? '',
+      // CMD #2115 — the unit word the row's quantity sentence is built from.
+      qtyUnit: (m['qty_unit'] as String?)?.trim() ?? '',
       availBadge: StateBadge.fromMap(m['avail_badge']),
       mrp: mrp,
       b2bPrice: mrp,

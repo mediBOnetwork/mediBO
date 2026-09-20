@@ -1174,7 +1174,11 @@ class Product {
     return Product(
       id: m['id']?.toString() ?? '',
       name: (m['product_name'] as String?) ?? 'Unnamed',
-      genericName: '',
+      // CMD #2119 — `composition` is bulk_match_items' own finished line:
+      // MEDICINE.salt_composition verbatim, or the backend's word when the
+      // catalogue row carries none. The phone review's alternative rows print
+      // it as line 2.
+      genericName: (m['composition'] as String?)?.trim() ?? '',
       manufacturer: (m['company'] as String?) ?? '',
       category: cat.isNotEmpty ? cat : 'Other',
       therapeuticClass: cat,

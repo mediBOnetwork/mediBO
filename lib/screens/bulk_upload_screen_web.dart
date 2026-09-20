@@ -16,12 +16,14 @@ import '../utils/file_pick_io.dart';
 import '../utils/doc_scan.dart';
 import '../utils/doc_capture.dart';
 import '../utils/web_image_io.dart' as imgio;
+import '../utils/bill_mime.dart';
 import '../utils/download_bytes.dart' as dl;
 
 import '../app_state.dart';
 import '../config/api_keys.dart';
 import '../design_tokens.dart';
 import '../models/product.dart';
+import '../widgets/bulk_file_viewer.dart';
 import '../widgets/product_image.dart';
 import 'product_detail_screen.dart';
 import '../services/ocr_edge_client.dart';
@@ -291,6 +293,15 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   Uint8List? _uploadedImageBytes;
   Size? _uploadedImageSize;
   String? _uploadedMimeType;
+
+  // CMD #2119 — the uploaded order itself, kept so it can be OPENED in the
+  // app's own viewer. `_uploadedImageBytes` above is the image path only (it
+  // also drives the handwriting crops); these three hold whatever was picked,
+  // in any format, plus the plain-text rendition the ingest already produced
+  // for spreadsheets and text files.
+  Uint8List? _uploadedFileBytes;
+  String? _uploadedFileMime;
+  String? _uploadedFileText;
   // Shared crop scale: ONE value for ALL rows so every crop renders at the
   // same apparent handwriting size. Computed from median line height after OCR.
   double? _cropGlobalScale;
@@ -469,6 +480,11 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     try {
       _uploadedImageBytes = bytes;
       _uploadedMimeType = mimeType;
+      // CMD #2119 — a WhatsApp image is an uploaded order too, and opens in
+      // the same in-app viewer.
+      _uploadedFileBytes = bytes;
+      _uploadedFileMime = mimeType;
+      _uploadedFileText = null;
       _uploadedImageSize = await _getImageSize(bytes, mimeType);
       _cachedImageBytes = bytes;
       _cachedImageSize = _uploadedImageSize;
@@ -696,6 +712,10 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     _cachedImageBytes = null;
     _cachedImageSize = null;
     _cachedMimeType = null;
+    // CMD #2119 — the viewer's copy of the order goes with the session.
+    _uploadedFileBytes = null;
+    _uploadedFileMime = null;
+    _uploadedFileText = null;
     await _clearImageFromPrefs();
   }
 
@@ -803,6 +823,14 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     try {
       // Step 1: extract raw text / bytes from file
       final rawContent = await _getRawFileContent(fileName, fileBytes);
+      // CMD #2119 — keep the file exactly as picked, plus the text rendition
+      // when there is one, so the viewer never has to fetch or re-read it.
+      _uploadedFileBytes = fileBytes;
+      _uploadedFileMime = mimeFromBillName(fileName);
+      _uploadedFileText = (rawContent.startsWith('PDF_BYTES:') ||
+              rawContent.startsWith('IMAGE_BYTES:'))
+          ? null
+          : rawContent;
 
       // Step 2: Try AI; silently fall back to header-column matching on failure
       setState(() => _step = _LoadStep.aiAnalyzing);
@@ -2491,7 +2519,15 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 1200),
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+                  // CMD #2119 — the page gutter is a phone decision. 20px each
+                  // side of a 360px screen, on top of the review card's own
+                  // gutter and the row's padding, is what still squeezed the
+                  // rows; a phone gets 8 and the desktop keeps its 24.
+                  padding: EdgeInsets.fromLTRB(
+                      viewport.maxWidth < 600 ? Ds.space.x8 : Ds.space.x24,
+                      Ds.space.x16,
+                      viewport.maxWidth < 600 ? Ds.space.x8 : Ds.space.x24,
+                      Ds.space.x24),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -2513,6 +2549,9 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
                         uploadedImageSize: _uploadedImageSize,
                         uploadedImageBytes: _uploadedImageBytes,
                         uploadedMimeType: _uploadedMimeType,
+                        uploadedFileBytes: _uploadedFileBytes,
+                        uploadedFileMime: _uploadedFileMime,
+                        uploadedFileText: _uploadedFileText,
                         onRetry: _retryMatch,
                         isRetrying: _isRetrying,
                         retryProgress: _retryProgress,
@@ -2584,6 +2623,11 @@ class _MainLayout extends StatelessWidget {
   final Size? uploadedImageSize;
   final Uint8List? uploadedImageBytes;
   final String? uploadedMimeType;
+
+  /// CMD #2119 — the uploaded order, for the in-app viewer.
+  final Uint8List? uploadedFileBytes;
+  final String? uploadedFileMime;
+  final String? uploadedFileText;
   final VoidCallback onRetry;
   final bool isRetrying;
   final double retryProgress;
@@ -2605,6 +2649,9 @@ class _MainLayout extends StatelessWidget {
     this.uploadedImageSize,
     this.uploadedImageBytes,
     this.uploadedMimeType,
+    this.uploadedFileBytes,
+    this.uploadedFileMime,
+    this.uploadedFileText,
     required this.onRetry,
     required this.isRetrying,
     required this.retryProgress,
@@ -2653,6 +2700,9 @@ class _MainLayout extends StatelessWidget {
               uploadedImageSize: uploadedImageSize,
               uploadedImageBytes: uploadedImageBytes,
               uploadedMimeType: uploadedMimeType,
+              uploadedFileBytes: uploadedFileBytes,
+              uploadedFileMime: uploadedFileMime,
+              uploadedFileText: uploadedFileText,
               onRetry: onRetry,
               isRetrying: isRetrying,
               retryProgress: retryProgress,
@@ -2684,6 +2734,9 @@ class _MainLayout extends StatelessWidget {
             uploadedImageSize: uploadedImageSize,
             uploadedImageBytes: uploadedImageBytes,
             uploadedMimeType: uploadedMimeType,
+            uploadedFileBytes: uploadedFileBytes,
+            uploadedFileMime: uploadedFileMime,
+            uploadedFileText: uploadedFileText,
             onRetry: onRetry,
             isRetrying: isRetrying,
             retryProgress: retryProgress,
@@ -3514,6 +3567,13 @@ class _SmartMatchSection extends StatefulWidget {
   final Size? uploadedImageSize;
   final Uint8List? uploadedImageBytes;
   final String? uploadedMimeType;
+
+  /// CMD #2119 — the uploaded order exactly as it was picked, plus the plain
+  /// text the ingest already extracted from it. The file chip below opens
+  /// these in the app's own viewer.
+  final Uint8List? uploadedFileBytes;
+  final String? uploadedFileMime;
+  final String? uploadedFileText;
   final VoidCallback onRetry;
   final bool isRetrying;
   final double retryProgress;
@@ -3533,6 +3593,9 @@ class _SmartMatchSection extends StatefulWidget {
     this.uploadedImageSize,
     this.uploadedImageBytes,
     this.uploadedMimeType,
+    this.uploadedFileBytes,
+    this.uploadedFileMime,
+    this.uploadedFileText,
     required this.onRetry,
     required this.isRetrying,
     required this.retryProgress,
@@ -3587,36 +3650,59 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                 errorBuilder: (_, _, _) => _fileGlyph()),
           )
         : _fileGlyph();
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF9FAFB),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF111827)),
-            ),
+    // CMD #2119 — the chip is the door to the file. Tapping it opens the
+    // order INSIDE the app (image, PDF, spreadsheet or plain text); nothing is
+    // ever handed to another application, so the review is still underneath
+    // when Back is pressed.
+    return Semantics(
+      identifier: 'bulk_uploaded_file_open',
+      button: true,
+      label: c('bulk.file_viewer_open_hint'),
+      child: InkWell(
+        onTap: () => _openFileViewer(name),
+        borderRadius: Ds.r.rButton,
+        child: Container(
+          margin: EdgeInsets.only(bottom: Ds.space.x12),
+          padding: EdgeInsets.all(Ds.space.x8),
+          constraints: BoxConstraints(minHeight: Ds.space.x48),
+          decoration: BoxDecoration(
+            color: Ds.c.bg,
+            borderRadius: Ds.r.rButton,
+            border:
+                Border.all(color: Ds.c.divider, width: Ds.space.hairline),
           ),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 8),
-            child: Text('•',
-                style: TextStyle(
-                    color: Color(0xFF9CA3AF), fontWeight: FontWeight.w700)),
+          child: Row(
+            children: [
+              Icon(Icons.visibility_outlined,
+                  size: Ds.space.x16, color: Ds.c.textSecondary),
+              SizedBox(width: Ds.space.x8),
+              Expanded(
+                child: Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Ds.t.caption.copyWith(
+                      color: Ds.c.text, fontWeight: FontWeight.w600),
+                ),
+              ),
+              SizedBox(width: Ds.space.x8),
+              thumb,
+            ],
           ),
-          thumb,
-        ],
+        ),
       ),
+    );
+  }
+
+  /// CMD #2119 — open the uploaded order in the app's own viewer.
+  void _openFileViewer(String name) {
+    try { RenderLog.write('c2119_file_open_tap', '1'); } catch (_) {}
+    showBulkFileViewer(
+      context,
+      fileName: name,
+      mimeType: widget.uploadedFileMime ?? widget.uploadedMimeType ?? '',
+      bytes: widget.uploadedFileBytes ?? widget.uploadedImageBytes,
+      text: widget.uploadedFileText,
     );
   }
 
@@ -3691,6 +3777,22 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                 Builder(builder: (_bCtx) {
                   try { RenderLog.write('c316_preview_built', '1'); } catch (_) {}
                   try { RenderLog.write('c316_badges_built', '1'); } catch (_) {}
+                  // CMD #2119 — NO counts until the real result exists.
+                  //
+                  // While a file was being read these pills counted the rows
+                  // that happened to be in the list — the demo rows, or the
+                  // previous upload — so the header confidently said
+                  // "Available · 8 items / Need attention · 6 items" about a
+                  // file nobody had matched yet, and then changed to 7 / 7
+                  // when the answer landed. A number that is replaced by a
+                  // different number is worse than no number: the first one
+                  // was never true. The skeleton holds the same height, so
+                  // nothing moves when the counts arrive once.
+                  if (widget.isLoading) {
+                    try { RenderLog.write('c2119_counts_skeleton', '1'); } catch (_) {}
+                    return const _CountPillSkeletons();
+                  }
+                  try { RenderLog.write('c2119_counts_real', '1'); } catch (_) {}
                   int available = 0, needAttention = 0, unavailable = 0;
                   for (final r in widget.rows) {
                     if (r.isHidden) continue;
@@ -3747,8 +3849,10 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
               // The old 10px gutter each side, on top of the card's own 12px,
               // cost 44px of a 360px screen and was what truncated
               // "10 tabl…" while there was room beside it.
-              padding: EdgeInsets.fromLTRB(
-                  Ds.space.x4, Ds.space.x4, Ds.space.x4, Ds.space.x8),
+              // CMD #2119 — no gutter at all here: the row draws its own
+              // border and its own padding, and every pixel between that
+              // border and the card edge was width the row could have used.
+              padding: EdgeInsets.fromLTRB(0, Ds.space.x4, 0, Ds.space.x8),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -4520,6 +4624,31 @@ class _StatusPillBadge extends StatelessWidget {
 
 // ─── Mobile match card ────────────────────────────────────────────────────────
 
+/// CMD #2119 — the count pills before there is anything true to count.
+///
+/// Same geometry as the real pills (two of them, the same height and the same
+/// gap), so the header does not jump when the numbers land.
+class _CountPillSkeletons extends StatelessWidget {
+  const _CountPillSkeletons();
+
+  @override
+  Widget build(BuildContext context) {
+    Widget pill(double w) => Container(
+          width: w,
+          height: Ds.space.x24,
+          decoration: BoxDecoration(
+            color: Ds.c.divider,
+            borderRadius: BorderRadius.circular(Ds.r.chip),
+          ),
+        );
+    return Wrap(
+      spacing: Ds.space.x8,
+      runSpacing: Ds.space.x8,
+      children: [pill(Ds.space.x48 * 2.5), pill(Ds.space.x48 * 2.5)],
+    );
+  }
+}
+
 class _MobileExpandableRow extends StatefulWidget {
   final _MatchRow row;
   final int index;
@@ -4756,10 +4885,21 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                         width: Ds.space.x48,
                                         height: Ds.space.x48,
                                         child: Center(
+                                          // CMD #2119 — ONE box for every
+                                          // value. It used to be padding
+                                          // around the digits, so 6, 16 and
+                                          // 999 each drew a different width
+                                          // and a column of rows had a ragged
+                                          // right edge. The box is now a fixed
+                                          // square and the digits scale down
+                                          // inside it, which also means three
+                                          // digits fit without it growing.
                                           child: Container(
+                                            width: _qtyBoxSide(),
+                                            height: _qtyBoxSide(),
+                                            alignment: Alignment.center,
                                             padding: EdgeInsets.symmetric(
-                                                horizontal: Ds.space.x8,
-                                                vertical: Ds.space.x4),
+                                                horizontal: Ds.space.x4),
                                             decoration: BoxDecoration(
                                               color: Ds.c.bg,
                                               borderRadius: Ds.r.rButton,
@@ -4767,12 +4907,15 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                                   color: Ds.c.divider,
                                                   width: Ds.space.hairline),
                                             ),
-                                            child: Text('${row.qty}',
-                                                textAlign: TextAlign.center,
-                                                style: Ds.t.caption.copyWith(
-                                                    color: Ds.c.text,
-                                                    fontWeight:
-                                                        FontWeight.w600)),
+                                            child: FittedBox(
+                                              fit: BoxFit.scaleDown,
+                                              child: Text('${row.qty}',
+                                                  textAlign: TextAlign.center,
+                                                  style: Ds.t.caption.copyWith(
+                                                      color: Ds.c.text,
+                                                      fontWeight:
+                                                          FontWeight.w600)),
+                                            ),
                                           ),
                                         ),
                                       ),
@@ -5293,9 +5436,15 @@ class _MobStateBadge extends StatelessWidget {
   }
 }
 
-/// The price line: the MRP the backend formatted, then its sale badge. The
-/// badge prints `price_display` — an amount for an approved viewer, the locked
-/// word for everyone else — and the app never asks which it is holding.
+/// CMD #2119 — the price line is the SALE price and nothing else.
+///
+/// #2115 printed the MRP first and the sale badge after it. On a 360px phone
+/// beside a photo there was never room for both, so the badge — the number the
+/// buyer is actually paying — lost its own label to an ellipsis and read
+/// "Sa… PTR". The MRP is gone; what remains is one badge with its full label
+/// and `price_display`: the formatted amount for an approved viewer, the
+/// locked word for everyone else. The app still never asks which it is
+/// holding, and it still computes no money.
 class _MobPriceLine extends StatelessWidget {
   final Product product;
   const _MobPriceLine({required this.product});
@@ -5303,52 +5452,46 @@ class _MobPriceLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cp = product.pricing?.cardPrice;
-    if (cp == null) return const SizedBox.shrink();
-    return Row(children: [
-      if (cp.hasMrp) ...[
-        Text(cp.mrpLabel, style: Ds.t.caption),
-        SizedBox(width: Ds.space.x4),
-        Flexible(
-          child: Text(cp.mrpDisplay,
+    if (cp == null || cp.priceDisplay.isEmpty) return const SizedBox.shrink();
+    try {
+      RenderLog.write('c2119_price_sale_only', '1');
+    } catch (_) {}
+    final ink = cp.saleFg == null ? Ds.c.surface : Color(cp.saleFg!);
+    // The badge hugs its content and the label is NOT flexible: with the MRP
+    // gone there is room for the whole of it, and a label that can shrink is
+    // exactly how "Sale price:" became "Sa…".
+    // FittedBox rather than an ellipsis: on a very narrow phone the whole
+    // badge scales down together, so the label is always readable in FULL
+    // instead of being the part that gets cut.
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.centerLeft,
+        child: Container(
+        padding: EdgeInsets.symmetric(
+            horizontal: Ds.space.x8, vertical: Ds.space.x4 / 2),
+        decoration: BoxDecoration(
+          color: cp.saleBg == null ? Ds.c.brand : Color(cp.saleBg!),
+          borderRadius: BorderRadius.circular(Ds.r.chip),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          if (cp.saleLabel.isNotEmpty) ...[
+            Text(cp.saleLabel,
+                maxLines: 1,
+                softWrap: false,
+                style: Ds.t.caption.copyWith(color: ink)),
+            SizedBox(width: Ds.space.x4),
+          ],
+          Text(cp.priceDisplay,
               maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Ds.t.caption.copyWith(
-                  color: Ds.c.text, fontWeight: FontWeight.w600)),
+              softWrap: false,
+              style: Ds.t.caption
+                  .copyWith(color: ink, fontWeight: FontWeight.w700)),
+        ]),
         ),
-        SizedBox(width: Ds.space.x8),
-      ],
-      if (cp.priceDisplay.isNotEmpty)
-        Flexible(
-          child: Container(
-            padding: EdgeInsets.symmetric(
-                horizontal: Ds.space.x8, vertical: Ds.space.x4 / 2),
-            decoration: BoxDecoration(
-              color: cp.saleBg == null ? Ds.c.brand : Color(cp.saleBg!),
-              borderRadius: BorderRadius.circular(Ds.r.chip),
-            ),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              if (cp.saleLabel.isNotEmpty) ...[
-                Flexible(
-                  child: Text(cp.saleLabel,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Ds.t.caption.copyWith(
-                          color: cp.saleFg == null
-                              ? Ds.c.surface
-                              : Color(cp.saleFg!))),
-                ),
-                SizedBox(width: Ds.space.x4),
-              ],
-              Text(cp.priceDisplay,
-                  maxLines: 1,
-                  style: Ds.t.caption.copyWith(
-                      color:
-                          cp.saleFg == null ? Ds.c.surface : Color(cp.saleFg!),
-                      fontWeight: FontWeight.w700)),
-            ]),
-          ),
-        ),
-    ]);
+      ),
+    );
   }
 }
 
@@ -5363,6 +5506,11 @@ class _MobPriceLine extends StatelessWidget {
 /// Nothing in it is composed here: `bulk_qty_picker()` returns the title, the
 /// options with their printed labels, which one is selected and the index to
 /// scroll to. This widget scrolls to that index and sends a number back.
+/// CMD #2119 — the quantity box is a fixed square at every value from 1 to
+/// 999, so a column of review rows lines up on one right edge. It is a token,
+/// not a literal.
+double _qtyBoxSide() => Ds.space.x32;
+
 const double _kQtyOptionH = 48.0;
 
 Future<int?> showBulkQtyPicker(BuildContext context,
@@ -5528,19 +5676,50 @@ class _MobProductBlock extends StatelessWidget {
   /// because it is a candidate for the same handwritten line.
   final int qty;
 
-  const _MobProductBlock({required this.product, required this.qty});
+  /// CMD #2119 — what line 2 says.
+  ///
+  /// The SELECTED match keeps quantity and pack ("17 strip · 10 tablets"),
+  /// because that is the line the buyer is ordering. An ALTERNATIVE prints the
+  /// product's COMPOSITION instead: two brands with the same salts is the
+  /// whole reason a buyer looks at the dropdown, and "17 strip" repeated four
+  /// times underneath the row that already said it told them nothing.
+  ///
+  /// Both strings are the backend's — a ui_copy template with the numbers
+  /// substituted, and MEDICINE.salt_composition verbatim.
+  final bool isAlternative;
+
+  const _MobProductBlock({
+    required this.product,
+    required this.qty,
+    this.isAlternative = false,
+  });
+
+  /// Line 2, decided by which of the two rows this is. Nothing is worded here:
+  /// `bulk.qty_pack_line` / `bulk.qty_line` are templates and the composition
+  /// arrives as one finished line from `bulk_composition_line()`.
+  String _line2() {
+    if (isAlternative) return product.genericName;
+    final pack = product.packQtyLabel.trim().isNotEmpty
+        ? product.packQtyLabel.trim()
+        : product.packSize.trim();
+    if (pack.isEmpty) {
+      return cf('bulk.qty_line', {'qty': '$qty', 'unit': product.qtyUnit});
+    }
+    return cf('bulk.qty_pack_line',
+        {'qty': '$qty', 'unit': product.qtyUnit, 'pack': pack});
+  }
 
   @override
   Widget build(BuildContext context) {
     try {
       RenderLog.write('c2115_bulk_row4', '1');
+      RenderLog.write(
+          isAlternative ? 'c2119_alt_composition' : 'c2119_selected_qty_pack',
+          '1');
     } catch (_) {}
     final h = _mobBlockH(4);
     final badge = product.availBadge;
-    final qtyLine = cf('bulk.qty_line', {
-      'qty': '$qty',
-      'unit': product.qtyUnit,
-    });
+    final qtyLine = _line2();
     return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
       // The photo is the only tap target that leaves the list: everything else
       // in the block belongs to the row it sits in (open the alternatives, or
@@ -6273,7 +6452,8 @@ class _MobileAltRow extends StatelessWidget {
                   top: BorderSide(
                       color: Ds.c.divider, width: Ds.space.hairline)),
             ),
-            child: _MobProductBlock(product: product, qty: qty),
+            child: _MobProductBlock(
+                product: product, qty: qty, isAlternative: true),
           ),
         ),
       );

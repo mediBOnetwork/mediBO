@@ -30,10 +30,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:pharma_b2b/app_state.dart';
 import 'package:pharma_b2b/data/medicine_repository.dart';
+import 'package:pharma_b2b/models/cart_model.dart';
 import 'package:pharma_b2b/models/search_page.dart';
 import 'package:pharma_b2b/services/search_chrome_focus.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
+import 'package:pharma_b2b/widgets/bottom_stack.dart';
 import 'package:pharma_b2b/widgets/search_surface.dart';
 
 /// `search_page().search_bar` as the backend sends it after CMD #2117.
@@ -220,6 +223,53 @@ void main() {
       SearchChromeFocus.report(focused: true, backendWantsHide: true);
       SearchChromeFocus.release();
       expect(SearchChromeFocus.suppressed.value, isFalse);
+    });
+
+    testWidgets('the pill and the bar leave, and give their room back',
+        (tester) async {
+      // A cart with a pill in it, and no Supabase: `rpcTransport` is the
+      // model's own test seam and `forTest` skips the auth wiring.
+      CartModel.rpcTransport = (fn, params) async => {
+            'ok': true,
+            'items': const [],
+            'pill': {'show': true, 'items_label': '3 items', 'cta': 'View cart'},
+          };
+      addTearDown(() => CartModel.rpcTransport = null);
+      final cart = CartModel.forTest();
+      addTearDown(cart.dispose);
+      await cart.refresh();
+      await tester.pumpWidget(MaterialApp(
+        home: AppState(
+          cart: cart,
+          child: Scaffold(
+            bottomNavigationBar: const SizedBox(height: 56),
+            body: Stack(children: [
+              const SizedBox.expand(),
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: StorefrontBottomStack(onCartTap: () {}),
+              ),
+            ]),
+          ),
+        ),
+      ));
+      await tester.pump();
+
+      // The one function the chrome AND every box holding room for it read.
+      final ctx = tester.element(find.byType(StorefrontBottomStack));
+      expect(bottomStackLiveOf(ctx, pill: true).pill, isTrue,
+          reason: 'the cart payload says there is a pill, so there is one');
+
+      SearchChromeFocus.report(focused: true, backendWantsHide: true);
+      await tester.pump();
+      final live = bottomStackLiveOf(ctx, pill: true);
+      expect(live.pill, isFalse);
+      expect(live.bar, isFalse);
+      // And the room goes with it — the chrome and the box holding room for
+      // it can never disagree, because they are the same answer.
+      expect(live.height, 0);
     });
   });
 

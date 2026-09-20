@@ -225,6 +225,10 @@ class SearchHeaderBar extends StatefulWidget {
   /// One height for both screens, so the two headers cannot drift apart.
   static const double fieldHeight = 46;
 
+  /// CMD #2117 — the semantics address of the field itself, so a browser
+  /// journey taps the search box rather than a rounded rectangle.
+  static const String boxId = 'c2117_search_box';
+
   @override
   State<SearchHeaderBar> createState() => _SearchHeaderBarState();
 }
@@ -331,7 +335,10 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
                         color: Ds.c.textSecondary, size: Ds.space.x16 + 4),
                   ),
                   Expanded(
-                    child: TextField(
+                    child: Semantics(
+                      identifier: SearchHeaderBar.boxId,
+                      textField: true,
+                      child: TextField(
                       controller: widget.controller,
                       focusNode: widget.focusNode,
                       onChanged: widget.onChanged,
@@ -365,6 +372,7 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
                         hintStyle: Ds.t.body
                             .copyWith(color: Ds.c.textSecondary),
                       ),
+                    ),
                     ),
                   ),
                   if (widget.isLoading)

@@ -20,7 +20,9 @@ import '../utils/download_bytes.dart' as dl;
 
 import '../app_state.dart';
 import '../config/api_keys.dart';
+import '../design_tokens.dart';
 import '../models/product.dart';
+import '../widgets/product_image.dart';
 import '../services/ocr_edge_client.dart';
 import '../services/ui_copy.dart';
 import '../user_state.dart';
@@ -3818,7 +3820,10 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                   decoration: BoxDecoration(color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(4)),
                   child: Text(badge, style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
                 );
-                final addButton = FilledButton(
+                final addButton = Semantics(
+                  identifier: 'bulk_add_matched',
+                  button: true,
+                  child: FilledButton(
                   onPressed: canAdd ? () => widget.onAddToCart() : null,
                   style: FilledButton.styleFrom(
                     backgroundColor: const Color(0xFF16A34A),
@@ -3827,8 +3832,10 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     elevation: 0,
                   ),
-                  child: Text(narrow ? 'Add to cart' : c('bulk_upload_screen_web.add_matched_to_cart')),
-                );
+                  child: Text(narrow
+                      ? c('bulk_upload_screen_web.add_to_cart_short')
+                      : c('bulk_upload_screen_web.add_matched_to_cart')),
+                ));
                 final spinner = const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2));
                 final statsText = Text(
                   widget.isLoading
@@ -4635,7 +4642,6 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
     }
 
     final p = row.selectedProduct;
-    final pack = p != null ? _packShort(p) : '';
     // Ticked when Matched/ManuallyMatched AND product is available (AV).
     // NA (buyable=false) items are always unchecked+disabled.
     final isNa = p != null && !p.isBuyable;
@@ -4645,7 +4651,13 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
     return LayoutBuilder(builder: (context, _) {
       return Opacity(
         opacity: row.isHidden ? 0.45 : 1.0,
-        child: GestureDetector(
+        // CMD #2113 — the row is the journey's tap target: a tap anywhere but
+        // the checkbox or the retry icon (both of which take the gesture
+        // themselves) opens the four alternatives.
+        child: Semantics(
+          identifier: 'bulk_review_row_${widget.index}',
+          button: true,
+          child: GestureDetector(
           onTap: !row.isHidden ? widget.onToggle : null,
           child: Container(
             // Fill the full available width so controls are always at the right edge.
@@ -4786,56 +4798,21 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                         ),
                         const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
                         // ── Selected matched product ─────────────────────────
+                        // CMD #2113 — the selected match: the catalogue photo
+                        // and five backend lines, replacing the four squeezed
+                        // columns and the two-letter AV/NA chip that Dart used
+                        // to word. The handwriting crop, qty box, checkbox,
+                        // retry icon and the accent bar above are untouched.
                         Padding(
-                          padding: const EdgeInsets.fromLTRB(
-                              _kMobPanelLeftPad, 17, _kMobPanelRightPad, 17),
+                          padding: EdgeInsets.fromLTRB(Ds.space.x12,
+                              Ds.space.x16, Ds.space.x12, Ds.space.x16),
                           child: p != null
-                              ? _buildMobPackRow(
-                                  name: Text(p.name,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w600,
-                                          color: Color(0xFF111827))),
-                                  pack: Text(pack,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                          fontSize: 11, color: Color(0xFF374151))),
-                                  company: Text(p.manufacturer,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                          fontSize: 11, color: Color(0xFF6B7280))),
-                                  mrp: Builder(builder: (_avCtx) {
-                                    try { RenderLog.write('c316_detail_avna', '1'); } catch (_) {}
-                                    try { RenderLog.write('c320_avna_mobile', '1'); } catch (_) {}
-                                    final avail = p.isBuyable;
-                                    return Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
-                                      decoration: BoxDecoration(
-                                        color: avail ? const Color(0xFFDCFCE7) : const Color(0xFFFEE2E2),
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                      child: Text(
-                                        avail ? 'AV' : 'NA',
-                                        textAlign: TextAlign.center,
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w600,
-                                          color: avail ? const Color(0xFF15803D) : const Color(0xFFDC2626),
-                                        ),
-                                      ),
-                                    );
-                                  }),
-                                )
+                              ? _MobProductBlock(product: p, selected: true)
                               : Text(
                                   row.status != _MatchStatus.unrecognized
                                       ? row.matchedSku
-                                      : 'No match found',
-                                  style: const TextStyle(
-                                      fontSize: 12, color: Color(0xFF9CA3AF))),
+                                      : c('bulk_upload_screen_web.no_match_found'),
+                                  style: Ds.t.caption),
                         ),
                         // ── Expandable section: fixed 6-line match panel ────
                         SizeTransition(
@@ -4856,6 +4833,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
               ),
             ),
           ),
+        ),
         ),
       );
     });
@@ -5196,6 +5174,215 @@ const double _kMobPanelMrpW     = 34.0;
 /// Name gets 3/4 of flexible space so long medicine names show without early truncation.
 /// Company gets 1/4, fills to MRP then ellipsis.
 /// All mobile row types call this so Pack aligns across every row at every card width.
+// ─── CMD #2113 — the phone review row ────────────────────────────────────────
+//
+// The selected match prints FIVE backend lines beside a square catalogue photo;
+// an alternative prints FOUR. Both heights come from one line height, so the
+// image is exactly as tall as the stack of lines it sits beside and the two row
+// types share a left edge at every width.
+//
+// Nothing on this row is decided here. The two pack badges are
+// `pack_type_label` / `pack_qty_label`, the one-line pack is `pack_line`, the
+// price is `pricing.card_price` (its `price_display` is the amount when the
+// backend says has_ptr and the locked word otherwise — a Dart branch on
+// entitlement would be the app deciding who may see a trade rate), and the
+// green/red badge is `avail_badge`, label and both colours together.
+double _mobLineH() => Ds.space.x24;
+double _mobBlockH(int lines) => _mobLineH() * lines;
+double _mobAltRowH() => _mobBlockH(4) + Ds.space.x8 * 2;
+
+/// One fixed-height line, so five lines and a square image agree on a height.
+class _MobLine extends StatelessWidget {
+  final Widget child;
+  const _MobLine({required this.child});
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        height: _mobLineH(),
+        child: Align(alignment: Alignment.centerLeft, child: child),
+      );
+}
+
+/// A pack badge — grey, and the backend's word verbatim.
+class _MobPackBadge extends StatelessWidget {
+  final String text;
+  const _MobPackBadge({required this.text});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: EdgeInsets.symmetric(
+            horizontal: Ds.space.x8, vertical: Ds.space.x4 / 2),
+        decoration: BoxDecoration(
+          color: Ds.c.bg,
+          borderRadius: BorderRadius.circular(Ds.r.chip),
+          border: Border.all(color: Ds.c.divider, width: Ds.space.hairline),
+        ),
+        child: Text(text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Ds.t.caption),
+      );
+}
+
+/// The state badge: one word and the two colours that came with it.
+class _MobStateBadge extends StatelessWidget {
+  final StateBadge badge;
+  const _MobStateBadge({required this.badge});
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = badge.bg;
+    final fg = badge.fg;
+    return Container(
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x8, vertical: Ds.space.x4 / 2),
+      decoration: BoxDecoration(
+        color: bg == null
+            ? (badge.available ? Ds.c.success : Ds.c.danger)
+            : Color(bg),
+        borderRadius: BorderRadius.circular(Ds.r.chip),
+      ),
+      child: Text(badge.label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Ds.t.caption.copyWith(
+              color: fg == null ? Ds.c.surface : Color(fg),
+              fontWeight: FontWeight.w600)),
+    );
+  }
+}
+
+/// The price line: the MRP the backend formatted, then its sale badge. The
+/// badge prints `price_display` — an amount for an approved viewer, the locked
+/// word for everyone else — and the app never asks which it is holding.
+class _MobPriceLine extends StatelessWidget {
+  final Product product;
+  const _MobPriceLine({required this.product});
+
+  @override
+  Widget build(BuildContext context) {
+    final cp = product.pricing?.cardPrice;
+    if (cp == null) return const SizedBox.shrink();
+    return Row(children: [
+      if (cp.hasMrp) ...[
+        Text(cp.mrpLabel, style: Ds.t.caption),
+        SizedBox(width: Ds.space.x4),
+        Flexible(
+          child: Text(cp.mrpDisplay,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Ds.t.caption.copyWith(
+                  color: Ds.c.text, fontWeight: FontWeight.w600)),
+        ),
+        SizedBox(width: Ds.space.x8),
+      ],
+      if (cp.priceDisplay.isNotEmpty)
+        Flexible(
+          child: Container(
+            padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x8, vertical: Ds.space.x4 / 2),
+            decoration: BoxDecoration(
+              color: cp.saleBg == null ? Ds.c.brand : Color(cp.saleBg!),
+              borderRadius: BorderRadius.circular(Ds.r.chip),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              if (cp.saleLabel.isNotEmpty) ...[
+                Flexible(
+                  child: Text(cp.saleLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Ds.t.caption.copyWith(
+                          color: cp.saleFg == null
+                              ? Ds.c.surface
+                              : Color(cp.saleFg!))),
+                ),
+                SizedBox(width: Ds.space.x4),
+              ],
+              Text(cp.priceDisplay,
+                  maxLines: 1,
+                  style: Ds.t.caption.copyWith(
+                      color:
+                          cp.saleFg == null ? Ds.c.surface : Color(cp.saleFg!),
+                      fontWeight: FontWeight.w700)),
+            ]),
+          ),
+        ),
+    ]);
+  }
+}
+
+/// The product, as the phone review list prints it.
+class _MobProductBlock extends StatelessWidget {
+  final Product product;
+
+  /// true = the selected match (5 lines: the two pack badges are separate and
+  /// the company has a line of its own). false = an alternative (4 lines: one
+  /// joined pack line, no company).
+  final bool selected;
+
+  const _MobProductBlock({required this.product, required this.selected});
+
+  @override
+  Widget build(BuildContext context) {
+    try {
+      RenderLog.write(
+          selected ? 'c2113_bulk_row_matched' : 'c2113_bulk_row_alt', '1');
+    } catch (_) {}
+    final h = _mobBlockH(selected ? 5 : 4);
+    final badge = product.availBadge;
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      ProductImage(
+        url: product.imageUrl,
+        width: h,
+        height: h,
+        radius: BorderRadius.circular(Ds.r.chip),
+      ),
+      SizedBox(width: Ds.space.x12),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _MobLine(
+            child: Text(product.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Ds.t.body.copyWith(fontWeight: FontWeight.w600)),
+          ),
+          if (selected)
+            _MobLine(
+              child: Row(children: [
+                if (product.packTypeLabel.isNotEmpty) ...[
+                  Flexible(child: _MobPackBadge(text: product.packTypeLabel)),
+                  SizedBox(width: Ds.space.x8),
+                ],
+                if (product.packQtyLabel.isNotEmpty)
+                  Flexible(child: _MobPackBadge(text: product.packQtyLabel)),
+              ]),
+            )
+          else
+            _MobLine(
+              child: Text(product.packLine,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Ds.t.caption),
+            ),
+          if (selected)
+            _MobLine(
+              child: Text(product.manufacturer,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Ds.t.caption),
+            ),
+          _MobLine(child: _MobPriceLine(product: product)),
+          _MobLine(
+            child: badge == null
+                ? const SizedBox.shrink()
+                : _MobStateBadge(badge: badge),
+          ),
+        ]),
+      ),
+    ]);
+  }
+}
+
 Widget _buildMobPackRow({
   required Widget name,
   required Widget pack,
@@ -5445,17 +5632,17 @@ class _MatchPanelState extends State<_MatchPanel> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Lines 2–5: always exactly 4 × _kMatchRowH — pixel-stable height in all states
+        // The four alternatives. CMD #2113 — each is the same block as the
+        // selected match minus the company line, so the dropdown reads like
+        // the row it hangs under. Still exactly four slots, so the panel's
+        // height does not move between loading, loaded and empty.
         ...List.generate(4, (i) {
           if (_searching) {
-            return const SizedBox(height: _kMatchRowH, child: _MobilePanelSkeletonRow());
+            return const _MobilePanelSkeletonRow();
           }
           if (i < rows.length) {
             final p = rows[i];
-            return SizedBox(
-              height: _kMatchRowH,
-              child: _SearchResultRow(product: p, onTap: () => _pick(p), isMobile: true),
-            );
+            return _MobileAltRow(product: p, onTap: () => _pick(p));
           }
           return const _MobilePanelEmptyRow();
         }),
@@ -5786,27 +5973,72 @@ class _MobilePanelSkeletonRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const shimmer = BoxDecoration(
-      color: Color(0xFFBBF7D0),
-      borderRadius: BorderRadius.all(Radius.circular(4)),
+    final shimmer = BoxDecoration(
+      color: Ds.c.divider,
+      borderRadius: BorderRadius.circular(Ds.r.chip),
     );
+    // CMD #2113 — the skeleton is the same geometry as the loaded row (a
+    // square plate and four lines), so nothing moves when the results land.
     return Container(
-      height: _kMatchRowH,
-      padding: const EdgeInsets.fromLTRB(
-          _kMobPanelLeftPad, 0, _kMobPanelRightPad, 0),
-      alignment: Alignment.centerLeft,
-      decoration: const BoxDecoration(
-        color: Color(0xFFF0FDF4),
-        border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+      height: _mobAltRowH(),
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x12, vertical: Ds.space.x8),
+      decoration: BoxDecoration(
+        color: Ds.c.bg,
+        border: Border(
+            top: BorderSide(color: Ds.c.divider, width: Ds.space.hairline)),
       ),
-      child: _buildMobPackRow(
-        name: Container(height: 10, decoration: shimmer),
-        pack: Container(height: 10, decoration: shimmer),
-        company: Container(height: 10, decoration: shimmer),
-        mrp: Container(height: 10, decoration: shimmer),
-      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(
+            width: _mobBlockH(4), height: _mobBlockH(4), decoration: shimmer),
+        SizedBox(width: Ds.space.x12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: List.generate(
+              4,
+              (_) => _MobLine(
+                child: Container(height: Ds.space.x8, decoration: shimmer),
+              ),
+            ),
+          ),
+        ),
+      ]),
     );
   }
+}
+
+/// CMD #2113 — one alternative product inside the expanded dropdown: the same
+/// block as the selected match with four lines instead of five. Tapping it
+/// picks that product, which is what the row did before; only what it PRINTS
+/// changed.
+class _MobileAltRow extends StatelessWidget {
+  final Product product;
+  final VoidCallback onTap;
+
+  const _MobileAltRow({required this.product, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        identifier: 'bulk_alt_${product.id}',
+        button: true,
+        label: product.name,
+        child: InkWell(
+          onTap: onTap,
+          child: Container(
+            height: _mobAltRowH(),
+            padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x12, vertical: Ds.space.x8),
+            decoration: BoxDecoration(
+              color: Ds.c.surface,
+              border: Border(
+                  top: BorderSide(
+                      color: Ds.c.divider, width: Ds.space.hairline)),
+            ),
+            child: _MobProductBlock(product: product, selected: false),
+          ),
+        ),
+      );
 }
 
 // ─── Mobile panel empty filler row (constant height when fewer than 4 results) ─
@@ -5816,9 +6048,10 @@ class _MobilePanelEmptyRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        height: _kMatchRowH,
-        decoration: const BoxDecoration(
-          border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+        height: _mobAltRowH(),
+        decoration: BoxDecoration(
+          border: Border(
+              top: BorderSide(color: Ds.c.divider, width: Ds.space.hairline)),
         ),
       );
 }

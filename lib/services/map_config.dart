@@ -13,9 +13,33 @@
 // Fetched ONCE per session and cached (A3). Concurrent callers share the same
 // in-flight future, so five maps opening at once still make one RPC.
 
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, kIsWeb;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../utils/render_log.dart';
+
+/// CMD #2107 — WHICH PLATFORM IS ASKING.
+///
+/// `map_config_get(p_platform)` already refuses to send a platform down the
+/// Google path unless THAT platform has a key: web checks `browser_key`,
+/// Android `native_key_android`, iOS `native_key_ios`, and its own comment
+/// says why — "on Android that is a process kill, not a broken map".
+///
+/// The app never sent the argument, so every caller was answered as 'web'.
+/// The browser key is set, so Android was told `uses_google_js: true` and
+/// rendered the NATIVE GoogleMap with no `com.google.android.geo.API_KEY` in
+/// the manifest: `java.lang.IllegalStateException: API key not found`, a
+/// PlatformException, and the whole app gone. crash_event carries those rows
+/// (android / super_admin, 19 Sep) and `map_config.native_key_android` is
+/// still empty.
+///
+/// This names the platform and nothing else. WHICH renderer that platform
+/// gets, and whether it has a key at all, stay the backend's answer — a key
+/// added to the config row turns the Google path on for Android with no
+/// deploy, exactly as it does for the web today.
+String get mapPlatformName =>
+    kIsWeb ? 'web' : defaultTargetPlatform.name.toLowerCase();
 
 class MapConfig {
   /// 'osm' | 'google' | anything the backend adds later. Never branched on in
@@ -137,7 +161,7 @@ class MapConfigService {
   static Future<MapConfig> _fetch() async {
     try {
       final res = await Supabase.instance.client
-          .rpc('map_config_get')
+          .rpc('map_config_get', params: {'p_platform': mapPlatformName})
           .timeout(const Duration(seconds: 12));
       final cfg = MapConfig.fromJson(Map<String, dynamic>.from(res as Map));
       _cached = cfg;

@@ -45,6 +45,7 @@ import 'screens/home_shell.dart';
 import 'screens/partner_app_block_screen.dart'; // CMD #2100
 import 'services/app_home_state.dart'; // CMD #2100
 import 'build_info.dart'; // CMD #2100 — kFlavorHeader / appFlavorName
+import 'widgets/screen_guard.dart'; // CMD #2107 — ErrorWidget.builder
 import 'screens/public/inquiry_form_screen.dart';
 import 'screens/delivery/agency_dispatch_screen.dart'; // C704: /agency/dispatch
 import 'screens/public/stock_update_form_screen.dart'; // C639: /stock-update/<token>
@@ -321,6 +322,15 @@ void main() {
     // audit back out of the render log. Inert for every real visitor.
     try {
       ResponsiveAudit.configureFromQuery(Uri.base.queryParameters);
+    } catch (_) {}
+
+    // CMD #2107 — an exception inside a screen must show an ERROR STATE, not
+    // take the screen (or the app) with it. Without this, Flutter's default
+    // ErrorWidget is a bare grey rectangle in a release build: the page goes
+    // blank, which on a phone reads as "it opened and then closed". Installed
+    // before the first frame so it covers the boot too.
+    try {
+      installScreenGuard();
     } catch (_) {}
 
     FlutterError.onError = (details) {

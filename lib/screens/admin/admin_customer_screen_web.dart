@@ -41,6 +41,7 @@ import '../../services/admin_zone_scope.dart'; // CHANGE #609
 import '../../services/date_labels.dart'; // CHANGE #548
 import '../../services/map_config.dart'; // C634: map deep links from config
 import '../../widgets/route_google_map_panel.dart'; // CHANGE #463
+import '../../widgets/screen_guard.dart'; // CMD #2107 — in-screen error state
 import '../bulk_upload_screen.dart';
 import '../../services/payment_claims_service.dart';
 import '../../view_as_state.dart';
@@ -12612,6 +12613,12 @@ class _RoutesTabState extends State<_RoutesTab> {
   Map<String, dynamic>? _today;
   bool _todayLoading = false;
 
+  /// CMD #2107 — routes_today() refused or failed on its OWN refetch. It used
+  /// to be swallowed, which left "Today's visits" showing the header of a
+  /// payload that never arrived and no way to ask again. It is an in-screen
+  /// error with a Retry now, never a pop.
+  bool _todayFailed = false;
+
   /// CMD #1877 — route_day_summary(): what the field team actually did for
   /// admin_active_date() in admin_active_zone(). Drawn as the card at the top
   /// of this tab and, from the same payload's `strip`, on the Leads tab. Every
@@ -13158,7 +13165,7 @@ class _RoutesTabState extends State<_RoutesTab> {
   /// stop the Navigate button opens are always the backend's current answer.
   Future<void> _refreshToday() async {
     if (!mounted) return;
-    setState(() => _todayLoading = true);
+    setState(() { _todayLoading = true; _todayFailed = false; });
     try {
       // CMD #1877 — a check-in changes BOTH the route progress line and the
       // day summary, so the two are refetched together and never disagree on
@@ -13181,7 +13188,9 @@ class _RoutesTabState extends State<_RoutesTab> {
       _logToday(today);
       _logDaySummary(day);
     } catch (_) {
-      if (mounted) setState(() => _todayLoading = false);
+      if (mounted) {
+        setState(() { _todayLoading = false; _todayFailed = true; });
+      }
     }
   }
 
@@ -14325,38 +14334,55 @@ class _RoutesTabState extends State<_RoutesTab> {
       );
     }
     if (_loadError != null) {
+      // CMD #2107 — the RPC failed. This is an IN-SCREEN error with a Retry,
+      // never a pop and never an exit: the three Dashboard doors all land
+      // here, and a bad minute of network must leave the operator on the
+      // screen they asked for. The button's word is the backend's.
       return Center(
         child: Padding(
-          padding: const EdgeInsets.all(32),
+          padding: EdgeInsets.all(Ds.space.x32),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Icon(Icons.wifi_off_rounded, size: 40, color: Color(0xFF6B7280)),
-            const SizedBox(height: 12),
+            Icon(Icons.wifi_off_rounded,
+                size: Ds.space.x48, color: Ds.c.textSecondary),
+            SizedBox(height: Ds.space.x12),
             Text(cf('admin_customer.failed_to_load', {'e': '$_loadError'}),
-                style: const TextStyle(fontSize: 13, color: Color(0xFFDC2626)),
+                style: Ds.t.caption.copyWith(color: Ds.c.danger),
                 textAlign: TextAlign.center),
-            const SizedBox(height: 12),
-            OutlinedButton(onPressed: _loadScreen, child: const Text('Retry')),
+            SizedBox(height: Ds.space.x12),
+            SizedBox(
+              height: Ds.touch.minTarget,
+              child: OutlinedButton(
+                  onPressed: _loadScreen,
+                  child: Text(c('routes_tab.retry'))),
+            ),
           ]),
         ),
       );
     }
-    final pad = widget.isDesktop ? 28.0 : 16.0;
-    return Padding(
-      padding: EdgeInsets.fromLTRB(pad, 20, pad, 32),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // CMD #1877 — the day summary sits above the mode row, so it reads the
-        // same in every mode: it answers "what did the field team do today",
-        // not "what is on this screen".
-        _buildDaySummaryCard(),
-        _buildTopModeToggle(),
-        SizedBox(height: Ds.space.x16),
-        if (_topMode == 'today')
-          _buildTodayView()
-        else if (_topMode == 'myRoute')
-          _buildMyRouteView()
-        else
-          _buildBuilder(),
-      ]),
+    final pad = widget.isDesktop ? Ds.space.x32 : Ds.space.x16;
+    // CMD #2107 — the body is guarded. An exception thrown while building one
+    // of the three views (a payload shape this build has never seen, a null
+    // where a number was expected) now replaces THIS subtree with the error
+    // state instead of blanking the page the operator is standing on.
+    return ScreenGuard(
+      onRetry: _loadScreen,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(pad, Ds.space.x24, pad, Ds.space.x32),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // CMD #1877 — the day summary sits above the mode row, so it reads
+          // the same in every mode: it answers "what did the field team do
+          // today", not "what is on this screen".
+          _buildDaySummaryCard(),
+          _buildTopModeToggle(),
+          SizedBox(height: Ds.space.x16),
+          if (_topMode == 'today')
+            _buildTodayView()
+          else if (_topMode == 'myRoute')
+            _buildMyRouteView()
+          else
+            _buildBuilder(),
+        ]),
+      ),
     );
   }
 
@@ -14516,6 +14542,26 @@ class _RoutesTabState extends State<_RoutesTab> {
         padding: EdgeInsets.only(top: Ds.space.x32),
         child: Center(
             child: CircularProgressIndicator(color: Ds.c.brand, strokeWidth: 2)),
+      );
+    }
+    if (_todayFailed && _today == null) {
+      // CMD #2107 — the refetch failed and there is nothing cached to show.
+      // The screen STAYS, says so in the backend's words, and offers the one
+      // action that can help.
+      return Padding(
+        padding: EdgeInsets.only(top: Ds.space.x32),
+        child: Column(children: [
+          Text(c('routes_tab.today_failed'),
+              style: Ds.t.body.copyWith(color: Ds.c.danger),
+              textAlign: TextAlign.center),
+          SizedBox(height: Ds.space.x12),
+          SizedBox(
+            height: Ds.touch.minTarget,
+            child: OutlinedButton(
+                onPressed: _refreshToday,
+                child: Text(c('routes_tab.retry'))),
+          ),
+        ]),
       );
     }
     final today = _today ?? const <String, dynamic>{};

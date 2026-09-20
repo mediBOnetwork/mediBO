@@ -332,6 +332,11 @@ class DashboardNeedsNowRow extends StatelessWidget {
     final bar = DashboardHomeTile.toneColor(tone);
     return Semantics(
       button: true,
+      // CMD #2107 — the tile's own name in the semantics tree, so a browser
+      // journey can tap THIS door rather than guess at a label that the
+      // backend may reword tomorrow. The key is the registry's feature_key:
+      // the same identity the tap already reports to nav_open().
+      identifier: 'c1891_tile_${_s(tile, 'feature_key')}',
       label: _s(tile, 'label'),
       child: InkWell(
         key: Key('c1891_tile_${_s(tile, 'feature_key')}'),
@@ -466,6 +471,11 @@ class DashboardHomeTile extends StatelessWidget {
     final count = (tile['badge_count'] as num?)?.toInt() ?? 0;
     return Semantics(
       button: true,
+      // CMD #2107 — the tile's own name in the semantics tree, so a browser
+      // journey can tap THIS door rather than guess at a label that the
+      // backend may reword tomorrow. The key is the registry's feature_key:
+      // the same identity the tap already reports to nav_open().
+      identifier: 'c1891_tile_${_s(tile, 'feature_key')}',
       label: _s(tile, 'label'),
       child: InkWell(
         key: Key('c1891_tile_${_s(tile, 'feature_key')}'),

@@ -81,7 +81,9 @@ Map<String, dynamic> _step(int n, String key, String label, List<String> fields,
       'key': key,
       'n': n,
       'label': label,
+      'done_label': 'DONE $label',
       'title': 'TITLE $label',
+      'subtitle': 'SUB $label',
       'step_of': 'STEP $n OF 3',
       'fields': fields,
       'docs': docs,
@@ -104,13 +106,13 @@ Map<String, dynamic> _wizard({int resume = 0, bool shopDone = false}) => {
       'saving_label': 'PAYLOAD SAVING',
       'submit_label': 'PAYLOAD SUBMIT',
       'submitting_label': 'PAYLOAD SUBMITTING',
+      'field_notes': {'whatsapp_no': 'PAYLOAD PREFILLED NOTE'},
       'chips': {
         'store_type': ['CHIP Retail', 'CHIP Hospital', 'CHIP Clinic', 'CHIP Wholesale'],
       },
       'done': {
         'title': 'PAYLOAD SUBMITTED',
         'line': 'PAYLOAD WE VERIFY',
-        'checklist_title': 'PAYLOAD CHECKLIST',
         'checklist': [
           {'key': 'shop', 'label': 'PART SHOP', 'done': true},
           {'key': 'documents', 'label': 'PART DOCS', 'done': false},
@@ -184,7 +186,8 @@ void main() {
   testWidgets('1 — step 1 renders the payload\'s labels, fields and chips; no Back',
       (tester) async {
     await pump(tester);
-    for (final t in ['SHOP', 'LOCATION', 'LICENCES', 'STEP 1 OF 3', 'TITLE SHOP']) {
+    for (final t in ['SHOP', 'LOCATION', 'LICENCES', 'TITLE SHOP', 'SUB SHOP',
+        'PAYLOAD PREFILLED NOTE']) {
       expect(find.text(t), findsOneWidget, reason: t);
     }
     expect(find.text('PAYLOAD Pharmacy *'), findsOneWidget);
@@ -214,6 +217,8 @@ void main() {
     expect(find.text('TITLE LOCATION'), findsOneWidget);
     expect(find.text('PAYLOAD Address *'), findsOneWidget);
     expect(find.text('PAYLOAD BACK'), findsOneWidget);
+    expect(find.text('DONE SHOP'), findsOneWidget,
+        reason: 'a finished step prints the backend done_label');
   });
 
   testWidgets('4 — Continue auto-saves; a refusal prints the backend sentence and stays',
@@ -246,7 +251,7 @@ void main() {
 
     await tester.tap(find.text('PAYLOAD CONTINUE'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('SHOP'));
+    await tester.tap(find.text('DONE SHOP'));
     await tester.pumpAndSettle();
     expect(find.text('TITLE SHOP'), findsOneWidget, reason: 'completed step is tappable');
   });
@@ -260,7 +265,7 @@ void main() {
     final fns = calls.map((c) => c['fn']).toList();
     expect(fns.indexOf('customer_registration_step_save'),
         lessThan(fns.indexOf('customer_registration_submit')));
-    for (final t in ['PAYLOAD SUBMITTED', 'PAYLOAD WE VERIFY', 'PAYLOAD CHECKLIST',
+    for (final t in ['PAYLOAD SUBMITTED', 'PAYLOAD WE VERIFY',
         'PART SHOP', 'PART DOCS', 'PAYLOAD DONE', 'PAYLOAD LATER', 'PAYLOAD BROWSE']) {
       expect(find.text(t), findsOneWidget, reason: t);
     }

@@ -20,8 +20,10 @@ List<Map<String, dynamic>> wizardSteps(Map<String, dynamic> wizard) =>
 bool wizardStepReachable(List<Map<String, dynamic>> steps, int i, int current) =>
     i < current || (i != current && steps[i]['complete'] == true);
 
-/// Three segments with their labels. A finished step shows a tick and is
-/// tappable; the current step is brand-filled; the rest are hairline grey.
+/// The approved design (Image A): three bars, and under each its own label —
+/// the first left, the middle centred, the last right. The current step is
+/// bold brand; a finished step reads "✓ 1 Shop" (the backend's done_label),
+/// underlined and tappable; a step not reached yet is grey.
 class RegistrationProgressBar extends StatelessWidget {
   const RegistrationProgressBar({
     super.key,
@@ -48,46 +50,47 @@ class RegistrationProgressBar extends StatelessWidget {
   }
 
   Widget _segment(int i) {
-    final done = i < current || (steps[i]['complete'] == true && i != current);
     final active = i == current;
+    final done = !active && (i < current || steps[i]['complete'] == true);
     final reachable = wizardStepReachable(steps, i, current);
-    final label = (steps[i]['label'] ?? '').toString();
-    final color = (done || active) ? Ds.c.brand : Ds.c.divider;
+    final label = ((done ? steps[i]['done_label'] : null) ?? steps[i]['label'] ?? '')
+        .toString();
+    final align = i == 0
+        ? TextAlign.left
+        : (i == steps.length - 1 ? TextAlign.right : TextAlign.center);
+    final style = active
+        ? Ds.t.caption.copyWith(color: Ds.c.brand, fontWeight: FontWeight.w700)
+        : done
+            ? Ds.t.caption.copyWith(
+                color: Ds.c.brand,
+                decoration: TextDecoration.underline,
+                decorationColor: Ds.c.brand)
+            : Ds.t.caption;
     return Semantics(
       identifier: 'reg_step_$i',
       button: reachable,
       selected: active,
       child: InkWell(
-        borderRadius: Ds.r.rChip,
         onTap: reachable ? () => onJump(i) : null,
         child: ConstrainedBox(
           constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
                 height: Ds.space.x4,
                 decoration: BoxDecoration(
-                    color: color, borderRadius: Ds.r.rChip),
+                  color: (done || active) ? Ds.c.brand : Ds.c.divider,
+                  borderRadius: Ds.r.rChip,
+                ),
               ),
               SizedBox(height: Ds.space.x8),
-              Row(children: [
-                if (done && !active) ...[
-                  Icon(Icons.check_circle, size: Ds.space.x16, color: Ds.c.brand),
-                  SizedBox(width: Ds.space.x4),
-                ],
-                Flexible(
-                  child: Text(
-                    label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: active
-                        ? Ds.t.caption.copyWith(color: Ds.c.text)
-                        : Ds.t.caption,
-                  ),
-                ),
-              ]),
+              Text(label,
+                  textAlign: align,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: style),
             ],
           ),
         ),
@@ -96,61 +99,87 @@ class RegistrationProgressBar extends StatelessWidget {
   }
 }
 
-/// The screen after Submit: a tick, the backend's sentence, what was sent
-/// (Done / Add later per part) and one green button.
+/// The screen after Submit (Image A · Done): a tick in a soft-green circle,
+/// the backend's title and line, one card listing each part with a coloured
+/// Done / Add later, and "Start browsing" pinned to the bottom.
 class RegistrationDoneView extends StatelessWidget {
   const RegistrationDoneView({
     super.key,
     required this.done,
     required this.onBrowse,
+    this.horizontalPadding,
   });
 
   final Map<String, dynamic> done;
   final VoidCallback onBrowse;
+  final double? horizontalPadding;
 
   String _s(String k) => (done[k] ?? '').toString();
 
   @override
   Widget build(BuildContext context) {
     final items = ((done['checklist'] as List?) ?? const []).map(_m).toList();
+    final pad = horizontalPadding ?? Ds.space.x16;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        SizedBox(height: Ds.space.x24),
-        Icon(Icons.check_circle, size: Ds.space.x48, color: Ds.c.brand),
-        SizedBox(height: Ds.space.x16),
-        Text(_s('title'), style: Ds.t.title, textAlign: TextAlign.center),
-        SizedBox(height: Ds.space.x8),
-        Text(_s('line'), style: Ds.t.bodySecondary, textAlign: TextAlign.center),
-        SizedBox(height: Ds.space.x24),
-        Container(
-          padding: EdgeInsets.all(Ds.space.x16),
-          decoration: BoxDecoration(
-            color: Ds.c.surface,
-            borderRadius: Ds.r.rCard,
-            boxShadow: Ds.elevation.e1,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (_s('checklist_title').isNotEmpty) ...[
-                Text(_s('checklist_title'), style: Ds.t.caption),
+        Expanded(
+          child: SingleChildScrollView(
+            padding: EdgeInsets.fromLTRB(pad, Ds.space.x32, pad, Ds.space.x24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Center(
+                  child: Container(
+                    width: Ds.space.x48 + Ds.space.x32,
+                    height: Ds.space.x48 + Ds.space.x32,
+                    decoration: BoxDecoration(
+                      color: Ds.c.brandSoft,
+                      shape: BoxShape.circle,
+                    ),
+                    alignment: Alignment.center,
+                    child: Icon(Icons.check_rounded,
+                        size: Ds.space.x48, color: Ds.c.brand),
+                  ),
+                ),
+                SizedBox(height: Ds.space.x24),
+                Text(_s('title'), style: Ds.t.title, textAlign: TextAlign.center),
                 SizedBox(height: Ds.space.x8),
+                Text(_s('line'),
+                    style: Ds.t.bodySecondary, textAlign: TextAlign.center),
+                SizedBox(height: Ds.space.x24),
+                Container(
+                  decoration: BoxDecoration(
+                    color: Ds.c.surface,
+                    borderRadius: Ds.r.rCard,
+                    border: Border.all(color: Ds.c.divider),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (var i = 0; i < items.length; i++) ...[
+                        if (i > 0) Divider(height: Ds.space.hairline, color: Ds.c.divider),
+                        _row(items[i]),
+                      ],
+                    ],
+                  ),
+                ),
               ],
-              for (final it in items) _row(it),
-            ],
+            ),
           ),
         ),
-        SizedBox(height: Ds.space.x24),
-        Semantics(
-          identifier: 'reg_primary',
-          button: true,
-          child: SizedBox(
-            width: double.infinity,
-            height: Ds.touch.minTarget,
-            child: FilledButton(
-              onPressed: onBrowse,
-              child: Text(_s('cta_label')),
+        Padding(
+          padding: EdgeInsets.fromLTRB(pad, Ds.space.x12, pad, Ds.space.x16),
+          child: Semantics(
+            identifier: 'reg_primary',
+            button: true,
+            child: SizedBox(
+              width: double.infinity,
+              height: Ds.touch.minTarget,
+              child: FilledButton(
+                onPressed: onBrowse,
+                child: Text(_s('cta_label')),
+              ),
             ),
           ),
         ),
@@ -160,22 +189,15 @@ class RegistrationDoneView extends StatelessWidget {
 
   Widget _row(Map<String, dynamic> it) {
     final ok = it['done'] == true;
-    return ConstrainedBox(
+    return Container(
       constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+      padding: EdgeInsets.symmetric(horizontal: Ds.space.x16, vertical: Ds.space.x12),
       child: Row(children: [
         Expanded(child: Text((it['label'] ?? '').toString(), style: Ds.t.body)),
         SizedBox(width: Ds.space.x8),
-        Container(
-          padding: EdgeInsets.symmetric(
-              horizontal: Ds.space.x8, vertical: Ds.space.x4),
-          decoration: BoxDecoration(
-            color: ok ? Ds.c.successSoft : Ds.c.warningSoft,
-            borderRadius: Ds.r.rChip,
-          ),
-          child: Text(
-            ok ? _s('done_label') : _s('later_label'),
-            style: Ds.t.caption.copyWith(color: ok ? Ds.c.success : Ds.c.warning),
-          ),
+        Text(
+          ok ? _s('done_label') : _s('later_label'),
+          style: Ds.t.bodyStrong.copyWith(color: ok ? Ds.c.brand : Ds.c.warning),
         ),
       ]),
     );

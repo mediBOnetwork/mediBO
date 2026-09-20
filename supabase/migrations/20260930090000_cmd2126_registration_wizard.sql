@@ -30,8 +30,14 @@ insert into public.ui_copy(key, value) values
   ('custreg.wiz_step_shop',       to_jsonb('Shop'::text)),
   ('custreg.wiz_step_location',   to_jsonb('Location'::text)),
   ('custreg.wiz_step_licences',   to_jsonb('Licences'::text)),
-  ('custreg.wiz_title_shop',      to_jsonb('Your shop'::text)),
-  ('custreg.wiz_title_location',  to_jsonb('Where is the shop?'::text)),
+  ('custreg.wiz_title_shop',      to_jsonb('Tell us about your shop'::text)),
+  ('custreg.wiz_title_location',  to_jsonb('Where is your shop?'::text)),
+  ('custreg.wiz_sub_shop',        to_jsonb('Takes about a minute. Saved as you go.'::text)),
+  ('custreg.wiz_sub_location',    to_jsonb('Drag the pin onto your shop door.'::text)),
+  ('custreg.wiz_sub_licences',    to_jsonb(''::text)),
+  ('custreg.wiz_step_label',      to_jsonb('{n} {label}'::text)),
+  ('custreg.wiz_step_done_label', to_jsonb('✓ {n} {label}'::text)),
+  ('custreg.wiz_prefilled_note',  to_jsonb('Pre-filled from your login — you can change it'::text)),
   ('custreg.wiz_title_licences',  to_jsonb('Licences and documents'::text)),
   ('custreg.wiz_step_of',         to_jsonb('Step {n} of {total}'::text)),
   ('custreg.wiz_continue',        to_jsonb('Continue'::text)),
@@ -40,13 +46,13 @@ insert into public.ui_copy(key, value) values
   ('custreg.wiz_missing',         to_jsonb('Please fill in: {fields}'::text)),
   ('custreg.wiz_saved',           to_jsonb('Saved — you can come back any time.'::text)),
   ('custreg.done_submitted_title',to_jsonb('Registration submitted'::text)),
-  ('custreg.done_submitted_line', to_jsonb('We verify within 24 hours — you''ll get a WhatsApp message.'::text)),
+  ('custreg.done_submitted_line', to_jsonb('We verify and approve within 24 hours. You''ll get a WhatsApp message.'::text)),
   ('custreg.done_checklist_title',to_jsonb('Your registration'::text)),
   ('custreg.done_item_done',      to_jsonb('Done'::text)),
   ('custreg.done_item_later',     to_jsonb('Add later'::text)),
   ('custreg.done_part_shop',      to_jsonb('Shop details'::text)),
-  ('custreg.done_part_location',  to_jsonb('Shop location'::text)),
-  ('custreg.done_part_licences',  to_jsonb('Licence numbers'::text)),
+  ('custreg.done_part_location',  to_jsonb('Location'::text)),
+  ('custreg.done_part_licences',  to_jsonb('Drug licence 20B / 21B'::text)),
   ('custreg.done_part_documents', to_jsonb('Documents'::text)),
   ('custreg.done_browse',         to_jsonb('Start browsing'::text))
 on conflict (key) do nothing;
@@ -57,21 +63,26 @@ insert into public.app_settings(key, value) values
      'enabled', true,
      'steps', jsonb_build_array(
        jsonb_build_object('key','shop',     'label_key','custreg.wiz_step_shop',
-                          'title_key','custreg.wiz_title_shop',     'docs', false,
+                          'title_key','custreg.wiz_title_shop', 'sub_key','custreg.wiz_sub_shop',     'docs', false,
                           'sections', jsonb_build_array('business','contact'),
                           'fields', jsonb_build_array('pharmacy_name','customer_name','store_type','whatsapp_no','email')),
        jsonb_build_object('key','location', 'label_key','custreg.wiz_step_location',
-                          'title_key','custreg.wiz_title_location', 'docs', false,
+                          'title_key','custreg.wiz_title_location', 'sub_key','custreg.wiz_sub_location', 'docs', false,
                           'sections', jsonb_build_array('address'),
                           'fields', jsonb_build_array('address','city','state','pincode','store_pin','store_location_link')),
        jsonb_build_object('key','licences', 'label_key','custreg.wiz_step_licences',
-                          'title_key','custreg.wiz_title_licences', 'docs', true,
+                          'title_key','custreg.wiz_title_licences', 'sub_key','custreg.wiz_sub_licences', 'docs', true,
                           'sections', jsonb_build_array('statutory'),
                           'fields', jsonb_build_array('gstin','gst_none','dl_20b','dl_21b','dl_expiry'))),
      'chips', jsonb_build_object(
        'store_type', jsonb_build_array('Retail pharmacy','Hospital pharmacy','Clinic','Wholesale')),
      'browse_route', '/'))
 on conflict (key) do nothing;
+
+-- The Owner name box shows "Full name" as its placeholder (approved design).
+-- Only fills a hint nobody has written yet.
+update public.customer_form_field set hint = 'Full name'
+ where key = 'customer_name' and nullif(btrim(coalesce(hint,'')),'') is null;
 
 -- ── 3. Owner name is never the email handle ──────────────────────────────
 create or replace function public.custreg_is_email_handle(p_name text, p_email text)
@@ -90,9 +101,11 @@ as $function$
 $function$;
 
 -- ── 4. The render-ready wizard block ─────────────────────────────────────
+-- An earlier draft of this command had no p_prefill; never leave an overload.
+drop function if exists public.customer_registration_wizard(jsonb, jsonb, jsonb, boolean, text, text);
 create or replace function public.customer_registration_wizard(
   p_schema jsonb, p_values jsonb, p_docs jsonb, p_needs boolean,
-  p_stage text, p_step text)
+  p_stage text, p_step text, p_prefill jsonb default '{}'::jsonb)
 returns jsonb
 language plpgsql
 stable
@@ -110,6 +123,7 @@ declare
   v_complete boolean; v_known text[] := '{}';
   v_by_key jsonb := '{}'::jsonb; v_done_map jsonb := '{}'::jsonb;
   v_docs_ok boolean; v_lic_any boolean; v_approved boolean;
+  v_check jsonb; v_notes jsonb := '{}'::jsonb;
 begin
   if coalesce((v_cfg->>'enabled')::boolean, false) is not true
      or jsonb_array_length(coalesce(v_cfg->'steps','[]'::jsonb)) = 0 then
@@ -158,8 +172,12 @@ begin
     v_steps := v_steps || jsonb_build_object(
       'key',      v_step->>'key',
       'n',        v_i + 1,
-      'label',    public._c(v_step->>'label_key'),
+      'label',    public._cf('custreg.wiz_step_label',
+                    jsonb_build_object('n', v_i + 1, 'label', public._c(v_step->>'label_key'))),
+      'done_label', public._cf('custreg.wiz_step_done_label',
+                    jsonb_build_object('n', v_i + 1, 'label', public._c(v_step->>'label_key'))),
       'title',    public._c(v_step->>'title_key'),
+      'subtitle', coalesce(public._c(v_step->>'sub_key'), ''),
       'step_of',  public._cf('custreg.wiz_step_of',
                     jsonb_build_object('n', v_i + 1, 'total', v_total)),
       'fields',   v_keys,
@@ -178,6 +196,33 @@ begin
                         nullif(btrim(coalesce(v_vals->>'dl_21b','')),''),
                         nullif(btrim(coalesce(v_vals->>'gstin','')),'')) is not null;
   v_approved := coalesce(p_stage,'') = 'approved' and not coalesce(p_needs,false);
+  -- A licence counts once its number is typed or its paper is on file.
+  v_lic_any := v_lic_any or exists (
+    select 1 from jsonb_array_elements(coalesce(p_docs->'rows','[]'::jsonb)) r
+     where r->>'key' in ('dl_20b','dl_21b') and coalesce((r->>'has_file')::boolean,false));
+
+  -- Done checklist: the shop, its location, the licences, then every other
+  -- paper the zone asks for — each Done or Add later.
+  v_check := jsonb_build_array(
+    jsonb_build_object('key','shop',     'label', public._c('custreg.done_part_shop'),
+      'done', coalesce((v_done_map->>'shop')::boolean, false)),
+    jsonb_build_object('key','location', 'label', public._c('custreg.done_part_location'),
+      'done', coalesce((v_done_map->>'location')::boolean, false)),
+    jsonb_build_object('key','licences', 'label', public._c('custreg.done_part_licences'),
+      'done', v_lic_any));
+  select v_check || coalesce(jsonb_agg(jsonb_build_object(
+           'key', r->>'key', 'label', r->>'label',
+           'done', coalesce((r->>'has_file')::boolean, false))), '[]'::jsonb)
+    into v_check
+    from jsonb_array_elements(coalesce(p_docs->'rows','[]'::jsonb)) r
+   where coalesce(r->>'key','') not in ('dl_20b','dl_21b');
+
+  -- "Pre-filled from your login" sits under WhatsApp only while the number
+  -- on screen is the one the login gave us.
+  if nullif(btrim(coalesce(p_prefill->>'whatsapp_no','')),'') is not null
+     and btrim(coalesce(p_prefill->>'whatsapp_no','')) = btrim(coalesce(v_vals->>'whatsapp_no','')) then
+    v_notes := jsonb_build_object('whatsapp_no', public._c('custreg.wiz_prefilled_note'));
+  end if;
 
   return jsonb_build_object(
     'enabled',        true,
@@ -192,29 +237,21 @@ begin
     'submitting_label', public._c('custreg.submitting_label'),
     'saved_label',    public._c('custreg.wiz_saved'),
     'chips',          coalesce(v_cfg->'chips', '{}'::jsonb),
+    'field_notes',    v_notes,
     'done', jsonb_build_object(
       'title', case when v_approved then public._c('custreg.done_title')
                     else public._c('custreg.done_submitted_title') end,
       'line',  case when v_approved then public._c('custreg.done_line')
                     else public._c('custreg.done_submitted_line') end,
-      'checklist_title', public._c('custreg.done_checklist_title'),
-      'checklist', jsonb_build_array(
-        jsonb_build_object('key','shop',      'label', public._c('custreg.done_part_shop'),
-          'done', coalesce((v_done_map->>'shop')::boolean, false)),
-        jsonb_build_object('key','location',  'label', public._c('custreg.done_part_location'),
-          'done', coalesce((v_done_map->>'location')::boolean, false)),
-        jsonb_build_object('key','licences',  'label', public._c('custreg.done_part_licences'),
-          'done', v_lic_any),
-        jsonb_build_object('key','documents', 'label', public._c('custreg.done_part_documents'),
-          'done', v_docs_ok)),
+      'checklist', v_check,
       'done_label',  public._c('custreg.done_item_done'),
       'later_label', public._c('custreg.done_item_later'),
       'cta_label',   public._c('custreg.done_browse'),
       'cta_route',   coalesce(v_cfg->>'browse_route', '/')));
 end $function$;
 
-revoke all on function public.customer_registration_wizard(jsonb, jsonb, jsonb, boolean, text, text) from public, anon, authenticated;
-grant execute on function public.customer_registration_wizard(jsonb, jsonb, jsonb, boolean, text, text) to service_role;
+revoke all on function public.customer_registration_wizard(jsonb, jsonb, jsonb, boolean, text, text, jsonb) from public, anon, authenticated;
+grant execute on function public.customer_registration_wizard(jsonb, jsonb, jsonb, boolean, text, text, jsonb) to service_role;
 revoke all on function public.custreg_is_email_handle(text, text) from public, anon;
 grant execute on function public.custreg_is_email_handle(text, text) to authenticated, service_role;
 
@@ -456,7 +493,7 @@ begin
     -- app renders the single form exactly as before.
     'wizard',      public.customer_registration_wizard(
                      v_schema, v_pre || (v_draft - '_step'), v_docs, v_needs,
-                     coalesce(v_stage, ''), v_draft->>'_step'),
+                     coalesce(v_stage, ''), v_draft->>'_step', v_pre),
     'sheet', jsonb_build_object(
                'title',        public._c('custreg.sheet_title'),
                'line',         public._c('custreg.sheet_line'),

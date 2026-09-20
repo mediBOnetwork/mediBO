@@ -282,6 +282,7 @@ class CustomerRegistrationForm extends StatefulWidget {
     this.header,
     this.onlyFields,
     this.chips = const {},
+    this.notes = const {},
   });
 
   final CustomerFormController controller;
@@ -294,6 +295,11 @@ class CustomerRegistrationForm extends StatefulWidget {
   /// CMD #2126 — select fields drawn as tappable chips instead of a dropdown,
   /// with the backend's own option list (`wizard.chips`).
   final Map<String, List<String>> chips;
+
+  /// CMD #2126 — a caption under a field, from the backend
+  /// (`wizard.field_notes`, e.g. "Pre-filled from your login — you can change
+  /// it" under WhatsApp). Absent key → nothing drawn.
+  final Map<String, String> notes;
 
   /// Surface-specific actions (scan documents, fetch location) that sit above
   /// the fields. They write into the same controller.
@@ -455,6 +461,10 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
           _dropdown(key, options, flagged)
         else
           _input(key, type, hint, f['max_lines'], flagged),
+        if ((widget.notes[key] ?? '').isNotEmpty) ...[
+          SizedBox(height: Ds.space.x4),
+          Text(widget.notes[key]!, style: Ds.t.caption),
+        ],
       ]),
     );
   }

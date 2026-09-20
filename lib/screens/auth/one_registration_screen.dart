@@ -417,10 +417,21 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
     // CMD #2126 — the flow: Done after Submit (or when nothing is owed), the
     // current step otherwise.
     if (_wizardOn && (_showDone || _p['needs'] != true)) {
-      return _page(RegistrationDoneView(
-          done: _map(_wiz['done']), onBrowse: _browse));
+      return LayoutBuilder(builder: (context, box) {
+        return Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 560),
+            child: RegistrationDoneView(
+              done: _map(_wiz['done']),
+              onBrowse: _browse,
+              horizontalPadding:
+                  box.maxWidth >= 600 ? Ds.space.x24 : Ds.space.x16,
+            ),
+          ),
+        );
+      });
     }
-    if (_wizardOn) return _page(_wizardStep());
+    if (_wizardOn) return _wizardStep();
 
     // Nothing owed — the backend says so, and says what to print about it.
     if (_p['needs'] != true) {
@@ -507,21 +518,10 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
     });
   }
 
-  /// Phone first: full width with a 16 px gutter, capped on a wide screen.
-  Widget _page(Widget child) => LayoutBuilder(builder: (context, box) {
-        final pad = box.maxWidth >= 600 ? Ds.space.x24 : Ds.space.x16;
-        return SingleChildScrollView(
-          controller: _scroll,
-          padding: EdgeInsets.fromLTRB(pad, Ds.space.x16, pad, Ds.space.x32),
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 560),
-              child: child,
-            ),
-          ),
-        );
-      });
-
+  /// CMD #2126 — one step, laid out as the approved design (Image A): the
+  /// progress bar on a white band under the title bar, the step's title and
+  /// subtitle, its fields with labels above them, and Back + Continue pinned
+  /// to the bottom. Phone first: a 16 px gutter, capped width on a big screen.
   Widget _wizardStep() {
     final steps = _steps;
     final step = steps[_step];
@@ -537,96 +537,117 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
         if (e.value is List)
           e.key: (e.value as List).map((o) => o.toString()).toList(),
     };
+    final notes = <String, String>{
+      for (final e in _map(_wiz['field_notes']).entries)
+        e.key: (e.value ?? '').toString(),
+    };
     final continueLabel = _saving
         ? (last ? _s(_wiz, 'submitting_label') : _s(_wiz, 'saving_label'))
         : (last ? _s(_wiz, 'submit_label') : _s(_wiz, 'continue_label'));
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        RegistrationProgressBar(steps: steps, current: _step, onJump: _goTo),
-        if (_step == 0 && imported['is'] == true && _s(imported, 'note').isNotEmpty)
-          _note(_s(imported, 'note'), Ds.c.infoSoft),
-        if (_step == 0 && _p['has_draft'] == true && _s(_p, 'draft_note').isNotEmpty)
-          _note(_s(_p, 'draft_note'), Ds.c.bg),
-        if (step['docs'] == true && pending['show'] == true && _s(pending, 'line').isNotEmpty)
-          _note(_s(pending, 'line'), Ds.c.warningSoft),
-        SizedBox(height: Ds.space.x16),
-        Container(
-          padding: EdgeInsets.all(Ds.space.x16),
-          decoration: BoxDecoration(
+    return LayoutBuilder(builder: (context, box) {
+      final pad = box.maxWidth >= 600 ? Ds.space.x24 : Ds.space.x16;
+      Widget capped(Widget child) => Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: child,
+            ),
+          );
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
             color: Ds.c.surface,
-            borderRadius: Ds.r.rCard,
-            boxShadow: Ds.elevation.e1,
+            padding: EdgeInsets.fromLTRB(pad, Ds.space.x8, pad, Ds.space.x4),
+            child: capped(RegistrationProgressBar(
+                steps: steps, current: _step, onJump: _goTo)),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(_s(step, 'step_of'), style: Ds.t.caption),
-              SizedBox(height: Ds.space.x4),
-              Text(_s(step, 'title'), style: Ds.t.subtitle),
-              SizedBox(height: Ds.space.x16),
-              if (ctrl != null)
-                CustomerRegistrationForm(
-                  controller: ctrl,
-                  onlyFields: fields,
-                  chips: chips,
-                ),
-              if (step['docs'] == true)
-                Container(
-                  key: _docsKey,
-                  child: RegistrationDocumentsSection(
-                    block: _docs,
-                    picked: _picked,
-                    skipped: _skips,
-                    busyKey: _busyDoc,
-                    onPick: _pick,
-                    onSkipToggle: _toggleSkip,
-                  ),
-                ),
-            ],
-          ),
-        ),
-        if (_message.isNotEmpty) ...[
-          SizedBox(height: Ds.space.x12),
-          Text(_message, style: Ds.t.caption.copyWith(color: Ds.c.danger)),
-        ],
-        SizedBox(height: Ds.space.x24),
-        Row(children: [
-          if (_step > 0) ...[
-            Expanded(
-              child: Semantics(
-                identifier: 'reg_back',
-                button: true,
-                child: SizedBox(
-                  height: Ds.touch.minTarget,
-                  child: OutlinedButton(
-                    onPressed: _saving ? null : () => _goTo(_step - 1),
-                    child: Text(_s(_wiz, 'back_label')),
-                  ),
-                ),
-              ),
-            ),
-            SizedBox(width: Ds.space.x12),
-          ],
           Expanded(
-            flex: 2,
-            child: Semantics(
-              identifier: 'reg_primary',
-              button: true,
-              child: SizedBox(
-                height: Ds.touch.minTarget,
-                child: FilledButton(
-                  onPressed: _saving ? null : _continue,
-                  child: Text(continueLabel,
-                      maxLines: 1, overflow: TextOverflow.ellipsis),
-                ),
-              ),
+            child: SingleChildScrollView(
+              controller: _scroll,
+              padding: EdgeInsets.fromLTRB(pad, Ds.space.x24, pad, Ds.space.x24),
+              child: capped(Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (_s(step, 'title').isNotEmpty)
+                    Text(_s(step, 'title'), style: Ds.t.title),
+                  if (_s(step, 'subtitle').isNotEmpty) ...[
+                    SizedBox(height: Ds.space.x4),
+                    Text(_s(step, 'subtitle'), style: Ds.t.bodySecondary),
+                  ],
+                  if (_step == 0 && imported['is'] == true && _s(imported, 'note').isNotEmpty)
+                    _note(_s(imported, 'note'), Ds.c.infoSoft),
+                  if (_step == 0 && _p['has_draft'] == true && _s(_p, 'draft_note').isNotEmpty)
+                    _note(_s(_p, 'draft_note'), Ds.c.surface),
+                  if (step['docs'] == true && pending['show'] == true && _s(pending, 'line').isNotEmpty)
+                    _note(_s(pending, 'line'), Ds.c.warningSoft),
+                  SizedBox(height: Ds.space.x16),
+                  if (ctrl != null)
+                    CustomerRegistrationForm(
+                      controller: ctrl,
+                      onlyFields: fields,
+                      chips: chips,
+                      notes: notes,
+                    ),
+                  if (step['docs'] == true)
+                    Container(
+                      key: _docsKey,
+                      child: RegistrationDocumentsSection(
+                        block: _docs,
+                        picked: _picked,
+                        skipped: _skips,
+                        busyKey: _busyDoc,
+                        onPick: _pick,
+                        onSkipToggle: _toggleSkip,
+                      ),
+                    ),
+                  if (_message.isNotEmpty) ...[
+                    SizedBox(height: Ds.space.x12),
+                    Text(_message, style: Ds.t.caption.copyWith(color: Ds.c.danger)),
+                  ],
+                ],
+              )),
             ),
           ),
-        ]),
-      ],
-    );
+          Padding(
+            padding: EdgeInsets.fromLTRB(pad, Ds.space.x12, pad, Ds.space.x16),
+            child: capped(Row(children: [
+              if (_step > 0) ...[
+                Expanded(
+                  child: Semantics(
+                    identifier: 'reg_back',
+                    button: true,
+                    child: SizedBox(
+                      height: Ds.touch.minTarget,
+                      child: OutlinedButton(
+                        onPressed: _saving ? null : () => _goTo(_step - 1),
+                        child: Text(_s(_wiz, 'back_label')),
+                      ),
+                    ),
+                  ),
+                ),
+                SizedBox(width: Ds.space.x12),
+              ],
+              Expanded(
+                flex: 2,
+                child: Semantics(
+                  identifier: 'reg_primary',
+                  button: true,
+                  child: SizedBox(
+                    height: Ds.touch.minTarget,
+                    child: FilledButton(
+                      onPressed: _saving ? null : _continue,
+                      child: Text(continueLabel,
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                    ),
+                  ),
+                ),
+              ),
+            ])),
+          ),
+        ],
+      );
+    });
   }
 
   Widget _note(String text, Color bg) => Container(

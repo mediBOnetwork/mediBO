@@ -21,6 +21,12 @@ class RegistrationBarFeed {
   const RegistrationBarFeed._();
 
   static const String kShow = 'show';
+
+  /// CMD #2114 — WHICH bar this answer is: 'login' for a signed-out visitor,
+  /// 'registration' for a shop that still owes its papers. The app never
+  /// infers it from the route — one slot, and the backend names what is in it.
+  static const String kKind = 'kind';
+
   static const String kTitle = 'title';
   static const String kCta = 'cta';
   static const String kRoute = 'route';
@@ -84,6 +90,10 @@ class RegistrationBarController extends ChangeNotifier {
   /// The word on the green button.
   String get actionLabel => _s(RegistrationBarFeed.kCta);
 
+  /// CMD #2114 — which of the two asks this is, straight out of the payload.
+  /// Empty when there is no bar.
+  String get kind => _s(RegistrationBarFeed.kKind);
+
   /// Where Continue goes, and which section it lands on. Both the backend's.
   String get route => _s(RegistrationBarFeed.kRoute);
   String get anchor => _s(RegistrationBarFeed.kAnchor);
@@ -122,8 +132,7 @@ final RegistrationBarController appRegistrationBar = RegistrationBarController()
 /// It is a driver, not a decision: it asks `customer_registration_bar()` when
 /// something could have changed (auth resolved, the form was submitted, the
 /// backend's own poll came round) and adopts whatever came back. A signed-out
-/// session takes the bar down without asking — there is no account to owe
-/// anything.
+/// session is asked too (CMD #2114) — it is the one that gets the login bar.
 class RegistrationBarDriver {
   RegistrationBarDriver._();
   static final RegistrationBarDriver instance = RegistrationBarDriver._();
@@ -135,13 +144,17 @@ class RegistrationBarDriver {
   static const Duration _fallback = Duration(minutes: 5);
 
   /// Called once auth has resolved, and again on every change of account.
-  /// [signedIn] false takes the bar down and stops the poll.
+  ///
+  /// CMD #2114 — SIGNED OUT IS ALSO AN ANSWER. This used to take the bar down
+  /// without asking, on the reasoning that there is no account to owe
+  /// anything; that reasoning is what left a first-time visitor with no way of
+  /// knowing there was anything to log in to. The backend is asked either way
+  /// and decides which bar — login, registration, or none at all.
+  ///
+  /// [signedIn] is still carried because it is a REASON TO RE-ASK, not a
+  /// decision: an account changing hands must not leave the previous
+  /// account's sentence on screen for one poll interval.
   Future<void> onAuth({required bool signedIn}) async {
-    if (!signedIn) {
-      stop();
-      appRegistrationBar.adopt(null);
-      return;
-    }
     await refresh();
     _arm();
   }

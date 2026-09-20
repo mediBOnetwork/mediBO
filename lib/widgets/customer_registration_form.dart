@@ -280,9 +280,20 @@ class CustomerRegistrationForm extends StatefulWidget {
     super.key,
     required this.controller,
     this.header,
+    this.onlyFields,
+    this.chips = const {},
   });
 
   final CustomerFormController controller;
+
+  /// CMD #2126 — one STEP of the registration flow: exactly these field keys,
+  /// in this order (the backend's `wizard.steps[].fields`), with no section
+  /// titles — the step's own title heads them. Null renders the whole schema.
+  final List<String>? onlyFields;
+
+  /// CMD #2126 — select fields drawn as tappable chips instead of a dropdown,
+  /// with the backend's own option list (`wizard.chips`).
+  final Map<String, List<String>> chips;
 
   /// Surface-specific actions (scan documents, fetch location) that sit above
   /// the fields. They write into the same controller.
@@ -332,12 +343,28 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
         ..add(SizedBox(height: Ds.space.x16));
     }
 
-    for (final section in ctrl.sections) {
-      children.add(_sectionTitle(section['title'].toString()));
-      final fields = ((section['fields'] as List?) ?? const [])
-          .whereType<Map>()
-          .map((e) => Map<String, dynamic>.from(e))
-          .toList();
+    final only = widget.onlyFields;
+    final groups = <MapEntry<String, List<Map<String, dynamic>>>>[];
+    if (only != null) {
+      final byKey = {for (final f in ctrl.fields) f['key'].toString(): f};
+      groups.add(MapEntry('', [
+        for (final k in only)
+          if (byKey[k] != null) byKey[k]!,
+      ]));
+    } else {
+      for (final section in ctrl.sections) {
+        groups.add(MapEntry(
+            section['title'].toString(),
+            ((section['fields'] as List?) ?? const [])
+                .whereType<Map>()
+                .map((e) => Map<String, dynamic>.from(e))
+                .toList()));
+      }
+    }
+
+    for (final group in groups) {
+      if (only == null) children.add(_sectionTitle(group.key));
+      final fields = group.value;
       var i = 0;
       while (i < fields.length) {
         final f = fields[i];
@@ -422,6 +449,8 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
           )
         else if (type == 'checkbox')
           _checkbox(key, label)
+        else if (widget.chips[key]?.isNotEmpty == true)
+          _chips(key, widget.chips[key]!)
         else if (type == 'select' && options.isNotEmpty)
           _dropdown(key, options, flagged)
         else
@@ -489,6 +518,44 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
           ? [FilteringTextInputFormatter.digitsOnly]
           : null,
       decoration: _decoration(hint, flagged),
+    );
+  }
+
+  /// CMD #2126 — one tap picks, a second tap on the same chip clears. Chips
+  /// wrap onto as many lines as the phone needs; each is a full touch target.
+  Widget _chips(String key, List<String> options) {
+    final ctl = widget.controller.controllerFor(key);
+    final current = ctl.text.trim();
+    return Wrap(
+      spacing: Ds.space.x8,
+      runSpacing: Ds.space.x8,
+      children: [
+        for (final o in options)
+          Semantics(
+            identifier: 'reg_chip_${key}_${options.indexOf(o)}',
+            button: true,
+            selected: o == current,
+            child: InkWell(
+              borderRadius: Ds.r.rChip,
+              onTap: () => setState(() => ctl.text = o == current ? '' : o),
+              child: Container(
+                constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+                padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: o == current ? Ds.c.brandSoft : Ds.c.surface,
+                  borderRadius: Ds.r.rChip,
+                  border: Border.all(
+                      color: o == current ? Ds.c.brand : Ds.c.divider),
+                ),
+                child: Text(o,
+                    style: o == current
+                        ? Ds.t.bodyStrong.copyWith(color: Ds.c.brand)
+                        : Ds.t.body),
+              ),
+            ),
+          ),
+      ],
     );
   }
 

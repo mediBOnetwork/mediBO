@@ -456,6 +456,9 @@ class _DropdownLogout extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // The one row the sheet is never allowed to be missing — feat-2108 reads
+    // this key to prove the sheet drew rows at all.
+    RenderLog.write('c2108_dropdown_logout', 1);
     return Padding(
       padding: EdgeInsets.only(bottom: Ds.space.x8),
       child: Semantics(
@@ -523,64 +526,64 @@ class _DropdownRow extends StatelessWidget {
         identifier: 'cust_dropdown_${(entry['route_key'] ?? '').toString()}',
         button: true,
         child: InkWell(
-        borderRadius: Ds.r.rCard,
-        onTap: () {
-          Navigator.of(context).pop();
-          Navigator.of(context)
-              .push(MaterialPageRoute<void>(builder: (_) => screen));
-        },
-        child: Container(
-          constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
-          padding: EdgeInsets.symmetric(
-              horizontal: Ds.space.x16, vertical: Ds.space.x12),
-          decoration: BoxDecoration(
-            color: Ds.c.surface,
-            borderRadius: Ds.r.rCard,
-            border: Border.all(color: Ds.c.divider),
-          ),
-          child: Row(
-            children: [
-              Icon(navIcon((entry['icon_key'] ?? '').toString()),
-                  size: 22, color: Ds.c.brand),
-              SizedBox(width: Ds.space.x12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(label,
-                        style:
-                            Ds.t.body.copyWith(fontWeight: FontWeight.w600)),
-                    if (caption.isNotEmpty) ...[
-                      SizedBox(height: Ds.space.x4),
-                      Text(caption,
-                          style: Ds.t.caption
-                              .copyWith(color: Ds.c.textSecondary)),
+          borderRadius: Ds.r.rCard,
+          onTap: () {
+            Navigator.of(context).pop();
+            Navigator.of(context)
+                .push(MaterialPageRoute<void>(builder: (_) => screen));
+          },
+          child: Container(
+            constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+            padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x16, vertical: Ds.space.x12),
+            decoration: BoxDecoration(
+              color: Ds.c.surface,
+              borderRadius: Ds.r.rCard,
+              border: Border.all(color: Ds.c.divider),
+            ),
+            child: Row(
+              children: [
+                Icon(navIcon((entry['icon_key'] ?? '').toString()),
+                    size: 22, color: Ds.c.brand),
+                SizedBox(width: Ds.space.x12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(label,
+                          style:
+                              Ds.t.body.copyWith(fontWeight: FontWeight.w600)),
+                      if (caption.isNotEmpty) ...[
+                        SizedBox(height: Ds.space.x4),
+                        Text(caption,
+                            style: Ds.t.caption
+                                .copyWith(color: Ds.c.textSecondary)),
+                      ],
                     ],
-                  ],
-                ),
-              ),
-              if (badge.isNotEmpty)
-                Container(
-                  padding: EdgeInsets.symmetric(
-                      horizontal: Ds.space.x8, vertical: 0),
-                  constraints: BoxConstraints(minWidth: Ds.space.x24),
-                  decoration: BoxDecoration(
-                    color: Ds.c.brand,
-                    borderRadius: Ds.r.rChip,
-                  ),
-                  child: Text(
-                    badge,
-                    textAlign: TextAlign.center,
-                    style: Ds.t.caption.copyWith(
-                        color: Ds.c.surface, fontWeight: FontWeight.w700),
                   ),
                 ),
-              SizedBox(width: Ds.space.x8),
-              Icon(Icons.chevron_right, size: 20, color: Ds.c.textSecondary),
-            ],
+                if (badge.isNotEmpty)
+                  Container(
+                    padding: EdgeInsets.symmetric(
+                        horizontal: Ds.space.x8, vertical: 0),
+                    constraints: BoxConstraints(minWidth: Ds.space.x24),
+                    decoration: BoxDecoration(
+                      color: Ds.c.brand,
+                      borderRadius: Ds.r.rChip,
+                    ),
+                    child: Text(
+                      badge,
+                      textAlign: TextAlign.center,
+                      style: Ds.t.caption.copyWith(
+                          color: Ds.c.surface, fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                SizedBox(width: Ds.space.x8),
+                Icon(Icons.chevron_right, size: 20, color: Ds.c.textSecondary),
+              ],
+            ),
           ),
         ),
-      ),
       ),
     );
   }

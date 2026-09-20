@@ -219,6 +219,7 @@ class UpdateBar extends StatefulWidget {
     this.downloaded = false,
     this.fixedHeight,
     this.leading,
+    this.actionIdentifier,
   });
 
   final String title;
@@ -245,6 +246,11 @@ class UpdateBar extends StatefulWidget {
   /// about the two pills — shape, size, colour, position, behaviour — is this
   /// one widget, which is what "the same banner" means.
   final IconData? leading;
+
+  /// CMD #2114 — the semantics identifier on the button, so a browser journey
+  /// can tap THIS bar's action rather than "the green button near the bottom".
+  /// Null on the update bar, which no journey drives.
+  final String? actionIdentifier;
 
   @override
   State<UpdateBar> createState() => _UpdateBarState();
@@ -359,7 +365,17 @@ class _UpdateBarState extends State<UpdateBar> with SingleTickerProviderStateMix
             color: Ds.c.text, size: Ds.t.subtitleSize),
       );
 
-  Widget _action() => FilledButton(
+  Widget _action() {
+    final id = widget.actionIdentifier;
+    final button = _button();
+    if (id == null || id.isEmpty) return button;
+    // A named node, so a journey taps the bar's own button by name. The child
+    // keeps its own semantics (the backend's label is what a screen reader
+    // reads); this only gives the node an address.
+    return Semantics(identifier: id, container: true, child: button);
+  }
+
+  Widget _button() => FilledButton(
         onPressed: (widget.updating || widget.downloaded) ? null : widget.onUpdate,
         style: FilledButton.styleFrom(
           backgroundColor: Ds.c.brand,

@@ -13,6 +13,7 @@ import 'services/fulfill_realtime.dart'; // C355: app-level realtime auth + subs
 import 'services/access.dart';
 import 'services/map_config.dart'; // C634: one backend-owned map config, session-cached
 import 'services/customer_surfaces.dart'; // C745: the customer menu's device cache
+import 'app_navigator.dart';
 import 'utils/render_log.dart';
 import 'services/registration_payload.dart';
 
@@ -480,6 +481,12 @@ class AuthNotifier extends ChangeNotifier {
   /// partial clear, because a half-cleared session is exactly the state that
   /// leaks one account's data into another's screen.
   void _clearAccountState() {
+    // CMD #2114 — WHERE A LOGOUT LANDS, read from the session that is about to
+    // be thrown away. `logout_route` is the backend's own
+    // (`login_role_config` row `signed_out`), so "the mediBO public home" is
+    // an UPDATE and never a deploy, and it is read HERE because in one more
+    // line there is no session left to ask.
+    final logoutRoute = _session.logoutRoute;
     _session = AppSession.signedOut;
     _profileLoading = false;
     _sessionFetchError = false;
@@ -511,6 +518,12 @@ class AuthNotifier extends ChangeNotifier {
     unawaited(CustomerSurfaces.clear());
     RenderLog.write('auth_email', 'signed_out');
     RenderLog.write('auth_role', 'none');
+    // CMD #2114 — and LAND. The account state clearing rebuilds the root as
+    // the public storefront, but anything PUSHED over it (a profile page, an
+    // order, the dev queue) stayed on screen for a user who no longer has it.
+    // One place, so none of the nine logout buttons has to remember.
+    RenderLog.write('c2114_logout_route', logoutRoute);
+    landOnRoute(logoutRoute);
   }
 
   /// The ONE fetch. One RPC, one payload, no reconciliation.

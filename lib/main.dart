@@ -109,6 +109,7 @@ import 'services/recording_tap.dart'; // CMD #1851
 import 'supabase_config.dart';
 import 'theme.dart';
 import 'design_tokens.dart';
+import 'app_navigator.dart';
 import 'user_state.dart';
 import 'widgets/animations.dart';
 
@@ -614,6 +615,14 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
     WidgetsBinding.instance.addObserver(this);
     _viewAs.addListener(_onViewAsChanged);
     _auth.addListener(_onAuthChanged);
+    // CMD #2114 — a boot that resolves to SIGNED OUT is the login bar's whole
+    // audience, and auth can finish resolving before this listener is
+    // attached. Ask once from here too, so a first-time visitor's bar never
+    // depends on a notify that already happened.
+    if (!_auth.loading) {
+      _regBarSignedIn = _auth.isAuthenticated;
+      RegistrationBarDriver.instance.onAuth(signedIn: _regBarSignedIn!);
+    }
     // Boot may have painted from the ui_copy cache (or from nothing at all on
     // a first run with no network). Re-render the moment the real payload
     // lands so no screen is left showing yesterday's words.
@@ -797,6 +806,7 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
             child: MaterialApp(
             title: 'mediBO',
             debugShowCheckedModeBanner: false,
+            navigatorKey: appNavigatorKey,
             scaffoldMessengerKey: VersionWatcher.instance.messengerKey,
             // CHANGE #473 — navigation breadcrumbs. Route NAMES only; a route's
             // arguments can carry an order id or a customer name.

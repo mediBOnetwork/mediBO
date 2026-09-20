@@ -85,6 +85,14 @@ const Key kPillGapKey = Key('bottom_stack_pill_gap');
 /// reading its copy.
 const Key kRegistrationBarKey = Key('bottom_stack_registration_bar');
 
+/// CMD #2114 — the login bar, in that same one slot. Same reason as above: the
+/// suite asks WHICH bar is up without reading a word of the backend's copy.
+const Key kLoginBarKey = Key('bottom_stack_login_bar');
+
+/// The semantics address of the login bar's button, so a browser journey taps
+/// the thing this command built rather than a green rectangle.
+const String kLoginBarActionId = 'c2114_login_bar_action';
+
 /// The bottom stack's geometry, in one place, as tokens.
 ///
 /// These are the heights of the boxes when they are FULL. Nothing here is
@@ -125,9 +133,15 @@ double get bottomStackHeight => BottomStackMetrics.height;
 /// which is what a staff screen with no update pending should always have
 /// looked like.
 /// What is in the one bar slot. The order of this enum IS the precedence
-/// (CMD #2112): the update outranks the registration ask, because a shop that
-/// finishes registering on an old build has still not got the new one.
-enum BottomBarKind { none, registration, update }
+/// (CMD #2112, CMD #2114): update > login > registration.
+///
+/// The update outranks both, because a shop that finishes registering on an
+/// old build has still not got the new one. The login ask outranks the
+/// registration ask trivially — they are the two sides of one question, and
+/// only one of them can be true of a given session — but the order is written
+/// down rather than left to follow from that, so a future payload that gets
+/// both wrong still puts ONE bar on screen instead of two.
+enum BottomBarKind { none, registration, login, update }
 
 class BottomStackLiveMetrics {
   const BottomStackLiveMetrics({
@@ -141,9 +155,10 @@ class BottomStackLiveMetrics {
   final bool pill;
 
   /// A bar is on screen: this Scaffold has a bottom nav for one to sit on AND
-  /// there is something to say — an update is pending, or the shop's
-  /// registration is. CMD #2112: ONE slot, and the update always wins, so the
-  /// registration ask comes up only once the app is on the new build.
+  /// there is something to say — an update is pending, nobody is signed in, or
+  /// the shop's registration is owed. CMD #2112/#2114: ONE slot, and the
+  /// update always wins, so the other two come up only once the app is on the
+  /// new build.
   final bool bar;
 
   /// Which of the two the slot is holding this frame. `none` when [bar] is
@@ -195,15 +210,22 @@ BottomStackLiveMetrics bottomStackLiveOf(
 }) {
   final hasNav = bottomNavVisible(context);
   final cart = _cartOrNull(context);
-  // ONE slot, and only one thing in it (CMD #2112). The precedence is not a
-  // preference: an update has to land before anything else the app says is
-  // worth acting on, and the registration ask is still there afterwards.
+  // ONE slot, and only one thing in it (CMD #2112/#2114). The precedence is
+  // not a preference: an update has to land before anything else the app says
+  // is worth acting on, and both asks below it are still there afterwards.
+  //
+  // WHICH ask it is, is the BACKEND'S word (`kind`), never a guess from the
+  // route or from an auth flag read here: one RPC answers signed-out with the
+  // login bar and a shop that owes its papers with the registration bar, and
+  // this only draws whichever came back.
   final kind = !hasNav
       ? BottomBarKind.none
       : appUpdateBar.visible
           ? BottomBarKind.update
           : appRegistrationBar.visible
-              ? BottomBarKind.registration
+              ? (appRegistrationBar.kind == 'login'
+                  ? BottomBarKind.login
+                  : BottomBarKind.registration)
               : BottomBarKind.none;
   return BottomStackLiveMetrics(
     pill: pill && cart != null && cart.pillShow,
@@ -469,13 +491,30 @@ class _BarSlot extends StatelessWidget {
               fixedHeight: BottomStackMetrics.slot,
               onUpdate: () => _openRegistration(context),
             ),
+          // CMD #2114 — the login ask. A signed-out visitor had no way of
+          // knowing there was anything to log in to; this is the same pill in
+          // the same box, and Login opens the login screen at the address the
+          // backend named.
+          BottomBarKind.login => UpdateBar(
+              key: kLoginBarKey,
+              leading: Icons.person_outline,
+              title: appRegistrationBar.label,
+              actionLabel: appRegistrationBar.actionLabel,
+              updatingLabel: appRegistrationBar.actionLabel,
+              updating: false,
+              fixedHeight: BottomStackMetrics.slot,
+              actionIdentifier: kLoginBarActionId,
+              onUpdate: () => _openRegistration(context),
+            ),
           BottomBarKind.none => null,
         },
       );
   }
 
-  /// Continue. The address and the section both arrive in the payload; a
-  /// backend that sent no route opens nothing rather than guessing one.
+  /// The button, for either ask. The address and the section both arrive in
+  /// the payload — `/login` for the login bar, the registration form for the
+  /// registration bar — and a backend that sent no route opens nothing rather
+  /// than guessing one.
   static void _openRegistration(BuildContext context) {
     final route = appRegistrationBar.route;
     if (route.isEmpty) return;

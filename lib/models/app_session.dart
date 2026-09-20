@@ -186,6 +186,7 @@ class AppSession {
     required this.displayName,
     required this.homeRoute,
     required this.homeLabel,
+    this.logoutRoute = '/',
     this.message = '',
     this.isSuperAdmin = false,
     this.isSupplier = false,
@@ -286,6 +287,12 @@ class AppSession {
   final String homeRoute;
   final String homeLabel;
 
+  /// CMD #2114 — where a LOGOUT lands, named by the backend
+  /// (`login_role_config` row `signed_out`, published on every session
+  /// payload). Not derived from [homeRoute]: home is where this user LIVES
+  /// and this is where they go when they stop being that user.
+  final String logoutRoute;
+
   /// Backend word for the surface: 'public' | 'admin' | 'supplier' |
   /// 'pending_supplier' | 'worker' | 'customer'.
   final String surfaceName;
@@ -352,6 +359,11 @@ class AppSession {
     return v == null ? '' : v.toString();
   }
 
+  /// A backend route, or the app root when the backend named none. The root
+  /// is the role-aware shell, so it is the right answer for a session that has
+  /// just stopped existing.
+  static String _route(String v) => v.trim().isEmpty ? '/' : v.trim();
+
   factory AppSession.fromJson(Map<String, dynamic> json) {
     String s(String k) => _str(json, k);
     bool b(String k) => json[k] == true;
@@ -374,6 +386,7 @@ class AppSession {
         displayName: '',
         homeRoute: s('home_route'),
         homeLabel: s('home_label'),
+        logoutRoute: _route(s('logout_route')),
         message: s('message'),
         surfaceName: s('surface'),
         statusLabel: s('status_label'),
@@ -404,6 +417,7 @@ class AppSession {
       displayName: s('display_name'),
       homeRoute: s('home_route'),
       homeLabel: s('home_label'),
+      logoutRoute: _route(s('logout_route')),
       surfaceName: s('surface'),
       headerTitle: s('header_title'),
       headerShort: s('header_short'),

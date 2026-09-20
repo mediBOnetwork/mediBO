@@ -130,6 +130,54 @@ class Availability {
       '#${(argb & 0xFFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}';
 }
 
+/// CMD #2113 — a rendered state badge: one word and its two colours, decided
+/// in Postgres (`bulk_avail_badge()`) and printed as-is.
+///
+/// The bulk review list used to draw "AV"/"NA" from `buyable`, which is the app
+/// wording a business verdict and colouring it. Here the label, the tint and
+/// the ink all arrive together, so rewording "Unavailable" — or retinting it —
+/// is an `ui_copy` UPDATE and never a deploy. A row that carried no badge
+/// parses to null and the caller draws nothing: absence is absence.
+class StateBadge {
+  final String label;
+
+  /// The backend's own boolean for the state, for anything that must branch on
+  /// it (a semantics label, a test). Never used to pick the colours — those
+  /// arrived with it.
+  final bool available;
+
+  /// ARGB ints parsed from `#RRGGBB`. Null keeps the caller's styling.
+  final int? bg;
+  final int? fg;
+
+  const StateBadge({
+    required this.label,
+    required this.available,
+    this.bg,
+    this.fg,
+  });
+
+  static StateBadge? fromMap(Object? raw) {
+    if (raw is! Map) return null;
+    final m = Map<String, dynamic>.from(raw);
+    final label = (m['label'] ?? '').toString();
+    if (label.isEmpty) return null;
+    return StateBadge(
+      label: label,
+      available: m['available'] == true,
+      bg: Availability._argb(m['bg']),
+      fg: Availability._argb(m['fg']),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'label': label,
+    'available': available,
+    if (bg != null) 'bg': Availability._hex(bg!),
+    if (fg != null) 'fg': Availability._hex(fg!),
+  };
+}
+
 /// CHANGE #573 — the backend's own rendered PRICE block for one row.
 ///
 /// product_card.dart used to do this per card:
@@ -678,6 +726,24 @@ class Product {
   /// is null (most `Piece` rows) and the card draws no chip at all.
   final String packQtyLabel;
 
+  /// CMD #2113 — `pack_line`: the SAME two pack strings joined into one line
+  /// ("Strip, 15 tablets in 1 strip"), for a row that has one line to spend on
+  /// the pack rather than two badges. Joined in Postgres, separator included,
+  /// so the two renderings can never drift apart. Empty means no pack at all.
+  final String packLine;
+
+  /// CMD #2115 — `qty_unit`: the unit word this product is counted in
+  /// ("strip", "bottle"), lowercased in Postgres from MEDICINE.pack_type. The
+  /// review row's quantity sentence ("17 strip") is `bulk.qty_line` with this
+  /// word and the row's number substituted, so nothing in Dart abbreviates a
+  /// pack — that is what produced "10 tabl…".
+  final String qtyUnit;
+
+  /// CMD #2113 — the rendered availability badge. Distinct from [availability],
+  /// which is a CTA (a button and what it may do); this is a state word with
+  /// its colours, for a list that reviews products instead of adding them.
+  final StateBadge? availBadge;
+
   /// Maximum Retail Price per pack (the printed consumer price).
   final double mrp;
 
@@ -783,6 +849,9 @@ class Product {
     this.formChip = '',
     this.packTypeLabel = '',
     this.packQtyLabel = '',
+    this.packLine = '',
+    this.qtyUnit = '',
+    this.availBadge,
     required this.mrp,
     required this.b2bPrice,
     required this.moq,
@@ -818,6 +887,9 @@ class Product {
     formChip: formChip,
     packTypeLabel: packTypeLabel,
     packQtyLabel: packQtyLabel,
+    packLine: packLine,
+    qtyUnit: qtyUnit,
+    availBadge: availBadge,
     mrp: mrp,
     b2bPrice: b2bPrice,
     gstPercent: gstPercent,
@@ -838,6 +910,17 @@ class Product {
     rx: rx,
     wish: wish,
   );
+
+  /// A numeric payload value that may arrive as a number OR as text, because
+  /// the column behind it is text. Never a display value — everything printed
+  /// arrives already formatted.
+  static double _num(Object? v) {
+    if (v is num) return v.toDouble();
+    if (v is String) {
+      return double.tryParse(v.replaceAll(RegExp(r'[^0-9.\-]'), '')) ?? 0.0;
+    }
+    return 0.0;
+  }
 
   /// CHANGE #287 — read one backend label, honouring the difference between a
   /// key that is ABSENT and one that is EMPTY.
@@ -1003,6 +1086,9 @@ class Product {
     'formChip': formChip,
     'packTypeLabel': packTypeLabel,
     'packQtyLabel': packQtyLabel,
+    'packLine': packLine,
+    'qtyUnit': qtyUnit,
+    'availBadge': availBadge?.toJson(),
     'mrp': mrp,
     'b2bPrice': b2bPrice,
     'gstPercent': gstPercent,
@@ -1047,6 +1133,9 @@ class Product {
         'packQtyLabel',
         (map['packSize'] as String?) ?? '',
       ),
+      packLine: (map['packLine'] as String?) ?? '',
+      qtyUnit: (map['qtyUnit'] as String?) ?? '',
+      availBadge: StateBadge.fromMap(map['availBadge']),
       mrp: (map['mrp'] as num?)?.toDouble() ?? 0.0,
       b2bPrice: (map['b2bPrice'] as num?)?.toDouble() ?? 0.0,
       gstPercent: (map['gstPercent'] as num?)?.toDouble() ?? 12.0,
@@ -1072,7 +1161,12 @@ class Product {
   /// Builds a [Product] from a `bulk_match_items` RPC response item.
   /// Fields: id, product_name, company, pack_type, pack_size, mrp, buyable, category, image_url, gst_percent.
   factory Product.fromBulkMatch(Map<String, dynamic> m) {
-    final mrp = (m['mrp'] as num?)?.toDouble() ?? 0.0;
+    // MEDICINE.mrp is a TEXT column, so this key arrives as a JSON string
+    // ("31.50", sometimes "₹59.06"). The cast that used to stand here —
+    // `m['mrp'] as num?` — throws on every one of them, which is why the bulk
+    // list never showed a price. The row prints pricing.card_price now; this
+    // number survives only for the callers that sort on it.
+    final mrp = _num(m['mrp']);
     final packSize = (m['pack_size'] as String?)?.trim() ?? '';
     final packType = (m['pack_type'] as String?)?.trim() ?? '';
     final imageUrl = (m['image_url'] as String?)?.trim() ?? '';
@@ -1088,6 +1182,15 @@ class Product {
       imageUrls: imageUrl.isNotEmpty ? [imageUrl] : [],
       packSize: packSize.isNotEmpty ? packSize : packType,
       formChip: packType,
+      // CMD #2113 — the two grey badges, the joined one-line form and the
+      // state badge are all the payload's, so the review list prints exactly
+      // what the catalogue holds instead of shortening a pack in Dart.
+      packTypeLabel: (m['pack_type_label'] as String?)?.trim() ?? packType,
+      packQtyLabel: (m['pack_qty_label'] as String?)?.trim() ?? '',
+      packLine: (m['pack_line'] as String?)?.trim() ?? '',
+      // CMD #2115 — the unit word the row's quantity sentence is built from.
+      qtyUnit: (m['qty_unit'] as String?)?.trim() ?? '',
+      availBadge: StateBadge.fromMap(m['avail_badge']),
       mrp: mrp,
       b2bPrice: mrp,
       gstPercent: (m['gst_percent'] as num?)?.toDouble() ?? 12.0,
@@ -1099,6 +1202,11 @@ class Product {
       requiresPrescription: (m['rx'] as Map?)?['is_rx'] == true,
       rx: (m['rx'] as Map?)?.cast<String, dynamic>(),
       wish: (m['wish'] as Map?)?.cast<String, dynamic>(),
+      // The price block the storefront card and the PDP already print. The
+      // bulk row's MRP used to parse to 0.0 here, because MEDICINE.mrp is TEXT
+      // and this cast never matched it — so the list showed no price at all.
+      pricing: Pricing.fromMap(m['pricing']),
+      availability: Availability.fromMap(m['availability']),
       discount: 0.0,
     );
   }

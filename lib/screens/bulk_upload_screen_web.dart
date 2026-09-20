@@ -20,7 +20,10 @@ import '../utils/download_bytes.dart' as dl;
 
 import '../app_state.dart';
 import '../config/api_keys.dart';
+import '../design_tokens.dart';
 import '../models/product.dart';
+import '../widgets/product_image.dart';
+import 'product_detail_screen.dart';
 import '../services/ocr_edge_client.dart';
 import '../services/ui_copy.dart';
 import '../user_state.dart';
@@ -38,7 +41,10 @@ enum _MatchStatus { matched, partial, unrecognized, manuallyMatched }
 
 class _MatchRow {
   final String lineItem;
-  final int qty;
+
+  /// CMD #2115 — the ordered quantity, now settable: the row's quantity box
+  /// opens a picker (1..50 of the match's own pack unit) and writes back here.
+  int qty;
   _MatchStatus status;
   final List<Product> candidates;
   int selectedIndex;
@@ -3737,13 +3743,18 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
             )
           else
             Padding(
-              padding: const EdgeInsets.fromLTRB(10, 4, 10, 10),
+              // CMD #2115 — the review rows take the full width of the phone.
+              // The old 10px gutter each side, on top of the card's own 12px,
+              // cost 44px of a 360px screen and was what truncated
+              // "10 tabl…" while there was room beside it.
+              padding: EdgeInsets.fromLTRB(
+                  Ds.space.x4, Ds.space.x4, Ds.space.x4, Ds.space.x8),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   for (int i = 0; i < widget.rows.length; i++)
                     Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
+                      padding: EdgeInsets.only(bottom: Ds.space.x8),
                       child: _MobileExpandableRow(
                         key: ValueKey('mob-$i'),
                         row: widget.rows[i],
@@ -3818,7 +3829,10 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                   decoration: BoxDecoration(color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(4)),
                   child: Text(badge, style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
                 );
-                final addButton = FilledButton(
+                final addButton = Semantics(
+                  identifier: 'bulk_add_matched',
+                  button: true,
+                  child: FilledButton(
                   onPressed: canAdd ? () => widget.onAddToCart() : null,
                   style: FilledButton.styleFrom(
                     backgroundColor: const Color(0xFF16A34A),
@@ -3827,8 +3841,10 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     elevation: 0,
                   ),
-                  child: Text(narrow ? 'Add to cart' : c('bulk_upload_screen_web.add_matched_to_cart')),
-                );
+                  child: Text(narrow
+                      ? c('bulk_upload_screen_web.add_to_cart_short')
+                      : c('bulk_upload_screen_web.add_matched_to_cart')),
+                ));
                 final spinner = const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2));
                 final statsText = Text(
                   widget.isLoading
@@ -4577,6 +4593,21 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
     widget.onRowChanged();
   }
 
+  /// CMD #2115 — open the quantity popup and keep whatever it returns. The
+  /// pack unit comes from the matched product (its raw `pack_type`); with no
+  /// match yet the backend falls back to its own word.
+  Future<void> _pickQty() async {
+    final row = widget.row;
+    final picked = await showBulkQtyPicker(
+      context,
+      packType: row.selectedProduct?.formChip ?? '',
+      current: row.qty,
+    );
+    if (picked == null || picked == row.qty) return;
+    setState(() => row.qty = picked);
+    widget.onRowChanged();
+  }
+
   void _toggleApproval() {
     final row = widget.row;
     if (row.status == _MatchStatus.unrecognized) return;
@@ -4635,7 +4666,6 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
     }
 
     final p = row.selectedProduct;
-    final pack = p != null ? _packShort(p) : '';
     // Ticked when Matched/ManuallyMatched AND product is available (AV).
     // NA (buyable=false) items are always unchecked+disabled.
     final isNa = p != null && !p.isBuyable;
@@ -4645,7 +4675,13 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
     return LayoutBuilder(builder: (context, _) {
       return Opacity(
         opacity: row.isHidden ? 0.45 : 1.0,
-        child: GestureDetector(
+        // CMD #2113 — the row is the journey's tap target: a tap anywhere but
+        // the checkbox or the retry icon (both of which take the gesture
+        // themselves) opens the four alternatives.
+        child: Semantics(
+          identifier: 'bulk_review_row_${widget.index}',
+          button: true,
+          child: GestureDetector(
           onTap: !row.isHidden ? widget.onToggle : null,
           child: Container(
             // Fill the full available width so controls are always at the right edge.
@@ -4675,7 +4711,8 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                       children: [
                         // ── Header row — CHANGE #314: slim layout [image|qty|checkbox] ──
                         Padding(
-                          padding: const EdgeInsets.fromLTRB(12, 14, 12, 10),
+                          padding: EdgeInsets.fromLTRB(Ds.space.x12,
+                              Ds.space.x12, Ds.space.x8, Ds.space.x8),
                           child: Row(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
@@ -4703,25 +4740,45 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                     try { RenderLog.write('c314_mobile_header_slim', '1'); } catch (_) {}
                                     return const SizedBox.shrink();
                                   }),
-                                  const SizedBox(width: 8),
-                                  SizedBox(
-                                    width: 36,
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFFF3F4F6),
-                                        borderRadius: BorderRadius.circular(8),
-                                        border: Border.all(color: const Color(0xFFD1D5DB)),
+                                  SizedBox(width: Ds.space.x8),
+                                  // CMD #2115 — the quantity box is a control,
+                                  // not a label: tapping it opens the picker
+                                  // and takes the tap, so the card's own
+                                  // "open the alternatives" gesture never
+                                  // fires from here. A full 44x44 target.
+                                  Semantics(
+                                    identifier: 'bulk_qty_box_${widget.index}',
+                                    button: true,
+                                    child: GestureDetector(
+                                      behavior: HitTestBehavior.opaque,
+                                      onTap: row.isHidden ? null : _pickQty,
+                                      child: SizedBox(
+                                        width: Ds.space.x48,
+                                        height: Ds.space.x48,
+                                        child: Center(
+                                          child: Container(
+                                            padding: EdgeInsets.symmetric(
+                                                horizontal: Ds.space.x8,
+                                                vertical: Ds.space.x4),
+                                            decoration: BoxDecoration(
+                                              color: Ds.c.bg,
+                                              borderRadius: Ds.r.rButton,
+                                              border: Border.all(
+                                                  color: Ds.c.divider,
+                                                  width: Ds.space.hairline),
+                                            ),
+                                            child: Text('${row.qty}',
+                                                textAlign: TextAlign.center,
+                                                style: Ds.t.caption.copyWith(
+                                                    color: Ds.c.text,
+                                                    fontWeight:
+                                                        FontWeight.w600)),
+                                          ),
+                                        ),
                                       ),
-                                      child: Text('${row.qty}',
-                                          textAlign: TextAlign.center,
-                                          style: const TextStyle(
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.w500,
-                                              color: Color(0xFF374151))),
                                     ),
                                   ),
-                                  const SizedBox(width: 8),
+                                  SizedBox(width: Ds.space.x8),
                                   // Approve cell: per-row retry for unrecognized rows,
                                   // normal checkbox for all other statuses.
                                   (row.status == _MatchStatus.unrecognized && !row.isHidden)
@@ -4786,56 +4843,21 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                         ),
                         const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
                         // ── Selected matched product ─────────────────────────
+                        // CMD #2113 — the selected match: the catalogue photo
+                        // and five backend lines, replacing the four squeezed
+                        // columns and the two-letter AV/NA chip that Dart used
+                        // to word. The handwriting crop, qty box, checkbox,
+                        // retry icon and the accent bar above are untouched.
                         Padding(
-                          padding: const EdgeInsets.fromLTRB(
-                              _kMobPanelLeftPad, 17, _kMobPanelRightPad, 17),
+                          padding: EdgeInsets.fromLTRB(Ds.space.x12,
+                              Ds.space.x16, Ds.space.x12, Ds.space.x16),
                           child: p != null
-                              ? _buildMobPackRow(
-                                  name: Text(p.name,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w600,
-                                          color: Color(0xFF111827))),
-                                  pack: Text(pack,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                          fontSize: 11, color: Color(0xFF374151))),
-                                  company: Text(p.manufacturer,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                          fontSize: 11, color: Color(0xFF6B7280))),
-                                  mrp: Builder(builder: (_avCtx) {
-                                    try { RenderLog.write('c316_detail_avna', '1'); } catch (_) {}
-                                    try { RenderLog.write('c320_avna_mobile', '1'); } catch (_) {}
-                                    final avail = p.isBuyable;
-                                    return Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
-                                      decoration: BoxDecoration(
-                                        color: avail ? const Color(0xFFDCFCE7) : const Color(0xFFFEE2E2),
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                      child: Text(
-                                        avail ? 'AV' : 'NA',
-                                        textAlign: TextAlign.center,
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w600,
-                                          color: avail ? const Color(0xFF15803D) : const Color(0xFFDC2626),
-                                        ),
-                                      ),
-                                    );
-                                  }),
-                                )
+                              ? _MobProductBlock(product: p, qty: row.qty)
                               : Text(
                                   row.status != _MatchStatus.unrecognized
                                       ? row.matchedSku
-                                      : 'No match found',
-                                  style: const TextStyle(
-                                      fontSize: 12, color: Color(0xFF9CA3AF))),
+                                      : c('bulk_upload_screen_web.no_match_found'),
+                                  style: Ds.t.caption),
                         ),
                         // ── Expandable section: fixed 6-line match panel ────
                         SizeTransition(
@@ -4856,6 +4878,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
               ),
             ),
           ),
+        ),
         ),
       );
     });
@@ -5196,6 +5219,374 @@ const double _kMobPanelMrpW     = 34.0;
 /// Name gets 3/4 of flexible space so long medicine names show without early truncation.
 /// Company gets 1/4, fills to MRP then ellipsis.
 /// All mobile row types call this so Pack aligns across every row at every card width.
+// ─── CMD #2115 — the phone review row (v2 of CMD #2113) ─────────────────────
+//
+// ONE row shape. The selected match and each of the four alternatives print
+// the same four lines beside a square catalogue photo whose side is exactly the
+// height of those four lines:
+//
+//   1  product name
+//   2  the quantity sentence — "17 strip" (bulk.qty_line + qty_unit)
+//   3  the price block — pricing.card_price, MRP then the sale/PTR badge
+//   4  the state badge — avail_badge, label and both colours together
+//
+// #2113 printed five lines for the selected match (two grey pack badges and a
+// company line) and four for an alternative, so the dropdown never read as the
+// same object as the row above it — and on a 360px phone the company was the
+// line that truncated ("GODDRES PHARMACE…"). Both extra lines are gone.
+//
+// Nothing here is decided in Dart. The sentence is a backend template with the
+// number substituted, the price is `pricing.card_price` (its `price_display`
+// is an amount when the backend says has_ptr and the locked word otherwise),
+// and the badge arrives with its own tint and ink.
+double _mobLineH() => Ds.space.x24;
+double _mobBlockH(int lines) => _mobLineH() * lines;
+double _mobAltRowH() => _mobBlockH(4) + Ds.space.x8 * 2;
+
+/// CMD #2115 — the product photo is the door to the full-screen product page.
+/// A plain push, so the bulk screen stays alive underneath and Back returns to
+/// the same tab at the same scroll offset rather than rebuilding the list.
+void _openBulkProduct(BuildContext context, Product p) {
+  try { RenderLog.write('c2115_bulk_open_product', '1'); } catch (_) {}
+  Navigator.of(context).push(
+    MaterialPageRoute(builder: (_) => ProductDetailScreen(productId: p.id)),
+  );
+}
+
+/// One fixed-height line, so four lines and a square image agree on a height.
+class _MobLine extends StatelessWidget {
+  final Widget child;
+  const _MobLine({required this.child});
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        height: _mobLineH(),
+        child: Align(alignment: Alignment.centerLeft, child: child),
+      );
+}
+
+/// The state badge: one word and the two colours that came with it.
+class _MobStateBadge extends StatelessWidget {
+  final StateBadge badge;
+  const _MobStateBadge({required this.badge});
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = badge.bg;
+    final fg = badge.fg;
+    return Container(
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x8, vertical: Ds.space.x4 / 2),
+      decoration: BoxDecoration(
+        color: bg == null
+            ? (badge.available ? Ds.c.success : Ds.c.danger)
+            : Color(bg),
+        borderRadius: BorderRadius.circular(Ds.r.chip),
+      ),
+      child: Text(badge.label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Ds.t.caption.copyWith(
+              color: fg == null ? Ds.c.surface : Color(fg),
+              fontWeight: FontWeight.w600)),
+    );
+  }
+}
+
+/// The price line: the MRP the backend formatted, then its sale badge. The
+/// badge prints `price_display` — an amount for an approved viewer, the locked
+/// word for everyone else — and the app never asks which it is holding.
+class _MobPriceLine extends StatelessWidget {
+  final Product product;
+  const _MobPriceLine({required this.product});
+
+  @override
+  Widget build(BuildContext context) {
+    final cp = product.pricing?.cardPrice;
+    if (cp == null) return const SizedBox.shrink();
+    return Row(children: [
+      if (cp.hasMrp) ...[
+        Text(cp.mrpLabel, style: Ds.t.caption),
+        SizedBox(width: Ds.space.x4),
+        Flexible(
+          child: Text(cp.mrpDisplay,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Ds.t.caption.copyWith(
+                  color: Ds.c.text, fontWeight: FontWeight.w600)),
+        ),
+        SizedBox(width: Ds.space.x8),
+      ],
+      if (cp.priceDisplay.isNotEmpty)
+        Flexible(
+          child: Container(
+            padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x8, vertical: Ds.space.x4 / 2),
+            decoration: BoxDecoration(
+              color: cp.saleBg == null ? Ds.c.brand : Color(cp.saleBg!),
+              borderRadius: BorderRadius.circular(Ds.r.chip),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              if (cp.saleLabel.isNotEmpty) ...[
+                Flexible(
+                  child: Text(cp.saleLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Ds.t.caption.copyWith(
+                          color: cp.saleFg == null
+                              ? Ds.c.surface
+                              : Color(cp.saleFg!))),
+                ),
+                SizedBox(width: Ds.space.x4),
+              ],
+              Text(cp.priceDisplay,
+                  maxLines: 1,
+                  style: Ds.t.caption.copyWith(
+                      color:
+                          cp.saleFg == null ? Ds.c.surface : Color(cp.saleFg!),
+                      fontWeight: FontWeight.w700)),
+            ]),
+          ),
+        ),
+    ]);
+  }
+}
+
+/// CMD #2115 — the quantity popup.
+///
+/// The number beside the handwriting used to be a read-only grey box: whatever
+/// the OCR read was what got ordered, and a wrong 1 could only be fixed by
+/// deleting the line. Tapping it now opens this list of every quantity the
+/// backend offers, in the match's OWN unit ("1 strip" … "50 strip"), scrolled
+/// so the current value sits in the middle already selected.
+///
+/// Nothing in it is composed here: `bulk_qty_picker()` returns the title, the
+/// options with their printed labels, which one is selected and the index to
+/// scroll to. This widget scrolls to that index and sends a number back.
+const double _kQtyOptionH = 48.0;
+
+Future<int?> showBulkQtyPicker(BuildContext context,
+        {required String packType, required int current}) =>
+    showDialog<int>(
+      context: context,
+      builder: (_) => _BulkQtyPickerDialog(packType: packType, current: current),
+    );
+
+class _BulkQtyPickerDialog extends StatefulWidget {
+  final String packType;
+  final int current;
+  const _BulkQtyPickerDialog({required this.packType, required this.current});
+
+  @override
+  State<_BulkQtyPickerDialog> createState() => _BulkQtyPickerDialogState();
+}
+
+class _BulkQtyPickerDialogState extends State<_BulkQtyPickerDialog> {
+  Map<String, dynamic>? _data;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() { _failed = false; _data = null; });
+    try {
+      final raw = await Supabase.instance.client.rpc('bulk_qty_picker', params: {
+        'p_pack_type': widget.packType,
+        'p_current': widget.current,
+      });
+      if (!mounted) return;
+      setState(() => _data = Map<String, dynamic>.from(raw as Map));
+    } catch (_) {
+      if (mounted) setState(() => _failed = true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    try { RenderLog.write('c2115_qty_picker', '1'); } catch (_) {}
+    final d = _data;
+    final listH = _kQtyOptionH * 5;
+    return Dialog(
+      insetPadding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x32, vertical: Ds.space.x48),
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rCard),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Padding(
+          padding: EdgeInsets.fromLTRB(
+              Ds.space.x16, Ds.space.x16, Ds.space.x16, Ds.space.x8),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+                d == null
+                    ? c('bulk.qty_picker_title')
+                    : (d['title'] ?? '').toString(),
+                style: Ds.t.subtitle),
+          ),
+        ),
+        Divider(height: Ds.space.hairline, color: Ds.c.divider),
+        SizedBox(
+          height: listH,
+          child: _failed
+              ? _error()
+              : d == null
+                  ? _skeleton()
+                  : _options(d, listH),
+        ),
+      ]),
+    );
+  }
+
+  Widget _error() => Center(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text(c('bulk.qty_picker_error'), style: Ds.t.caption),
+          SizedBox(height: Ds.space.x8),
+          SizedBox(
+            height: Ds.space.x48,
+            child: TextButton(
+              onPressed: _load,
+              child: Text(c('bulk.qty_picker_retry')),
+            ),
+          ),
+        ]),
+      );
+
+  /// A skeleton of the same rows, so nothing moves when the list lands.
+  Widget _skeleton() => ListView.builder(
+        itemCount: 5,
+        itemExtent: _kQtyOptionH,
+        itemBuilder: (_, __) => Padding(
+          padding: EdgeInsets.symmetric(
+              horizontal: Ds.space.x16, vertical: Ds.space.x12),
+          child: Container(
+            decoration: BoxDecoration(
+              color: Ds.c.divider,
+              borderRadius: Ds.r.rChip,
+            ),
+          ),
+        ),
+      );
+
+  Widget _options(Map<String, dynamic> d, double listH) {
+    final opts = List<Map<String, dynamic>>.from(
+        (d['options'] as List? ?? const []).map((e) => Map<String, dynamic>.from(e as Map)));
+    final selected = (d['selected'] as num?)?.toInt();
+    final idx = (d['selected_index'] as num?)?.toInt() ?? 0;
+    // Centre the selected row: its top, minus half a viewport, plus half a row.
+    final maxOffset = (opts.length * _kQtyOptionH) - listH;
+    final target = (idx * _kQtyOptionH) - (listH / 2) + (_kQtyOptionH / 2);
+    final offset = target < 0 ? 0.0 : (target > maxOffset ? (maxOffset < 0 ? 0.0 : maxOffset) : target);
+    return ListView.builder(
+      controller: ScrollController(initialScrollOffset: offset),
+      itemCount: opts.length,
+      itemExtent: _kQtyOptionH,
+      itemBuilder: (_, i) {
+        final o = opts[i];
+        final v = (o['value'] as num?)?.toInt() ?? 0;
+        final isSel = selected != null && v == selected;
+        return Semantics(
+          identifier: 'bulk_qty_option_$v',
+          button: true,
+          selected: isSel,
+          child: InkWell(
+            onTap: () => Navigator.of(context).pop(v),
+            child: Container(
+              color: isSel ? Ds.c.brandSoft : null,
+              padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+              alignment: Alignment.centerLeft,
+              child: Row(children: [
+                Expanded(
+                  child: Text((o['label'] ?? '').toString(),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: isSel
+                          ? Ds.t.body.copyWith(
+                              color: Ds.c.brand, fontWeight: FontWeight.w700)
+                          : Ds.t.body),
+                ),
+                if (isSel) Icon(Icons.check, size: Ds.space.x16, color: Ds.c.brand),
+              ]),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// The product, as the phone review list prints it — four lines and a photo,
+/// identical for the selected match and for every alternative under it.
+class _MobProductBlock extends StatelessWidget {
+  final Product product;
+
+  /// The row's ordered quantity, printed through the backend's own template
+  /// beside the product's unit word. An alternative shows the same number,
+  /// because it is a candidate for the same handwritten line.
+  final int qty;
+
+  const _MobProductBlock({required this.product, required this.qty});
+
+  @override
+  Widget build(BuildContext context) {
+    try {
+      RenderLog.write('c2115_bulk_row4', '1');
+    } catch (_) {}
+    final h = _mobBlockH(4);
+    final badge = product.availBadge;
+    final qtyLine = cf('bulk.qty_line', {
+      'qty': '$qty',
+      'unit': product.qtyUnit,
+    });
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // The photo is the only tap target that leaves the list: everything else
+      // in the block belongs to the row it sits in (open the alternatives, or
+      // pick one).
+      Semantics(
+        identifier: 'bulk_product_open_${product.id}',
+        button: true,
+        label: c('bulk.open_product_hint'),
+        child: InkWell(
+          onTap: () => _openBulkProduct(context, product),
+          borderRadius: BorderRadius.circular(Ds.r.chip),
+          child: ProductImage(
+            url: product.imageUrl,
+            width: h,
+            height: h,
+            radius: BorderRadius.circular(Ds.r.chip),
+          ),
+        ),
+      ),
+      SizedBox(width: Ds.space.x12),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _MobLine(
+            child: Text(product.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Ds.t.body.copyWith(fontWeight: FontWeight.w600)),
+          ),
+          _MobLine(
+            child: Text(qtyLine,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Ds.t.caption),
+          ),
+          _MobLine(child: _MobPriceLine(product: product)),
+          _MobLine(
+            child: badge == null
+                ? const SizedBox.shrink()
+                : _MobStateBadge(badge: badge),
+          ),
+        ]),
+      ),
+    ]);
+  }
+}
+
 Widget _buildMobPackRow({
   required Widget name,
   required Widget pack,
@@ -5438,40 +5829,61 @@ class _MatchPanelState extends State<_MatchPanel> {
     );
   }
 
-  // ── MOBILE panel: parity with web — fixed 4-row area + pinned search box ──────
+  // ── MOBILE panel — CMD #2115: the SEARCH BOX comes first ────────────────────
+  // It sits directly under the selected product and above the four
+  // alternatives, because the list below it is what the search replaces:
+  // typing and seeing the four rows change underneath is one movement, where a
+  // box pinned beneath four rows read as a footer nobody found.
   Widget _buildMobilePanel() {
     final rows = _hasSearched ? _searchResults : _webCandidates();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Lines 2–5: always exactly 4 × _kMatchRowH — pixel-stable height in all states
+        _mobileSearchBox(),
+        // The four alternatives. Each is the same four-line block as the
+        // selected match above, so the dropdown reads as the same object seen
+        // again. Exactly four slots, so the panel's height does not move
+        // between loading, loaded and empty.
         ...List.generate(4, (i) {
           if (_searching) {
-            return const SizedBox(height: _kMatchRowH, child: _MobilePanelSkeletonRow());
+            return const _MobilePanelSkeletonRow();
           }
           if (i < rows.length) {
             final p = rows[i];
-            return SizedBox(
-              height: _kMatchRowH,
-              child: _SearchResultRow(product: p, onTap: () => _pick(p), isMobile: true),
-            );
+            return _MobileAltRow(
+                product: p, qty: widget.row.qty, onTap: () => _pick(p));
           }
           return const _MobilePanelEmptyRow();
         }),
+      ],
+    );
+  }
 
-        // Line 6: search box — CHANGE #316 item 7: right 1/4 is a wide tap zone.
-        Container(
-          color: const Color(0xFFF3F4F6),
-          padding: const EdgeInsets.fromLTRB(12, 7, 12, 7),
-          decoration: const BoxDecoration(
-            border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
-          ),
-          child: Builder(builder: (_szCtx) {
-            try { RenderLog.write('c316_search_hitzone', '1'); } catch (_) {}
-            return Row(children: [
-              Expanded(
-                flex: 3,
+  /// The one search field on the phone panel. Same behaviour as before
+  /// (explicit search, then live re-search, icon toggles to clear); only its
+  /// position and its styling changed — every colour, radius and gap is a
+  /// design token now.
+  Widget _mobileSearchBox() => Container(
+        padding: EdgeInsets.symmetric(
+            horizontal: Ds.space.x12, vertical: Ds.space.x8),
+        decoration: BoxDecoration(
+          color: Ds.c.bg,
+          border: Border(
+              top: BorderSide(color: Ds.c.divider, width: Ds.space.hairline),
+              bottom:
+                  BorderSide(color: Ds.c.divider, width: Ds.space.hairline)),
+        ),
+        child: Builder(builder: (_szCtx) {
+          try {
+            RenderLog.write('c316_search_hitzone', '1');
+            RenderLog.write('c2115_search_above_alts', '1');
+          } catch (_) {}
+          return Row(children: [
+            Expanded(
+              child: Semantics(
+                identifier: 'bulk_match_search',
+                textField: true,
                 child: TextField(
                   controller: _ctrl,
                   focusNode: _focusNode,
@@ -5479,53 +5891,61 @@ class _MatchPanelState extends State<_MatchPanel> {
                   onChanged: _hasSearched ? _liveSearch : null,
                   decoration: InputDecoration(
                     hintText: c('bulk_upload_screen_web.search_change_match'),
-                    hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                    hintStyle:
+                        Ds.t.caption.copyWith(color: Ds.c.textSecondary),
                     isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                    contentPadding: EdgeInsets.symmetric(
+                        horizontal: Ds.space.x12, vertical: Ds.space.x12),
                     filled: true,
-                    fillColor: Colors.white,
+                    fillColor: Ds.c.surface,
                     border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(6),
-                      borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
+                      borderRadius: BorderRadius.circular(Ds.r.button),
+                      borderSide: BorderSide(color: Ds.c.divider),
                     ),
                     enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(6),
-                      borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
+                      borderRadius: BorderRadius.circular(Ds.r.button),
+                      borderSide: BorderSide(color: Ds.c.divider),
                     ),
                     focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(6),
-                      borderSide: const BorderSide(color: Color(0xFF16A34A), width: 1.5),
+                      borderRadius: BorderRadius.circular(Ds.r.button),
+                      borderSide: BorderSide(color: Ds.c.brand),
                     ),
                   ),
-                  style: const TextStyle(fontSize: 12),
+                  style: Ds.t.body,
                 ),
               ),
-              Expanded(
-                flex: 1,
-                child: InkWell(
-                  onTap: _hasSearched ? _clearSearch : (_searching ? null : _fireSearch),
-                  borderRadius: BorderRadius.circular(6),
-                  child: Center(
-                    child: _hasSearched
-                        ? const Icon(Icons.close_rounded, size: 16, color: Color(0xFF9CA3AF))
-                        : _searching
-                            ? const SizedBox(
-                                width: 16, height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF16A34A)),
-                                ),
-                              )
-                            : const Icon(Icons.search_rounded, size: 18, color: Color(0xFF6B7280)),
-                  ),
+            ),
+            SizedBox(width: Ds.space.x8),
+            // A 44×44 tap target, as every control on a phone must be.
+            SizedBox(
+              width: Ds.space.x48,
+              height: Ds.space.x48,
+              child: InkWell(
+                onTap:
+                    _hasSearched ? _clearSearch : (_searching ? null : _fireSearch),
+                borderRadius: BorderRadius.circular(Ds.r.button),
+                child: Center(
+                  child: _hasSearched
+                      ? Icon(Icons.close_rounded,
+                          size: Ds.space.x16, color: Ds.c.textSecondary)
+                      : _searching
+                          ? SizedBox(
+                              width: Ds.space.x16,
+                              height: Ds.space.x16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: Ds.space.x4 / 2,
+                                valueColor:
+                                    AlwaysStoppedAnimation<Color>(Ds.c.brand),
+                              ),
+                            )
+                          : Icon(Icons.search_rounded,
+                              size: Ds.space.x24, color: Ds.c.textSecondary),
                 ),
               ),
-            ]);
-          }),
-        ),
-      ],
-    );
-  }
+            ),
+          ]);
+        }),
+      );
 }
 
 /// A search-result row shown below the search field after an explicit search.
@@ -5786,27 +6206,77 @@ class _MobilePanelSkeletonRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const shimmer = BoxDecoration(
-      color: Color(0xFFBBF7D0),
-      borderRadius: BorderRadius.all(Radius.circular(4)),
+    final shimmer = BoxDecoration(
+      color: Ds.c.divider,
+      borderRadius: BorderRadius.circular(Ds.r.chip),
     );
+    // CMD #2113 — the skeleton is the same geometry as the loaded row (a
+    // square plate and four lines), so nothing moves when the results land.
     return Container(
-      height: _kMatchRowH,
-      padding: const EdgeInsets.fromLTRB(
-          _kMobPanelLeftPad, 0, _kMobPanelRightPad, 0),
-      alignment: Alignment.centerLeft,
-      decoration: const BoxDecoration(
-        color: Color(0xFFF0FDF4),
-        border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+      height: _mobAltRowH(),
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x12, vertical: Ds.space.x8),
+      decoration: BoxDecoration(
+        color: Ds.c.bg,
+        border: Border(
+            top: BorderSide(color: Ds.c.divider, width: Ds.space.hairline)),
       ),
-      child: _buildMobPackRow(
-        name: Container(height: 10, decoration: shimmer),
-        pack: Container(height: 10, decoration: shimmer),
-        company: Container(height: 10, decoration: shimmer),
-        mrp: Container(height: 10, decoration: shimmer),
-      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(
+            width: _mobBlockH(4), height: _mobBlockH(4), decoration: shimmer),
+        SizedBox(width: Ds.space.x12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: List.generate(
+              4,
+              (_) => _MobLine(
+                child: Container(height: Ds.space.x8, decoration: shimmer),
+              ),
+            ),
+          ),
+        ),
+      ]),
     );
   }
+}
+
+/// CMD #2113 — one alternative product inside the expanded dropdown: the same
+/// block as the selected match with four lines instead of five. Tapping it
+/// picks that product, which is what the row did before; only what it PRINTS
+/// changed.
+class _MobileAltRow extends StatelessWidget {
+  final Product product;
+
+  /// CMD #2115 — the handwritten line's quantity, so an alternative prints the
+  /// same "17 strip" sentence as the match it would replace.
+  final int qty;
+  final VoidCallback onTap;
+
+  const _MobileAltRow(
+      {required this.product, required this.qty, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        identifier: 'bulk_alt_${product.id}',
+        button: true,
+        label: product.name,
+        child: InkWell(
+          onTap: onTap,
+          child: Container(
+            height: _mobAltRowH(),
+            padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x12, vertical: Ds.space.x8),
+            decoration: BoxDecoration(
+              color: Ds.c.surface,
+              border: Border(
+                  top: BorderSide(
+                      color: Ds.c.divider, width: Ds.space.hairline)),
+            ),
+            child: _MobProductBlock(product: product, qty: qty),
+          ),
+        ),
+      );
 }
 
 // ─── Mobile panel empty filler row (constant height when fewer than 4 results) ─
@@ -5816,9 +6286,10 @@ class _MobilePanelEmptyRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        height: _kMatchRowH,
-        decoration: const BoxDecoration(
-          border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+        height: _mobAltRowH(),
+        decoration: BoxDecoration(
+          border: Border(
+              top: BorderSide(color: Ds.c.divider, width: Ds.space.hairline)),
         ),
       );
 }

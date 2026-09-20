@@ -902,6 +902,17 @@ class Product {
     wish: wish,
   );
 
+  /// A numeric payload value that may arrive as a number OR as text, because
+  /// the column behind it is text. Never a display value — everything printed
+  /// arrives already formatted.
+  static double _num(Object? v) {
+    if (v is num) return v.toDouble();
+    if (v is String) {
+      return double.tryParse(v.replaceAll(RegExp(r'[^0-9.\-]'), '')) ?? 0.0;
+    }
+    return 0.0;
+  }
+
   /// CHANGE #287 — read one backend label, honouring the difference between a
   /// key that is ABSENT and one that is EMPTY.
   ///
@@ -1139,7 +1150,12 @@ class Product {
   /// Builds a [Product] from a `bulk_match_items` RPC response item.
   /// Fields: id, product_name, company, pack_type, pack_size, mrp, buyable, category, image_url, gst_percent.
   factory Product.fromBulkMatch(Map<String, dynamic> m) {
-    final mrp = (m['mrp'] as num?)?.toDouble() ?? 0.0;
+    // MEDICINE.mrp is a TEXT column, so this key arrives as a JSON string
+    // ("31.50", sometimes "₹59.06"). The cast that used to stand here —
+    // `m['mrp'] as num?` — throws on every one of them, which is why the bulk
+    // list never showed a price. The row prints pricing.card_price now; this
+    // number survives only for the callers that sort on it.
+    final mrp = _num(m['mrp']);
     final packSize = (m['pack_size'] as String?)?.trim() ?? '';
     final packType = (m['pack_type'] as String?)?.trim() ?? '';
     final imageUrl = (m['image_url'] as String?)?.trim() ?? '';

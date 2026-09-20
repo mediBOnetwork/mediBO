@@ -67,6 +67,7 @@ import '../app_state.dart';
 import '../design_tokens.dart';
 import '../models/cart_model.dart';
 import '../utils/render_log.dart';
+import '../services/registration_bar.dart';
 import 'cart_pill.dart';
 import 'update_bar.dart';
 
@@ -78,6 +79,11 @@ const Key kBarSlotKey = Key('bottom_stack_bar_slot');
 /// The pill's air, as its own box — it closes with the pill (#2091), so the
 /// suite can measure that it went with it rather than inferring it.
 const Key kPillGapKey = Key('bottom_stack_pill_gap');
+
+/// CMD #2112 — the registration bar, inside the very same slot key. Named so
+/// the protected suite can tell WHICH bar the one slot is holding without
+/// reading its copy.
+const Key kRegistrationBarKey = Key('bottom_stack_registration_bar');
 
 /// The bottom stack's geometry, in one place, as tokens.
 ///
@@ -118,16 +124,31 @@ double get bottomStackHeight => BottomStackMetrics.height;
 /// `height == 0`: the page above it runs all the way down to the bottom nav,
 /// which is what a staff screen with no update pending should always have
 /// looked like.
+/// What is in the one bar slot. The order of this enum IS the precedence
+/// (CMD #2112): the update outranks the registration ask, because a shop that
+/// finishes registering on an old build has still not got the new one.
+enum BottomBarKind { none, registration, update }
+
 class BottomStackLiveMetrics {
-  const BottomStackLiveMetrics({required this.pill, required this.bar});
+  const BottomStackLiveMetrics({
+    required this.pill,
+    required this.bar,
+    this.kind = BottomBarKind.none,
+  });
 
   /// The cart pill is on screen: this surface floats one AND the cart payload
   /// says there is something to show.
   final bool pill;
 
-  /// The update bar is on screen: this Scaffold has a bottom nav for it to sit
-  /// on AND an update is pending.
+  /// A bar is on screen: this Scaffold has a bottom nav for one to sit on AND
+  /// there is something to say — an update is pending, or the shop's
+  /// registration is. CMD #2112: ONE slot, and the update always wins, so the
+  /// registration ask comes up only once the app is on the new build.
   final bool bar;
+
+  /// Which of the two the slot is holding this frame. `none` when [bar] is
+  /// false. The slot draws from this and nothing else.
+  final BottomBarKind kind;
 
   double get pillBox => pill ? BottomStackMetrics.pill : 0;
 
@@ -174,9 +195,20 @@ BottomStackLiveMetrics bottomStackLiveOf(
 }) {
   final hasNav = bottomNavVisible(context);
   final cart = _cartOrNull(context);
+  // ONE slot, and only one thing in it (CMD #2112). The precedence is not a
+  // preference: an update has to land before anything else the app says is
+  // worth acting on, and the registration ask is still there afterwards.
+  final kind = !hasNav
+      ? BottomBarKind.none
+      : appUpdateBar.visible
+          ? BottomBarKind.update
+          : appRegistrationBar.visible
+              ? BottomBarKind.registration
+              : BottomBarKind.none;
   return BottomStackLiveMetrics(
     pill: pill && cart != null && cart.pillShow,
-    bar: hasNav && appUpdateBar.visible,
+    bar: kind != BottomBarKind.none,
+    kind: kind,
   );
 }
 
@@ -200,10 +232,10 @@ class BottomStackLive extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
-        // The controller is a ChangeNotifier, so this is the listener that
-        // makes "an update arrived" and "the bar was dismissed" arrive here at
+        // Both controllers are ChangeNotifiers, so this is the listener that
+        // makes "an update arrived" and "a paper is still owed" arrive here at
         // all. The cart and the viewport come in as dependencies below.
-        animation: appUpdateBar,
+        animation: Listenable.merge([appUpdateBar, appRegistrationBar]),
         builder: (context, _) =>
             builder(context, bottomStackLiveOf(context, pill: pill)),
       );
@@ -370,7 +402,7 @@ class StorefrontBottomStack extends StatelessWidget {
                 show: live.pill,
                 height: BottomStackMetrics.gap,
               ),
-              _BarSlot(key: kBarSlotKey, show: live.bar),
+              _BarSlot(key: kBarSlotKey, kind: live.kind),
             ],
           ),
         );
@@ -379,45 +411,71 @@ class StorefrontBottomStack extends StatelessWidget {
   }
 }
 
-/// The update-bar slot: [BottomStackMetrics.slot] tall while an update is
-/// pending on a shell with a bottom nav, and 0 tall the rest of the time.
+/// The ONE bar slot: [BottomStackMetrics.slot] tall while there is something
+/// in it on a shell with a bottom nav, and 0 tall the rest of the time.
 ///
 /// #2066 kept this box at full height either way so the pill above it could
 /// not move. #2091 closes it, because on a staff shell — which floats no pill
 /// for it to hold still — the permanently reserved box WAS the bug: a blank
 /// white strip above the nav on every admin screen, months at a time, holding
 /// room for a bar that was not there.
+///
+/// CMD #2112 — it now holds EITHER bar. Same box, same height, same
+/// [UpdateBar] widget, so "the registration banner has the same position,
+/// shape, size and colour as the update banner" is one renderer rather than
+/// two that have to be kept equal. Which one is in it is
+/// [BottomStackLiveMetrics.kind]; this widget only draws.
 class _BarSlot extends StatelessWidget {
-  const _BarSlot({super.key, required this.show});
+  const _BarSlot({super.key, required this.kind});
 
-  /// Has this shell a nav for the bar to sit on, and is an update pending?
-  /// Both are decided in [bottomStackLiveOf]; this widget only draws.
-  final bool show;
+  final BottomBarKind kind;
 
   @override
   Widget build(BuildContext context) => _Collapsible(
-        show: show,
+        show: kind != BottomBarKind.none,
         height: BottomStackMetrics.slot,
-        child: show
-            ? UpdateBar(
-                title: appUpdateBar.label,
-                actionLabel: appUpdateBar.actionLabel,
-                updatingLabel: appUpdateBar.updatingLabel,
-                downloadedLabel: appUpdateBar.downloadedLabel,
-                updating: appUpdateBar.updating,
-                downloaded: appUpdateBar.downloaded,
-                // CMD #2065 — Later, when the backend sent one. Both null on a
-                // forced update, which is how "non-dismissable" is rendered:
-                // not a disabled button, no control at all.
-                dismissLabel: appUpdateBar.dismissLabel,
-                onDismiss: appUpdateBar.onDismiss,
-                // FLUSH, and exactly one slot tall: the bar fills the box it
-                // was given instead of publishing a height of its own.
-                fixedHeight: BottomStackMetrics.slot,
-                onUpdate: appUpdateBar.onUpdate ?? _noop,
-              )
-            : null,
+        child: switch (kind) {
+          BottomBarKind.update => UpdateBar(
+              title: appUpdateBar.label,
+              actionLabel: appUpdateBar.actionLabel,
+              updatingLabel: appUpdateBar.updatingLabel,
+              downloadedLabel: appUpdateBar.downloadedLabel,
+              updating: appUpdateBar.updating,
+              downloaded: appUpdateBar.downloaded,
+              // FLUSH, and exactly one slot tall: the bar fills the box it
+              // was given instead of publishing a height of its own.
+              fixedHeight: BottomStackMetrics.slot,
+              onUpdate: appUpdateBar.onUpdate ?? _noop,
+            ),
+          // The registration ask. Every string is
+          // `customer_registration_bar()`'s, and Continue opens the ONE
+          // registration screen — resuming from whatever is already saved, on
+          // the section the backend named.
+          BottomBarKind.registration => UpdateBar(
+              key: kRegistrationBarKey,
+              leading: Icons.assignment_outlined,
+              title: appRegistrationBar.label,
+              actionLabel: appRegistrationBar.actionLabel,
+              updatingLabel: appRegistrationBar.actionLabel,
+              updating: false,
+              fixedHeight: BottomStackMetrics.slot,
+              onUpdate: () => _openRegistration(context),
+            ),
+          BottomBarKind.none => null,
+        },
       );
+
+  /// Continue. The address and the section both arrive in the payload; a
+  /// backend that sent no route opens nothing rather than guessing one.
+  static void _openRegistration(BuildContext context) {
+    final route = appRegistrationBar.route;
+    if (route.isEmpty) return;
+    final anchor = appRegistrationBar.anchor;
+    Navigator.of(context).pushNamed(
+      route,
+      arguments: anchor.isEmpty ? null : {'anchor': anchor},
+    );
+  }
 
   static void _noop() {}
 }

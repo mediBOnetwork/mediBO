@@ -1856,7 +1856,12 @@ class _HomeShellState extends State<HomeShell> {
                 // used to sit here (and in the desktop header below) is
                 // deleted, not hidden. c455_banners proves zero render.
                 shellStaffChrome(isAdmin), // CHANGE #1017
-                if (!isAdmin) const RegistrationBanner(),
+                // CMD #2112 — the orange "Complete your registration" block
+                // that sat here is DELETED, not hidden. It pushed the whole
+                // feed down on every phone for as long as a paper was out,
+                // and it was a second thing to keep in step with the pill. The
+                // one ask now rides the bottom stack's bar slot
+                // ([StorefrontBottomStack]), where the update bar already is.
                 Builder(builder: (_) {
                   RenderLog.write('c455_banners', 0);
                   return const SizedBox.shrink();
@@ -1949,7 +1954,7 @@ class _HomeShellState extends State<HomeShell> {
                 ),
               // ── Search + chips: storefront only (index 0) ─────────────────
               shellStaffChrome(isAdmin), // CHANGE #1017
-              if (!isAdmin) const RegistrationBanner(),
+              // CMD #2112 — deleted here too; see the phone layout above.
               if (_index == 0) _shellSearchHeader(this),
               Expanded(
                 // CMD #2070 — same clearance on the wide layout, same reason.

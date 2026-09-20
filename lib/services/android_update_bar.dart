@@ -110,11 +110,8 @@ class AndroidUpdateBar with WidgetsBindingObserver {
       RenderLog.write('c2028_update_bar_android',
           'flow=${res[AppUpdateFeed.kFlow]};target=${res['target_version']}');
     } catch (_) {}
-    appUpdateBar.show(
-      payload: res,
-      onUpdate: _update,
-      onDismiss: () => _dismiss(),
-    );
+    // CMD #2112 — no Later. The bar stays up until Play has the update on.
+    appUpdateBar.show(payload: res, onUpdate: _update);
     _arm();
   }
 
@@ -127,11 +124,6 @@ class AndroidUpdateBar with WidgetsBindingObserver {
     if (play['inProgress'] == true) return 'in_progress';
     if (play.containsKey('available')) return 'none';
     return 'unknown';
-  }
-
-  Future<void> _dismiss() async {
-    await AppUpdateFeed.markDismissed(AppUpdateFeed.pAndroid);
-    appUpdateBar.hide();
   }
 
   Future<void> _update() async {

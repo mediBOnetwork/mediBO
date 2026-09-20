@@ -99,8 +99,8 @@ android {
         create("partner") {
             dimension = "app"
             applicationId = "in.medibo.partner"
-            versionCode = 2
-            versionName = "1.0.1"
+            versionCode = 3
+            versionName = "1.0.2"
             resValue("string", "app_name", "mediBO Partner")
             if (hasPartnerKeystore) {
                 signingConfig = signingConfigs.getByName("partner")

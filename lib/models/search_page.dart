@@ -274,12 +274,42 @@ class SearchBarSpec {
   final List<SearchBarAction> actions;
   final bool chipRowOnResults;
 
+  /// CMD #2117 — the half of the placeholder that never moves. The word that
+  /// cycles after it is [placeholderWords]; both are the backend's, so
+  /// changing either is an UPDATE and not a deploy.
+  final String placeholderPrefix;
+
+  /// The words that cycle behind the prefix, in payload order. The backend
+  /// sends 'medicine', 'salt', 'composition' and then the best sellers this
+  /// zone actually orders. Fewer than two words means nothing rotates.
+  final List<String> placeholderWords;
+
+  /// How long each word holds the box before the next one slides up.
+  final int placeholderRotateMs;
+
+  /// CMD #2117 §3 — the bottom chrome (registration/login bar, cart pill)
+  /// stands down while the search box has focus. The BACKEND decides whether
+  /// it does; this app only obeys.
+  final bool hideBottomChromeOnFocus;
+
   const SearchBarSpec({
     required this.minChars,
     required this.debounceMs,
     required this.actions,
     required this.chipRowOnResults,
+    this.placeholderPrefix = '',
+    this.placeholderWords = const <String>[],
+    this.placeholderRotateMs = 5000,
+    this.hideBottomChromeOnFocus = false,
   });
+
+  /// Is there anything to animate? One word (or none) is a still placeholder,
+  /// which is what an old payload and every desktop build get.
+  bool get placeholderAnimates =>
+      placeholderPrefix.isNotEmpty && placeholderWords.length > 1;
+
+  Duration get placeholderRotate =>
+      Duration(milliseconds: placeholderRotateMs);
 
   /// The shipped answer for a payload that carries no bar block at all (an old
   /// cache): the behaviour CMD #2010 left behind, and no buttons this file
@@ -298,6 +328,14 @@ class SearchBarSpec {
             .map((a) => SearchBarAction.fromMap(Map<String, dynamic>.from(a)))
             .toList(growable: false),
         chipRowOnResults: m['chip_row_on_results'] == true,
+        placeholderPrefix: (m['placeholder_prefix'] ?? '').toString(),
+        placeholderWords: ((m['placeholder_words'] as List?) ?? const [])
+            .map((w) => (w ?? '').toString())
+            .where((w) => w.isNotEmpty)
+            .toList(growable: false),
+        placeholderRotateMs: (m['placeholder_rotate_ms'] as num?)?.toInt() ??
+            fallback.placeholderRotateMs,
+        hideBottomChromeOnFocus: m['hide_bottom_chrome_on_focus'] == true,
       );
 
   /// CMD #2026 — which half of the icon swap the box is in. ANY text at all, a

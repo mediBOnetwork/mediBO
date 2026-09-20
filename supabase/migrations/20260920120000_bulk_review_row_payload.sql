@@ -24,7 +24,10 @@ insert into public.ui_copy(key, value) values
   ('bulk.avail_badge_available_fg', '"#065F46"'::jsonb),
   ('bulk.avail_badge_unavailable_bg','"#FEE2E2"'::jsonb),
   ('bulk.avail_badge_unavailable_fg','"#991B1B"'::jsonb),
-  ('bulk.pack_line_separator',      '", "'::jsonb)
+  ('bulk.pack_line_separator',      '", "'::jsonb),
+  -- Two strings the review list used to type in Dart. Wording is an UPDATE now.
+  ('bulk_upload_screen_web.no_match_found',   '"No match found"'::jsonb),
+  ('bulk_upload_screen_web.add_to_cart_short','"Add to cart"'::jsonb)
 on conflict (key) do nothing;
 
 -- ── the one-line pack sentence ("Strip, 10 tablet in 1 strip") ───────────────

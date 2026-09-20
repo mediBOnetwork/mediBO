@@ -68,6 +68,7 @@ import '../design_tokens.dart';
 import '../models/cart_model.dart';
 import '../utils/render_log.dart';
 import '../services/registration_bar.dart';
+import '../services/search_chrome_focus.dart';
 import 'cart_pill.dart';
 import 'update_bar.dart';
 
@@ -210,6 +211,20 @@ BottomStackLiveMetrics bottomStackLiveOf(
 }) {
   final hasNav = bottomNavVisible(context);
   final cart = _cartOrNull(context);
+  // CMD #2117 §3 — the keyboard is up, so the chrome stands down.
+  //
+  // It is answered HERE, in the one function both the chrome and every box
+  // holding room for it read, so the pill and the bar leave AND the pixels
+  // they were holding go back to the suggestions in the same frame. A shopper
+  // typing on a 360 px phone is not reaching for "View cart" or for a
+  // registration ask; they are reading the list the keyboard already halved.
+  //
+  // WHETHER focus does this is the BACKEND's answer
+  // (`search_bar.hide_bottom_chrome_on_focus`); [SearchChromeFocus] only
+  // reports what the box observed.
+  if (SearchChromeFocus.suppressed.value) {
+    return const BottomStackLiveMetrics(pill: false, bar: false);
+  }
   // ONE slot, and only one thing in it (CMD #2112/#2114). The precedence is
   // not a preference: an update has to land before anything else the app says
   // is worth acting on, and both asks below it are still there afterwards.
@@ -257,7 +272,10 @@ class BottomStackLive extends StatelessWidget {
         // Both controllers are ChangeNotifiers, so this is the listener that
         // makes "an update arrived" and "a paper is still owed" arrive here at
         // all. The cart and the viewport come in as dependencies below.
-        animation: Listenable.merge([appUpdateBar, appRegistrationBar]),
+        // CMD #2117 — the search box's focus is a third input to the same
+        // answer, so it arrives the same way the other two do.
+        animation: Listenable.merge(
+            [appUpdateBar, appRegistrationBar, SearchChromeFocus.suppressed]),
         builder: (context, _) =>
             builder(context, bottomStackLiveOf(context, pill: pill)),
       );

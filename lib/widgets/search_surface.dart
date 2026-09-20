@@ -10,6 +10,7 @@ import '../utils/toast.dart';
 import '../utils/render_log.dart';
 import 'compact_product_card.dart';
 import '../models/product.dart';
+import '../services/search_chrome_focus.dart';
 import '../services/storefront_fast_order.dart';
 import 'product_card_grid.dart';
 import 'scan_mic_search_controls.dart';
@@ -32,6 +33,150 @@ import 'scan_mic_search_controls.dart';
 /// label, count, plural or default written in this file.
 
 // ─────────────────────────── the header ────────────────────────────────────
+
+/// CMD #2117 §4 — the placeholder that moves.
+///
+/// "Search" is fixed; the word after it changes every
+/// `placeholder_rotate_ms` — medicine, salt, composition, then the medicines
+/// this zone actually orders most. The new word slides up from below while the
+/// old one carries on up out of the middle and fades out, so the two are one
+/// movement rather than a swap.
+///
+/// NOT ONE OF THOSE WORDS IS WRITTEN HERE. The prefix, the list and the
+/// interval all arrive in `search_page().search_bar`; a payload with fewer than
+/// two words animates nothing and the box shows a still hint, which is also
+/// what an app running from an old cache gets.
+class AnimatedSearchPlaceholder extends StatefulWidget {
+  const AnimatedSearchPlaceholder({
+    super.key,
+    required this.prefix,
+    required this.words,
+    required this.rotate,
+    this.style,
+  });
+
+  final String prefix;
+  final List<String> words;
+  final Duration rotate;
+  final TextStyle? style;
+
+  /// The cycling half, addressable so the protected suite can read the word on
+  /// screen without reading the whole box.
+  static const Key wordKey = Key('c2117_placeholder_word');
+
+  @override
+  State<AnimatedSearchPlaceholder> createState() =>
+      _AnimatedSearchPlaceholderState();
+}
+
+class _AnimatedSearchPlaceholderState extends State<AnimatedSearchPlaceholder>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: Ds.motion.standard,
+    value: 1,
+  );
+  Timer? _timer;
+  int _i = 0;
+  int _prev = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _start();
+    RenderLog.write('c2117_placeholder_words', widget.words.length);
+  }
+
+  @override
+  void didUpdateWidget(covariant AnimatedSearchPlaceholder old) {
+    super.didUpdateWidget(old);
+    // A fresh payload (a new zone, a new best seller) restarts the cycle from
+    // the top rather than landing mid-list on a word that has moved.
+    if (old.words.length != widget.words.length ||
+        old.rotate != widget.rotate) {
+      _i = 0;
+      _prev = 0;
+      _start();
+    }
+  }
+
+  void _start() {
+    _timer?.cancel();
+    if (widget.words.length < 2) return;
+    _timer = Timer.periodic(widget.rotate, (_) {
+      if (!mounted) return;
+      setState(() {
+        _prev = _i;
+        _i = (_i + 1) % widget.words.length;
+      });
+      _c.forward(from: 0);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _c.dispose();
+    super.dispose();
+  }
+
+  Widget _word(String text, TextStyle? style) => Text(
+        text,
+        key: AnimatedSearchPlaceholder.wordKey,
+        style: style,
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.ellipsis,
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final style = widget.style;
+    if (widget.words.isEmpty) return Text(widget.prefix, style: style);
+    if (widget.words.length < 2) {
+      return Text('${widget.prefix} ${widget.words.first}',
+          style: style, maxLines: 1, overflow: TextOverflow.ellipsis);
+    }
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(widget.prefix, style: style, maxLines: 1),
+        SizedBox(width: Ds.space.x4),
+        Flexible(
+          child: ClipRect(
+            child: AnimatedBuilder(
+              animation: _c,
+              builder: (context, _) {
+                final t = _c.value;
+                return Stack(
+                  children: [
+                    // The word on its way out: up and away, never downwards.
+                    if (t < 1)
+                      FractionalTranslation(
+                        translation: Offset(0, -t),
+                        child: Opacity(
+                          opacity: 1 - t,
+                          child: _word(widget.words[_prev], style),
+                        ),
+                      ),
+                    // The new word, arriving from below the box.
+                    FractionalTranslation(
+                      translation: Offset(0, 1 - t),
+                      child: Opacity(
+                        opacity: t,
+                        child: _word(widget.words[_i], style),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
 
 /// The search field. White ground, grey rounded field, scan and voice inside
 /// it, and the BACKEND's placeholder.
@@ -79,6 +224,10 @@ class SearchHeaderBar extends StatefulWidget {
 
   /// One height for both screens, so the two headers cannot drift apart.
   static const double fieldHeight = 46;
+
+  /// CMD #2117 — the semantics address of the field itself, so a browser
+  /// journey taps the search box rather than a rounded rectangle.
+  static const String boxId = 'c2117_search_box';
 
   @override
   State<SearchHeaderBar> createState() => _SearchHeaderBarState();
@@ -186,7 +335,10 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
                         color: Ds.c.textSecondary, size: Ds.space.x16 + 4),
                   ),
                   Expanded(
-                    child: TextField(
+                    child: Semantics(
+                      identifier: SearchHeaderBar.boxId,
+                      textField: true,
+                      child: TextField(
                       controller: widget.controller,
                       focusNode: widget.focusNode,
                       onChanged: widget.onChanged,
@@ -203,10 +355,24 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
                         filled: false,
                         contentPadding:
                             EdgeInsets.symmetric(vertical: Ds.space.x12),
-                        hintText: widget.placeholder,
+                        // CMD #2117 — the hint is a WIDGET when the backend
+                        // sent a prefix and a word list, and the plain string
+                        // it always was otherwise.
+                        hintText:
+                            widget.bar.placeholderAnimates ? null : widget.placeholder,
+                        hint: widget.bar.placeholderAnimates
+                            ? AnimatedSearchPlaceholder(
+                                prefix: widget.bar.placeholderPrefix,
+                                words: widget.bar.placeholderWords,
+                                rotate: widget.bar.placeholderRotate,
+                                style: Ds.t.body
+                                    .copyWith(color: Ds.c.textSecondary),
+                              )
+                            : null,
                         hintStyle: Ds.t.body
                             .copyWith(color: Ds.c.textSecondary),
                       ),
+                    ),
                     ),
                   ),
                   if (widget.isLoading)
@@ -888,11 +1054,17 @@ class _SearchIdleOverlayState extends State<SearchIdleOverlay> {
           child: Container(
             color: Ds.c.bg,
             child: SingleChildScrollView(
-              // The keyboard is up: a shopper dragging the panel means "let me
-              // see the page", so the drag dismisses the box rather than
-              // fighting it.
+              // CMD #2117 §2 — THE BUG. `onDrag` read one gesture as two
+              // different intentions: scrolling the suggestions to reach the
+              // one below the fold dropped the keyboard, and dropping the
+              // keyboard unfocuses the box, which closes this overlay — so the
+              // list a shopper had just started reading disappeared under
+              // their finger and there was nothing to scroll back up to.
+              // A drag inside the suggestions is a drag inside the
+              // suggestions. The keyboard closes when the shopper closes it.
               keyboardDismissBehavior:
-                  ScrollViewKeyboardDismissBehavior.onDrag,
+                  ScrollViewKeyboardDismissBehavior.manual,
+              key: const Key('c2117_idle_scroll'),
               child: SearchIdleView(
                 payload: _idle,
                 loading: _loading,
@@ -1031,14 +1203,27 @@ class _SearchChromeState extends State<SearchChrome> {
   void dispose() {
     widget.focusNode.removeListener(_onFocus);
     _debounce.cancel();
+    // Never leave the bottom chrome hidden behind a header that has gone.
+    SearchChromeFocus.release();
     super.dispose();
   }
 
   void _onFocus() {
     final f = widget.focusNode.hasFocus;
     if (f != _focused && mounted) setState(() => _focused = f);
+    _reportChromeFocus();
     if (f) _maybeLoadChrome();
   }
+
+  /// CMD #2117 §3 — tell the bottom chrome the keyboard is up.
+  ///
+  /// The surface only REPORTS; whether the bar and the pill then stand down is
+  /// `search_bar.hide_bottom_chrome_on_focus`, so turning this off is an
+  /// UPDATE on `app_settings` and not a deploy.
+  void _reportChromeFocus() => SearchChromeFocus.report(
+        focused: widget.focusNode.hasFocus,
+        backendWantsHide: _bar.hideBottomChromeOnFocus,
+      );
 
   /// The idle chrome is `search_page()` with NOTHING typed, so it is asked for
   /// only while the host is not already showing a search. Firing it next to a
@@ -1074,6 +1259,9 @@ class _SearchChromeState extends State<SearchChrome> {
       final p = await _repo.searchPage(SearchQueryState.blank);
       if (!mounted) return;
       setState(() => _chrome = p);
+      // The payload that carries the flag has only just landed: re-answer with
+      // it rather than with the fallback the first focus was judged against.
+      _reportChromeFocus();
     } catch (_) {
       // Whatever the cache painted stays; never chips this file invented.
       // A failed refresh may be asked again on the next focus.

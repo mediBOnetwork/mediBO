@@ -37,7 +37,15 @@ class DeviceLocation {
     try {
       final completer = Completer<html.Geoposition>();
       html.window.navigator.geolocation
-          .getCurrentPosition(enableHighAccuracy: true, timeout: timeout)
+          .getCurrentPosition(
+            enableHighAccuracy: true,
+            timeout: timeout,
+            // CMD #2112 — never a REMEMBERED fix. The browser will happily
+            // hand back a cached position from a different part of town, and
+            // a shop pin dropped on it looks like a working map right up
+            // until a rider is sent to the wrong street.
+            maximumAge: Duration.zero,
+          )
           .then((pos) {
         if (!completer.isCompleted) completer.complete(pos);
       }).catchError((Object e) {
@@ -48,6 +56,72 @@ class DeviceLocation {
     } catch (_) {
       return null;
     }
+  }
+
+  /// CMD #2112 — the BEST fix within [window], not the first one.
+  ///
+  /// A browser answers `getCurrentPosition` as soon as it has anything at all,
+  /// which on a phone that has just woken its GPS is usually the wifi/cell
+  /// estimate: hundreds of metres out. Setting a shop's door on that is the
+  /// whole problem the pin exists to solve, so this watches for a few seconds
+  /// and keeps the most accurate reading, stopping early once the fix is
+  /// inside [goodEnoughMetres].
+  ///
+  /// Returns null exactly as [current] does — permission denied, no GPS, an
+  /// insecure context — and never throws. It decides nothing beyond "which of
+  /// these readings is the most accurate", which is arithmetic on a number the
+  /// browser supplied.
+  static Future<DeviceFix?> best({
+    Duration window = const Duration(seconds: 8),
+    double goodEnoughMetres = 25,
+  }) async {
+    final done = Completer<DeviceFix?>();
+    DeviceFix? bestFix;
+    StreamSubscription<html.Geoposition>? sub;
+    Timer? stop;
+
+    void finish() {
+      if (done.isCompleted) return;
+      stop?.cancel();
+      sub?.cancel();
+      done.complete(bestFix);
+    }
+
+    try {
+      sub = html.window.navigator.geolocation
+          .watchPosition(enableHighAccuracy: true)
+          .listen((pos) {
+        final fix = _fixOf(pos);
+        if (fix == null) return;
+        final have = bestFix?.accuracy;
+        final got = fix.accuracy;
+        // No accuracy reported at all: take the newest reading, since there
+        // is nothing to compare. Otherwise keep the tighter circle.
+        if (have == null || got == null || got <= have) bestFix = fix;
+        final acc = bestFix?.accuracy;
+        if (acc != null && acc <= goodEnoughMetres) finish();
+      }, onError: (Object _) {
+        finish();
+      }, cancelOnError: false);
+    } catch (_) {
+      return current();
+    }
+
+    stop = Timer(window, finish);
+
+    // A first reading in parallel, so a device whose watch never fires still
+    // answers with something rather than with silence.
+    unawaited(current(timeout: window).then((f) {
+      if (f == null) return;
+      final have = bestFix?.accuracy;
+      final got = f.accuracy;
+      if (bestFix == null || have == null || got == null || got < have) {
+        bestFix = f;
+      }
+    }));
+
+    final out = await done.future;
+    return out ?? await current();
   }
 
   /// Continuous updates for the run heartbeat (PART B7). Emits on every

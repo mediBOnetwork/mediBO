@@ -359,11 +359,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             height: 44,
                             child: FilledButton(
                               // CMD #2112 — ONE registration screen. This
-                              // button used to push BusinessDetailsScreen, the
-                              // self-signup form, while an imported shop was
-                              // sent somewhere else entirely; the two drifted
-                              // for a year. Both doors are this screen now,
-                              // and it resumes from whatever is already saved.
+                              // button used to push the self-signup form,
+                              // while an imported shop was sent somewhere else
+                              // entirely; the two drifted for a year. Both
+                              // doors are this screen now, and it resumes from
+                              // whatever is already saved.
                               onPressed: () => Navigator.of(context).push(
                                 MaterialPageRoute(
                                   builder: (_) => const OneRegistrationScreen(),

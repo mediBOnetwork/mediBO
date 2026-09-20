@@ -1,6 +1,5 @@
 import 'package:flutter/foundation.dart'
     show kIsWeb, defaultTargetPlatform, TargetPlatform;
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// versionCode of THIS build. MUST stay in lockstep with
@@ -39,15 +38,12 @@ class AppUpdateFeed {
   static const String kAction = 'action';
   static const String kUpdating = 'updating_label';
   static const String kDownloaded = 'downloaded_label';
-  static const String kDismissLabel = 'dismiss_label';
-  static const String kDismissible = 'dismissible';
   static const String kForced = 'forced';
   static const String kFlow = 'flow';
   static const String kPollSeconds = 'poll_seconds';
   static const String kReason = 'reason';
 
-  /// The three platform strings the backend knows. They are also the keys the
-  /// 24 h dismissal is stored under — "per platform" is literally this.
+  /// The three platform strings the backend knows.
   static const String pWeb = 'web';
   static const String pPwa = 'pwa';
   static const String pAndroid = 'android';
@@ -73,7 +69,6 @@ class AppUpdateFeed {
           'p_live_version': liveVersion,
           'p_platform_state': platformState,
           'p_platform_version': platformVersion,
-          'p_dismissed_at': (await dismissedAt(platform))?.toIso8601String(),
         },
       );
       if (res is Map) return Map<String, dynamic>.from(res);
@@ -91,42 +86,12 @@ class AppUpdateFeed {
     return Duration(seconds: n);
   }
 
-  // ── The 24 h dismissal ────────────────────────────────────────────────────
+  // ── CMD #2112 — THERE IS NO DISMISSAL ANY MORE ───────────────────────────
   //
-  // Stored on the DEVICE because that is the only place it exists: one phone
-  // tapping Later says nothing about the next one. It is a fact, not a
-  // decision — how long it lasts (`dismiss_hours`), and whether a forced
-  // update ignores it, are both the backend's, which is why what goes over the
-  // wire is a timestamp and never a boolean.
-
-  static String _key(String platform) => 'app_update_dismissed_$platform';
-
-  /// Test seam — SharedPreferences has no reset of its own between tests.
-  static Map<String, DateTime>? debugStore;
-
-  static Future<DateTime?> dismissedAt(String platform) async {
-    final store = debugStore;
-    if (store != null) return store[platform];
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString(_key(platform));
-      if (raw == null || raw.isEmpty) return null;
-      return DateTime.tryParse(raw);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  static Future<void> markDismissed(String platform, {DateTime? at}) async {
-    final when = (at ?? DateTime.now()).toUtc();
-    final store = debugStore;
-    if (store != null) {
-      store[platform] = when;
-      return;
-    }
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_key(platform), when.toIso8601String());
-    } catch (_) {/* a device that cannot remember simply asks again */}
-  }
+  // CMD #2065 stored a 24 h "Later" stamp on the device and sent it back as
+  // `p_dismissed_at`, so the backend could refuse to raise the bar again. Both
+  // ends of that are gone: the bar has no control that could set it, this file
+  // has no key to store it under, and the RPC is called without the argument.
+  // A shop is on the new build or it is being asked to be — there is no third
+  // state, and no per-device memory that could produce one.
 }

@@ -431,7 +431,15 @@ class _BarSlot extends StatelessWidget {
   final BottomBarKind kind;
 
   @override
-  Widget build(BuildContext context) => _Collapsible(
+  Widget build(BuildContext context) {
+    // Live proof that the ONE-slot renderer is the one painting, and which of
+    // the two bars it is holding. Written on every build, including the empty
+    // one, so a curl of the render-log can tell "no bar" from "no renderer".
+    try {
+      RenderLog.write('c2112_bar_slot', 1);
+      RenderLog.write('c2112_bar_kind', kind.name);
+    } catch (_) {}
+    return _Collapsible(
         show: kind != BottomBarKind.none,
         height: BottomStackMetrics.slot,
         child: switch (kind) {
@@ -464,6 +472,7 @@ class _BarSlot extends StatelessWidget {
           BottomBarKind.none => null,
         },
       );
+  }
 
   /// Continue. The address and the section both arrive in the payload; a
   /// backend that sent no route opens nothing rather than guessing one.

@@ -22,14 +22,16 @@
 //      navigation bar exists — a route pushed over the shell has no edge for
 //      it to sit on and gets no bar.
 //
-//   3. LATER EXISTS ONLY WHEN THE BACKEND SENT ONE. CMD #2065 replaced "there
-//      is never a dismiss" with "the dismiss is the backend's": a payload with
-//      dismissible:true and a dismiss_label gets ONE close control, which
-//      stamps this platform's 24 h dismissal and takes the bar down; a forced
-//      update (dismissible:false) gets no control at all — not a disabled one,
-//      none. Nothing else was added: still no Later word eating the sentence,
-//      still no version text, and a Play flow that fails or is cancelled hands
-//      the button BACK (markIdle) rather than taking the bar away.
+//   3. THERE IS NO LATER, ON ANY PLATFORM, WHATEVER THE PAYLOAD SAYS.
+//      CMD #2065 made the dismiss the backend's; CMD #2112 removed it. The
+//      pill carries ONE control — Update Now — and it stays up until the
+//      update lands, because an update a shop can postpone for a day reaches
+//      it a day late, and this slot is now shared with the registration bar
+//      (where a dismissed pill would read as "nothing owed"). A payload that
+//      still carries dismissible:true and a dismiss_label draws NO control:
+//      the removal is in the widget, not in a flag anyone can flip back. A
+//      Play flow that fails or is cancelled still hands the button BACK
+//      (markIdle) rather than taking the bar away.
 //
 //   5. CMD #2065 — EACH PLATFORM ANSWERS ITS OWN QUESTION, AND ANDROID'S IS
 //      PLAY'S. The Android driver asks the In-App Update API and reports the
@@ -69,9 +71,9 @@ const _payload = <String, dynamic>{
   'bottom_gap': 128,
 };
 
-/// CMD #2065 — the same answer with a Later on it. `dismissible` and the word
-/// are BOTH the backend's: the bar renders a control it was sent, and invents
-/// nothing when it was sent none.
+/// CMD #2112 — a payload that STILL carries the old Later. Kept deliberately:
+/// the bar must draw no control for it, so the removal cannot be undone by a
+/// stale `app_update_check()` on a slow-to-replay database.
 const _dismissable = <String, dynamic>{
   ..._payload,
   'dismissible': true,
@@ -266,12 +268,12 @@ void main() {
     }
   });
 
-  group('later exists only when the backend sent one', () {
+  group('there is no Later, and no payload can bring one back', () {
     testWidgets('a forced update has no dismiss control at all', (t) async {
       final ctrl = appUpdateBar;
       await t.pumpWidget(_host());
       // dismissible:false is what `forced` looks like on the wire.
-      ctrl.show(onUpdate: () {}, onDismiss: () {}, payload: _forced);
+      ctrl.show(onUpdate: () {}, payload: _forced);
       await t.pumpAndSettle();
 
       expect(
@@ -292,44 +294,47 @@ void main() {
       expect(texts, ['App update available', 'Update Now']);
     });
 
-    testWidgets('a dismissable update gets ONE control, and it takes the bar down',
+    testWidgets('CMD #2112 — dismissible:true and a dismiss_label draw NOTHING',
         (t) async {
       final ctrl = appUpdateBar;
-      var dismissed = 0;
       await t.pumpWidget(_host());
-      ctrl.show(
-          onUpdate: () {},
-          onDismiss: () {
-            dismissed++;
-            ctrl.hide();
-          },
-          payload: _dismissable);
+      ctrl.show(onUpdate: () {}, payload: _dismissable);
       await t.pumpAndSettle();
 
-      final close = find.descendant(
-          of: find.byType(UpdateBar), matching: find.byType(IconButton));
-      expect(close, findsOneWidget);
-      // The word is the BACKEND's, and it is a tooltip rather than a label:
-      // at 360 px a second word would come out of the sentence's share.
-      expect(t.widget<IconButton>(close).tooltip, 'Not right now');
-      // Still a 44 px target.
-      final box = t.getSize(close);
-      expect(box.width, greaterThanOrEqualTo(Ds.touch.minTarget));
-      expect(box.height, greaterThanOrEqualTo(Ds.touch.minTarget));
+      // No close control of any kind, and the backend's old word is nowhere
+      // on screen: the pill has one button and it is Update Now.
+      expect(
+          find.descendant(
+              of: find.byType(UpdateBar), matching: find.byType(IconButton)),
+          findsNothing);
+      expect(find.byIcon(Icons.close), findsNothing);
+      expect(find.text('Not right now'), findsNothing);
+      final texts = find
+          .descendant(of: find.byType(UpdateBar), matching: find.byType(Text))
+          .evaluate()
+          .map((e) => (e.widget as Text).data)
+          .toList();
+      expect(texts, ['App update available', 'Update Now']);
+    });
 
-      await t.tap(close);
+    testWidgets('the controller has no dismissal to offer either', (t) async {
+      final ctrl = appUpdateBar;
+      await t.pumpWidget(_host());
+      ctrl.show(onUpdate: () {}, payload: _dismissable);
       await t.pumpAndSettle();
-      expect(dismissed, 1);
-      // The slot stays (the chrome must not move); the bar inside it is gone.
+      // `hide()` survives — it is how a landed update, or a driver that
+      // decided there is no update after all, takes the bar down. What is
+      // gone is any USER path to it.
+      ctrl.hide();
+      await t.pumpAndSettle();
       expect(find.byType(UpdateBar), findsNothing);
       expect(find.byKey(kBarSlotKey), findsOneWidget);
     });
 
-    testWidgets('no dismiss_label, no control — a missing flag is not a Later',
-        (t) async {
+    testWidgets('no dismiss_label, no control — unchanged', (t) async {
       final ctrl = appUpdateBar;
       await t.pumpWidget(_host());
-      ctrl.show(onUpdate: () {}, onDismiss: () {}, payload: _payload);
+      ctrl.show(onUpdate: () {}, payload: _payload);
       await t.pumpAndSettle();
       expect(
           find.descendant(
@@ -337,20 +342,16 @@ void main() {
           findsNothing);
     });
 
-    testWidgets('while the update runs there is nothing left to postpone',
+    testWidgets('while the update runs the one button is the updating word',
         (t) async {
       final ctrl = appUpdateBar;
       await t.pumpWidget(_host());
-      ctrl.show(
-          onUpdate: ctrl.markUpdating, onDismiss: () {}, payload: _dismissable);
+      ctrl.show(onUpdate: ctrl.markUpdating, payload: _dismissable);
       await t.pumpAndSettle();
-      expect(
-          find.descendant(
-              of: find.byType(UpdateBar), matching: find.byType(IconButton)),
-          findsOneWidget);
 
       await t.tap(find.text('Update Now'));
       await t.pumpAndSettle();
+      expect(find.text('Fetching the new build…'), findsOneWidget);
       expect(
           find.descendant(
               of: find.byType(UpdateBar), matching: find.byType(IconButton)),
@@ -469,17 +470,29 @@ void main() {
           isTrue);
     });
 
-    test('the dismissal is per platform, and is a timestamp not a verdict', () {
+    test('CMD #2112 — there is no dismissal to store, anywhere', () {
       final f = _read('lib/services/app_update_feed.dart');
-      expect(f.contains("'app_update_dismissed_\$platform'"), isTrue,
-          reason: 'one phone tapping Later says nothing about a browser');
-      expect(f.contains("'p_dismissed_at'"), isTrue,
-          reason: 'how long a Later lasts is the backend\'s, so a time goes out');
-      // The number itself is never in Dart: the device stores WHEN it was
-      // dismissed and the backend decides whether that is still true.
-      expect(f.contains('Duration(hours:'), isFalse);
-      expect(f.contains("'dismiss_hours'"), isFalse,
-          reason: 'dismiss_hours lives in app_settings, not in Dart');
+      // No device memory of a Later: no key, no writer, no reader.
+      expect(f.contains('app_update_dismissed_'), isFalse,
+          reason: 'a 24 h hide is what CMD #2112 removed');
+      expect(f.contains('markDismissed'), isFalse);
+      expect(f.contains('dismissedAt'), isFalse);
+      // Nothing is sent either, so a stale backend cannot start hiding it.
+      expect(f.contains("'p_dismissed_at'"), isFalse);
+      expect(f.contains('shared_preferences'), isFalse,
+          reason: 'the only thing this file stored was the dismissal');
+      // And the two drivers have no path to one.
+      for (final path in const [
+        'lib/services/version_watcher.dart',
+        'lib/services/android_update_bar.dart',
+      ]) {
+        expect(_read(path).contains('onDismiss'), isFalse,
+            reason: '\$path must not offer a Later');
+      }
+      // The widget itself carries no close control.
+      final bar = _read('lib/widgets/update_bar.dart');
+      expect(bar.contains('Icons.close'), isFalse);
+      expect(bar.contains('dismissLabel'), isFalse);
     });
 
     test('the web clear-and-reload really drops caches and workers', () {

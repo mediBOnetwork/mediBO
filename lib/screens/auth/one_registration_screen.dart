@@ -23,6 +23,7 @@ import '../../services/registration_bar.dart';
 import '../../utils/render_log.dart';
 import '../../widgets/customer_registration_form.dart';
 import '../../widgets/registration_documents_section.dart';
+import '../../widgets/registration_wizard.dart';
 import '../customer_documents_screen.dart' show CustomerDocumentsTransport;
 
 class OneRegistrationScreen extends StatefulWidget {
@@ -70,6 +71,12 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
   final Map<String, PickedDoc> _picked = {};
   final Set<String> _skips = {};
 
+  // CMD #2126 — the 3-step flow. Where the person is, whether the resume
+  // point has been taken from the payload yet, and whether Submit landed.
+  int _step = 0;
+  bool _stepSeeded = false;
+  bool _showDone = false;
+
   @override
   void initState() {
     super.initState();
@@ -89,6 +96,12 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
   String _s(Map<String, dynamic> m, String k) => (m[k] ?? '').toString();
 
   Map<String, dynamic> get _docs => _map(_p['documents']);
+
+  /// CMD #2126 — the backend's flow block. Absent or disabled and this screen
+  /// is the single form it always was.
+  Map<String, dynamic> get _wiz => _map(_p['wizard']);
+  List<Map<String, dynamic>> get _steps => wizardSteps(_wiz);
+  bool get _wizardOn => _wiz['enabled'] == true && _steps.isNotEmpty;
 
   Future<void> _load() async {
     setState(() {
@@ -113,7 +126,18 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
         _p = p;
         _form = ctrl;
         _loading = false;
+        // Resume on the step the backend saved with the draft — once. A
+        // re-read after a save must never yank the person to another step.
+        if (_wizardOn && !_stepSeeded) {
+          _stepSeeded = true;
+          _step = ((_wiz['resume_step'] as num?)?.toInt() ?? 0)
+              .clamp(0, _steps.length - 1);
+        }
       });
+      if (_wizardOn) {
+        RenderLog.write('c2126_reg_wizard',
+            'steps=${_steps.length};step=$_step;done=${_showDone ? 1 : 0}');
+      }
 
       RenderLog.write(
           'c2061_one_form',
@@ -127,6 +151,11 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
       // land; the payload's own docs_pending still answers every other way in.
       if (_map(p['docs_pending'])['show'] == true ||
           _routeAnchor() == 'documents') {
+        if (_wizardOn && !_showDone) {
+          // In the flow the papers are a STEP, so resuming there is a jump.
+          final i = _steps.indexWhere((s) => s['docs'] == true);
+          if (i >= 0) setState(() => _step = i);
+        }
         WidgetsBinding.instance.addPostFrameCallback((_) => _toDocs());
       }
     } catch (_) {
@@ -220,6 +249,7 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
       });
       RenderLog.write('c2061_submit',
           res['docs_pending'] == true ? 'docs_pending' : 'complete');
+      if (_wizardOn) _showDone = true;
       widget.onSaved?.call();
       // CMD #2112 — the bar in the bottom stack is the same ask as this form,
       // so it re-reads the backend the moment the form does. A registration
@@ -233,6 +263,88 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
         _message = _s(_p, 'error_label');
       });
     }
+  }
+
+  /// CMD #2126 — Continue. The backend judges the step (its required fields)
+  /// and AUTO-SAVES the draft with the step to come back to; the last step's
+  /// Continue is Submit.
+  Future<void> _continue() async {
+    final ctrl = _form;
+    if (ctrl == null || _saving) return;
+    final steps = _steps;
+    final key = (steps[_step]['key'] ?? '').toString();
+    setState(() {
+      _saving = true;
+      _message = '';
+    });
+    try {
+      final res = _map(await OneRegistrationScreen.rpc(
+          'customer_registration_step_save',
+          {'p_step': key, 'p_values': ctrl.payload()}));
+      if (!mounted) return;
+      if (res['ok'] != true) {
+        setState(() {
+          _saving = false;
+          _message = _s(res, 'message');
+        });
+        return;
+      }
+      if (_step >= steps.length - 1) {
+        setState(() => _saving = false);
+        await _submit();
+        return;
+      }
+      setState(() {
+        _saving = false;
+        _step = ((res['step_index'] as num?)?.toInt() ?? _step + 1)
+            .clamp(0, steps.length - 1);
+      });
+      _toTop();
+      RenderLog.write('c2126_reg_step', 'step=$_step');
+      // The bar reads the same saved draft, so it re-reads after every step.
+      unawaited(RegistrationBarDriver.instance.refresh());
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _message = _s(_p, 'error_label');
+      });
+    }
+  }
+
+  /// Back, or a tapped tick: save what is on screen and move — never blocks.
+  Future<void> _goTo(int i) async {
+    final ctrl = _form;
+    if (ctrl == null || i == _step || i < 0 || i >= _steps.length) return;
+    final from = (_steps[_step]['key'] ?? '').toString();
+    final to = (_steps[i]['key'] ?? '').toString();
+    setState(() {
+      _step = i;
+      _message = '';
+    });
+    _toTop();
+    try {
+      await OneRegistrationScreen.rpc('customer_registration_step_save',
+          {'p_step': from, 'p_values': ctrl.payload(), 'p_goto': to});
+    } catch (_) {
+      // The next Continue saves again; nothing typed is lost on the device.
+    }
+  }
+
+  void _toTop() {
+    if (!_scroll.hasClients) return;
+    _scroll.animateTo(0, duration: Ds.motion.standard, curve: Ds.motion.curve);
+  }
+
+  void _browse() {
+    // Leaving the flow: the bar in the bottom stack re-reads the backend so a
+    // finished registration never leaves "Registration pending" on screen.
+    unawaited(RegistrationBarDriver.instance.refresh());
+    if (widget.embedded) {
+      Navigator.of(context).maybePop();
+      return;
+    }
+    Navigator.of(context).popUntil((r) => r.isFirst);
   }
 
   Future<void> _upload(String customerId, String kind, PickedDoc doc) async {
@@ -301,6 +413,25 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
         ),
       );
     }
+
+    // CMD #2126 — the flow: Done after Submit (or when nothing is owed), the
+    // current step otherwise.
+    if (_wizardOn && (_showDone || _p['needs'] != true)) {
+      return LayoutBuilder(builder: (context, box) {
+        return Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 560),
+            child: RegistrationDoneView(
+              done: _map(_wiz['done']),
+              onBrowse: _browse,
+              horizontalPadding:
+                  box.maxWidth >= 600 ? Ds.space.x24 : Ds.space.x16,
+            ),
+          ),
+        );
+      });
+    }
+    if (_wizardOn) return _wizardStep();
 
     // Nothing owed — the backend says so, and says what to print about it.
     if (_p['needs'] != true) {
@@ -383,6 +514,138 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
             ),
           ),
         ),
+      );
+    });
+  }
+
+  /// CMD #2126 — one step, laid out as the approved design (Image A): the
+  /// progress bar on a white band under the title bar, the step's title and
+  /// subtitle, its fields with labels above them, and Back + Continue pinned
+  /// to the bottom. Phone first: a 16 px gutter, capped width on a big screen.
+  Widget _wizardStep() {
+    final steps = _steps;
+    final step = steps[_step];
+    final ctrl = _form;
+    final pending = _map(_p['docs_pending']);
+    final imported = _map(_p['imported']);
+    final last = _step >= steps.length - 1;
+    final fields = ((step['fields'] as List?) ?? const [])
+        .map((e) => e.toString())
+        .toList();
+    final chips = <String, List<String>>{
+      for (final e in _map(_wiz['chips']).entries)
+        if (e.value is List)
+          e.key: (e.value as List).map((o) => o.toString()).toList(),
+    };
+    final notes = <String, String>{
+      for (final e in _map(_wiz['field_notes']).entries)
+        e.key: (e.value ?? '').toString(),
+    };
+    final continueLabel = _saving
+        ? (last ? _s(_wiz, 'submitting_label') : _s(_wiz, 'saving_label'))
+        : (last ? _s(_wiz, 'submit_label') : _s(_wiz, 'continue_label'));
+
+    return LayoutBuilder(builder: (context, box) {
+      final pad = box.maxWidth >= 600 ? Ds.space.x24 : Ds.space.x16;
+      Widget capped(Widget child) => Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: child,
+            ),
+          );
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            color: Ds.c.surface,
+            padding: EdgeInsets.fromLTRB(pad, Ds.space.x8, pad, Ds.space.x4),
+            child: capped(RegistrationProgressBar(
+                steps: steps, current: _step, onJump: _goTo)),
+          ),
+          Expanded(
+            child: SingleChildScrollView(
+              controller: _scroll,
+              padding: EdgeInsets.fromLTRB(pad, Ds.space.x24, pad, Ds.space.x24),
+              child: capped(Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (_s(step, 'title').isNotEmpty)
+                    Text(_s(step, 'title'), style: Ds.t.title),
+                  if (_s(step, 'subtitle').isNotEmpty) ...[
+                    SizedBox(height: Ds.space.x4),
+                    Text(_s(step, 'subtitle'), style: Ds.t.bodySecondary),
+                  ],
+                  if (_step == 0 && imported['is'] == true && _s(imported, 'note').isNotEmpty)
+                    _note(_s(imported, 'note'), Ds.c.infoSoft),
+                  if (_step == 0 && _p['has_draft'] == true && _s(_p, 'draft_note').isNotEmpty)
+                    _note(_s(_p, 'draft_note'), Ds.c.surface),
+                  if (step['docs'] == true && pending['show'] == true && _s(pending, 'line').isNotEmpty)
+                    _note(_s(pending, 'line'), Ds.c.warningSoft),
+                  SizedBox(height: Ds.space.x16),
+                  if (ctrl != null)
+                    CustomerRegistrationForm(
+                      controller: ctrl,
+                      onlyFields: fields,
+                      chips: chips,
+                      notes: notes,
+                    ),
+                  if (step['docs'] == true)
+                    Container(
+                      key: _docsKey,
+                      child: RegistrationDocumentsSection(
+                        block: _docs,
+                        picked: _picked,
+                        skipped: _skips,
+                        busyKey: _busyDoc,
+                        onPick: _pick,
+                        onSkipToggle: _toggleSkip,
+                      ),
+                    ),
+                  if (_message.isNotEmpty) ...[
+                    SizedBox(height: Ds.space.x12),
+                    Text(_message, style: Ds.t.caption.copyWith(color: Ds.c.danger)),
+                  ],
+                ],
+              )),
+            ),
+          ),
+          Padding(
+            padding: EdgeInsets.fromLTRB(pad, Ds.space.x12, pad, Ds.space.x16),
+            child: capped(Row(children: [
+              if (_step > 0) ...[
+                Expanded(
+                  child: Semantics(
+                    identifier: 'reg_back',
+                    button: true,
+                    child: SizedBox(
+                      height: Ds.touch.minTarget,
+                      child: OutlinedButton(
+                        onPressed: _saving ? null : () => _goTo(_step - 1),
+                        child: Text(_s(_wiz, 'back_label')),
+                      ),
+                    ),
+                  ),
+                ),
+                SizedBox(width: Ds.space.x12),
+              ],
+              Expanded(
+                flex: 2,
+                child: Semantics(
+                  identifier: 'reg_primary',
+                  button: true,
+                  child: SizedBox(
+                    height: Ds.touch.minTarget,
+                    child: FilledButton(
+                      onPressed: _saving ? null : _continue,
+                      child: Text(continueLabel,
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                    ),
+                  ),
+                ),
+              ),
+            ])),
+          ),
+        ],
       );
     });
   }

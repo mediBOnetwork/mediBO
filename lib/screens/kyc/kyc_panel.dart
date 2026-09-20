@@ -273,6 +273,23 @@ class _KycPanelState extends State<KycPanel> {
 
     final items = _items;
     final grace = (_payload['state'] as Map?)?['grace_until'];
+    // CMD #2108 — the cards are taller now (the action button has its own
+    // row), so the panel can be taller than the box it is given. It scrolls
+    // ITSELF only when the host bounds its height; embedded in a scrolling
+    // account tab the height is unbounded and the host keeps the scrolling,
+    // because a SingleChildScrollView in unbounded space is an error, not a
+    // safety net.
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final body = _body(items, grace);
+        return constraints.maxHeight.isFinite
+            ? SingleChildScrollView(child: body)
+            : body;
+      },
+    );
+  }
+
+  Widget _body(List<Map<String, dynamic>> items, Object? grace) {
     return Padding(
       padding: EdgeInsets.all(Ds.space.x16),
       child: Column(
@@ -326,7 +343,15 @@ class _KycPanelState extends State<KycPanel> {
             ),
             SizedBox(width: Ds.space.x8),
           ],
-          Text(label, style: Ds.t.caption.copyWith(color: _tone(tone))),
+          // CMD #2108 — the chip shares the card's top row with a name that
+          // must stay readable, so a long status word ellipsises instead of
+          // taking width off the name.
+          Flexible(
+            child: Text(label,
+                style: Ds.t.caption.copyWith(color: _tone(tone)),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis),
+          ),
         ],
       ),
     );
@@ -359,6 +384,12 @@ class _KycPanelState extends State<KycPanel> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // CMD #2108 — thumb, name+meta, chip. THREE things on this row and
+          // no button: an OutlinedButton sitting in the same Row took its own
+          // intrinsic width first, and on a 360px phone that left the name a
+          // column about one glyph wide — "GST certificate" came out one
+          // letter per line. The button has its own full-width row below now,
+          // so the name column is the only thing that flexes.
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -368,28 +399,34 @@ class _KycPanelState extends State<KycPanel> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(_s(it, 'label'), style: Ds.t.subtitle),
+                    Text(_s(it, 'label'),
+                        style: Ds.t.subtitle,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis),
                     SizedBox(height: Ds.space.x4),
-                    Text(meta, style: Ds.t.caption, maxLines: 3),
+                    Text(meta,
+                        style: Ds.t.caption,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis),
                   ],
                 ),
               ),
-              SizedBox(width: Ds.space.x12),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  _chip(it),
-                  SizedBox(height: Ds.space.x8),
-                  SizedBox(
-                    height: Ds.touch.minTarget,
-                    child: OutlinedButton(
-                      onPressed: busy ? null : () => _pickAndUpload(it),
-                      child: Text(_reuploadLabel(it)),
-                    ),
-                  ),
-                ],
+              SizedBox(width: Ds.space.x8),
+              ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: Ds.space.x48 * 2),
+                child: _chip(it),
               ),
             ],
+          ),
+          SizedBox(height: Ds.space.x12),
+          SizedBox(
+            width: double.infinity,
+            height: Ds.touch.minTarget,
+            child: OutlinedButton(
+              onPressed: busy ? null : () => _pickAndUpload(it),
+              child: Text(_reuploadLabel(it),
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+            ),
           ),
           // CMD #1914 — ONE sentence, chosen in the backend from the check that
           // failed. The composed check list it replaced is still available, one

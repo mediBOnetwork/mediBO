@@ -132,15 +132,32 @@ class _KycDocThumbState extends State<KycDocThumb> {
       );
     }
 
+    // CMD #2108 — a tile that failed to sign still shows WHAT the file is.
+    // It used to be a bordered square holding nothing but an error sentence,
+    // which read as a broken card rather than as a document on file; the
+    // file-type icon stays, and the backend's word sits under it.
     if (_error) {
       return _shell(
         onTap: _load,
-        child: Center(
-          child: Padding(
-            padding: EdgeInsets.all(Ds.space.x4),
-            child: Text(_s('error_label'),
-                style: Ds.t.caption, textAlign: TextAlign.center, maxLines: 3),
-          ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+                _isPdf
+                    ? Icons.picture_as_pdf_outlined
+                    : Icons.image_outlined,
+                color: Ds.c.textSecondary,
+                size: Ds.space.x24),
+            SizedBox(height: Ds.space.x4),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: Ds.space.x4),
+              child: Text(_s('error_label'),
+                  style: Ds.t.caption,
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis),
+            ),
+          ],
         ),
       );
     }

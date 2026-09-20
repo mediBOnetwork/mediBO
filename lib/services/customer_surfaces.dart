@@ -166,9 +166,32 @@ class CustomerSurfaces {
   }
 
   /// The auth identity moved — re-ask. Never blanks what is already drawn.
+  ///
+  /// CMD #2108 — the "never bound" case used to return here, and that was the
+  /// latch behind an empty profile sheet. `_bound` only becomes true after an
+  /// `ok:true` answer, so a session whose FIRST fetch was made signed-out (or
+  /// whose auth listener failed to attach, which the boot-resilience catch
+  /// above allows) stayed unbound for its whole life: every later
+  /// `ensureLoaded` landed here and returned, the notifier stayed empty, and
+  /// the header sheet drew a name with nothing under it. An unbound service
+  /// with a signed-in user has no answer to keep, so it asks for one.
   static void syncIdentity() {
-    if (!_bound) return;
-    final uid = Supabase.instance.client.auth.currentUser?.id;
+    // Asking who is signed in must never be the thing that throws: this runs
+    // from a surface's initState, and `Supabase.instance` ASSERTS that boot
+    // got as far as initialising it. The old `if (!_bound) return;` happened
+    // to short-circuit ahead of that assert; moving the read up exposed it and
+    // took 35 widget tests (and any boot where Supabase.initialize failed)
+    // down with it. Boot resilience rule: no instance = no identity to sync.
+    String? uid;
+    try {
+      uid = Supabase.instance.client.auth.currentUser?.id;
+    } catch (_) {
+      return;
+    }
+    if (!_bound) {
+      if (uid != null) load();
+      return;
+    }
     if (uid == _boundUid) return;
     _boundUid = uid;
     load();

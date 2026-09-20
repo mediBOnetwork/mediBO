@@ -5,7 +5,6 @@ import '../../design_tokens.dart';
 import '../../pages/supplier_availability_page.dart';
 import '../../pages/supplier_companies_page.dart';
 import '../../utils/render_log.dart';
-import '../kyc/kyc_panel.dart';
 
 /// The two "about my shop" entry points on the supplier's Home tab (cmd #401).
 ///
@@ -63,12 +62,11 @@ class _SupplierShopEntriesState extends State<SupplierShopEntries> {
                     builder: (_) => const SupplierCompaniesPage()))
                 .then((_) => _load()),
           ),
-          // CHANGE #705 — the licence-and-documents panel, on the tab the
-          // supplier lands on. The same widget the pharmacy sees: kyc_my_panel()
-          // resolves which account is asking and words every line. It stays out
-          // of SupplierShopEntriesView so that pure, widget-tested half keeps
-          // needing no Supabase.
-          const KycPanel(),
+          // CMD #2108 — the licence-and-documents panel is NOT here any more.
+          // CHANGE #705 put it on the Home tab; My account > Profile & KYC then
+          // grew the same panel, so a supplier scrolled past a full duplicate
+          // of it — two upload buttons for one document — every time he opened
+          // the app. Profile & KYC is the one place it lives now.
         ],
       );
 }

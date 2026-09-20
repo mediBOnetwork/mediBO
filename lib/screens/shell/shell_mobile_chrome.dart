@@ -208,70 +208,74 @@ class _MobileProfileAvatarState extends State<_MobileProfileAvatar> {
 
     return PressEffect(
       scale: 0.92,
-      child: GestureDetector(
-        onTap: () {
-          if (!auth.isAuthenticated) {
-            Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const LoginScreen()));
-          } else if (isCustomerViewAs) {
-            // In customer ViewAs mode, show the impersonated customer's profile
-            Navigator.push(context,
-                MaterialPageRoute(builder: (_) => ProfileScreen(viewAsUserId: viewAs.identity!.userId)));
-          } else if (onAdminNav != null) {
-            _showAdminSheet(context, auth);
-          } else {
-            // CMD #1914 (Om) — a customer's avatar opens the profile DROPDOWN,
-            // not the profile page. My profile is the sheet's first row, so
-            // the door the tap used to be is still one tap away; the wishlist
-            // and the notifications inbox that used to sit on the header are
-            // the rows under it. WHICH rows is `profile_dropdown` in
-            // customer_feature_placement, so this file names none of them.
-            _showCustomerSheet(context, auth);
-          }
-        },
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-        Container(
-          // CMD #2030 — the tap target is the token minimum (44), and its edge
-          // is the header's own 16 px margin, so it lands on the search bar's
-          // left edge exactly.
-          width: Ds.touch.minTarget,
-          height: Ds.touch.minTarget,
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Color(0xFF1D9E75), Color(0xFF0F4C35)],
-            ),
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFF1D9E75).withValues(alpha: 0.35),
-                blurRadius: 8,
-                offset: const Offset(0, 3),
+      child: Semantics(
+        identifier: 'cust_avatar',
+        button: true,
+        child: GestureDetector(
+          onTap: () {
+            if (!auth.isAuthenticated) {
+              Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => const LoginScreen()));
+            } else if (isCustomerViewAs) {
+              // In customer ViewAs mode, show the impersonated customer's profile
+              Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => ProfileScreen(viewAsUserId: viewAs.identity!.userId)));
+            } else if (onAdminNav != null) {
+              _showAdminSheet(context, auth);
+            } else {
+              // CMD #1914 (Om) — a customer's avatar opens the profile DROPDOWN,
+              // not the profile page. My profile is the sheet's first row, so
+              // the door the tap used to be is still one tap away; the wishlist
+              // and the notifications inbox that used to sit on the header are
+              // the rows under it. WHICH rows is `profile_dropdown` in
+              // customer_feature_placement, so this file names none of them.
+              _showCustomerSheet(context, auth);
+            }
+          },
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+          Container(
+            // CMD #2030 — the tap target is the token minimum (44), and its edge
+            // is the header's own 16 px margin, so it lands on the search bar's
+            // left edge exactly.
+            width: Ds.touch.minTarget,
+            height: Ds.touch.minTarget,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF1D9E75), Color(0xFF0F4C35)],
               ),
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF1D9E75).withValues(alpha: 0.35),
+                  blurRadius: 8,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: Center(
+              child: initial != null
+                  ? Text(
+                      initial,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                        height: 1,
+                      ),
+                    )
+                  : const Icon(Icons.person_rounded,
+                      color: Colors.white, size: 20),
+            ),
+          ),
+              if (auth.isAuthenticated)
+                const Positioned(
+                    top: -2, right: -2, child: ProfileUnreadDot()),
             ],
           ),
-          child: Center(
-            child: initial != null
-                ? Text(
-                    initial,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.white,
-                      height: 1,
-                    ),
-                  )
-                : const Icon(Icons.person_rounded,
-                    color: Colors.white, size: 20),
-          ),
-        ),
-            if (auth.isAuthenticated)
-              const Positioned(
-                  top: -2, right: -2, child: ProfileUnreadDot()),
-          ],
         ),
       ),
     );

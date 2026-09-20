@@ -28,6 +28,12 @@ class CompanyPage {
   final List<({String key, String label, String countLabel})> saltCloud;
   final String backLabel;
 
+  /// CMD #2118 — "Search in this company". The hint, the empty line and the
+  /// term the payload was built for are all the backend's; the box is a box.
+  final String searchHint;
+  final String emptyLabel;
+  final String q;
+
   final List<Product> items;
   final int offset;
 
@@ -46,6 +52,9 @@ class CompanyPage {
     required this.saltCloudTitle,
     required this.saltCloud,
     required this.backLabel,
+    required this.searchHint,
+    required this.emptyLabel,
+    required this.q,
     required this.items,
     required this.offset,
     required this.hasMore,
@@ -62,6 +71,9 @@ class CompanyPage {
     saltCloudTitle: '',
     saltCloud: [],
     backLabel: '',
+    searchHint: '',
+    emptyLabel: '',
+    q: '',
     items: <Product>[],
     offset: 0,
     hasMore: false,
@@ -82,6 +94,9 @@ class CompanyPage {
         saltCloudTitle: '',
         saltCloud: const [],
         backLabel: '',
+        searchHint: '',
+        emptyLabel: '',
+        q: '',
         items: const [],
         offset: 0,
         hasMore: false,
@@ -99,6 +114,9 @@ class CompanyPage {
       saltCloudTitle: '',
       saltCloud: const [],
       backLabel: m['back_label']?.toString() ?? '',
+      searchHint: m['search_hint']?.toString() ?? '',
+      emptyLabel: m['empty_label']?.toString() ?? '',
+      q: m['q']?.toString() ?? '',
       items: ((m['items'] as List?) ?? const [])
           .whereType<Map>()
           .map((e) => Product.fromHomeCard(Map<String, dynamic>.from(e)))
@@ -107,6 +125,69 @@ class CompanyPage {
       hasMore: m['has_more'] == true,
     );
   }
+}
+
+/// CMD #2118 — one company as `storefront_company_search` returns it: the
+/// name, the count sentence and the key that opens its page. Nothing is
+/// computed here — `countLabel` is already "668 products" in the payload.
+class CompanyHit {
+  final String key;
+  final String label;
+  final String countLabel;
+
+  const CompanyHit({
+    required this.key,
+    required this.label,
+    required this.countLabel,
+  });
+
+  factory CompanyHit.fromMap(Map<String, dynamic> m) => CompanyHit(
+        key: m['key']?.toString() ?? '',
+        label: m['label']?.toString() ?? '',
+        countLabel: m['count_label']?.toString() ?? '',
+      );
+}
+
+/// CMD #2118 — the Companies block. It rides on `storefront_search_page` above
+/// the medicine results, and the "Shop by company" filter box draws the same
+/// rows from `storefront_company_search`. The heading, the hint and the empty
+/// line are the payload's; absent (`none`) means the backend sent no block and
+/// the app draws nothing at all.
+class CompanyHits {
+  final bool ok;
+  final String title;
+  final String hint;
+  final String emptyLabel;
+  final List<CompanyHit> rows;
+
+  const CompanyHits({
+    required this.ok,
+    required this.title,
+    required this.hint,
+    required this.emptyLabel,
+    required this.rows,
+  });
+
+  static const CompanyHits none = CompanyHits(
+    ok: false,
+    title: '',
+    hint: '',
+    emptyLabel: '',
+    rows: <CompanyHit>[],
+  );
+
+  bool get has => ok && rows.isNotEmpty;
+
+  factory CompanyHits.fromMap(Map<String, dynamic> m) => CompanyHits(
+        ok: m['ok'] == true,
+        title: m['title']?.toString() ?? '',
+        hint: m['hint']?.toString() ?? '',
+        emptyLabel: m['empty_label']?.toString() ?? '',
+        rows: ((m['rows'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((e) => CompanyHit.fromMap(Map<String, dynamic>.from(e)))
+            .toList(growable: false),
+      );
 }
 
 /// Result of `wishlist_toggle(p_product_id)`.

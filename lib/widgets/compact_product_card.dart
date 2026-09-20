@@ -81,6 +81,14 @@ class CompactProductCard extends StatelessWidget {
   /// never built.
   final VoidCallback? onPeek;
 
+  /// CMD #2118 — the maker's line, OFF on the company page.
+  ///
+  /// Every card in a company's own catalogue repeated the name that is already
+  /// the title of the page, twenty times down the screen. Off, the card is one
+  /// row shorter and the caller reserves [extentWithoutCompany]; it is a
+  /// parameter rather than a guess, so no other surface loses the line.
+  final bool showManufacturer;
+
   const CompactProductCard({
     super.key,
     required this.product,
@@ -89,6 +97,7 @@ class CompactProductCard extends StatelessWidget {
     this.onCompare,
     this.wishlistToggle,
     this.onPeek,
+    this.showManufacturer = true,
   });
 
   bool get _showsCompare => compareLabel.isNotEmpty && onCompare != null;
@@ -184,6 +193,11 @@ class CompactProductCard extends StatelessWidget {
   /// typed as a second number, so the two can never drift.
   static const double extentWithCompare = extent + _gapS + compareRowH;
 
+  /// CMD #2118 — the extent of a card drawn with [showManufacturer] false.
+  /// Summed from the same constants, so the company page's grid cannot drift
+  /// from the card it is laying out.
+  static const double extentWithoutCompany = extent - _gapS - _mfrH;
+
   /// CMD #2010 — the width one card takes in a horizontal rail. It lives here,
   /// beside [extent], so a rail cannot pick its own number: the recently-viewed
   /// rail carried 162 as a literal and nothing tied it to the card.
@@ -236,16 +250,21 @@ class CompactProductCard extends StatelessWidget {
                 ),
               ),
             ),
-            const SizedBox(height: _gapS),
-            SizedBox(
-              height: _mfrH,
-              child: Text(
-                product.manufacturer,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: AppType.t1,
+            // CMD #2118 — the maker's line. Absent, not empty, when the
+            // surface already names the company: an empty box would keep
+            // paying for a line nobody can read.
+            if (showManufacturer) ...[
+              const SizedBox(height: _gapS),
+              SizedBox(
+                height: _mfrH,
+                child: Text(
+                  product.manufacturer,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppType.t1,
+                ),
               ),
-            ),
+            ],
             const SizedBox(height: _gapM),
             CardPriceLines(
               price: pricing?.cardPrice,
@@ -447,14 +466,16 @@ class _Frame extends StatelessWidget {
             ),
             child: SizedBox(
               height: CompactProductCard._actionH,
+              // CMD #2118 — ONE pack label per card. The row used to carry the
+              // pack TYPE ("Tube") while the badge on the photo above it
+              // already said "15 gm in 1 tube": the same fact, twice, three
+              // centimetres apart. The sentence is the one that survives —
+              // it is the one that tells a buyer what they are buying — and
+              // the row is now the add control alone, hard right, which is
+              // also what makes the price the loudest thing on the card.
               child: Row(
                 children: [
-                  Expanded(
-                    child: product.packTypeLabel.isEmpty
-                        ? const SizedBox.shrink()
-                        : _TypeChip(text: product.packTypeLabel),
-                  ),
-                  const SizedBox(width: CompactProductCard._gapM),
+                  const Spacer(),
                   soldOut
                       ? NotifyControl(productId: product.id)
                       : CompactCartControl(product: product),
@@ -904,48 +925,9 @@ class _PackBadge extends StatelessWidget {
   );
 }
 
-/// The dosage-form chip under the plate ("Strip", "Vial", "Bottle").
-///
-/// It HUGS its label. The #673 version wrapped a `Container(alignment: …)` in
-/// an `Align`, and a Container with a non-null alignment expands to fill the
-/// loose constraints Align hands it — which is exactly how a 40px chip became
-/// the full-width grey pill across the whole card.
-class _TypeChip extends StatelessWidget {
-  final String text;
-  const _TypeChip({required this.text});
-
-  static const double _padH = 8;
-
-  // A Row, not an Align. `Align(widthFactor: 1)` shrinks the ALIGN to its
-  // child, and the fixed-height SizedBox above it then centres that shrunken
-  // box — which is why the chip rendered mid-card on the first deploy. A Row
-  // fills the width and starts its children at the left, and the Container
-  // (no `alignment` of its own — see the class doc) hugs its Text.
-  @override
-  Widget build(BuildContext context) => Row(
-    children: [
-      // CHANGE #287 — Flexible, because the chip now prints the stored pack
-      // sentence. A Row lays a non-flex child out with an UNBOUNDED main-axis
-      // constraint, so a long label would paint past the card edge (and stripe
-      // in debug) instead of ellipsising inside it.
-      Flexible(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: _padH),
-          decoration: BoxDecoration(
-            color: Brand.accentSoft,
-            borderRadius: BorderRadius.circular(Rad.chip),
-          ),
-          child: Text(
-            text,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: AppType.t2.copyWith(color: Brand.accentDark),
-          ),
-        ),
-      ),
-    ],
-  );
-}
+// CMD #2118 — `_TypeChip` (the dosage-form chip under the plate) is gone
+// with the second pack label it drew. The pack sentence badge on the artwork
+// is now the card's ONE pack label.
 
 /// A small tinted chip that hugs its label — the scheme badge on the plate and
 /// the sold-out chip in the footer. Colours come from the payload when it sent

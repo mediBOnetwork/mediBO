@@ -178,14 +178,13 @@ void main() {
       await _pumpRow(tester, _row());
       expect(find.text('Monticope Tablet'), findsOneWidget);
       expect(find.text('MANKIND PHARMA LTD'), findsOneWidget);
-      // CMD #2044 — the row card that joined the two decided labels into one
-      // "Strip · 10.0 Tablets in 1 strip" line is deleted; the card Om asked
-      // for carries the same two strings in its own two places (the pack badge
-      // lying on the artwork, the pack-type chip beside ADD). BOTH still
-      // arrive verbatim, and neither raw column ('10 tablets',
-      // 'Strip of 10 tablets') may appear anywhere.
+      // CHANGED BY CMD #2118 — ONE pack label per card. #2044 printed the
+      // pack SENTENCE on the artwork and the pack TYPE beside ADD, which is
+      // the same fact said twice on a card two columns wide. The sentence is
+      // the one that stays, verbatim; the type chip is gone. Neither raw
+      // column ('10 tablets', 'Strip of 10 tablets') may appear anywhere.
       expect(find.text('10.0 Tablets in 1 strip'), findsOneWidget);
-      expect(find.text('Strip'), findsOneWidget);
+      expect(find.text('Strip'), findsNothing);
       expect(find.text('Strip of 10 tablets'), findsNothing);
       expect(find.text('10 tablets'), findsNothing);
     });

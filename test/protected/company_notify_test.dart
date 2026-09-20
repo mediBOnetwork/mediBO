@@ -152,18 +152,18 @@ void main() {
     testWidgets('renders label and count_label verbatim', (tester) async {
       await _pumpCompany(
         tester,
-        (key, offset) async => CompanyPage.fromMap(_companyPage(
+        (key, offset, q) async => CompanyPage.fromMap(_companyPage(
           offset: 0,
           items: [_card(id: 1, name: 'Diprovate Plus G Cream')],
           hasMore: false,
         )),
       );
 
-      // Title appears in the app bar AND the body header, both from the payload.
-      // CHANGED BY #274 — three, not two: the page title, the count line, and
-      // now the manufacturer line the rebuilt product card prints under the
-      // name. Same one backend string in all three places.
-      expect(find.text('SUN PHARMACEUTICAL INDUSTRIES LTD'), findsNWidgets(3));
+      // CHANGED BY CMD #2118 — ONE, not three. The name was in the pinned bar,
+      // again in the collapsing header under it, and a third time on every
+      // card in the company's own grid. The bar keeps it; the header lost it
+      // and the cards render with showManufacturer:false.
+      expect(find.text('SUN PHARMACEUTICAL INDUSTRIES LTD'), findsOneWidget);
       expect(find.text('2,510 products'), findsOneWidget);
       expect(find.text('Diprovate Plus G Cream'), findsOneWidget);
     });
@@ -174,7 +174,7 @@ void main() {
 
       // Page one must be long enough to overflow the viewport, otherwise
       // there is nothing to scroll and "paging never fired" would pass.
-      await _pumpCompany(tester, (key, offset) async {
+      await _pumpCompany(tester, (key, offset, q) async {
         requested.add(offset);
         if (offset == 0) {
           return CompanyPage.fromMap(_companyPage(
@@ -211,7 +211,7 @@ void main() {
     testWidgets('stops paging when the backend says has_more:false',
         (tester) async {
       var calls = 0;
-      await _pumpCompany(tester, (key, offset) async {
+      await _pumpCompany(tester, (key, offset, q) async {
         calls++;
         return CompanyPage.fromMap(_companyPage(
           offset: 0,
@@ -230,7 +230,7 @@ void main() {
         (tester) async {
       await _pumpCompany(
         tester,
-        (key, offset) async =>
+        (key, offset, q) async =>
             CompanyPage.fromMap({'ok': false, 'error': 'company_not_found'}),
       );
 

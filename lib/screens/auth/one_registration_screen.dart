@@ -14,15 +14,25 @@
 // uploads and the "I don't have this" answers together, and the sentence it
 // prints afterwards is the backend's too.
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:syncfusion_flutter_pdf/pdf.dart';
 
 import '../../design_tokens.dart';
 import '../../services/registration_bar.dart';
+import '../../utils/doc_capture.dart';
+import '../../utils/doc_scan.dart';
 import '../../utils/render_log.dart';
 import '../../widgets/customer_registration_form.dart';
+import '../../widgets/doc_upload_sheet.dart';
+import '../../widgets/doc_viewer_screen.dart';
 import '../../widgets/registration_documents_section.dart';
+import '../../widgets/registration_licences_section.dart';
 import '../../widgets/registration_wizard.dart';
 import '../customer_documents_screen.dart' show CustomerDocumentsTransport;
 
@@ -70,6 +80,14 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
 
   final Map<String, PickedDoc> _picked = {};
   final Set<String> _skips = {};
+
+  // CMD #2128 — Step 3 · Licences. The block is a SECOND read, on its own
+  // RPC, so the list refreshes after an upload or a removal without pulling
+  // the whole registration payload down again.
+  Map<String, dynamic> _lic = const {};
+  final Map<String, String> _thumbUrls = {};
+  final Map<String, int> _pages = {};
+  bool _scanning = false;
 
   // CMD #2126 — the 3-step flow. Where the person is, whether the resume
   // point has been taken from the payload yet, and whether Submit landed.
@@ -139,6 +157,8 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
             'steps=${_steps.length};step=$_step;done=${_showDone ? 1 : 0}');
       }
 
+      unawaited(_loadLicences());
+
       RenderLog.write(
           'c2061_one_form',
           'docs=${(_docs['rows'] as List?)?.length ?? 0}'
@@ -193,6 +213,304 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
           PickedDoc(name: chosen.name, ext: chosen.ext, bytes: chosen.bytes);
       _skips.remove(key);
     });
+  }
+
+  // ── CMD #2128 · Step 3 · Licences ────────────────────────────────────────
+
+  /// The list, its counter and every caption on it.
+  Future<void> _loadLicences() async {
+    try {
+      final raw = await OneRegistrationScreen.rpc('custreg_licences_step');
+      final b = _map(raw is List && raw.isNotEmpty ? raw.first : raw);
+      if (!mounted || b['show'] != true) return;
+      setState(() => _lic = b);
+      RenderLog.write(
+          'c2128_licences',
+          'rows=${_licRows.length}'
+          ';groups=${((b['groups'] as List?) ?? const []).length}'
+          ';req=${b['required_done'] ?? 0}/${b['required_total'] ?? 0}');
+      unawaited(_signThumbs());
+    } catch (_) {
+      // The step still renders the papers the payload already carried.
+    }
+  }
+
+  List<Map<String, dynamic>> get _licRows => [
+        for (final g in ((_lic['groups'] as List?) ?? const []))
+          ...(((_map(g)['rows'] as List?) ?? const []).map(_map)),
+      ];
+
+  /// A private object needs a signed URL before it can be drawn. One per row,
+  /// resolved once, and a failure simply leaves the tile blank.
+  Future<void> _signThumbs() async {
+    for (final row in _licRows) {
+      final key = _s(row, 'key');
+      final thumb = _map(row['thumb']);
+      final path = _s(thumb, 'path');
+      if (path.isEmpty || _thumbUrls.containsKey(key)) continue;
+      try {
+        final url = await CustomerDocumentsTransport.sign(
+            _s(thumb, 'bucket').isEmpty ? 'kyc-docs' : _s(thumb, 'bucket'),
+            path);
+        if (!mounted) return;
+        if (url.isNotEmpty) setState(() => _thumbUrls[key] = url);
+      } catch (_) {
+        // no thumbnail is a blank tile, never a broken screen
+      }
+    }
+  }
+
+  /// What this device can actually do. The sheet drops an option it cannot
+  /// honour; it never invents one.
+  Set<String> get _capabilities => {
+        'files',
+        if (!kIsWeb) 'scanner',
+      };
+
+  /// Tap an upload circle: the row's own sheet, then whichever way in was
+  /// chosen. The file is held on the device and rides up with Submit, exactly
+  /// as it did before — this only changes HOW it is chosen.
+  Future<void> _pickForRow(Map<String, dynamic> row) async {
+    final sheet = _map(row['sheet']);
+    final choice = await showDocUploadSheet(context,
+        sheet: sheet, capabilities: _capabilities);
+    if (choice == null || !mounted) return;
+    final key = _s(row, 'key');
+    setState(() => _busyDoc = key);
+    try {
+      switch (choice) {
+        case 'scan':
+          await captureDocument(
+            scan: () async => await scanDocuments(pageLimit: 1),
+            cameraFallback: _shot,
+            handlePage: (page) async =>
+                _hold(key, page.name, page.bytes),
+          );
+        case 'camera':
+          final shot = await _shot();
+          if (shot != null) await _hold(key, shot.name, shot.bytes);
+        case 'gallery':
+          final shot = await _shot(gallery: true);
+          if (shot != null) await _hold(key, shot.name, shot.bytes);
+        default:
+          final f = await CustomerDocumentsTransport.choose(false);
+          if (f != null) await _hold(key, f.name, f.bytes);
+      }
+    } catch (_) {
+      // A cancelled or refused picker is not an error the person must read.
+    } finally {
+      if (mounted) setState(() => _busyDoc = '');
+    }
+  }
+
+  Future<CapturedPage?> _shot({bool gallery = false}) async {
+    final x = await ImagePicker().pickImage(
+        source: gallery ? ImageSource.gallery : ImageSource.camera,
+        imageQuality: 85,
+        maxWidth: 1800);
+    if (x == null) return null;
+    return (name: x.name, bytes: await x.readAsBytes());
+  }
+
+  /// Hold a chosen file against its row. The page count of a PDF is a fact
+  /// about the file, measured here and sent up with it so the backend can
+  /// print "2 pages" without ever opening it.
+  Future<void> _hold(String key, String name, Uint8List bytes) async {
+    final ext = name.contains('.') ? name.split('.').last.toLowerCase() : 'jpg';
+    var pages = 1;
+    if (ext == 'pdf') {
+      try {
+        pages = PdfDocument(inputBytes: bytes).pages.count;
+      } catch (_) {
+        pages = 1;
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _picked[key] = PickedDoc(name: name, ext: ext, bytes: bytes);
+      _pages[key] = pages;
+      _skips.remove(key);
+      _thumbUrls.remove(key);
+    });
+  }
+
+  /// Tap a thumbnail: the paper opens INSIDE the app. Never a share sheet,
+  /// never another viewer.
+  Future<void> _viewDoc(Map<String, dynamic> row) async {
+    final key = _s(row, 'key');
+    final local = _picked[key];
+    final choice = await showDocViewer(context,
+        row: local == null
+            ? row
+            : ({
+                ...row,
+                'thumb': {
+                  ..._map(row['thumb']),
+                  'kind': local.ext == 'pdf' ? 'pdf' : 'image',
+                  'pages': _pages[key] ?? 1,
+                },
+              }),
+        url: _thumbUrls[key] ?? '',
+        bytes: local?.bytes);
+    if (!mounted || choice == null) return;
+    switch (choice) {
+      case DocViewerChoice.retake:
+        await _pickForRow(row);
+      case DocViewerChoice.remove:
+        await _removeDoc(row);
+      case DocViewerChoice.keep:
+        break;
+    }
+  }
+
+  Future<void> _removeDoc(Map<String, dynamic> row) async {
+    final key = _s(row, 'key');
+    if (_picked.containsKey(key)) {
+      setState(() {
+        _picked.remove(key);
+        _pages.remove(key);
+      });
+      return;
+    }
+    setState(() => _busyDoc = key);
+    try {
+      final res =
+          _map(await OneRegistrationScreen.rpc('custreg_doc_remove', {
+        'p_kind': key,
+      }));
+      if (!mounted) return;
+      final block = _map(res['block']);
+      setState(() {
+        _message = _s(res, 'message');
+        _busyDoc = '';
+        if (block.isNotEmpty) _lic = _lic.isEmpty ? block : {..._lic, ...block};
+        _thumbUrls.remove(key);
+      });
+    } catch (_) {
+      if (mounted) setState(() => _busyDoc = '');
+    }
+  }
+
+  /// Scan a licence: one photo, and the backend reads the numbers off it. The
+  /// model names nothing the person then sees — the review sheet's title, its
+  /// line, its field labels and its buttons all come back from SQL.
+  Future<void> _scanLicence() async {
+    if (_scanning) return;
+    final scan = _map(_lic['scan']);
+    setState(() {
+      _scanning = true;
+      _message = '';
+    });
+    try {
+      CapturedPage? page;
+      await captureDocument(
+        scan: () async => await scanDocuments(pageLimit: 1),
+        cameraFallback: _shot,
+        handlePage: (p) async => page = p,
+      );
+      if (page == null || !mounted) {
+        setState(() => _scanning = false);
+        return;
+      }
+      final res = await Supabase.instance.client.functions.invoke(
+        'licence-ocr',
+        body: {
+          'image_base64': base64Encode(page!.bytes),
+          'mime_type': page!.name.toLowerCase().endsWith('.png')
+              ? 'image/png'
+              : 'image/jpeg',
+        },
+      );
+      final data = _map(res.data);
+      final review = _map(await OneRegistrationScreen.rpc(
+          'custreg_licence_scan_review', {'p_fields': _map(data['fields'])}));
+      if (!mounted) return;
+      setState(() => _scanning = false);
+      if (review['ok'] != true) {
+        setState(() => _message = _s(review, 'empty_label').isNotEmpty
+            ? _s(review, 'empty_label')
+            : _s(scan, 'none_label'));
+        return;
+      }
+      final take = await _confirmScan(review);
+      if (take != true || !mounted) return;
+      final applied = _map(await OneRegistrationScreen.rpc(
+          'custreg_licence_scan_apply', {'p_values': _map(review['values'])}));
+      if (!mounted) return;
+      final values = _map(applied['values']);
+      if (values.isNotEmpty) _form?.applyMap(values);
+      setState(() => _message = _s(applied, 'message'));
+      RenderLog.write('c2128_lic_scan', 'fields=${values.length}');
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _scanning = false;
+        _message = _s(scan, 'none_label');
+      });
+    }
+  }
+
+  /// The review sheet. Every word on it is in `review`.
+  Future<bool?> _confirmScan(Map<String, dynamic> review) {
+    final rows = ((review['rows'] as List?) ?? const []).map(_map).toList();
+    return showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet)),
+      ),
+      builder: (ctx) => SafeArea(
+        top: false,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+              Ds.space.x16, Ds.space.x24, Ds.space.x16, Ds.space.x16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(_s(review, 'title'), style: Ds.t.title),
+              SizedBox(height: Ds.space.x4),
+              Text(_s(review, 'line'), style: Ds.t.bodySecondary),
+              SizedBox(height: Ds.space.x16),
+              for (final r in rows)
+                Padding(
+                  padding: EdgeInsets.only(bottom: Ds.space.x12),
+                  child: Row(children: [
+                    Expanded(
+                        child: Text(_s(r, 'label'), style: Ds.t.bodySecondary)),
+                    SizedBox(width: Ds.space.x12),
+                    Flexible(
+                      child: Text(_s(r, 'value'),
+                          textAlign: TextAlign.right, style: Ds.t.bodyStrong),
+                    ),
+                  ]),
+                ),
+              SizedBox(height: Ds.space.x8),
+              Semantics(
+                identifier: 'reg_lic_scan_confirm',
+                button: true,
+                child: SizedBox(
+                  height: Ds.touch.minTarget,
+                  child: FilledButton(
+                    onPressed: () => Navigator.of(ctx).pop(true),
+                    child: Text(_s(review, 'confirm_label')),
+                  ),
+                ),
+              ),
+              SizedBox(height: Ds.space.x8),
+              SizedBox(
+                height: Ds.touch.minTarget,
+                child: TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(false),
+                  child: Text(_s(review, 'cancel_label')),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   void _toggleSkip(Map<String, dynamic> row) {
@@ -256,6 +574,7 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
       // that just completed must not leave "Registration pending" on screen.
       unawaited(RegistrationBarDriver.instance.refresh());
       await _load();
+      await _loadLicences();
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -369,6 +688,7 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
         'p_file_name': doc.name,
         'p_mime': mime,
         'p_bytes': doc.bytes.length,
+        'p_pages': _pages[kind] ?? 1,
       });
     } catch (_) {
       // A file that would not go up is not a failed registration: the profile
@@ -592,14 +912,31 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
                   if (step['docs'] == true)
                     Container(
                       key: _docsKey,
-                      child: RegistrationDocumentsSection(
-                        block: _docs,
-                        picked: _picked,
-                        skipped: _skips,
-                        busyKey: _busyDoc,
-                        onPick: _pick,
-                        onSkipToggle: _toggleSkip,
-                      ),
+                      // CMD #2128 — the Licences step is its own surface: the
+                      // three groups, the live counter, thumbnails and the
+                      // in-app viewer. Until that block has arrived the older
+                      // flat list keeps the step usable.
+                      child: _lic['show'] == true
+                          ? RegistrationLicencesSection(
+                              block: _lic,
+                              picked: _picked,
+                              skipped: _skips,
+                              thumbUrls: _thumbUrls,
+                              busyKey: _busyDoc,
+                              scanning: _scanning,
+                              onUpload: _pickForRow,
+                              onView: _viewDoc,
+                              onSkipToggle: _toggleSkip,
+                              onScan: _scanLicence,
+                            )
+                          : RegistrationDocumentsSection(
+                              block: _docs,
+                              picked: _picked,
+                              skipped: _skips,
+                              busyKey: _busyDoc,
+                              onPick: _pick,
+                              onSkipToggle: _toggleSkip,
+                            ),
                     ),
                   if (_message.isNotEmpty) ...[
                     SizedBox(height: Ds.space.x12),

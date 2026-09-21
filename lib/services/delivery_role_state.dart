@@ -20,6 +20,7 @@ import 'package:flutter/widgets.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../utils/render_log.dart';
+import '../models/auth_refresh_policy.dart'; // CMD #2137
 
 class DeliveryRoleState extends ChangeNotifier {
   DeliveryRoleState._();
@@ -35,6 +36,24 @@ class DeliveryRoleState extends ChangeNotifier {
   bool _probed = false;
 
   bool get loading => _loading;
+
+  /// CMD #2137 — the auth user the shell last painted its page stack for.
+  /// Only the FIRST resolution for a login may hold the shell behind a
+  /// spinner: a re-probe on resume (after a failed first probe) used to
+  /// unmount every page, Bulk Upload's pending camera/file pick included.
+  String _paintedFor = '';
+
+  /// Asked by the shell on every build; a "no" means the page stack paints
+  /// for this login, which is recorded so later re-probes never hold it.
+  bool holdShell() {
+    final live = Supabase.instance.client.auth.currentUser?.id ?? '';
+    final hold = AuthRefreshPolicy.holdForDeliveryProbe(
+        resolved: resolved,
+        loading: _loading,
+        paintedForThisUser: _paintedFor.isNotEmpty && _paintedFor == live);
+    if (!hold) _paintedFor = live;
+    return hold;
+  }
 
   /// True only once the probe has completed for the LIVE auth user.
   bool get resolved => _probed && _matchesLiveUser;

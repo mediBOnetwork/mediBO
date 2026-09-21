@@ -101,7 +101,9 @@ void main() {
       expect(us.contains('AuthRefreshPolicy.blanksShell('), isTrue);
       expect(us.contains('} else if (blanks) {'), isTrue);
       final hs = _read('lib/screens/home_shell.dart');
-      expect(hs.contains('AuthRefreshPolicy.holdForDeliveryProbe('), isTrue);
+      expect(hs.contains('if (deliveryRole.holdShell())'), isTrue);
+      final dr = _read('lib/services/delivery_role_state.dart');
+      expect(dr.contains('AuthRefreshPolicy.holdForDeliveryProbe('), isTrue);
     });
     test('a pick landing on a disposed State is handed on, not dropped', () {
       final b = _read('lib/screens/bulk_upload_screen_web.dart');

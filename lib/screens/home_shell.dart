@@ -130,7 +130,6 @@ import 'admin/admin_money_screen.dart'; // CMD #450 — /admin/go/money
 import 'admin/admin_demand_engine_screen.dart'; // CMD #427 — /admin/go/demand_engine
 import 'profile_screen.dart';
 import '../models/shell_nav.dart';
-import '../models/auth_refresh_policy.dart'; // CMD #2137
 import 'storefront_screen.dart';
 import 'supplier/supplier_shell.dart';
 // #745 — drawn by this library's `part` files (mobile + desktop chrome).
@@ -275,8 +274,6 @@ class _HomeShellState extends State<HomeShell> {
   // old element and creates a new one at the new tree position, wiping _uploadedImageBytes
   // and all processedCrop values. With a GlobalKey, Flutter reparents the element instead.
   final GlobalKey _bulkUploadKey = GlobalKey();
-  // CMD #2137 — auth user id the page stack last painted for (see build).
-  String _shellPaintedFor = '';
 
   int _index = 0; // 0 = storefront, 1 = orders, 2 = bulk upload
   String _viewAsKey = 'none'; // tracks active ViewAs identity; reset _index on change
@@ -1572,14 +1569,7 @@ class _HomeShellState extends State<HomeShell> {
         RenderLog.write('c629_surface', 'delivery');
         return const DeliveryHomeScreen();
       }
-      // CMD #2137 — only the FIRST resolution may hold the shell. A re-probe
-      // on resume (after a failed first probe) used to unmount every page,
-      // Bulk Upload's pending camera/file pick included.
-      if (AuthRefreshPolicy.holdForDeliveryProbe(
-          resolved: deliveryRole.resolved,
-          loading: deliveryRole.loading,
-          paintedForThisUser: _shellPaintedFor.isNotEmpty &&
-              _shellPaintedFor == auth.session.authUserId)) {
+      if (deliveryRole.holdShell()) { // CMD #2137 — first paint only
         return const Scaffold(
           backgroundColor: Color(0xFFF5F6F8),
           body: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43))),
@@ -1629,8 +1619,6 @@ class _HomeShellState extends State<HomeShell> {
       );
     }
 
-    // CMD #2137 — the shell has painted its pages for this login.
-    _shellPaintedFor = auth.isAuthenticated ? auth.session.authUserId : '';
     return LayoutBuilder(
       builder: (context, constraints) {
         final isDesktop = constraints.maxWidth >= 900;

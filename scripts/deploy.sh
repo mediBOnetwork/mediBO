@@ -310,10 +310,13 @@ bash scripts/gen_repo_map.sh || echo "⚠️  REPO_MAP generation failed (contin
 if [ "${MEDIBO_SKIP_CLEAN:-0}" = "1" ] && [ -f build/web/index.html ]; then
   echo "[build] incremental — toolchain and pubspec.lock unchanged, keeping the Dart build cache"
   echo "        (a refused bundle is rebuilt clean by the caller; the guards below are unchanged)"
-  # main.dart.js is renamed to main.<commit>.dart.js after every build, so the
-  # previous run's fingerprinted copies would otherwise pile up in build/web and
-  # be uploaded alongside the new one.
-  rm -f build/web/main.*.dart.js build/web/main.*.dart.js.map 2>/dev/null || true
+  # CMD #2157 — PRUNE THE OUTPUT, KEEP THE CACHE. The compile cache lives in
+  # .dart_tool/flutter_build; build/web is only the copy Flutter writes out.
+  # Deleting build/web (and nothing else) means a file removed from the app —
+  # an old main.<commit>.dart.js, a dropped asset — cannot linger in the
+  # snapshot and be uploaded forever, while the Dart cache survives. Flutter
+  # re-copies any missing output from its cache without recompiling it.
+  rm -rf build/web 2>/dev/null || true
   _phase_put clean_build 0
 else
   flutter clean
@@ -336,7 +339,11 @@ echo "[crash] release=${SENTRY_RELEASE} dist=${SENTRY_DIST}"
 # fresh version.json and concludes nothing is wrong. This one cannot be re-read
 # from a cached document. The COMMIT cannot be used here — it is created by the
 # `git commit` below, after the build.
-flutter build web --release \
+# CMD #2157 — --no-wasm-dry-run: since Flutter 3.22 every JS release build also
+# compiles the whole app to Wasm just to PRINT compatibility warnings ("Wasm dry
+# run failed … Use --no-wasm-dry-run to disable"). We ship JS only, the output
+# is discarded, and it was a second full compile on every deploy.
+flutter build web --release --no-wasm-dry-run \
   --dart-define=MEDIBO_CHANGE="${N}" \
   --dart-define=SENTRY_RELEASE="${SENTRY_RELEASE}" \
   --dart-define=SENTRY_DIST="${SENTRY_DIST}"
@@ -522,6 +529,7 @@ if [ "$BOOT_OK" -ne 1 ]; then
     "Fix the build and retry. Full boot-gate output is above."
 fi
 echo "[boot-gate] PASSED — bundle is safe to deploy"
+_phase_mark "boot gate"
 
 # ── Amend git commit with fingerprinted artifacts (background history only) ─
 cp web/_redirects "$WEB/_redirects"
@@ -629,6 +637,11 @@ echo "[upload-diff] version.json is last: the snapshot already carries main.${SH
 # ── LIVE DEPLOY: wrangler Direct Upload — bypasses Cloudflare Pages git queue ──
 echo ""
 echo "⬆  Uploading build/web to Cloudflare Pages (project=medibo, branch=main)…"
+# CMD #2157 — everything since the boot gate (the commit, the pre-upload smoke
+# gate on a preview, the feature journey, the manifest) is ITS OWN number.
+# Until #2157 it all landed in upload_s, so a 12 s wrangler call read as a
+# "461 s upload" and the upload was blamed for the smoke gate's 180 s budget.
+_phase_mark "smoke gate"
 DEPLOY_START=$(date +%s)
 WRANGLER_OUTPUT=$(npx wrangler pages deploy "$WEB" \
   --project-name=medibo \

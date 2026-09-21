@@ -13,6 +13,9 @@ import 'ds_tone.dart';
 import 'notify_control.dart';
 import 'product_image.dart';
 
+// CMD #2123 — the row variant of this card (cart, Bulk Upload) ships with it.
+export 'product_row_card.dart';
+
 /// CMD #2122 — THE product card. One widget, every grid: storefront, home
 /// rails, category, catalogue, search results and the company page.
 ///

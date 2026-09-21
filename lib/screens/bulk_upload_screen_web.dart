@@ -24,8 +24,9 @@ import '../config/api_keys.dart';
 import '../design_tokens.dart';
 import '../models/product.dart';
 import '../widgets/bulk_file_viewer.dart';
-import '../widgets/product_image.dart';
 import '../widgets/qty_picker.dart';
+import '../widgets/product_row_card.dart';
+import '../models/product_card_view.dart';
 import 'product_detail_screen.dart';
 import '../services/ocr_edge_client.dart';
 import '../services/ui_copy.dart';
@@ -5409,92 +5410,8 @@ class _MobLine extends StatelessWidget {
       );
 }
 
-/// The state badge: one word and the two colours that came with it.
-class _MobStateBadge extends StatelessWidget {
-  final StateBadge badge;
-  const _MobStateBadge({required this.badge});
-
-  @override
-  Widget build(BuildContext context) {
-    final bg = badge.bg;
-    final fg = badge.fg;
-    return Container(
-      padding: EdgeInsets.symmetric(
-          horizontal: Ds.space.x8, vertical: Ds.space.x4 / 2),
-      decoration: BoxDecoration(
-        color: bg == null
-            ? (badge.available ? Ds.c.success : Ds.c.danger)
-            : Color(bg),
-        borderRadius: BorderRadius.circular(Ds.r.chip),
-      ),
-      child: Text(badge.label,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: Ds.t.caption.copyWith(
-              color: fg == null ? Ds.c.surface : Color(fg),
-              fontWeight: FontWeight.w600)),
-    );
-  }
-}
-
-/// CMD #2119 — the price line is the SALE price and nothing else.
-///
-/// #2115 printed the MRP first and the sale badge after it. On a 360px phone
-/// beside a photo there was never room for both, so the badge — the number the
-/// buyer is actually paying — lost its own label to an ellipsis and read
-/// "Sa… PTR". The MRP is gone; what remains is one badge with its full label
-/// and `price_display`: the formatted amount for an approved viewer, the
-/// locked word for everyone else. The app still never asks which it is
-/// holding, and it still computes no money.
-class _MobPriceLine extends StatelessWidget {
-  final Product product;
-  const _MobPriceLine({required this.product});
-
-  @override
-  Widget build(BuildContext context) {
-    final cp = product.pricing?.cardPrice;
-    if (cp == null || cp.priceDisplay.isEmpty) return const SizedBox.shrink();
-    try {
-      RenderLog.write('c2119_price_sale_only', '1');
-    } catch (_) {}
-    final ink = cp.saleFg == null ? Ds.c.surface : Color(cp.saleFg!);
-    // The badge hugs its content and the label is NOT flexible: with the MRP
-    // gone there is room for the whole of it, and a label that can shrink is
-    // exactly how "Sale price:" became "Sa…".
-    // FittedBox rather than an ellipsis: on a very narrow phone the whole
-    // badge scales down together, so the label is always readable in FULL
-    // instead of being the part that gets cut.
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: FittedBox(
-        fit: BoxFit.scaleDown,
-        alignment: Alignment.centerLeft,
-        child: Container(
-        padding: EdgeInsets.symmetric(
-            horizontal: Ds.space.x8, vertical: Ds.space.x4 / 2),
-        decoration: BoxDecoration(
-          color: cp.saleBg == null ? Ds.c.brand : Color(cp.saleBg!),
-          borderRadius: BorderRadius.circular(Ds.r.chip),
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          if (cp.saleLabel.isNotEmpty) ...[
-            Text(cp.saleLabel,
-                maxLines: 1,
-                softWrap: false,
-                style: Ds.t.caption.copyWith(color: ink)),
-            SizedBox(width: Ds.space.x4),
-          ],
-          Text(cp.priceDisplay,
-              maxLines: 1,
-              softWrap: false,
-              style: Ds.t.caption
-                  .copyWith(color: ink, fontWeight: FontWeight.w700)),
-        ]),
-        ),
-      ),
-    );
-  }
-}
+// CMD #2123 — the state badge and the sale-price line moved into the shared
+// row card (lib/widgets/product_row_card.dart): RowStateBadge / RowPriceBadge.
 
 /// CMD #2115 — the quantity popup.
 ///
@@ -5566,52 +5483,33 @@ class _MobProductBlock extends StatelessWidget {
           isAlternative ? 'c2119_alt_composition' : 'c2119_selected_qty_pack',
           '1');
     } catch (_) {}
-    final h = _mobBlockH(4);
     final badge = product.availBadge;
-    final qtyLine = _line2();
-    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      // The photo is the only tap target that leaves the list: everything else
-      // in the block belongs to the row it sits in (open the alternatives, or
-      // pick one).
-      Semantics(
-        identifier: 'bulk_product_open_${product.id}',
-        button: true,
-        label: c('bulk.open_product_hint'),
-        child: InkWell(
-          onTap: () => _openBulkProduct(context, product),
-          borderRadius: BorderRadius.circular(Ds.r.chip),
-          child: ProductImage(
-            url: product.imageUrl,
-            width: h,
-            height: h,
-            radius: BorderRadius.circular(Ds.r.chip),
-          ),
-        ),
-      ),
-      SizedBox(width: Ds.space.x12),
-      Expanded(
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _MobLine(
-            child: Text(product.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Ds.t.body.copyWith(fontWeight: FontWeight.w600)),
-          ),
-          _MobLine(
-            child: Text(qtyLine,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Ds.t.caption),
-          ),
-          _MobLine(child: _MobPriceLine(product: product)),
-          _MobLine(
-            child: badge == null
-                ? const SizedBox.shrink()
-                : _MobStateBadge(badge: badge),
-          ),
-        ]),
-      ),
-    ]);
+    final price = ProductCardView.of(product).price;
+    if (price != null && price.priceDisplay.isNotEmpty) {
+      try {
+        RenderLog.write('c2119_price_sale_only', '1');
+      } catch (_) {}
+    }
+    // CMD #2123 — the row IS the shared card's row variant, fed the same
+    // product payload the grid card reads. The handwriting crop, checkbox,
+    // retry and confidence bar stay on the review row around it.
+    return ProductRowCard(
+      surface: 'bulk',
+      product: product,
+      name: product.name,
+      line2: _line2(),
+      price: RowPriceBadge.fromCardPrice(price),
+      line4: badge == null
+          ? null
+          : RowStateBadge(
+              label: badge.label,
+              bg: badge.bg,
+              fg: badge.fg,
+              available: badge.available),
+      onOpen: () => _openBulkProduct(context, product),
+      openSemanticsId: 'bulk_product_open_${product.id}',
+      openHint: c('bulk.open_product_hint'),
+    );
   }
 }
 

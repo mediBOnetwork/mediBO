@@ -405,6 +405,7 @@ class OpsOrderDetailView extends StatelessWidget {
             _s(payload, 'customer'),
             _s(payload, 'amount_display'),
             _s(payload, 'zone_label'),
+            _s(payload, 'receive_label'), // CMD #2139 — Delivery / Self pickup
           ].where((e) => e.isNotEmpty).join(' · '),
           style: Ds.t.caption,
         ),

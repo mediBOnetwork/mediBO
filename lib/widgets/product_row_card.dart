@@ -84,7 +84,12 @@ class ProductRowCard extends StatelessWidget {
     this.openSemanticsId = '',
     this.openHint = '',
     this.trailing,
+    this.inlineControl = false,
   });
+
+  /// CMD #2139 — the cart row: three lines, the control sits on the price
+  /// line beside the badge, and the photo is exactly those three lines tall.
+  final bool inlineControl;
 
   /// One text line of the block.
   static double get lineH => Ds.space.x24;
@@ -98,7 +103,9 @@ class ProductRowCard extends StatelessWidget {
     try {
       RenderLog.write('c2123_row_card_$surface', '1');
     } catch (_) {}
-    final side = blockHeight(controlLine: line4IsControl);
+    final side = inlineControl
+        ? lineH * 2 + Ds.touch.minTarget
+        : blockHeight(controlLine: line4IsControl);
     Widget nameText = Text(
       name,
       maxLines: 1,
@@ -136,11 +143,22 @@ class ProductRowCard extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: Ds.t.caption),
             ),
-            _RowLine(height: lineH, child: price ?? const SizedBox.shrink()),
-            _RowLine(
-              height: line4IsControl ? Ds.touch.minTarget : lineH,
-              child: line4 ?? const SizedBox.shrink(),
-            ),
+            if (inlineControl)
+              _RowLine(
+                height: Ds.touch.minTarget,
+                child: Row(children: [
+                  Flexible(child: price ?? const SizedBox.shrink()),
+                  SizedBox(width: Ds.space.x8),
+                  ?line4,
+                ]),
+              )
+            else ...[
+              _RowLine(height: lineH, child: price ?? const SizedBox.shrink()),
+              _RowLine(
+                height: line4IsControl ? Ds.touch.minTarget : lineH,
+                child: line4 ?? const SizedBox.shrink(),
+              ),
+            ],
           ],
         ),
       ),
@@ -352,7 +370,16 @@ class RowQtyChip extends StatefulWidget {
     required this.onPicked,
     this.locked = false,
     this.semanticsId = 'cart_qty_chip',
+    this.pickerRpc = '',
+    this.compact = false,
   });
+
+  /// CMD #2139 — non-empty opens the backend's sheet (e.g. `cart_qty_picker`,
+  /// which ends with "Remove from cart") instead of the plain dialog.
+  final String pickerRpc;
+
+  /// Badge-height chip, centred in a full touch target.
+  final bool compact;
 
   @override
   State<RowQtyChip> createState() => _RowQtyChipState();
@@ -373,11 +400,13 @@ class _RowQtyChipState extends State<RowQtyChip> {
   static String _label(Map<String, dynamic> m) => (m['label'] ?? '').toString();
 
   Future<void> _open() async {
-    final picked = await showQtyPickerChoice(
-      context,
-      packType: (widget.chip['pack_type'] ?? '').toString(),
-      current: (widget.chip['qty'] as num?)?.toInt() ?? 0,
-    );
+    final packType = (widget.chip['pack_type'] ?? '').toString();
+    final current = (widget.chip['qty'] as num?)?.toInt() ?? 0;
+    final picked = widget.pickerRpc.isNotEmpty
+        ? await showCardQtyPicker(context,
+            packType: packType, current: current, rpc: widget.pickerRpc)
+        : await showQtyPickerChoice(context,
+            packType: packType, current: current);
     if (picked == null || !mounted) return;
     setState(() => _pending = picked.label);
     widget.onPicked(picked.value);
@@ -396,9 +425,19 @@ class _RowQtyChipState extends State<RowQtyChip> {
       child: InkWell(
         onTap: widget.locked ? null : _open,
         borderRadius: BorderRadius.circular(Ds.r.chip),
-        child: Container(
+        child: SizedBox(
           height: Ds.touch.minTarget,
-          padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
+          child: Center(
+            widthFactor: 1,
+            child: _chipBody(text, tint))),
+      ),
+    );
+  }
+
+  Widget _chipBody(String text, Color tint) => Container(
+          height: widget.compact ? Ds.space.x24 : Ds.touch.minTarget,
+          padding: EdgeInsets.symmetric(
+              horizontal: widget.compact ? Ds.space.x8 : Ds.space.x12),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(Ds.r.chip),
             border: Border.all(color: tint),
@@ -408,14 +447,11 @@ class _RowQtyChipState extends State<RowQtyChip> {
               child: Text(text,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: Ds.t.body
+                  style: (widget.compact ? Ds.t.caption : Ds.t.body)
                       .copyWith(color: tint, fontWeight: FontWeight.w600)),
             ),
             SizedBox(width: Ds.space.x4),
             Icon(Icons.keyboard_arrow_down, size: Ds.space.x16, color: tint),
           ]),
-        ),
-      ),
-    );
-  }
+        );
 }

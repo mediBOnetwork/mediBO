@@ -159,6 +159,10 @@ class _StorePinPickerState extends State<StorePinPicker> {
               center: centre,
               zoom: (widget.geo['default_zoom'] as num?)?.toDouble() ?? 16,
               fitToContent: false,
+              // CMD #2127 — the centre IS the content on a picker; without
+              // this the map never drew at all (map_config's empty sentence
+              // was painted over it).
+              centerCounts: true,
               cameraSignature: _cameraSignature,
               logKey: 'c1888_pin_map',
               borderRadius: Ds.r.rCard,

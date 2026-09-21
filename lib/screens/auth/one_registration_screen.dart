@@ -33,6 +33,7 @@ import '../../widgets/doc_upload_sheet.dart';
 import '../../widgets/doc_viewer_screen.dart';
 import '../../widgets/registration_documents_section.dart';
 import '../../widgets/registration_licences_section.dart';
+import '../../widgets/registration_location_step.dart';
 import '../../widgets/registration_wizard.dart';
 import '../customer_documents_screen.dart' show CustomerDocumentsTransport;
 
@@ -852,6 +853,7 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
     final fields = ((step['fields'] as List?) ?? const [])
         .map((e) => e.toString())
         .toList();
+    final mapBlock = _map(step['map']);
     final chips = <String, List<String>>{
       for (final e in _map(_wiz['chips']).entries)
         if (e.value is List)
@@ -861,9 +863,16 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
       for (final e in _map(_wiz['field_notes']).entries)
         e.key: (e.value ?? '').toString(),
     };
+    // CMD #2127 — a step may name its own primary button ("Confirm location");
+    // absent, the flow's own Continue stands.
+    final stepContinue = _s(step, 'continue_label');
     final continueLabel = _saving
         ? (last ? _s(_wiz, 'submitting_label') : _s(_wiz, 'saving_label'))
-        : (last ? _s(_wiz, 'submit_label') : _s(_wiz, 'continue_label'));
+        : (last
+            ? _s(_wiz, 'submit_label')
+            : (stepContinue.isNotEmpty
+                ? stepContinue
+                : _s(_wiz, 'continue_label')));
 
     return LayoutBuilder(builder: (context, box) {
       final pad = box.maxWidth >= 600 ? Ds.space.x24 : Ds.space.x16;
@@ -902,7 +911,30 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
                   if (step['docs'] == true && pending['show'] == true && _s(pending, 'line').isNotEmpty)
                     _note(_s(pending, 'line'), Ds.c.warningSoft),
                   SizedBox(height: Ds.space.x16),
-                  if (ctrl != null)
+                  // CMD #2127 — the location step is a MAP, not five boxes:
+                  // the pin is the input and the address is the backend's
+                  // answer to it, shown in a card with Edit. Every other step
+                  // is the form it always was.
+                  if (ctrl != null && mapBlock.isNotEmpty)
+                    RegistrationLocationStep(
+                      map: mapBlock,
+                      values: ctrl.valuesForKeys(const [
+                        'address', 'landmark', 'city', 'state',
+                        'pincode', 'district', 'latitude', 'longitude',
+                        'store_location_link',
+                      ]),
+                      rpc: (fn, params) =>
+                          OneRegistrationScreen.rpc(fn, params),
+                      onValues: (vals) {
+                        ctrl.applyMap(vals);
+                        final la = (vals['latitude'] ?? '').toString();
+                        final ln = (vals['longitude'] ?? '').toString();
+                        if (la.isNotEmpty && ln.isNotEmpty) {
+                          ctrl.setPin(la, ln);
+                        }
+                      },
+                    )
+                  else if (ctrl != null)
                     CustomerRegistrationForm(
                       controller: ctrl,
                       onlyFields: fields,

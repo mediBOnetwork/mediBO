@@ -206,6 +206,11 @@ class CustomerFormController extends ChangeNotifier {
   /// Pre-fill from a backend map (lead prefill, OCR extract, existing profile).
   /// Keys the schema does not carry are still stored, so a later schema load
   /// picks them up.
+  /// CMD #2127 — what is held for these keys right now. A step that asks the
+  /// backend about the address sends this and applies what comes back.
+  Map<String, String> valuesForKeys(List<String> keys) =>
+      {for (final k in keys) k: (_ctl[k]?.text ?? '').trim()};
+
   void applyMap(Map? values) {
     if (values == null) return;
     values.forEach((k, v) => setValue(k.toString(), v));

@@ -247,4 +247,83 @@ end $function$
 revoke all on function public.custreg_location_resolve(numeric, numeric, jsonb, boolean) from public, anon;
 grant execute on function public.custreg_location_resolve(numeric, numeric, jsonb, boolean) to authenticated, service_role;
 
+-- CMD #2133 — the permanent journey bug-2133, found by convention
+-- (_dev_journey_by_convention → _journey_bug_2133). It runs the REAL RPCs as a
+-- real signed-in user and leaves by the exception door, so every write (and the
+-- impersonation) is rolled back: nothing simulated, nothing kept.
+create or replace function public._journey_bug_2133()
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+declare
+  v_uid  uuid;
+  v_a1 boolean;  -- the predicate: bounds, NaN, Infinity, text, absent
+  v_a2 boolean;  -- resolve refuses an off-globe pin with ui_copy's sentence
+  v_a3 boolean;  -- ...and echoes NOTHING of it back
+  v_a4 boolean;  -- resolve still accepts a real pin (no over-blocking)
+  v_a5 boolean;  -- submit lists bad coordinates in rejected_keys, stores the rest
+  v_bad  jsonb; v_good jsonb; v_sub jsonb;
+  v_err  text;
+  v_ok   boolean;
+begin
+  v_a1 := public._custreg_coord_ok('latitude', '90')
+      and public._custreg_coord_ok('latitude', '-90')
+      and public._custreg_coord_ok('longitude', '180')
+      and public._custreg_coord_ok('longitude', '-180')
+      and public._custreg_coord_ok('latitude', '')
+      and public._custreg_coord_ok('latitude', null)
+      and not public._custreg_coord_ok('latitude', '90.0001')
+      and not public._custreg_coord_ok('longitude', '-180.5')
+      and not public._custreg_coord_ok('latitude', 'NaN')
+      and not public._custreg_coord_ok('latitude', 'Infinity')
+      and not public._custreg_coord_ok('longitude', 'abc');
+
+  select id into v_uid from auth.users order by created_at limit 1;
+
+  begin
+    perform set_config('request.jwt.claims',
+      jsonb_build_object('sub', v_uid, 'role', 'authenticated')::text, true);
+
+    v_bad := public.custreg_location_resolve(123, 500, '{}'::jsonb, false);
+    v_a2 := v_bad->>'ok' = 'false' and v_bad->>'error' = 'invalid_point'
+        and coalesce(v_bad->>'message', '') = public._c('custreg.loc_invalid_point')
+        and coalesce(v_bad->>'message', '') <> '';
+    v_a3 := not (v_bad ? 'values') and v_bad::text not like '%500%';
+
+    v_good := public.custreg_location_resolve(12.97, 77.59, '{}'::jsonb, false);
+    v_a4 := v_good->>'ok' = 'true' and v_good#>>'{values,latitude}' = '12.970000';
+
+    v_sub := public.customer_registration_submit(
+      '{"pharmacy_name":"bug-2133 probe","address":"bug-2133 probe","city":"Bengaluru","pincode":"560001","latitude":"123","longitude":"abc","landmark":"bug-2133 probe"}'::jsonb);
+    v_a5 := coalesce(v_sub->'rejected_keys', '[]'::jsonb) @> '["latitude","longitude"]'::jsonb
+        and v_sub->>'ok' = 'true';
+
+    raise exception using errcode = 'J2133', message = 'planned rollback';
+  exception
+    when sqlstate 'J2133' then null;
+    when others then v_err := sqlerrm;
+  end;
+
+  v_ok := coalesce(v_a1,false) and coalesce(v_a2,false) and coalesce(v_a3,false)
+      and coalesce(v_a4,false) and coalesce(v_a5,false) and v_err is null;
+
+  return jsonb_build_object(
+    'status', case when v_ok then 'passed' else 'failed' end,
+    'evidence', jsonb_build_object(
+      'db_proof',
+        'predicate bounds/NaN/Infinity/text=' || coalesce(v_a1,false)::text ||
+        ' | resolve(123,500) refused invalid_point=' || coalesce(v_a2,false)::text ||
+        ' | nothing echoed=' || coalesce(v_a3,false)::text ||
+        ' | real pin accepted=' || coalesce(v_a4,false)::text ||
+        ' | submit rejects bad lat/lng=' || coalesce(v_a5,false)::text ||
+        coalesce(' | probe error: ' || v_err, ''),
+      'resolve_bad', v_bad,
+      'submit_rejected', v_sub->'rejected_keys'));
+end $function$;
+
+revoke all on function public._journey_bug_2133() from public, anon, authenticated;
+grant execute on function public._journey_bug_2133() to service_role;
+
 commit;

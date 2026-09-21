@@ -112,7 +112,7 @@
   "lib/widgets/pdf_frame_stub.dart": 1,
   "lib/widgets/pinned_footer_list.dart": 1,
   "lib/widgets/policy_page_layout.dart": 8,
-  "lib/widgets/product_card.dart": 66,
+  "lib/widgets/product_card.dart": 4,
   "lib/widgets/product_image.dart": 3,
   "lib/widgets/report_issue_section.dart": 39,
   "lib/widgets/route_google_map_panel.dart": 5,

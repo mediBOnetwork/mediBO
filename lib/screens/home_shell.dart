@@ -109,6 +109,7 @@ import 'pharmacy/paper_sale_screen.dart'; // CMD #429 — /admin/go/paper_sale
 // already built and already routed by URL; what none of them had was a way in
 // from the account that owns the data. They are My Shop's tiles now.
 import 'pharmacy/my_shop_screen.dart';
+import 'customer/profile_tab_screen.dart'; // CMD #2125
 import 'pharmacy/rx_scan_screen.dart';
 import 'pharmacy/pharmacy_expiry_screen.dart';
 import 'pharmacy/pharmacy_variance_screen.dart';
@@ -1702,10 +1703,8 @@ class _HomeShellState extends State<HomeShell> {
                 child: AdminFulfillmentScreen(
                     allowedTabs:
                         Access.instance.allowedTabIndexes('fulfillment'))), _handleAdminNav)),
-          // CHANGE #536 — index 11, MY SHOP. It is appended rather than slotted
-          // in beside the customer's other three pages because indices 3–10 are
-          // addressed by number from _handleAdminNav; inserting would have
-          // silently renumbered every admin section.
+          // CHANGE #536 — index 11, MY SHOP, appended: 3–10 are addressed by number
+          // from _handleAdminNav. CMD #2125 — opened from the Profile tab (15) now.
           MyShopScreen(navigate: _handleAdminNav, active: _index == 11),
           // #747 — index 12, the CATALOGUE. Appended for My Shop's reason (3–10
           // are addressed by number); `active` keeps it from fetching unseen.
@@ -1728,6 +1727,7 @@ class _HomeShellState extends State<HomeShell> {
           // CHANGE #1016 — index 13 Money, index 14 More: staff_home() rendered.
           adminPage(() => shellStaffHomePage('money', _index == 13, _handleAdminNav)),
           adminPage(() => shellStaffHomePage('more', _index == 14, _handleAdminNav)),
+          ProfileTabScreen(active: _index == 15, navigate: _handleAdminNav, onOpenCart: _openCart),
         ];
 
         // Customer ViewAs: force customer shell (header + nav), never admin chrome

@@ -8,7 +8,10 @@ import '../../user_state.dart';
 import '../../widgets/delete_account_section.dart';
 import '../admin/loyalty_admin_screen.dart';
 import '../admin/nav_registry_view.dart' show navIcon, navIconResolves;
+import '../about_screen.dart';
 import '../auth/one_registration_screen.dart';
+import '../customer_documents_screen.dart';
+import '../legal_pages.dart' show PrivacyScreen, TermsScreen;
 import '../notifications_inbox_screen.dart';
 import '../orders_screen.dart';
 import '../profile_screen.dart';
@@ -26,11 +29,13 @@ import 'my_account_screen.dart';
 /// arrives from `customer_surfaces()`. A route this build has never heard of
 /// resolves to null, and the caller skips it in silence rather than throwing:
 /// a registry row that ships before its screen must not break the menu.
-Widget? customerMenuScreen(String routeKey) => switch (routeKey) {
+Widget? customerMenuScreen(String routeKey, {String tab = ''}) => switch (routeKey) {
       // CHANGE #840 — the account page. Every other row below is also a tab
       // INSIDE it; they stay routable because the registry, not this file,
       // decides where a customer reaches them from.
-      'cust_account' => const MyAccountScreen(),
+      // CMD #2125 — a registry row may name the account tab it opens
+      // (`feature_registry.tab_screen`), e.g. the Profile tab's Payments row.
+      'cust_account' => MyAccountScreen(initialTab: tab),
       'cust_orders' => const OrdersScreen(),
       // CMD #1834 — the Edit profile screen is DELETED, and its form is not in
       // Profile & KYC either. The registry row is inactive; a stale row or an
@@ -55,6 +60,11 @@ Widget? customerMenuScreen(String routeKey) => switch (routeKey) {
       // included), so there is no registry row to go stale behind it — and it
       // opens the SAME screen the bar and Home open.
       'cust_registration' => const OneRegistrationScreen(),
+      // CMD #2125 — the Profile tab's doors onto screens that already exist.
+      'cust_documents' => const CustomerDocumentsScreen(),
+      'cust_about' => const AboutScreen(),
+      'cust_privacy' => const PrivacyScreen(),
+      'cust_terms' => const TermsScreen(),
       _ => null,
     };
 

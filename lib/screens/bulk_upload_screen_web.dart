@@ -318,6 +318,13 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   bool get _isLoading => _step != _LoadStep.idle;
 
+  // CMD #2137 — a pick that came back to a disposed State. If anything ever
+  // unmounts this screen while the camera/file picker is open, the file the
+  // user just chose is parked here and the NEXT State ingests it on mount,
+  // instead of being dropped on the floor ("first pick lost").
+  static final List<({String name, Uint8List bytes})> _pendingPicks = [];
+  static _BulkUploadScreenState? _liveState;
+
   static const _kSessionKey = 'bulk_upload_session';
   static const _kImageKey = 'bulk_upload_image';
   static const _kImageMetaKey = 'bulk_upload_image_meta';
@@ -366,6 +373,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   @override
   void dispose() {
+    if (_liveState == this) _liveState = null;
     if (_gWaConvertTrigger == _checkAndStartConvert) _gWaConvertTrigger = null;
     if (BulkUploadScreen.onWaOrderPlaced == _doWaFinalize) BulkUploadScreen.onWaOrderPlaced = null;
     _scrollCtrl.dispose();
@@ -375,6 +383,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   @override
   void initState() {
     super.initState();
+    _liveState = this;
     _gWaConvertTrigger = _checkAndStartConvert;
     // Pick up any pending convert that was set before initState ran.
     if (BulkUploadScreen._pendingWaConvert != null) {
@@ -383,8 +392,19 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       });
     } else if (widget.preloadedItems != null) {
       _loadPreloadedItems();
+    } else if (_pendingPicks.isNotEmpty) {
+      // CMD #2137 — a pick handed back to a State that no longer existed.
+      WidgetsBinding.instance.addPostFrameCallback((_) => _drainPendingPicks());
     } else {
       _loadSession();
+    }
+  }
+
+  Future<void> _drainPendingPicks() async {
+    while (mounted && _pendingPicks.isNotEmpty) {
+      final p = _pendingPicks.removeAt(0);
+      try { RenderLog.write('c2137_pick_recovered', p.name); } catch (_) {}
+      await _processPickedFile(p.name, p.bytes);
     }
   }
 
@@ -810,6 +830,18 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   // CHANGE #312: shared ingest entry — both camera and upload feed here.
   Future<void> _processPickedFile(String fileName, Uint8List fileBytes) async {
+    if (!mounted) {
+      // The screen was rebuilt while the picker was open. Hand the file to
+      // the State that replaced this one; park it if none is mounted yet.
+      final live = _liveState;
+      if (live != null && live != this && live.mounted) {
+        try { RenderLog.write('c2137_pick_recovered', fileName); } catch (_) {}
+        return live._processPickedFile(fileName, fileBytes);
+      }
+      _pendingPicks.add((name: fileName, bytes: fileBytes));
+      try { RenderLog.write('c2137_pick_parked', fileName); } catch (_) {}
+      return;
+    }
     try { RenderLog.write('c312_ingest_start', fileName); } catch (_) {}
     // Always start fresh — clear any stale session (including old bbox coordinates)
     // so the previous result never bleeds into the new upload's crop display.

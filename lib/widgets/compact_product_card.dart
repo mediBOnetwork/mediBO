@@ -5,13 +5,15 @@ import '../data/medicine_repository.dart';
 import '../design_tokens.dart';
 import '../models/product.dart';
 import '../models/product_card_view.dart';
-import '../models/storefront_p3.dart' show WishlistResult;
+import '../models/storefront_p3.dart' show NotifyResult, WishlistResult;
 import '../utils/toast.dart';
 import '../theme.dart';
 import 'animations.dart';
 import 'ds_tone.dart';
 import 'notify_control.dart';
 import 'product_image.dart';
+import 'qty_picker.dart';
+import '../utils/render_log.dart';
 
 // CMD #2123 — the row variant of this card (cart, Bulk Upload) ships with it.
 export 'product_row_card.dart';
@@ -221,17 +223,11 @@ class CompactProductCard extends StatelessWidget {
                     const SizedBox(height: _gapS),
                     SizedBox(
                       height: _footH,
-                      child: view.hasFoot
-                          ? Text(
-                              view.footLabel,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: AppType.t2.copyWith(
-                                color: dsToneFg(view.footTone),
-                                fontWeight: FontWeight.w600,
-                              ),
-                            )
-                          : const SizedBox.shrink(),
+                      child: _CardFoot(
+                        product: product,
+                        view: view,
+                        soldOut: soldOut,
+                      ),
                     ),
                   ],
                 ),
@@ -607,7 +603,17 @@ class _Artwork extends StatelessWidget {
         Positioned(
           right: CompactProductCard._gapS,
           bottom: CompactProductCard._gapS,
-          child: soldOut
+          child: soldOut && CardAction.of(product.card) != null
+              ? SizedBox(
+                  height: CompactProductCard.pillH,
+                  child: Center(
+                    child: CardNotifyButton(
+                      productId: product.id,
+                      action: CardAction.of(product.card)!,
+                    ),
+                  ),
+                )
+              : soldOut
               ? SizedBox(
                   height: CompactProductCard.pillH,
                   child: Center(
@@ -773,6 +779,45 @@ class CompactCartControl extends StatelessWidget {
   Widget build(BuildContext context) {
     final cart = AppState.of(context);
     final qty = cart.quantityOf(product.id);
+
+    // CMD #2124 — a card that carries `action` opens the ONE qty picker from
+    // the + and shows the chosen quantity on a pill that reopens it.
+    final action = CardAction.of(product.card);
+    if (action != null) {
+      try {
+        RenderLog.write('c2124_card_action', qty > 0 ? 'pill' : 'plus');
+      } catch (_) {}
+      Future<void> pick() async {
+        if (cart.isPending(product.id)) return;
+        final picked = await showCardQtyPicker(
+          context,
+          packType: action.packType,
+          current: qty,
+          rpc: action.pickerRpc.isEmpty ? 'card_qty_picker' : action.pickerRpc,
+        );
+        if (picked == null || picked.value == qty) return;
+        cart.setQuantityId(product.id, picked.value);
+        if (qty == 0 && picked.value > 0) {
+          try {
+            MedicineRepository().incrementSalesCount(product.id);
+          } catch (_) {}
+        }
+      }
+
+      if (qty > 0) {
+        return _QtyPill(
+          key: const ValueKey('qty-pill'),
+          label: action.pillLabel(qty),
+          onTap: pick,
+        );
+      }
+      final a = product.availability;
+      return _PlusButton(
+        key: const ValueKey('add'),
+        label: a?.ctaShort.isNotEmpty == true ? a!.ctaShort : (a?.ctaLabel ?? ''),
+        onTap: pick,
+      );
+    }
 
     if (qty > 0) {
       return _Stepper(
@@ -1364,5 +1409,227 @@ class _PurchaseBadge extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// CMD #2124 — the chosen quantity on the button: a filled brand pill
+/// ("5 strip ⌄") in the +'s corner. The words are the backend's template
+/// filled with the cart's number; tapping it reopens the qty picker.
+class _QtyPill extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  const _QtyPill({super.key, required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      identifier: 'card_qty_pill',
+      button: true,
+      label: label,
+      child: SizedBox(
+        height: CompactProductCard.pillH,
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: CompactProductCard.stepperW),
+            child: Material(
+              color: Ds.c.brand,
+              borderRadius: BorderRadius.circular(Rad.pill),
+              child: InkWell(
+                key: const ValueKey('card-qty-pill'),
+                borderRadius: BorderRadius.circular(Rad.pill),
+                onTap: onTap,
+                child: SizedBox(
+                  height: CompactProductCard.plusDot,
+                  child: Padding(
+                    padding: EdgeInsets.only(left: Ds.space.x12, right: Ds.space.x8),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              label,
+                              maxLines: 1,
+                              style: AppType.l4.copyWith(
+                                color: Ds.c.surface,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        ),
+                        SizedBox(width: Ds.space.x4),
+                        Icon(Icons.keyboard_arrow_down_rounded,
+                            size: Ds.space.x16, color: Ds.c.surface),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// CMD #2124 — the ids the viewer asked to be told about in this session, so
+/// the button and the foot line of every card showing that pack flip together
+/// the moment `stock_notify_request` says subscribed. The backend's own
+/// `notified` flag covers every later read.
+class CardNotifyLedger {
+  static final ValueNotifier<Set<String>> notified = ValueNotifier(<String>{});
+  static void mark(String id) =>
+      notified.value = {...notified.value, id};
+}
+
+/// CMD #2124 — unavailable: an outlined "🔔 Notify" that becomes "✓ Notified".
+/// Labels are `card.action.notify`'s; the toast is the RPC's own.
+class CardNotifyButton extends StatefulWidget {
+  final String productId;
+  final CardAction action;
+  final Future<NotifyResult> Function(String productId)? request;
+  const CardNotifyButton({
+    super.key,
+    required this.productId,
+    required this.action,
+    this.request,
+  });
+
+  @override
+  State<CardNotifyButton> createState() => _CardNotifyButtonState();
+}
+
+class _CardNotifyButtonState extends State<CardNotifyButton> {
+  bool _busy = false;
+
+  Future<void> _tap() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final req = widget.request ??
+        (id) => MedicineRepository().stockNotifyRequest(id);
+    NotifyResult? r;
+    try {
+      r = await req(widget.productId);
+    } catch (_) {
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    if (!mounted || r == null) return;
+    if (r.loginRequired) {
+      Navigator.of(context).pushNamed('/login');
+      return;
+    }
+    if (r.toast.isNotEmpty) showToast(context, r.toast, isError: !r.ok);
+    if (r.ok && r.subscribed) CardNotifyLedger.mark(widget.productId);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<Set<String>>(
+      valueListenable: CardNotifyLedger.notified,
+      builder: (context, ids, _) {
+        final done = widget.action.notified || ids.contains(widget.productId);
+        final label = done ? widget.action.notifiedLabel : widget.action.notifyLabel;
+        if (label.isEmpty) return const SizedBox.shrink();
+        final fg = Ds.c.danger;
+        return Semantics(
+          identifier: done ? 'card_notified' : 'card_notify',
+          button: !done,
+          label: label,
+          child: Material(
+            color: done ? Ds.c.dangerSoft : Ds.c.surface,
+            shape: StadiumBorder(
+              side: done ? BorderSide.none : BorderSide(color: fg),
+            ),
+            child: InkWell(
+              key: const ValueKey('card-notify'),
+              customBorder: const StadiumBorder(),
+              onTap: done ? null : _tap,
+              child: SizedBox(
+                height: CompactProductCard.plusDot,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        done ? Icons.check_rounded : Icons.notifications_rounded,
+                        size: Ds.space.x16,
+                        color: fg,
+                      ),
+                      SizedBox(width: Ds.space.x4),
+                      Text(
+                        label,
+                        maxLines: 1,
+                        style: AppType.l5.copyWith(
+                          color: fg,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// The ONE line under the price. A `card.action` payload re-picks it from the
+/// backend's own lines as the cart and the notify request move; an older
+/// payload prints its `foot` as it always did.
+class _CardFoot extends StatelessWidget {
+  final Product product;
+  final ProductCardView view;
+  final bool soldOut;
+  const _CardFoot({
+    required this.product,
+    required this.view,
+    required this.soldOut,
+  });
+
+  Widget _line(String label, String tone) => label.isEmpty
+      ? const SizedBox.shrink()
+      : Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: AppType.t2.copyWith(
+            color: dsToneFg(tone),
+            fontWeight: tone == 'muted' ? FontWeight.w400 : FontWeight.w600,
+          ),
+        );
+
+  @override
+  Widget build(BuildContext context) {
+    final action = CardAction.of(product.card);
+    if (action == null) {
+      return view.hasFoot
+          ? _line(view.footLabel, view.footTone)
+          : const SizedBox.shrink();
+    }
+    if (soldOut) {
+      return ValueListenableBuilder<Set<String>>(
+        valueListenable: CardNotifyLedger.notified,
+        builder: (_, ids, _) {
+          final (l, t) = action.foot(
+            view: view,
+            soldOut: true,
+            notifiedNow: ids.contains(product.id),
+            qty: 0,
+          );
+          return _line(l, t);
+        },
+      );
+    }
+    final qty = AppState.of(context).quantityOf(product.id);
+    final (l, t) =
+        action.foot(view: view, soldOut: false, notifiedNow: false, qty: qty);
+    return _line(l, t);
   }
 }

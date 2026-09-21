@@ -36,6 +36,21 @@ Future<QtyChoice?> showQtyPickerChoice(BuildContext context,
       builder: (_) => _BulkQtyPickerDialog(packType: packType, current: current),
     );
 
+/// CMD #2124 — the product card opens the SAME list as a bottom sheet (the
+/// approved card design). `card_qty_picker` is `bulk_qty_picker` plus a 0
+/// "Remove" row once the pack is in the cart; its words are the backend's.
+Future<QtyChoice?> showCardQtyPicker(BuildContext context,
+        {required String packType, required int current, String rpc = 'card_qty_picker'}) =>
+    showModalBottomSheet<QtyChoice>(
+      context: context,
+      useSafeArea: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Ds.r.rCard.topLeft)),
+      builder: (_) => _BulkQtyPickerDialog(
+          packType: packType, current: current, rpc: rpc, asSheet: true),
+    );
+
 Future<int?> showBulkQtyPicker(BuildContext context,
         {required String packType, required int current}) async =>
     (await showQtyPickerChoice(context, packType: packType, current: current))
@@ -44,7 +59,14 @@ Future<int?> showBulkQtyPicker(BuildContext context,
 class _BulkQtyPickerDialog extends StatefulWidget {
   final String packType;
   final int current;
-  const _BulkQtyPickerDialog({required this.packType, required this.current});
+  final String rpc;
+  final bool asSheet;
+  const _BulkQtyPickerDialog({
+    required this.packType,
+    required this.current,
+    this.rpc = 'bulk_qty_picker',
+    this.asSheet = false,
+  });
 
   @override
   State<_BulkQtyPickerDialog> createState() => _BulkQtyPickerDialogState();
@@ -63,7 +85,7 @@ class _BulkQtyPickerDialogState extends State<_BulkQtyPickerDialog> {
   Future<void> _load() async {
     setState(() { _failed = false; _data = null; });
     try {
-      final raw = await Supabase.instance.client.rpc('bulk_qty_picker', params: {
+      final raw = await Supabase.instance.client.rpc(widget.rpc, params: {
         'p_pack_type': widget.packType,
         'p_current': widget.current,
       });
@@ -79,12 +101,7 @@ class _BulkQtyPickerDialogState extends State<_BulkQtyPickerDialog> {
     try { RenderLog.write('c2115_qty_picker', '1'); } catch (_) {}
     final d = _data;
     final listH = _kQtyOptionH * 5;
-    return Dialog(
-      insetPadding: EdgeInsets.symmetric(
-          horizontal: Ds.space.x32, vertical: Ds.space.x48),
-      backgroundColor: Ds.c.surface,
-      shape: RoundedRectangleBorder(borderRadius: Ds.r.rCard),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
+    final body = Column(mainAxisSize: MainAxisSize.min, children: [
         Padding(
           padding: EdgeInsets.fromLTRB(
               Ds.space.x16, Ds.space.x16, Ds.space.x16, Ds.space.x8),
@@ -106,7 +123,15 @@ class _BulkQtyPickerDialogState extends State<_BulkQtyPickerDialog> {
                   ? _skeleton()
                   : _options(d, listH),
         ),
-      ]),
+        if (widget.asSheet) SizedBox(height: Ds.space.x16),
+      ]);
+    if (widget.asSheet) return body;
+    return Dialog(
+      insetPadding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x32, vertical: Ds.space.x48),
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rCard),
+      child: body,
     );
   }
 

@@ -9,11 +9,15 @@
 //    verdict's suffix verbatim; "already registered" draws the verdict's card
 //    with its Login label; a blocking verdict blocks Continue; an empty
 //    required box shows the backend's "Required" after Continue;
+//  • Screen: that same Continue still AUTO-SAVES what was typed (#2126) —
+//    step_save with p_goto = the step it is on, so it saves in place and
+//    never moves on while boxes are red;
 //  • Documents: ONE progress card with the backend's words, one sub-line and
 //    one circle per row, and the circle's `tap` decides edit / view / upload.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pharma_b2b/design_tokens.dart';
+import 'package:pharma_b2b/screens/auth/one_registration_screen.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/widgets/customer_registration_form.dart';
 import 'package:pharma_b2b/widgets/registration_licences_section.dart';
@@ -165,6 +169,105 @@ void main() {
       ctrl.revealRequired();
       await t.pump();
       expect(find.text('PAYLOAD Required'), findsNWidgets(3));
+    });
+  });
+
+  group('Screen', () {
+    tearDown(() => OneRegistrationScreen.rpcTransport = null);
+
+    Map<String, dynamic> step(int n, String key, List<String> fields) => {
+          'key': key,
+          'n': n,
+          'label': 'STEP $key',
+          'done_label': 'DONE $key',
+          'title': 'TITLE $key',
+          'subtitle': '',
+          'step_of': 'STEP $n OF 2',
+          'fields': fields,
+          'docs': false,
+          'complete': false,
+          'missing': [],
+        };
+
+    Map<String, dynamic> payload() => {
+          'signed_in': true,
+          'needs': true,
+          'stage': 'form',
+          'title': 'Register',
+          'subtitle': '',
+          'submit_label': 'LEGACY SUBMIT',
+          'submitting_label': 'LEGACY SUBMITTING',
+          'error_label': 'ERR',
+          'retry_label': 'RETRY',
+          'close_label': 'CLOSE',
+          'done_title': 'DONE',
+          'done_line': 'LINE',
+          'imported': {'is': false, 'note': ''},
+          'schema': {
+            ..._schema,
+            'ok': true,
+            'context': 'signup',
+            'sections': [
+              {'key': 'business', 'title': 'BUSINESS', 'fields': _schema['fields']},
+            ],
+          },
+          'prefill': const {},
+          'draft': const {},
+          'has_draft': false,
+          'draft_note': '',
+          'documents': {'show': false, 'rows': []},
+          'docs_pending': {'show': false},
+          'steps': const [],
+          'step': const {'n': 1, 'total': 1},
+          'wizard': {
+            ..._v4,
+            'enabled': true,
+            'total': 2,
+            'resume_step': 0,
+            'steps': [step(1, 'shop', _fields), step(2, 'location', ['address'])],
+            'continue_label': 'PAYLOAD CONTINUE',
+            'back_label': 'PAYLOAD BACK',
+            'saving_label': 'PAYLOAD SAVING',
+            'submit_label': 'PAYLOAD SUBMIT',
+            'submitting_label': 'PAYLOAD SUBMITTING',
+          },
+        };
+
+    testWidgets('Continue with an empty required box still auto-saves, in place',
+        (t) async {
+      t.view.physicalSize = const Size(360, 900);
+      t.view.devicePixelRatio = 1.0;
+      addTearDown(t.view.reset);
+      final calls = <Map<String, dynamic>>[];
+      final p = payload();
+      OneRegistrationScreen.rpcTransport = (fn, params) async {
+        final prm = Map<String, dynamic>.from(params ?? const {});
+        calls.add({'fn': fn, 'params': prm});
+        if (fn == 'customer_registration_payload') return p;
+        if (fn == 'customer_registration_step_save') {
+          final to = prm['p_goto'] ?? 'location';
+          return {'ok': true, 'step': to, 'step_index': to == 'shop' ? 0 : 1};
+        }
+        if (fn == 'custreg_contact_check') return {'ok': true, 'state': 'ok'};
+        return null;
+      };
+      await t.pumpWidget(MaterialApp(key: UniqueKey(), home: const OneRegistrationScreen()));
+      await t.pumpAndSettle();
+
+      await t.enterText(find.widgetWithText(TextField, 'Full name'), 'Chandra');
+      await t.tap(find.text('PAYLOAD CONTINUE'));
+      await t.pumpAndSettle();
+
+      final saves =
+          calls.where((c) => c['fn'] == 'customer_registration_step_save').toList();
+      expect(saves, hasLength(1), reason: 'what was typed is saved while boxes are red');
+      expect(saves.single['params']['p_step'], 'shop');
+      expect(saves.single['params']['p_goto'], 'shop',
+          reason: 'it saves in place and never moves on');
+      expect((saves.single['params']['p_values'] as Map)['customer_name'], 'Chandra');
+      expect(find.text('PAYLOAD Required'), findsNWidgets(3));
+      expect(find.widgetWithText(TextField, 'Full name'), findsOneWidget,
+          reason: 'still on the General step');
     });
   });
 

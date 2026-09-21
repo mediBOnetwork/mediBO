@@ -527,3 +527,14 @@ begin
     execute d;
   end if;
 end $$;
+
+-- ── 9. Tokenless callers, recorded (privileged_rpcs_are_not_anon) ───────────
+-- A signed-out visitor has a cart: they tap Place order (and get the Login
+-- popup) and open the quantity sheet. storefront_cart_label is the guest cart
+-- pill's label, granted to anon since #417 and never recorded.
+insert into public.rpc_anon_allow(fn_name, reason)
+select v.f, v.r from (values
+  ('cart_place_block', 'CMD #2139 — a guest taps Place order and gets the backend''s Login popup.'),
+  ('cart_qty_picker',  'CMD #2139 — the guest cart''s quantity sheet (bulk_qty_picker + Remove row).'),
+  ('storefront_cart_label', 'CMD #417 guest cart pill label; recorded by CMD #2139.')) v(f, r)
+where not exists (select 1 from public.rpc_anon_allow a where a.fn_name = v.f);

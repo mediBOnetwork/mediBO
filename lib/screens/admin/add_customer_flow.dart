@@ -110,6 +110,9 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
   bool _reading = false;
   String _message = '';
   int _step = 0;
+  // CMD #2141 (QA) — steps the backend saved with Continue this session; the
+  // bar paints only these and the backend's own `complete` green.
+  final Set<String> _okSteps = {};
 
   int? _leadId;
   String? _customerId;
@@ -215,6 +218,7 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
         _numFor = '';
         _fresh = false;
         _readKeys.clear();
+        _okSteps.clear();
         _skips.clear();
         _lic = const {};
         _seedTerms(_m(p['terms']));
@@ -437,6 +441,7 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
         if (!_isDocs) {
           final res = await _saveStep(_stepKey);
           if (res == null) return;
+          _okSteps.add(_stepKey);
         }
         if (!mounted) return;
         setState(() => _step = (_step + 1).clamp(0, _steps.length - 1));
@@ -577,6 +582,45 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
     if (choice == DocViewerChoice.retake) await _upload(row);
   }
 
+  /// CMD #2141 (Om, 22 Sep) — the SAME edit sheet as registration: the photo
+  /// (tap to zoom), the row's own fields with "✓ read" on what came off the
+  /// photo, Retake and Save → custreg_doc_read_edit for this customer.
+  Future<void> _editDoc(Map<String, dynamic> row) async {
+    final cid = _customerId;
+    final key = _s(row, 'key');
+    final edit = _m(row['edit']);
+    if (cid == null || edit.isEmpty) return _view(row);
+    var retake = false;
+    await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (ctx) => DocReadEditSheet(
+        edit: edit,
+        thumb: docEditThumb(row, _thumbUrls[key] ?? '', null),
+        onViewPhoto: () => _view(row),
+        onRetake: () {
+          retake = true;
+          Navigator.of(ctx).pop(false);
+        },
+        onConfirm: (values) async {
+          try {
+            final res = _m(await AddCustomerFlow.rpc('custreg_doc_read_edit',
+                {'p_kind': key, 'p_values': values, 'p_owner': cid}));
+            if (res['ok'] != true) return _s(res, 'message');
+            await _refreshLic();
+            RenderLog.write('c2141_addcust_doc_edit', key);
+            return null;
+          } catch (_) {
+            return _s(_p, 'error_label');
+          }
+        },
+      ),
+    );
+    if (retake && mounted) await _upload(row);
+  }
+
   void _toggleSkip(Map<String, dynamic> row) {
     final key = _s(row, 'key');
     setState(() => _skips.contains(key) ? _skips.remove(key) : _skips.add(key));
@@ -713,7 +757,10 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
             color: Ds.c.surface,
             padding: EdgeInsets.fromLTRB(pad, Ds.space.x8, pad, Ds.space.x4),
             child: _capped(RegistrationProgressBar(
-              steps: steps,
+              steps: [
+                for (final st in steps)
+                  _okSteps.contains(_s(st, 'key')) ? {...st, 'complete': true} : st,
+              ],
               current: _step,
               currentComplete: _isDocs && _lic['show'] == true
                   ? _lic['required_complete'] == true
@@ -765,6 +812,7 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
                             onView: _view,
                             onSkipToggle: _toggleSkip,
                             onScan: _scanFirst,
+                            onEdit: _editDoc,
                             reading: _docReading,
                           )
                         : const SizedBox.shrink()

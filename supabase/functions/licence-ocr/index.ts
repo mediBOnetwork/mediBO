@@ -13,10 +13,22 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 // Same model, same endpoint, same credential as every other OCR path in
 // mediBO — gemini-3.5-flash on the Vertex GLOBAL endpoint, GCP_SA_KEY auth.
 
+// CMD #2141 (QA round) — THE real OCR bug. Since CMD #2100 the web app sends
+// x-medibo-flavor on every request; this allow-list did not name it, so the
+// browser stopped after the OPTIONS preflight and the POST never came (6
+// OPTIONS, 0 POST in a day of logs). The preflight now echoes whatever
+// headers the browser asks to send, and the fixed list names the app's own.
 const cors = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers':
+    'authorization, x-client-info, apikey, content-type, x-medibo-flavor',
 }
+const preflight = (req: Request) => ({
+  ...cors,
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers':
+    req.headers.get('Access-Control-Request-Headers') || cors['Access-Control-Allow-Headers'],
+})
 const MODEL = 'gemini-3.5-flash'
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const jitter = (b: number) => b + Math.floor(Math.random() * 400)
@@ -153,7 +165,7 @@ async function callVertex(projectId: string, token: string, payload: unknown): P
 const strip = (t: string) => t.replace(/```json/gi, '').replace(/```/g, '').trim()
 
 serve(async (req: Request) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: preflight(req) })
   try {
     const saJson = Deno.env.get('GCP_SA_KEY')
     if (!saJson) throw new Error('GCP_SA_KEY secret not set')
@@ -168,12 +180,11 @@ serve(async (req: Request) => {
     }
     let image_base64 = body.image_base64 ?? ''
     let mime_type = body.mime_type ?? 'image/jpeg'
-    // CMD #2141 — the OCR fix. Registration sent the whole photo as base64 in
-    // the request body; on a phone that POST never reached this function
-    // (only its OPTIONS preflight is in the logs), so a 20B photo was saved
-    // with no number. The paper is already in storage by then, so the app now
-    // sends its bucket + path and the file is fetched HERE with the caller's
-    // own token — storage policies still decide who may read it.
+    // CMD #2141 — the paper is already in storage by the time it is read, so
+    // the app sends its bucket + path and the file is fetched HERE with the
+    // caller's own token — storage policies still decide who may read it, and
+    // the phone never re-sends a multi-megabyte photo. (The missing POSTs were
+    // the CORS preflight above, not the body size.)
     if (!image_base64 && body.bucket && body.path) {
       const base = Deno.env.get('SUPABASE_URL') ?? ''
       const anon = Deno.env.get('SUPABASE_ANON_KEY') ?? ''

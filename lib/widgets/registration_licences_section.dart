@@ -468,14 +468,19 @@ extension _RowV4 on RegistrationLicencesSection {
       'view' => () => onView(row),
       _ => () => onUpload(row),
     };
-    final showDontHave = dontHave['show'] == true &&
-        !isReading &&
-        _s(circle, 'tap') == 'upload' &&
-        row['required'] == true;
+    // Om, 22 Sep — no Skip anywhere unless the BACKEND offers it on the row
+    // (it sends dont_have.show=false on every row today). No client-side
+    // "required" rule, and a key skipped earlier draws nothing either.
+    final skippable = dontHave['show'] == true;
+    final isSkipped = skippable && skipped.contains(key);
+    final showDontHave =
+        skippable && !isReading && _s(circle, 'tap') == 'upload';
     final subText = isReading
         ? _s(block, 'reading_label')
-        : (skipped.contains(key) ? _s(dontHave, 'label') : _s(sub, 'text'));
-    final subTone = isReading ? 'success' : (skipped.contains(key) ? 'neutral' : _s(sub, 'tone'));
+        : (isSkipped ? _s(dontHave, 'label') : _s(sub, 'text'));
+    final subTone = isReading ? 'success' : (isSkipped ? 'neutral' : _s(sub, 'tone'));
+    // Tapping the number (or the ✎) of a read row opens its edit sheet.
+    final editable = row['edit'] is Map && onEdit != null && !isReading;
 
     return Semantics(
       identifier: 'reg_lic_row_$key',
@@ -508,27 +513,48 @@ extension _RowV4 on RegistrationLicencesSection {
               onTap: canView ? () => onView(row) : null,
             ),
           Expanded(
-            child: Padding(
-              padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(_s(row, 'label'), style: Ds.t.bodyStrong),
-                  if (subText.isNotEmpty) ...[
-                    SizedBox(height: Ds.space.x4),
-                    Text(subText,
-                        style: Ds.t.caption.copyWith(
-                            color: licTone(subTone),
-                            fontWeight: subTone == 'neutral'
-                                ? FontWeight.w500
-                                : FontWeight.w600)),
-                  ],
-                ],
+            child: Semantics(
+              identifier: 'reg_lic_text_$key',
+              button: editable,
+              child: InkWell(
+                onTap: editable ? () => onEdit!(row) : null,
+                borderRadius: Ds.r.rChip,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
+                    // Two lines at most: the paper's name, then ONE line —
+                    // the number, or the Mandatory/Optional tag (row.sub).
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(_s(row, 'label'),
+                            style: Ds.t.bodyStrong,
+                            maxLines: 1,
+                            softWrap: false,
+                            overflow: TextOverflow.ellipsis),
+                        if (subText.isNotEmpty) ...[
+                          SizedBox(height: Ds.space.x4),
+                          Text(subText,
+                              maxLines: 1,
+                              softWrap: false,
+                              overflow: TextOverflow.ellipsis,
+                              style: Ds.t.caption.copyWith(
+                                  color: licTone(subTone),
+                                  fontWeight: subTone == 'neutral'
+                                      ? FontWeight.w500
+                                      : FontWeight.w600)),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
-          if (showDontHave || skipped.contains(key))
+          if (showDontHave || isSkipped)
             Semantics(
               identifier: 'reg_lic_skip_$key',
               button: true,
@@ -537,7 +563,7 @@ extension _RowV4 on RegistrationLicencesSection {
                 child: TextButton(
                   onPressed: busy ? null : () => onSkipToggle(row),
                   child: Text(
-                      skipped.contains(key)
+                      isSkipped
                           ? _s(dontHave, 'undo_label')
                           : _s(dontHave, 'label'),
                       style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
@@ -873,6 +899,25 @@ class _DocReadEditSheetState extends State<DocReadEditSheet> {
     super.dispose();
   }
 
+  /// The backend sends "Valid till" as `DD Mon YYYY`; the picker opens on it
+  /// (or today) and writes back `YYYY-MM-DD`.
+  Future<void> _pickDate(String key) async {
+    final c = _ctl[key];
+    if (c == null) return;
+    final now = DateTime.now();
+    final initial = parseDocDate(c.text) ?? now;
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(now.year - 30),
+      lastDate: DateTime(now.year + 30),
+    );
+    if (picked == null || !mounted) return;
+    setState(() => c.text = '${picked.year.toString().padLeft(4, '0')}-'
+        '${picked.month.toString().padLeft(2, '0')}-'
+        '${picked.day.toString().padLeft(2, '0')}');
+  }
+
   Future<void> _confirm() async {
     setState(() {
       _saving = true;
@@ -937,13 +982,24 @@ class _DocReadEditSheetState extends State<DocReadEditSheet> {
                 Semantics(
                   identifier: 'reg_doc_edit_${_s(f, 'key')}',
                   textField: true,
-                  child: TextField(
-                    controller: _ctl[_s(f, 'key')],
-                    style: Ds.t.body,
-                    textCapitalization: _s(f, 'key') == 'number'
-                        ? TextCapitalization.characters
-                        : TextCapitalization.words,
-                  ),
+                  child: f['date'] == true
+                      // "Valid till" is picked, never typed: the picker hands
+                      // the backend an ISO date, which _custreg_date reads.
+                      ? TextField(
+                          controller: _ctl[_s(f, 'key')],
+                          style: Ds.t.body,
+                          readOnly: true,
+                          onTap: _saving ? null : () => _pickDate(_s(f, 'key')),
+                          decoration: const InputDecoration(
+                              suffixIcon: Icon(Icons.calendar_today_outlined)),
+                        )
+                      : TextField(
+                          controller: _ctl[_s(f, 'key')],
+                          style: Ds.t.body,
+                          textCapitalization: _s(f, 'key') == 'number'
+                              ? TextCapitalization.characters
+                              : TextCapitalization.words,
+                        ),
                 ),
                 SizedBox(height: Ds.space.x16),
               ],
@@ -993,3 +1049,18 @@ class _DocReadEditSheetState extends State<DocReadEditSheet> {
 /// The document tile the Edit sheet shows beside its title.
 Widget docEditThumb(Map<String, dynamic> row, String url, PickedDoc? local) =>
     _Thumb(row: row, local: local, url: url, onTap: null);
+
+/// Reads the two shapes a "Valid till" value arrives in — the backend's
+/// `DD Mon YYYY` and the picker's own `YYYY-MM-DD` — or null.
+DateTime? parseDocDate(String text) {
+  final t = text.trim();
+  final iso = DateTime.tryParse(t);
+  if (iso != null) return iso;
+  final m = RegExp(r'^(\d{1,2})\s+([A-Za-z]{3})[A-Za-z]*\s+(\d{4})$').firstMatch(t);
+  if (m == null) return null;
+  const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun',
+                  'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+  final mo = months.indexOf(m.group(2)!.toLowerCase()) + 1;
+  if (mo == 0) return null;
+  return DateTime(int.parse(m.group(3)!), mo, int.parse(m.group(1)!));
+}

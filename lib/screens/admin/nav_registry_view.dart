@@ -313,6 +313,23 @@ class PendingAdminNav {
     return r;
   }
 
+  /// CMD #2141 — [take], but only for the shell the person is LOOKING at.
+  ///
+  /// A cold `/admin/go/<key>` URL builds two routes, '/' underneath and the
+  /// link's own route on top, and each mounts its own HomeShell. Until #2144
+  /// they shared one GlobalKey, so there was only ever one shell state. Now
+  /// the shell UNDER the top route mounted first, took the link and opened
+  /// the screen where nobody could see it, while the visible shell stayed on
+  /// the storefront. A shell whose route is not the current one leaves the
+  /// link parked; while one is parked this call depends on the route, so when
+  /// the route above it pops, the shell's dependencies change and it takes the
+  /// link then. Nothing parked → no dependency, so a plain boot is untouched.
+  static String? takeFor(BuildContext context) {
+    if (route == null) return null;
+    if (!(ModalRoute.isCurrentOf(context) ?? true)) return null;
+    return take();
+  }
+
   /// Read-and-clear the subject. Call it at the moment the screen opens.
   static String? takeSeed() {
     final s = seed;

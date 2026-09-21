@@ -800,7 +800,7 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   void _consumePendingDeepLink() {
-    final route = PendingAdminNav.take();
+    final route = PendingAdminNav.takeFor(context); // CMD #2141: the VISIBLE shell only
     if (route == null || route.isEmpty) return;
     if (!UserState.of(context).isAdmin && !HomeShell.selfGatedRoutes.contains(route)) {
       PendingAdminNav.route = route; // not ours to open — leave it parked

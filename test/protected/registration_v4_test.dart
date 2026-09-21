@@ -95,6 +95,23 @@ void main() {
           steps: steps, current: 2, onJump: (_) {}, currentComplete: true)));
       expect(barColour(t, 2), Ds.c.brand);
     });
+
+    testWidgets('a step BEHIND the current one stays grey until the backend calls it complete',
+        (t) async {
+      // QA round: a draft resumed on Documents with General and Location
+      // unfinished painted both green only because they came first.
+      await t.pumpWidget(_host(RegistrationProgressBar(
+          steps: [
+            {...steps[0], 'complete': false},
+            steps[1],
+            steps[2],
+          ],
+          current: 2,
+          onJump: (_) {})));
+      expect(barColour(t, 0), Ds.c.divider);
+      expect(barColour(t, 1), Ds.c.divider);
+      expect(barColour(t, 2), Ds.c.divider);
+    });
   });
 
   group('General', () {
@@ -122,6 +139,12 @@ void main() {
       final pfx = t.getTopLeft(find.bySemanticsIdentifier('reg_prefix_owner_salutation'));
       final name = t.getTopLeft(find.widgetWithText(TextField, 'Full name'));
       expect(pfx.dx < name.dx, isTrue);
+    });
+
+    testWidgets('the backend\'s +91 shows in the EMPTY, unfocused WhatsApp box', (t) async {
+      await pump(t, (_, _) => {'ok': true, 'state': 'ok'});
+      expect(find.text('+91'), findsOneWidget,
+          reason: 'prefixText hid it until focus; the prefix is always drawn');
     });
 
     testWidgets('a checked box prints the verdict suffix verbatim', (t) async {

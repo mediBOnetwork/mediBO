@@ -722,10 +722,17 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
         fillColor: Ds.c.surface,
         enabledBorder: OutlineInputBorder(
             borderRadius: Ds.r.rButton, borderSide: BorderSide(color: edge)),
-        prefixText: type == 'phone' && _s4('phone_prefix').isNotEmpty
-            ? '${_s4('phone_prefix')}  '
+        // QA round — a prefixIcon, not prefixText: prefixText is only drawn
+        // once the box is focused or filled, so an empty box showed a blank
+        // gap where "+91" belongs.
+        prefixIcon: type == 'phone' && _s4('phone_prefix').isNotEmpty
+            ? Padding(
+                padding: EdgeInsets.only(left: Ds.space.x12, right: Ds.space.x8),
+                child: Text(_s4('phone_prefix'),
+                    style: Ds.t.body.copyWith(color: Ds.c.textSecondary)),
+              )
             : null,
-        prefixStyle: Ds.t.body.copyWith(color: Ds.c.textSecondary),
+        prefixIconConstraints: const BoxConstraints(),
         suffixIcon: suffix.isEmpty
             ? null
             : Padding(

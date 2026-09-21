@@ -54,15 +54,17 @@ class RegistrationProgressBar extends StatelessWidget {
     );
   }
 
-  /// CMD #2141 — v4: a bar is green ONLY when its step is complete (a step
-  /// already passed with Continue, or one the backend calls complete); the
-  /// current step is grey until it is done. Labels never carry a ✓ — the
-  /// current one is bold, a done one green, the rest grey.
+  /// CMD #2141 — v4: a bar is green ONLY when its step is complete — the
+  /// backend's `complete` (the host marks a step the backend just accepted
+  /// with Continue); the current step is grey until it is done. Being BEHIND
+  /// the current step is not "complete": a resumed draft parked past an
+  /// unfinished step keeps that step grey (QA round). Labels never carry a
+  /// ✓ — the current one is bold, a done one green, the rest grey.
   Widget _segment(int i) {
     final active = i == current;
     final done = active
         ? (currentComplete ?? false)
-        : (i < current || steps[i]['complete'] == true);
+        : steps[i]['complete'] == true;
     final reachable = wizardStepReachable(steps, i, current);
     final label = ((done && !active ? steps[i]['done_label'] : null) ??
             steps[i]['label'] ??

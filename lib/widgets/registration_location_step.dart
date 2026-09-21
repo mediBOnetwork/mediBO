@@ -548,10 +548,13 @@ class _RegistrationLocationStepState extends State<RegistrationLocationStep> {
                 child: _pill(_pillText()),
               ),
             ),
+          // QA round — bottom CENTRE: bottom-right sat on the map's own
+          // zoom control at 360px, and bottom-left is the map's logo.
           Positioned(
+            left: Ds.space.x8,
             right: Ds.space.x8,
             bottom: Ds.space.x8,
-            child: _useMyLocationButton(),
+            child: Center(child: _useMyLocationButton()),
           ),
         ]),
       ),

@@ -110,6 +110,9 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
   bool _reading = false;
   String _message = '';
   int _step = 0;
+  // CMD #2141 (QA) — steps the backend saved with Continue this session; the
+  // bar paints only these and the backend's own `complete` green.
+  final Set<String> _okSteps = {};
 
   int? _leadId;
   String? _customerId;
@@ -215,6 +218,7 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
         _numFor = '';
         _fresh = false;
         _readKeys.clear();
+        _okSteps.clear();
         _skips.clear();
         _lic = const {};
         _seedTerms(_m(p['terms']));
@@ -437,6 +441,7 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
         if (!_isDocs) {
           final res = await _saveStep(_stepKey);
           if (res == null) return;
+          _okSteps.add(_stepKey);
         }
         if (!mounted) return;
         setState(() => _step = (_step + 1).clamp(0, _steps.length - 1));
@@ -752,7 +757,10 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
             color: Ds.c.surface,
             padding: EdgeInsets.fromLTRB(pad, Ds.space.x8, pad, Ds.space.x4),
             child: _capped(RegistrationProgressBar(
-              steps: steps,
+              steps: [
+                for (final st in steps)
+                  _okSteps.contains(_s(st, 'key')) ? {...st, 'complete': true} : st,
+              ],
               current: _step,
               currentComplete: _isDocs && _lic['show'] == true
                   ? _lic['required_complete'] == true

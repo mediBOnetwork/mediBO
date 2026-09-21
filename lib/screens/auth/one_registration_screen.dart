@@ -112,6 +112,10 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
   // CMD #2126 — the 3-step flow. Where the person is, whether the resume
   // point has been taken from the payload yet, and whether Submit landed.
   int _step = 0;
+  // CMD #2141 (QA) — steps the backend accepted with Continue in this
+  // session (step_save ok, no p_goto): the bar may paint them green before
+  // the payload is read again. Nothing else makes a step "complete".
+  final Set<String> _okSteps = {};
   bool _stepSeeded = false;
   bool _showDone = false;
 
@@ -179,7 +183,12 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
         // re-read after a save must never yank the person to another step.
         if (_wizardOn && !_stepSeeded) {
           _stepSeeded = true;
-          _step = ((_wiz['resume_step'] as num?)?.toInt() ?? 0)
+          // CMD #2141 (QA) — never resume PAST a step the backend still
+          // calls open: a draft parked on Documents with an empty General
+          // would skip General's required boxes and live checks.
+          final resume = (_wiz['resume_step'] as num?)?.toInt() ?? 0;
+          final firstOpen = (_wiz['first_open'] as num?)?.toInt() ?? resume;
+          _step = (firstOpen < resume ? firstOpen : resume)
               .clamp(0, _steps.length - 1);
         }
       });
@@ -762,6 +771,7 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
         });
         return;
       }
+      _okSteps.add(key);
       if (_step >= steps.length - 1) {
         setState(() => _saving = false);
         await _submit();
@@ -1055,7 +1065,10 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
             color: Ds.c.surface,
             padding: EdgeInsets.fromLTRB(pad, Ds.space.x8, pad, Ds.space.x4),
             child: capped(RegistrationProgressBar(
-                steps: steps,
+                steps: [
+                  for (final s in steps)
+                    _okSteps.contains(_s(s, 'key')) ? {...s, 'complete': true} : s,
+                ],
                 current: _step,
                 onJump: _goTo,
                 currentComplete: step['docs'] == true && _lic['show'] == true

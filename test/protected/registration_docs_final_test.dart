@@ -333,5 +333,25 @@ void main() {
       expect(primary(t).onPressed, isNotNull);
       expect(find.text('GATE LINE'), findsNothing);
     });
+
+    testWidgets('a draft parked past an open step resumes ON that step (first_open)',
+        (t) async {
+      t.view.physicalSize = const Size(360, 900);
+      t.view.devicePixelRatio = 1.0;
+      addTearDown(t.view.reset);
+      addTearDown(() => OneRegistrationScreen.rpcTransport = null);
+      final p = payload();
+      (p['wizard'] as Map)['first_open'] = 0; // General is still open
+      OneRegistrationScreen.rpcTransport = (fn, params) async {
+        if (fn == 'customer_registration_payload') return p;
+        if (fn == 'custreg_licences_step') return _block(complete: true);
+        return null;
+      };
+      await t.pumpWidget(MaterialApp(key: UniqueKey(), home: const OneRegistrationScreen()));
+      await t.pumpAndSettle();
+      expect(find.text('TITLE shop'), findsOneWidget,
+          reason: 'resume_step 2 must not skip an open General');
+      expect(find.text('PAYLOAD SUBMIT'), findsNothing);
+    });
   });
 }

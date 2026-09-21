@@ -392,15 +392,12 @@ class _Body extends StatelessWidget {
               SliverPadding(
                 padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
                 sliver: SliverGrid(
-                  // CMD #2118 — the card drops the maker's line here: the bar
-                  // above already says it, and the grid reserves the shorter
-                  // extent the card itself publishes.
-                  gridDelegate: ProductCardGrid.delegateFor(gridW,
-                      showManufacturer: false),
+                  // CMD #2122 — the same card, and the same extent, as every
+                  // other grid.
+                  gridDelegate: ProductCardGrid.delegateFor(gridW),
                   delegate: SliverChildBuilderDelegate(
                     (context, i) => CompactProductCard(
                       product: items[i],
-                      showManufacturer: false,
                       onTap: () => Navigator.of(context)
                           .pushNamed('/product/${items[i].id}'),
                     ),

@@ -362,15 +362,13 @@ void main() {
       expect(find.text('Fungicros Cream'), findsOneWidget);
     });
 
-    test('the shorter extent is DERIVED from the card, never a second number',
+    test('the extent is DERIVED from the card, never a second number',
         () {
       expect(
         CompactProductCard.extentWithoutCompany,
-        lessThan(CompactProductCard.extent),
-      );
-      expect(
-        CompactProductCard.extent - CompactProductCard.extentWithoutCompany,
-        greaterThan(0),
+        CompactProductCard.extent,
+        reason: 'CHANGED BY CMD #2122 — the approved universal card (image A) has no '
+            'company line anywhere, so there is ONE card height',
       );
     });
   });

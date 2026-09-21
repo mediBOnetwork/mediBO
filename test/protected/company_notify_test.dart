@@ -315,7 +315,9 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Notify me'), findsNothing);
-      expect(find.text('Add to cart'), findsOneWidget);
+      // CHANGED BY CMD #2122 — the approved universal card (image A) — the add word is
+      // the floating +'s tooltip.
+      expect(find.byTooltip('Add to cart'), findsOneWidget);
     });
   });
 

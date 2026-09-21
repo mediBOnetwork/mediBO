@@ -67,6 +67,19 @@
 //      rather than falling back to another column; the card must never choose
 //      between pack_qty / pack_size / pack_type again.
 //
+//  11. CHANGED BY CMD #2122 — Om's approved "Universal product card" (image A) is ONE
+//      white card: the plate (unit chip top-left, Rx dot top-right, a
+//      FLOATING ROUND + bottom-right), then name, pack line, the price row
+//      (amount bold + MRP struck bare, or the locked PTR pill) and ONE foot
+//      line. What that reverses here, each marked at its test: the company
+//      line is off the card; the add word is the +'s tooltip/label rather
+//      than a text pill; the "Sale price:" caption and the green amount badge
+//      are off the unlocked row (the backend's sale colours ride the locked
+//      PTR pill); the MRP caption prints only when the MRP stands alone; the
+//      frame holds the text block too. The card object (`card`, CMD #2121)
+//      carries the unit word, Rx, offer and the foot line — group "CMD #2122"
+//      pins that path; a payload without it keeps rules 1–10.
+//
 // Fixtures mirror a real storefront_page() row. No network, no Supabase, no
 // camera.
 
@@ -312,11 +325,11 @@ void main() {
       },
     );
 
-    testWidgets('the manufacturer sits under the name', (tester) async {
-      // REVERSED BY #274 — it used to be forbidden here. The reference layout
-      // puts it on the card and the extent below was re-summed to pay for it.
+    testWidgets('the manufacturer is not on the card', (tester) async {
+      // CHANGED BY CMD #2122 — reversed again. #274 put the company under the name; the
+      // approved card is name, pack line, price row, foot line.
       await _pump(tester, _row());
-      expect(find.text('CELON LABORATORIES LTD'), findsOneWidget);
+      expect(find.text('CELON LABORATORIES LTD'), findsNothing);
     });
 
     testWidgets('the composition line is NOT on the card', (tester) async {
@@ -331,11 +344,9 @@ void main() {
     ) async {
       await _pump(tester, _row());
 
-      expect(
-        find.text('MRP'),
-        findsOneWidget,
-        reason: 'card_price.mrp_label — never typed in Dart',
-      );
+      // CHANGED BY CMD #2122 — beside a sale amount the ceiling prints bare, struck; the
+      // caption is for an MRP that stands alone (next test).
+      expect(find.text('MRP'), findsNothing);
       expect(
         find.text('₹2,597.00'),
         findsOneWidget,
@@ -361,6 +372,8 @@ void main() {
           (r['pricing'] as Map<String, dynamic>)['card_price']
               as Map<String, dynamic>;
       cp['mrp_label'] = 'LIST';
+      // CHANGED BY CMD #2122 — the caption shows when the MRP stands alone.
+      cp['price_display'] = '';
       await _pump(tester, r);
 
       expect(find.text('LIST'), findsOneWidget);
@@ -418,25 +431,25 @@ void main() {
       expect(struck2, isFalse);
     });
 
-    testWidgets('the sale caption and the badge colours are the payload\'s', (
-      tester,
-    ) async {
-      // CHANGE #1895b. Om's sketch made the sale line a LABELLED row: a grey
-      // caption, then the value on a green plate. Every one of those three
-      // things is a field — reword the caption or repaint the badge with an
-      // UPDATE to storefront_ui_label and the card follows without a deploy.
+    testWidgets('the sale colours ride the locked pill; the amount is bold '
+        'text', (tester) async {
+      // CHANGED BY CMD #2122 — the approved card prints the entitled amount bold in the
+      // text colour, with no caption and no badge. The backend's sale colours
+      // (card_price.sale_bg / sale_fg) paint the LOCKED pill instead.
       await _pump(tester, _row());
-
+      expect(find.text('Sale price:'), findsNothing);
       expect(
-        find.text('Sale price:'),
-        findsOneWidget,
-        reason: 'card_price.sale_label — never typed in Dart',
+        tester.widget<Text>(find.text('₹2,337.30')).style?.color,
+        isNot(const Color(0xFFFFFFFF)),
+        reason: 'an unlocked amount is plain bold text, not a white-on-green '
+            'badge',
       );
 
+      await _pump(tester, _row(entitled: false));
       final deco = tester
           .widgetList<Container>(
             find.ancestor(
-              of: find.text('₹2,337.30'),
+              of: find.text('PTR'),
               matching: find.byType(Container),
             ),
           )
@@ -449,20 +462,10 @@ void main() {
         reason: 'card_price.sale_bg, parsed — not a green chosen here',
       );
       expect(
-        tester.widget<Text>(find.text('₹2,337.30')).style?.color,
+        tester.widget<Text>(find.text('PTR')).style?.color,
         const Color(0xFFFFFFFF),
         reason: 'card_price.sale_fg, parsed',
       );
-
-      // Reword it and the card follows. If the caption were a Dart literal
-      // the old words would still be on the screen.
-      final r = _row();
-      ((r['pricing'] as Map<String, dynamic>)['card_price']
-              as Map<String, dynamic>)['sale_label'] =
-          'Your rate:';
-      await _pump(tester, r);
-      expect(find.text('Your rate:'), findsOneWidget);
-      expect(find.text('Sale price:'), findsNothing);
     });
 
     testWidgets('a pre-#1895b payload still paints its sale line', (
@@ -518,8 +521,9 @@ void main() {
         );
 
         // MRP still shows, struck: it is public, printed on the pack.
+        // CHANGED BY CMD #2122 — bare beside the PTR pill, no caption.
         expect(find.text('₹2,597.00'), findsOneWidget);
-        expect(find.text('MRP'), findsOneWidget);
+        expect(find.text('MRP'), findsNothing);
       },
     );
 
@@ -651,20 +655,23 @@ void main() {
     });
   });
 
+  // CHANGED BY CMD #2122 — the add control is the FLOATING ROUND +. The backend's word
+  // is its tooltip and screen-reader label (find.byTooltip), still verbatim
+  // and still never typed in Dart.
   group('ADD ⇄ stepper', () {
     testWidgets('the ADD label is cta_short verbatim', (tester) async {
       await _pump(tester, _row());
-      expect(find.text('ADD'), findsOneWidget);
+      expect(find.byTooltip('ADD'), findsOneWidget);
       expect(
-        find.text('Add to cart'),
+        find.byTooltip('Add to cart'),
         findsNothing,
         reason: 'the card takes the SHORT backend word, not the long one',
       );
 
       // Reword it in Postgres and the button follows.
       await _pump(tester, _row(ctaShort: 'BUY'));
-      expect(find.text('BUY'), findsOneWidget);
-      expect(find.text('ADD'), findsNothing);
+      expect(find.byTooltip('BUY'), findsOneWidget);
+      expect(find.byTooltip('ADD'), findsNothing);
     });
 
     testWidgets('no cta_short falls back to cta_label, never to a Dart word', (
@@ -673,7 +680,7 @@ void main() {
       // An older payload (or a surface that has not been migrated) carries only
       // the long label. The card prints THAT — it does not substitute "ADD".
       await _pump(tester, _row(ctaShort: ''));
-      expect(find.text('Add to cart'), findsOneWidget);
+      expect(find.byTooltip('Add to cart'), findsOneWidget);
     });
 
     testWidgets('tapping ADD morphs the control into the stepper', (
@@ -681,10 +688,10 @@ void main() {
     ) async {
       final cart = await _pump(tester, _row());
 
-      expect(find.text('ADD'), findsOneWidget);
+      expect(find.byTooltip('ADD'), findsOneWidget);
       expect(find.byIcon(Icons.remove_rounded), findsNothing);
 
-      await tester.tap(find.text('ADD'));
+      await tester.tap(find.byTooltip('ADD'));
       // CHANGE #678a — the swap is instant now (the 180ms cross-fade is gone),
       // so pumpAndSettle returns before the cart's own send debounce has run.
       // Pump past it explicitly rather than relying on an animation to hold
@@ -697,7 +704,7 @@ void main() {
       expect(find.byIcon(Icons.remove_rounded), findsOneWidget);
       expect(find.byIcon(Icons.add_rounded), findsOneWidget);
       expect(
-        find.text('ADD'),
+        find.byTooltip('ADD'),
         findsNothing,
         reason: 'ADD morphs in place — the two never show at once',
       );
@@ -706,7 +713,7 @@ void main() {
     testWidgets('+ and − drive the cart quantity', (tester) async {
       final cart = await _pump(tester, _row());
 
-      await tester.tap(find.text('ADD'));
+      await tester.tap(find.byTooltip('ADD'));
       await tester.pumpAndSettle();
       expect(cart.quantityOf('176026'), 1);
 
@@ -737,7 +744,7 @@ void main() {
         reason: 'can_add:false means no path into the cart at all',
       );
       expect(
-        find.text('ADD'),
+        find.byTooltip('ADD'),
         findsNothing,
         reason: 'and no dead ADD label left behind',
       );
@@ -778,18 +785,14 @@ void main() {
       // AND the skeleton, so a taller card overflowed silently in both. The
       // extent is derived, and this pins that it stays derived.
       //
-      // CMD #1926 sum: the FRAME (artwork + gap + the pack-type/ADD row +
-      //            the frame's bottom padding + its two hairlines) + gap +
-      //            two name lines + gap + company + gap + MRP line + gap +
-      //            sale line + gap + the zone availability line = 330.
-      //
-      //            It grew from #1895's 300 for two reasons this change made
-      //            on purpose: the action row moved INSIDE the border (so the
-      //            frame owns its padding and its hairlines), and the zone
-      //            line is a new row. Every caller reserves `extent`, so all
-      //            of them moved with it — which is exactly why the number is
-      //            derived and not copied.
-      expect(CompactProductCard.extent, 330);
+      // CHANGED BY CMD #2122 sum: the card's two hairlines + the plate (152) + gap (8) +
+      //            two name lines (36) + gap (4) + the pack line (16) + gap
+      //            (6) + the price row (22) + gap (4) + the foot line (16) +
+      //            the card's bottom padding (12) = 278. The + floats ON the
+      //            plate and the company line is gone, so the card is shorter
+      //            than #1926's 330 — and every caller moved with it, because
+      //            they all reserve `extent`.
+      expect(CompactProductCard.extent, 278);
       expect(
         CompactProductCard.extent,
         greaterThan(CompactProductCard.tileH + CompactProductCard.pillH),
@@ -807,56 +810,31 @@ void main() {
       expect(CompactProductCard.tileH, 152);
     });
 
-    testWidgets('the chips sit hard LEFT, on the same edge as the name', (
-      tester,
-    ) async {
-      // #274 shipped once with `Align(widthFactor: 1)` around the type chip and
-      // the PTR box. Align shrinks ITSELF to its child, and the fixed-height
-      // SizedBox that reserves the row then centres that shrunken box — so
-      // both rendered mid-card on the live site while every unit test passed.
-      // Pin the geometry, not the widget: everything in the text block starts
-      // on one edge.
+    testWidgets('the text block sits hard LEFT, on the same edge as the name',
+        (tester) async {
+      // #274 shipped once with an Align that centred the chips mid-card while
+      // every unit test passed. Pin the geometry, not the widget.
+      // CHANGED BY CMD #2122 — the pack sentence is the line under the name and the price
+      // row starts on the same edge; nothing floats to the middle.
       await _pump(tester, _row());
 
       final nameLeft = tester
           .getTopLeft(find.text('Alkacel 100mg Injection'))
           .dx;
-      // CHANGED BY CMD #2118 — the pack-type chip is gone (one pack label per
-      // card), so the label this pins is the pack SENTENCE badge lying on the
-      // plate. It is still hard LEFT; it is simply left inside a box. What
-      // this pins is unchanged: it is nowhere near the middle of the card.
-      final chipLeft =
-          tester.getTopLeft(find.text('1.0 Injection in 1 vial')).dx;
       expect(
-        chipLeft,
-        lessThan(nameLeft + 24),
-        reason: 'the pack badge is left-aligned inside the frame',
+        tester.getTopLeft(find.text('1.0 Injection in 1 vial')).dx,
+        lessThan(nameLeft + 1),
+        reason: 'the pack line starts on the name\'s edge',
       );
       expect(
-        chipLeft,
+        tester.getTopLeft(find.text('₹2,337.30')).dx,
+        lessThan(nameLeft + 1),
+        reason: 'the price row starts on the name\'s edge',
+      );
+      expect(
+        tester.getTopLeft(find.text('₹2,337.30')).dx,
         lessThan(100 / 2),
-        reason: 'the badge is not centred — #274 shipped that once',
-      );
-      expect(
-        tester.getTopLeft(find.text('MRP')).dx,
-        lessThan(nameLeft + 4),
-        reason: 'the MRP line starts on the same edge',
-      );
-      // #1895b — the sale line is a LABELLED row now, so the thing sitting on
-      // that edge is the CAPTION and the value rides in a badge just after
-      // it. Both halves are pinned: the caption on the name's edge, and the
-      // badge hard against the caption, which is what stops the value drifting
-      // to the middle of the card the way #274's Align once did.
-      expect(
-        tester.getTopLeft(find.text('Sale price:')).dx,
-        lessThan(nameLeft + 4),
-        reason: 'the sale caption starts on the same edge',
-      );
-      final capRight = tester.getTopRight(find.text('Sale price:')).dx;
-      expect(
-        tester.getTopLeft(find.text('₹2,337.30')).dx - capRight,
-        lessThan(20.0),
-        reason: 'the badge follows the caption — one gap, not a centred box',
+        reason: 'the price is not centred — #274 shipped that once',
       );
     });
 
@@ -911,21 +889,12 @@ void main() {
   // three back. These tests pin the correction so a later "tidy-up" cannot
   // quietly float the row out of the frame again.
   group('CMD #1926 — the frame is one block', () {
-    testWidgets('the pack badge and ADD sit INSIDE the bordered frame', (
+    testWidgets('the whole card is ONE bordered block — plate, + and text', (
       tester,
     ) async {
+      // CHANGED BY CMD #2122 — the approved card is one white block: the plate, the
+      // floating + on it, AND the text block all sit inside the border.
       await _pump(tester, _row());
-
-      // The frame is the one bordered, shadowed box on this card. Find it by
-      // its height rather than by a private type name, so the test survives a
-      // rename but not a re-float.
-      final frame = tester.widgetList<Container>(find.byType(Container)).where((
-        c,
-      ) {
-        final d = c.decoration;
-        return d is BoxDecoration && d.border != null && d.boxShadow != null;
-      });
-      expect(frame, isNotEmpty, reason: 'the card has a bordered frame');
 
       final frameBox = find
           .byWidgetPredicate(
@@ -938,64 +907,52 @@ void main() {
           .first;
       final frameRect = tester.getRect(frameBox);
 
-      // The two things the spec names must lie within the frame's bounds.
-      // CHANGED BY CMD #2118 — the pack TAG is the sentence badge on the
-      // plate; the second, duplicate pack chip in the action row is gone.
-      final chipRect = tester.getRect(find.text('1.0 Injection in 1 vial'));
-      final addRect = tester.getRect(find.text('ADD'));
-      expect(chipRect.top, greaterThanOrEqualTo(frameRect.top));
-      expect(
-        chipRect.bottom,
-        lessThanOrEqualTo(frameRect.bottom),
-        reason: 'the pack tag is inside the frame, not floating under it',
-      );
-      expect(
-        addRect.bottom,
-        lessThanOrEqualTo(frameRect.bottom),
-        reason: 'ADD is inside the frame, not floating under it',
-      );
+      for (final f in [
+        find.byTooltip('ADD'),
+        find.text('Alkacel 100mg Injection'),
+        find.text('1.0 Injection in 1 vial'),
+        find.text('₹2,337.30'),
+        find.text('Available · Raipur Zone'),
+      ]) {
+        final r = tester.getRect(f);
+        expect(r.top, greaterThanOrEqualTo(frameRect.top));
+        expect(r.bottom, lessThanOrEqualTo(frameRect.bottom),
+            reason: '$f sits inside the one bordered card');
+      }
 
-      // …and the NAME is below the frame, which is what "one bordered block"
-      // means: the frame ends before the text block starts.
-      final nameRect = tester.getRect(find.text('Alkacel 100mg Injection'));
+      // The + floats ON the plate: it sits above the name.
       expect(
-        nameRect.top,
-        greaterThanOrEqualTo(frameRect.bottom),
-        reason: 'the name sits below the frame',
+        tester.getRect(find.byTooltip('ADD')).bottom,
+        lessThanOrEqualTo(
+          tester.getRect(find.text('Alkacel 100mg Injection')).top,
+        ),
+        reason: 'the + is on the image, not in a row under it',
       );
     });
 
-    testWidgets('ADD is OUTLINED green, not a filled green block', (
+    testWidgets('the + is a filled brand circle with a white mark', (
       tester,
     ) async {
+      // CHANGED BY CMD #2122 — reversed from #1926's outlined text pill: the approved add
+      // control is a round filled +. It is still the ONE primary action.
       await _pump(tester, _row());
-
-      // The ADD control is an Ink with a border and NO fill of its own — the
-      // white comes from the Material under it. #1895b filled it solid; a
-      // grid of twenty filled green blocks is what this reverses.
-      final inks = tester.widgetList<Ink>(find.byType(Ink)).where((i) {
-        final d = i.decoration;
-        return d is BoxDecoration && d.border != null;
-      });
-      expect(
-        inks,
-        isNotEmpty,
-        reason: 'ADD draws an outline, so it has a bordered Ink',
+      final icon = tester.widget<Icon>(
+        find.descendant(
+          of: find.byTooltip('ADD'),
+          matching: find.byIcon(Icons.add_rounded),
+        ),
       );
-      final d = inks.first.decoration as BoxDecoration;
-      expect(
-        d.color,
-        isNull,
-        reason: 'an outlined button has no fill of its own',
+      final circle = tester.widget<Material>(
+        find
+            .ancestor(
+              of: find.byIcon(Icons.add_rounded),
+              matching: find.byType(Material),
+            )
+            .first,
       );
-
-      // The word itself is the payload's, in the accent — not white on green.
-      final label = tester.widget<Text>(find.text('ADD'));
-      expect(
-        label.style?.color,
-        isNot(Colors.white),
-        reason: 'an outlined ADD prints the accent, not white',
-      );
+      expect(circle.shape, isA<CircleBorder>());
+      expect(circle.color, isNot(icon.color),
+          reason: 'a filled circle, the mark in the contrasting colour');
     });
 
     testWidgets('the pack badge is a LIGHT tint with dark text', (
@@ -1040,7 +997,7 @@ void main() {
       expect(find.text('Available · Raipur Zone'), findsOneWidget);
       // Under the sale line — the spec's stacking order, pinned by geometry so
       // a re-order of the Column is caught here and not on Om's phone.
-      final sale = tester.getRect(find.text('Sale price:'));
+      final sale = tester.getRect(find.text('₹2,337.30'));
       final line = tester.getRect(find.text('Available · Raipur Zone'));
       expect(
         line.top,
@@ -1081,7 +1038,7 @@ void main() {
       expect(t.style!.color, isNot(dsToneFg('success')));
 
       // …and the card offers no cart control at all in that state (rule 8).
-      expect(find.text('ADD'), findsNothing);
+      expect(find.byTooltip('ADD'), findsNothing);
     });
 
     testWidgets(
@@ -1279,4 +1236,129 @@ void main() {
     });
   });
 
+  // ── CMD #2122 ─────────────────────────────────────────────────────────────
+  // The card object (`_product_card()`, CMD #2121) is what the approved card
+  // prints: the unit chip, the Rx dot, the offer badge and the ONE foot line
+  // all arrive in `card`, and the widget prints them verbatim.
+  group('CMD #2122 — the universal card prints the card object', () {
+    Map<String, dynamic> withCard({
+      String unitWord = 'Strip',
+      String packLine = '10 tablets in 1 strip',
+      bool rx = true,
+      bool offer = false,
+      Map<String, dynamic>? foot,
+    }) {
+      final row = Map<String, dynamic>.from(_row());
+      row['card'] = {
+        'v': 1,
+        'unit_word': unitWord,
+        'pack_line': packLine,
+        'rx': rx
+            ? {
+                'has': true,
+                'is_rx': true,
+                'label': 'Rx',
+                'tone': {'bg': '#FEE2E2', 'fg': '#991B1B'},
+              }
+            : {'has': false, 'is_rx': false},
+        'offer': {
+          'has': offer,
+          'label': offer ? '10 + 1 FREE' : '',
+          'tone': {'bg': '#FEE2E2', 'fg': '#991B1B'},
+        },
+        'price': (row['pricing'] as Map)['card_price'],
+        'foot': foot ??
+            {
+              'has': true,
+              'label': 'You earn 15% margin',
+              'tone': {'name': 'brand', 'bg': '#D1FAE5', 'fg': '#1B7A43'},
+            },
+      };
+      return row;
+    }
+
+    testWidgets('the unit chip and the pack line are card strings, verbatim',
+        (tester) async {
+      await _pump(tester, withCard(unitWord: 'ZZunit', packLine: 'ZZ pack'));
+      expect(find.text('ZZunit'), findsOneWidget);
+      expect(find.text('ZZ pack'), findsOneWidget);
+      // The older keys are not read once the card object is here.
+      expect(find.text('1.0 Injection in 1 vial'), findsNothing);
+    });
+
+    testWidgets('the Rx dot shows only when the card says rx', (tester) async {
+      await _pump(tester, withCard(rx: true));
+      expect(find.text('Rx'), findsOneWidget);
+      await _pump(tester, withCard(rx: false));
+      expect(find.text('Rx'), findsNothing);
+    });
+
+    testWidgets('the offer badge is gated on offer.has', (tester) async {
+      await _pump(tester, withCard(offer: true));
+      expect(find.text('10 + 1 FREE'), findsOneWidget);
+      await _pump(tester, withCard(offer: false));
+      expect(find.text('10 + 1 FREE'), findsNothing);
+    });
+
+    testWidgets('the foot line is card.foot verbatim, in its tone', (
+      tester,
+    ) async {
+      await _pump(tester, withCard());
+      final t = tester.widget<Text>(find.text('You earn 15% margin'));
+      expect(t.style!.color, dsToneFg('brand'));
+      // The zone sentence of the older payload is not a second line.
+      expect(find.text('Available · Raipur Zone'), findsNothing);
+
+      await _pump(
+        tester,
+        withCard(
+          foot: {
+            'has': true,
+            'label': 'Unavailable right now',
+            'tone': {'name': 'danger'},
+          },
+        ),
+      );
+      expect(
+        tester.widget<Text>(find.text('Unavailable right now')).style!.color,
+        dsToneFg('danger'),
+      );
+    });
+
+    testWidgets('foot.has:false draws no line — nothing is invented', (
+      tester,
+    ) async {
+      await _pump(
+        tester,
+        withCard(foot: {'has': false, 'label': 'stale words', 'tone': {}}),
+      );
+      expect(find.text('stale words'), findsNothing);
+      expect(find.textContaining('Available'), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('the card never overflows at the narrowest rail width', (
+      tester,
+    ) async {
+      final cart = CartModel.forTest();
+      await tester.pumpWidget(
+        AppState(
+          cart: cart,
+          child: MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 148,
+                height: CompactProductCard.extent,
+                child: CompactProductCard(
+                  product: Product.fromMap(withCard(offer: true)),
+                  onTap: () {},
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      expect(tester.takeException(), isNull);
+    });
+  });
 }

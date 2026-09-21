@@ -380,7 +380,9 @@ void main() {
       expect(find.text('4 products for “monticope”'), findsOneWidget);
       expect(find.byType(CompactProductCard), findsNWidgets(2));
       expect(find.text('Monticope Tablet'), findsOneWidget);
-      expect(find.text('MANKIND PHARMA LTD'), findsNWidgets(2));
+      // CHANGED BY CMD #2122 — the approved universal card (image A) has no company
+      // line: name, pack line, price row, foot line.
+      expect(find.text('MANKIND PHARMA LTD'), findsNothing);
       // The count line is ONE field: nothing here builds "4 results".
       expect(find.text('4 results'), findsNothing);
     });

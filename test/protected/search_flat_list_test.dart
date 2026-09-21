@@ -177,7 +177,8 @@ void main() {
         (tester) async {
       await _pumpRow(tester, _row());
       expect(find.text('Monticope Tablet'), findsOneWidget);
-      expect(find.text('MANKIND PHARMA LTD'), findsOneWidget);
+      // CHANGED BY CMD #2122 — the approved universal card (image A) has no company line.
+      expect(find.text('MANKIND PHARMA LTD'), findsNothing);
       // CHANGED BY CMD #2118 — ONE pack label per card. #2044 printed the
       // pack SENTENCE on the artwork and the pack TYPE beside ADD, which is
       // the same fact said twice on a card two columns wide. The sentence is
@@ -194,7 +195,10 @@ void main() {
       // CMD #2044 — `mrp_label` and `mrp_display` are printed as they arrive,
       // in two Texts, and the STRIKE is `strike_mrp` — never a decision made
       // by comparing the two numbers here.
-      expect(find.text('MRP'), findsOneWidget);
+      // CHANGED BY CMD #2122 — the approved universal card prints the struck
+      // ceiling BARE beside the sale amount; `mrp_label` shows only when the
+      // MRP stands alone.
+      expect(find.text('MRP'), findsNothing);
       final t = tester.widget<Text>(find.text('₹174.38'));
       expect(t.style?.decoration, TextDecoration.lineThrough);
     });
@@ -216,9 +220,11 @@ void main() {
     testWidgets('ADD is cta_short verbatim and morphs off the cart',
         (tester) async {
       final cart = await _pumpRow(tester, _row());
-      expect(find.text('ADD'), findsOneWidget);
+      // CHANGED BY CMD #2122 — the approved universal card (image A) — the add word is
+      // the floating +'s tooltip.
+      expect(find.byTooltip('ADD'), findsOneWidget);
 
-      await tester.tap(find.text('ADD'));
+      await tester.tap(find.byTooltip('ADD'));
       // The swap is instant, so pumpAndSettle returns before the cart's own
       // send debounce (and the row's one-beat tick) have run. Pump past both
       // explicitly rather than leaning on an animation to hold the frame loop.
@@ -228,7 +234,7 @@ void main() {
       expect(cart.quantityOf('900101'), 1);
       expect(find.text('1'), findsOneWidget, reason: 'the stepper qty');
       expect(find.byIcon(Icons.remove_rounded), findsOneWidget);
-      expect(find.text('ADD'), findsNothing,
+      expect(find.byTooltip('ADD'), findsNothing,
           reason: 'ADD morphs in place — the two never show at once');
     });
 

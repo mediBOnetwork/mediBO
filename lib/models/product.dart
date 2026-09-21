@@ -818,6 +818,12 @@ class Product {
 
   bool get hasWish => wish?['has'] == true;
   bool get isWishlisted => wish?['saved'] == true;
+
+  /// CMD #2121/#2122 — the universal card object (`_product_card()` in
+  /// Postgres): image, unit word, pack line, rx, offer, price, availability,
+  /// cta and the ONE foot line. Null on a payload built before #2121; the
+  /// grid card then reads the older per-surface keys instead.
+  final Map<String, dynamic>? card;
   String get wishAddLabel => (wish?['add_label'] ?? '').toString();
   String get wishRemoveLabel => (wish?['remove_label'] ?? '').toString();
 
@@ -837,6 +843,7 @@ class Product {
   const Product({
     this.rx,
     this.wish,
+    this.card,
     required this.id,
     required this.name,
     required this.genericName,
@@ -909,6 +916,7 @@ class Product {
     offerChip: offerChip,
     rx: rx,
     wish: wish,
+    card: card,
   );
 
   /// A numeric payload value that may arrive as a number OR as text, because
@@ -984,6 +992,7 @@ class Product {
       offerChip: (map['offer_chip'] ?? '').toString(),
       rx: (map['rx'] as Map?)?.cast<String, dynamic>(),
       wish: (map['wish'] as Map?)?.cast<String, dynamic>(),
+      card: (map['card'] as Map?)?.cast<String, dynamic>(),
       // CMD #791 — present on the catalogue grid's rows (storefront_page
       // resolves the whole page's overlays in ONE scan of order_items) and
       // absent everywhere else, which parses to PurchaseOverlay.absent().
@@ -1070,6 +1079,7 @@ class Product {
       offerChip: (map['offer_chip'] ?? '').toString(),
       rx: (map['rx'] as Map?)?.cast<String, dynamic>(),
       wish: (map['wish'] as Map?)?.cast<String, dynamic>(),
+      card: (map['card'] as Map?)?.cast<String, dynamic>(),
     );
   }
 
@@ -1105,6 +1115,7 @@ class Product {
     'pricing': pricing?.toJson(),
     'rx': rx,
     'wish': wish,
+    'card': card,
   };
 
   factory Product.fromJson(Map<String, dynamic> map) {
@@ -1155,6 +1166,7 @@ class Product {
       // the next payload overwrites it. A cache is a render fallback.
       rx: (map['rx'] as Map?)?.cast<String, dynamic>(),
       wish: (map['wish'] as Map?)?.cast<String, dynamic>(),
+      card: (map['card'] as Map?)?.cast<String, dynamic>(),
     );
   }
 
@@ -1206,6 +1218,7 @@ class Product {
       requiresPrescription: (m['rx'] as Map?)?['is_rx'] == true,
       rx: (m['rx'] as Map?)?.cast<String, dynamic>(),
       wish: (m['wish'] as Map?)?.cast<String, dynamic>(),
+      card: (m['card'] as Map?)?.cast<String, dynamic>(),
       // The price block the storefront card and the PDP already print. The
       // bulk row's MRP used to parse to 0.0 here, because MEDICINE.mrp is TEXT
       // and this cast never matched it — so the list showed no price at all.

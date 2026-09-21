@@ -379,6 +379,11 @@ class AuthNotifier extends ChangeNotifier {
           } catch (_) {
             // Session fetch failure must NOT clear the credential.
           }
+        } else {
+          // CMD #2140 — a visitor who never logged in still gets the backend's
+          // signed-out payload (bulk_wa_gate: the "Login to Send Order"
+          // button). Never awaited: the public home paints without it.
+          unawaited(_loadSession(anonBoot: true).then((_) => notifyListeners()));
         }
       } finally {
         if (_loading) {
@@ -614,7 +619,7 @@ class AuthNotifier extends ChangeNotifier {
   }
 
   /// The ONE fetch. One RPC, one payload, no reconciliation.
-  Future<void> _loadSession() async {
+  Future<void> _loadSession({bool anonBoot = false}) async {
     try {
       final raw = await Supabase.instance.client.rpc('my_session');
       final map = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
@@ -628,6 +633,8 @@ class AuthNotifier extends ChangeNotifier {
       // RULE 4 — never adopt a payload that resolved against a different auth
       // user than the one live right now (a stale in-flight response).
       final live = Supabase.instance.client.auth.currentUser?.id ?? '';
+      // CMD #2140 — the anonymous boot read lost a race with a sign-in.
+      if (anonBoot && (next.signedIn || live.isNotEmpty)) return;
       if (next.signedIn && live.isNotEmpty && next.authUserId != live) {
         RenderLog.write('c571_session_mismatch_dropped', 1);
         return;
@@ -635,6 +642,11 @@ class AuthNotifier extends ChangeNotifier {
 
       _session = next;
       RenderLog.write('auth_role', next.role);
+      // CMD #2140 — the anonymous read only needs the public payload itself.
+      if (anonBoot) {
+        RenderLog.write('c2140_anon_wa_gate', next.bulkWaGate.label.isNotEmpty ? 1 : 0);
+        return;
+      }
 
       // CMD #2059 — the registration surface is cached and this is the one
       // place an identity is known. Warming it here (never awaited) is what

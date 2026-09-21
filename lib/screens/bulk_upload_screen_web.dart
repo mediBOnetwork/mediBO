@@ -2546,7 +2546,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         child: ConstrainedBox(
           constraints: BoxConstraints(minHeight: viewport.maxHeight),
           child: Container(
-            color: const Color(0xFFF9FAFB),
+            color: Ds.c.bg,
             width: double.infinity,
             child: Align(
               alignment: Alignment.topCenter,
@@ -2557,10 +2557,12 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
                   // side of a 360px screen, on top of the review card's own
                   // gutter and the row's padding, is what still squeezed the
                   // rows; a phone gets 8 and the desktop keeps its 24.
+                  // CMD #2140 — v4: the SAME 16px side gap every other tab
+                  // uses, so Bulk lines up with Home and Catalogue.
                   padding: EdgeInsets.fromLTRB(
-                      viewport.maxWidth < 600 ? Ds.space.x8 : Ds.space.x24,
+                      viewport.maxWidth < 600 ? Ds.space.x16 : Ds.space.x24,
                       Ds.space.x16,
-                      viewport.maxWidth < 600 ? Ds.space.x8 : Ds.space.x24,
+                      viewport.maxWidth < 600 ? Ds.space.x16 : Ds.space.x24,
                       Ds.space.x24),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -2812,7 +2814,6 @@ class _WhatsAppCard extends StatelessWidget {
     // my_session().bulk_wa_gate is the same decision, rendered for this button
     // by the backend: label, note and enabled all arrive decided.
     final waGate = auth.bulkWaGate;
-    final canOrder = auth.canOrder;
     final btnLabel = waGate.label;
     // has_note encodes absence explicitly — an empty note is not "no note".
     final String? gateNote = waGate.hasNote ? waGate.note : null;
@@ -2828,7 +2829,7 @@ class _WhatsAppCard extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: Ds.r.rCard,
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.08),
@@ -2839,7 +2840,7 @@ class _WhatsAppCard extends StatelessWidget {
         border: Border.all(color: Colors.grey.withValues(alpha: 0.15), width: 1),
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(15),
+        borderRadius: Ds.r.rCard,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -2929,7 +2930,10 @@ class _WhatsAppCard extends StatelessWidget {
                             child: Row(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                if (canOrder) ...[
+                                // CMD #2140 — the icon follows the backend's
+                                // action, not canOrder: a shop whose licence is
+                                // pending still sends on WhatsApp.
+                                if (waGate.action == 'send') ...[
                                   SvgPicture.asset('assets/whatsapp.svg',
                                       width: 20, height: 20),
                                   const SizedBox(width: 8),
@@ -2990,7 +2994,7 @@ class _UploadCard extends StatelessWidget {
     try { RenderLog.write('c312_bulk_built', '1'); } catch (_) {}
     return Container(
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: Ds.r.rCard,
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.08),
@@ -3001,7 +3005,7 @@ class _UploadCard extends StatelessWidget {
         border: Border.all(color: Colors.grey.withValues(alpha: 0.15), width: 1),
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(15),
+        borderRadius: Ds.r.rCard,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -3178,7 +3182,7 @@ class _HowItWorksCard extends StatelessWidget {
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
         color: const Color(0xFF1e2a3a),
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: Ds.r.rCard,
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.08),
@@ -3397,7 +3401,7 @@ class _TemplateSection extends StatelessWidget {
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: Ds.r.rCard,
         border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
       child: Column(
@@ -3781,7 +3785,7 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: Ds.r.rCard,
         border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
       child: Column(
@@ -3951,7 +3955,7 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: Ds.r.rCard,
         border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
       child: Column(
@@ -4851,7 +4855,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
             width: double.infinity,
             decoration: BoxDecoration(
               color: Colors.white,
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: Ds.r.rCard,
               border: Border.all(color: const Color(0xFFE5E7EB)),
               boxShadow: [
                 BoxShadow(
@@ -4861,7 +4865,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
               ],
             ),
             child: ClipRRect(
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: Ds.r.rCard,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -5410,7 +5414,7 @@ const double _kMobPanelMrpW     = 34.0;
 // and the badge arrives with its own tint and ink.
 double _mobLineH() => Ds.space.x24;
 double _mobBlockH(int lines) => _mobLineH() * lines;
-double _mobAltRowH() => _mobBlockH(4) + Ds.space.x8 * 2;
+double _mobAltRowH() => _mobBlockH(3) + Ds.space.x8 * 2;
 
 /// CMD #2115 — the product photo is the door to the full-screen product page.
 /// A plain push, so the bulk screen stays alive underneath and Back returns to
@@ -5484,28 +5488,19 @@ class _MobProductBlock extends StatelessWidget {
     this.isAlternative = false,
   });
 
-  /// Line 2, decided by which of the two rows this is. Nothing is worded here:
-  /// `bulk.qty_pack_line` / `bulk.qty_line` are templates and the composition
-  /// arrives as one finished line from `bulk_composition_line()`.
-  String _line2() {
-    if (isAlternative) return product.genericName;
-    final pack = product.packQtyLabel.trim().isNotEmpty
-        ? product.packQtyLabel.trim()
-        : product.packSize.trim();
-    if (pack.isEmpty) {
-      return cf('bulk.qty_line', {'qty': '$qty', 'unit': product.qtyUnit});
-    }
-    return cf('bulk.qty_pack_line',
-        {'qty': '$qty', 'unit': product.qtyUnit, 'pack': pack});
-  }
+  /// CMD #2140 — Bulk Upload v4: line 2 is the COMPOSITION on every row —
+  /// the selected match, each alternative and each search result alike —
+  /// `bulk_match_items()` / `bulk_search_products()`'s own `composition`
+  /// line, verbatim. The quantity already sits in the qty box beside the
+  /// handwriting, so "16 strip · 10 tablets in 1 strip" said it twice.
+  String _line2() => product.genericName;
 
   @override
   Widget build(BuildContext context) {
     try {
-      RenderLog.write('c2115_bulk_row4', '1');
+      RenderLog.write('c2140_bulk_row3', '1');
       RenderLog.write(
-          isAlternative ? 'c2119_alt_composition' : 'c2119_selected_qty_pack',
-          '1');
+          isAlternative ? 'c2140_alt_row3' : 'c2140_selected_row3', '1');
     } catch (_) {}
     final badge = product.availBadge;
     final price = ProductCardView.of(product).price;
@@ -5530,6 +5525,8 @@ class _MobProductBlock extends StatelessWidget {
               bg: badge.bg,
               fg: badge.fg,
               available: badge.available),
+      // CMD #2140 — three lines: the state badge sits beside the price.
+      inlineControl: true,
       onOpen: () => _openBulkProduct(context, product),
       openSemanticsId: 'bulk_product_open_${product.id}',
       openHint: c('bulk.open_product_hint'),
@@ -6173,13 +6170,13 @@ class _MobilePanelSkeletonRow extends StatelessWidget {
       ),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Container(
-            width: _mobBlockH(4), height: _mobBlockH(4), decoration: shimmer),
+            width: _mobBlockH(3), height: _mobBlockH(3), decoration: shimmer),
         SizedBox(width: Ds.space.x12),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: List.generate(
-              4,
+              3,
               (_) => _MobLine(
                 child: Container(height: Ds.space.x8, decoration: shimmer),
               ),

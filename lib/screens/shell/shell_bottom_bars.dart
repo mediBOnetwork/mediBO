@@ -694,3 +694,16 @@ Widget shellBottomStack(VoidCallback onTap, int page, {bool staff = false}) =>
         ),
       ),
     );
+
+/// CMD #2140 — the page host for every shell tab: staff pages clear the bar,
+/// customer tabs clear the bar AND, on a tab that floats it, the View cart
+/// pill — so neither ever sits on top of the last card.
+Widget shellHost(Widget child, {required bool staff, required int page}) =>
+    staff
+        ? shellPageHost(child, staff: true)
+        : ValueListenableBuilder<List<Map<String, dynamic>>>(
+            valueListenable: CustomerNav.value,
+            child: child,
+            builder: (_, slots, host) => shellPageHost(host!,
+                staff: false, pill: CartPill.floatsOnPage(slots, page)),
+          );

@@ -36,6 +36,11 @@ class ProductCardView {
   /// for a `card` payload.
   final String soldOutChip;
 
+  /// CMD #2146 — Product card v5, present only when the payload carries the
+  /// v5 blocks (`style`, `pack_chip`, `sub_line`, `layout`, `placeholder`).
+  /// Null = an older payload, drawn the way it always was.
+  final CardV5? v5;
+
   const ProductCardView({
     required this.unitWord,
     required this.packLine,
@@ -53,6 +58,7 @@ class ProductCardView {
     required this.footTone,
     this.footFg,
     this.soldOutChip = '',
+    this.v5,
   });
 
   static Map<String, dynamic>? _map(Object? raw) =>
@@ -118,7 +124,94 @@ class ProductCardView {
       footLabel: _s(foot?['label']),
       footTone: _s(footTone?['name']),
       footFg: footTone?['fg'],
+      v5: CardV5.of(c),
     );
+  }
+}
+
+/// CMD #2146 — the v5 card's own blocks, read verbatim from `_product_card()`.
+///
+/// Colours stay the payload's hex strings (resolved by the widget through
+/// `Ds.hex`), labels are printed as they arrived, and every `has` is the
+/// backend's boolean. The only rule applied here is the shared text budget
+/// ([subLinesFor]): name + sub line together use `layout.text_lines`.
+class CardV5 {
+  final bool hasPackChip;
+  final String packChip;
+  final bool hasSubLine;
+  final String subLine;
+  final Object? subFg;
+  final String placeholderKind;
+  final bool imagePlaceholder;
+  final bool mrpStruck;
+  final Object? mrpFg;
+  final bool hasRx;
+  final bool hasFoot;
+  final int textLines;
+  final int nameMaxLines;
+  final Object? photoBg;
+  final Object? textBg;
+  final Object? border;
+  final Object? nameFg;
+
+  const CardV5({
+    required this.hasPackChip,
+    required this.packChip,
+    required this.hasSubLine,
+    required this.subLine,
+    required this.subFg,
+    required this.placeholderKind,
+    required this.imagePlaceholder,
+    required this.mrpStruck,
+    required this.mrpFg,
+    required this.hasRx,
+    required this.hasFoot,
+    required this.textLines,
+    required this.nameMaxLines,
+    required this.photoBg,
+    required this.textBg,
+    required this.border,
+    required this.nameFg,
+  });
+
+  static Map _m(Object? v) => v is Map ? v : const {};
+  static String _s(Object? v) => (v ?? '').toString();
+  static int _i(Object? v, int d) =>
+      v is num ? v.toInt() : int.tryParse(_s(v)) ?? d;
+
+  static CardV5? of(Map<String, dynamic>? c) {
+    if (c == null || c['style'] is! Map) return null;
+    final st = _m(c['style']);
+    final pc = _m(c['pack_chip']);
+    final sub = _m(c['sub_line']);
+    final price = _m(c['price']);
+    final layout = _m(c['layout']);
+    return CardV5(
+      hasPackChip: pc['has'] == true && _s(pc['label']).isNotEmpty,
+      packChip: _s(pc['label']),
+      hasSubLine: sub['has'] == true && _s(sub['label']).isNotEmpty,
+      subLine: _s(sub['label']),
+      subFg: sub['fg'] ?? st['sub_fg'],
+      placeholderKind: _s(_m(c['placeholder'])['kind']),
+      imagePlaceholder: _m(c['image'])['placeholder'] == true,
+      mrpStruck: price['mrp_struck'] == true,
+      mrpFg: price['mrp_fg'] ?? st['mrp_fg'],
+      hasRx: _m(c['rx'])['has'] == true,
+      hasFoot: _m(c['foot'])['has'] == true && _s(_m(c['foot'])['label']).isNotEmpty,
+      textLines: _i(layout['text_lines'], 3),
+      nameMaxLines: _i(layout['name_max_lines'], 2),
+      photoBg: st['photo_bg'],
+      textBg: st['text_bg'],
+      border: st['border'],
+      nameFg: st['name_fg'],
+    );
+  }
+
+  /// Name + sub line share [textLines]: a 1-line name leaves 2 sub lines, a
+  /// 2-line name leaves 1. Never below 0.
+  int subLinesFor(int nameLines) {
+    final n = textLines - nameLines;
+    return n < 0 ? 0 : n;
   }
 }
 

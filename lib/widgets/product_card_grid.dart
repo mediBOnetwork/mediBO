@@ -59,16 +59,12 @@ class ProductCardGrid extends StatelessWidget {
 
   /// The delegate, in one place, so a sliver grid and a box grid cannot
   /// disagree about the extent.
-  /// CMD #2118 — [showManufacturer] false is the company page, where the card
-  /// drops the maker's line the page title already carries. The extent comes
-  /// from the card either way, never from a number typed into a screen.
-  static SliverGridDelegate delegateFor(double width,
-          {bool showManufacturer = true}) =>
+  /// CMD #2122 — ONE card height on every surface: the extent comes from the
+  /// card, never from a number typed into a screen.
+  static SliverGridDelegate delegateFor(double width) =>
       SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: columnsFor(width),
-        mainAxisExtent: showManufacturer
-            ? CompactProductCard.extent
-            : CompactProductCard.extentWithoutCompany,
+        mainAxisExtent: CompactProductCard.extent,
         crossAxisSpacing: crossGap,
         mainAxisSpacing: mainGap,
       );

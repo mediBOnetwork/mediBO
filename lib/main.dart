@@ -110,6 +110,7 @@ import 'supabase_config.dart';
 import 'theme.dart';
 import 'design_tokens.dart';
 import 'app_navigator.dart';
+import 'services/payload_cache.dart'; // CMD #2144: storage budget before the session
 import 'user_state.dart';
 import 'widgets/animations.dart';
 
@@ -367,6 +368,14 @@ void main() {
       probeHeaders: const {'apikey': SupabaseConfig.anonKey},
     );
     RecordingCapture.instance.useFlushClient(medibotHttp);
+    // CMD #2144 — headroom for the session BEFORE the SDK writes it. Screen
+    // caches had filled localStorage and the sb-…-auth-token write threw
+    // QuotaExceededError. Bounded and swallowed: it can never hold boot.
+    try {
+      final n = await PayloadStore.enforceBudget()
+          .timeout(const Duration(seconds: 1));
+      if (n > 0) RenderLog.write('c2144_cache_evicted', n);
+    } catch (_) {}
     try {
       await Supabase.initialize(
         url: SupabaseConfig.url,
@@ -1575,9 +1584,10 @@ class _AppRootState extends State<_AppRoot> {
   @override
   void initState() {
     super.initState();
-    // Hard 5-second timeout: if auth never resolves, render HomeShell anyway.
+    // Hard boot timeout: if auth never resolves, render HomeShell anyway.
     // A feature crash in auth init MUST NOT leave users on an infinite spinner.
-    _bootTimer = Timer(const Duration(seconds: 5), () {
+    // CMD #2144 — 4 s, the one budget every boot/auth/role gate shares.
+    _bootTimer = Timer(AuthNotifier.gateBudget, () {
       if (mounted && widget.auth.loading) {
         try { RenderLog.write('boot_status', 'timeout_fallback'); } catch (_) {}
         setState(() => _timedOut = true);

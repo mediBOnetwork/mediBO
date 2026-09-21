@@ -213,6 +213,9 @@ dependencies {
     // this host nor changes the 16 KB page alignment the #278 gate checks.
     implementation("com.google.android.play:app-update:2.1.0")
     implementation("com.google.android.play:app-update-ktx:2.1.0")
+    // CMD #2151 — Phone Number Hint (Identity API) for registration's WhatsApp
+    // box. Same version google_sign_in_android already ships, so no second copy.
+    implementation("com.google.android.gms:play-services-auth:21.6.0")
 }
 
 flutter {

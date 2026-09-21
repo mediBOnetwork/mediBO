@@ -144,9 +144,16 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
 
   Map<String, dynamic>? _saved;
 
+  /// CMD #2151 — true while a finger is on the Location map.
+  final ValueNotifier<bool> _mapTouch = ValueNotifier<bool>(false);
+  void _onMapTouch() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void initState() {
     super.initState();
+    _mapTouch.addListener(_onMapTouch);
     _leadId = widget.leadId;
     _customerId = widget.customerId;
     _prefill = widget.prefill;
@@ -155,6 +162,8 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
 
   @override
   void dispose() {
+    _mapTouch.removeListener(_onMapTouch);
+    _mapTouch.dispose();
     _numTimer?.cancel();
     _scroll.dispose();
     _form?.controllerFor('whatsapp_no').removeListener(_onNumber);
@@ -773,6 +782,10 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
           Expanded(
             child: SingleChildScrollView(
               controller: _scroll,
+              // CMD #2151 — a finger on the map stops the page scrolling.
+              physics: _mapTouch.value
+                  ? const NeverScrollableScrollPhysics()
+                  : null,
               padding: EdgeInsets.fromLTRB(pad, Ds.space.x24, pad, Ds.space.x24),
               child: _capped(Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -818,6 +831,7 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
                         : const SizedBox.shrink()
                   else if (ctrl != null && mapBlock.isNotEmpty)
                     RegistrationLocationStep(
+                      touchLock: _mapTouch,
                       map: mapBlock,
                       values: ctrl.valuesForKeys(const [
                         'address', 'landmark', 'city', 'state',
@@ -1059,16 +1073,23 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(_s(pay, 'label'), style: Ds.t.bodyStrong),
-        SizedBox(height: Ds.space.x8),
-        _chipRow(_l(pay['options']), _payment,
-            (v) => setState(() => _payment = v), 'addcust_pay'),
-        SizedBox(height: Ds.space.x24),
-        Text(_s(del, 'label'), style: Ds.t.bodyStrong),
-        SizedBox(height: Ds.space.x8),
-        _chipRow(_l(del['options']), _delivery,
-            (v) => setState(() => _delivery = v), 'addcust_deliv'),
-        SizedBox(height: Ds.space.x24),
+        // CMD #2151 — Invite step: payment term and delivery are drawn only
+        // when the backend turns them on (addcust_rules); their defaults
+        // still travel with Save.
+        if (pay['show'] != false) ...[
+          Text(_s(pay, 'label'), style: Ds.t.bodyStrong),
+          SizedBox(height: Ds.space.x8),
+          _chipRow(_l(pay['options']), _payment,
+              (v) => setState(() => _payment = v), 'addcust_pay'),
+          SizedBox(height: Ds.space.x24),
+        ],
+        if (del['show'] != false) ...[
+          Text(_s(del, 'label'), style: Ds.t.bodyStrong),
+          SizedBox(height: Ds.space.x8),
+          _chipRow(_l(del['options']), _delivery,
+              (v) => setState(() => _delivery = v), 'addcust_deliv'),
+          SizedBox(height: Ds.space.x24),
+        ],
         Container(
           decoration: BoxDecoration(
             color: Ds.c.surface,

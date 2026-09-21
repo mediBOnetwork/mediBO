@@ -119,9 +119,16 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
   bool _stepSeeded = false;
   bool _showDone = false;
 
+  /// CMD #2151 — true while a finger is on the Location map.
+  final ValueNotifier<bool> _mapTouch = ValueNotifier<bool>(false);
+  void _onMapTouch() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void initState() {
     super.initState();
+    _mapTouch.addListener(_onMapTouch);
     _load();
   }
 
@@ -134,6 +141,8 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
 
   @override
   void dispose() {
+    _mapTouch.removeListener(_onMapTouch);
+    _mapTouch.dispose();
     _scroll.dispose();
     _form?.removeListener(_onFormChange);
     _form?.dispose();
@@ -1078,6 +1087,10 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
           Expanded(
             child: SingleChildScrollView(
               controller: _scroll,
+              // CMD #2151 — a finger on the map stops the page scrolling.
+              physics: _mapTouch.value
+                  ? const NeverScrollableScrollPhysics()
+                  : null,
               padding: EdgeInsets.fromLTRB(pad, Ds.space.x24, pad, Ds.space.x24),
               child: capped(Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1088,7 +1101,8 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
                     SizedBox(height: Ds.space.x4),
                     Text(_s(step, 'subtitle'), style: Ds.t.bodySecondary),
                   ],
-                  if (!_v4 && _step == 0 && imported['is'] == true && _s(imported, 'note').isNotEmpty)
+                  // CMD #2151 — v4 too: an imported shop opens here, prefilled.
+                  if (_step == 0 && imported['is'] == true && _s(imported, 'note').isNotEmpty)
                     _note(_s(imported, 'note'), Ds.c.infoSoft),
                   if (!_v4 && _step == 0 && _p['has_draft'] == true && _s(_p, 'draft_note').isNotEmpty)
                     _note(_s(_p, 'draft_note'), Ds.c.surface),
@@ -1101,6 +1115,7 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
                   // is the form it always was.
                   if (ctrl != null && mapBlock.isNotEmpty)
                     RegistrationLocationStep(
+                      touchLock: _mapTouch,
                       map: mapBlock,
                       values: ctrl.valuesForKeys(const [
                         'address', 'landmark', 'city', 'state',
@@ -1125,6 +1140,7 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
                       chips: chips,
                       notes: notes,
                       v4: _v4 ? _wiz : const {},
+                      pickers: _v4,
                       checkRpc: (fn, params) =>
                           OneRegistrationScreen.rpc(fn, params),
                     ),

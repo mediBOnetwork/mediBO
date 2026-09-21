@@ -34,7 +34,7 @@ import 'profile_screen.dart';
 import 'customer/my_account_screen.dart'; // CMD #1815 — the notice's action
 import '../services/idempotency.dart';
 import '../widgets/registration_sheet.dart';
-import '../widgets/qty_picker.dart';
+import '../widgets/product_row_card.dart';
 
 class CartScreen extends StatefulWidget {
   final VoidCallback? onOrderPlaced;
@@ -2223,13 +2223,6 @@ class _CartItemCard extends StatelessWidget {
   Widget _buildPhone(BuildContext context) {
     final p = line.product;
     final av = availability;
-    final rx = line.rowMap('rx_chip');
-    final badge = line.rowMap('sale_badge');
-    final chip = line.rowMap('qty_chip');
-
-    final name = line.rows('name').isNotEmpty ? line.rows('name') : p.name;
-    final composition = line.rows('composition');
-
     final open = line.rowMap('open');
     final canOpen = open['has'] == true;
     void openProduct() {
@@ -2243,89 +2236,46 @@ class _CartItemCard extends StatelessWidget {
       );
     }
 
-    // Three text lines and one control line, so the chip keeps a full 44px
-    // touch height without the first three growing to match it. The tile is
-    // exactly as tall as the four of them together.
-    final double textH = _kC2120LineH * 3 + Ds.touch.minTarget;
-
+    // CMD #2123 — the row IS the shared card's row variant. The cart hands it
+    // the payload's four lines and keeps only what is the cart's own: the ✕
+    // (or the ViewAs checkbox), and the blocking chips under the row.
     return Padding(
       padding: EdgeInsets.symmetric(vertical: Ds.space.x12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: canOpen ? openProduct : null,
-                child: C2013Thumb(product: p, rx: rx, side: textH),
-              ),
-              SizedBox(width: Ds.space.x12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _C2120Line(
-                      height: _kC2120LineH,
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: canOpen ? openProduct : null,
-                        child: Text(
-                          name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Ds.t.body.copyWith(
-                              color: Ds.c.text, fontWeight: FontWeight.w700),
-                        ),
-                      ),
+          ProductRowCard(
+            surface: 'cart',
+            product: p,
+            name: line.rows('name').isNotEmpty ? line.rows('name') : p.name,
+            line2: line.rows('composition'),
+            price: RowPriceBadge.fromMap(line.rowMap('sale_badge')),
+            line4: RowQtyChip(
+              chip: line.rowMap('qty_chip'),
+              locked: line.qtyLocked,
+              onPicked: (qty) => cart.setQuantity(p, qty),
+            ),
+            line4IsControl: true,
+            rx: line.rowMap('rx_chip'),
+            onOpen: canOpen ? openProduct : null,
+            nameOpens: true,
+            // CHANGE #324: ViewAs → checkbox; normal → the ✕. Both sit where
+            // the ✕ has always sat, so nothing moves between the modes.
+            trailing: viewAsChecked != null
+                ? SizedBox(
+                    width: Ds.touch.minTarget,
+                    height: Ds.touch.minTarget,
+                    child: Checkbox(
+                      value: viewAsChecked,
+                      onChanged: (_) => onViewAsToggle?.call(),
+                      activeColor: Ds.c.brand,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      visualDensity: VisualDensity.compact,
                     ),
-                    _C2120Line(
-                      height: _kC2120LineH,
-                      child: composition.isEmpty
-                          ? const SizedBox.shrink()
-                          : Text(
-                              composition,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Ds.t.caption,
-                            ),
-                    ),
-                    _C2120Line(
-                      height: _kC2120LineH,
-                      child: C2120SaleBadge(badge: badge),
-                    ),
-                    _C2120Line(
-                      height: Ds.touch.minTarget,
-                      child: C2120QtyChip(
-                        chip: chip,
-                        locked: line.qtyLocked,
-                        onPicked: (qty) => cart.setQuantity(p, qty),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              // CHANGE #324: ViewAs → checkbox; normal → the ✕. Both sit where
-              // the ✕ has always sat, so nothing moves between the modes.
-              if (viewAsChecked != null)
-                SizedBox(
-                  width: Ds.touch.minTarget,
-                  height: Ds.touch.minTarget,
-                  child: Checkbox(
-                    value: viewAsChecked,
-                    onChanged: (_) => onViewAsToggle?.call(),
-                    activeColor: Ds.c.brand,
-                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    visualDensity: VisualDensity.compact,
-                  ),
-                )
-              else
-                _C1912Remove(
+                  )
+                : _C1912Remove(
                     onTap: () => cart.remove(p), danger: line.unavailable),
-            ],
           ),
           // CHANGE #553 / #639 — the backend's verdict for this line, in the
           // backend's own label and colours. It is the one thing still allowed
@@ -2359,188 +2309,32 @@ class _CartItemCard extends StatelessWidget {
   }
 }
 
-// ─── CMD #2120 — the phone cart row's three pieces ───────────────────────────
 
 /// The phone breakpoint this screen already splits on. Below it the cart row
-/// is the Bulk Upload shape; at or above it the desktop row is untouched.
+/// is the shared ProductRowCard; at or above it the desktop row is untouched.
 const double _kC2120PhoneMax = 600;
 
-/// One text line of the four-line block. A fixed slot rather than an intrinsic
-/// height, so a line the payload left empty still holds its place and the
-/// photo beside it ends on the same baseline as line 4.
-double get _kC2120LineH => Ds.space.x24;
+/// CMD #2120 names, kept as thin doors onto the shared row card (CMD #2123)
+/// so nothing outside this file has to change what it calls.
+typedef C2120QtyChip = RowQtyChip;
 
-class _C2120Line extends StatelessWidget {
-  final double height;
-  final Widget child;
-  const _C2120Line({required this.height, required this.child});
-
-  @override
-  Widget build(BuildContext context) => SizedBox(
-        height: height,
-        width: double.infinity,
-        child: Align(alignment: Alignment.centerLeft, child: child),
-      );
-}
-
-/// CMD #2120 — line 3: ONE filled badge, the sale price and nothing else.
-///
-/// `sale_badge` is cart_row_block()'s copy of _pricing_block()'s `card_price`:
-/// the label, the value and the two colours. `value` is already the right
-/// answer for THIS viewer — the formatted amount for an approved buyer, the
-/// locked word for everyone else — so nothing here asks which it is holding
-/// and no PTR number can reach a viewer the backend withheld it from.
-///
-/// FittedBox rather than an ellipsis (CMD #2119's lesson on the same badge):
-/// on a very narrow phone the whole badge scales down together, so the label
-/// is never the part that gets cut.
 class C2120SaleBadge extends StatelessWidget {
   final Map<String, dynamic> badge;
   const C2120SaleBadge({super.key, required this.badge});
 
   @override
-  Widget build(BuildContext context) {
-    if (badge['has'] != true) return const SizedBox.shrink();
-    final value = (badge['value'] ?? '').toString();
-    if (value.isEmpty) return const SizedBox.shrink();
-    final label = (badge['label'] ?? '').toString();
-    final ink = _C1912Chip._colour(badge['fg'], Ds.c.surface);
-    return FittedBox(
-      fit: BoxFit.scaleDown,
-      alignment: Alignment.centerLeft,
-      child: Container(
-        padding: EdgeInsets.symmetric(
-            horizontal: Ds.space.x8, vertical: Ds.space.hairline),
-        decoration: BoxDecoration(
-          color: _C1912Chip._colour(badge['bg'], Ds.c.brand),
-          borderRadius: BorderRadius.circular(Ds.r.chip),
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          if (label.isNotEmpty) ...[
-            Text(label,
-                maxLines: 1,
-                softWrap: false,
-                style: Ds.t.caption.copyWith(color: ink)),
-            SizedBox(width: Ds.space.x4),
-          ],
-          Text(value,
-              maxLines: 1,
-              softWrap: false,
-              style: Ds.t.caption
-                  .copyWith(color: ink, fontWeight: FontWeight.w700)),
-        ]),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => RowPriceBadge.fromMap(badge);
 }
 
-/// CMD #2120 — line 4: the quantity, as a control rather than a caption.
-///
-/// The − 1 + stepper is gone. This is an outlined chip with a chevron, so it
-/// reads as something to tap, and tapping it opens `showQtyPickerChoice` — the
-/// SAME popup Bulk Upload opens, from the same file, centred on this line's
-/// quantity and capped by `bulk.qty_picker_max`.
-///
-/// The word on it is never composed here: `qty_chip.label` is
-/// bulk_qty_line()'s template ("5 strip"). Between the pick and the server's
-/// reply the chip prints the label the PICKER handed back — still the
-/// backend's sentence, just one round trip early — and drops it the moment the
-/// payload's own label changes.
-///
-/// `locked` is cart_render()'s `qty_locked`, carried through: the chip is dead
-/// and tinted danger on the strength of that flag, never on a local check.
-/// CMD #2120 — the chip's ONE decision, pure so it can be held down.
-///
-/// After a pick the chip prints the label the PICKER handed back (still a
-/// backend string), and it keeps printing it until the payload's own label
-/// changes — which is the server answering, whatever it answered. It is never
-/// a Dart-composed sentence and it never outlives the round trip.
 String? c2120PendingAfterPayload(
-    {required String? pending,
-    required String oldLabel,
-    required String newLabel}) =>
-    oldLabel == newLabel ? pending : null;
+        {required String? pending,
+        required String oldLabel,
+        required String newLabel}) =>
+    rowQtyPendingAfterPayload(
+        pending: pending, oldLabel: oldLabel, newLabel: newLabel);
 
 String c2120ChipText({required String? pending, required String payload}) =>
-    (pending != null && pending.isNotEmpty) ? pending : payload;
-
-class C2120QtyChip extends StatefulWidget {
-  final Map<String, dynamic> chip;
-  final bool locked;
-  final ValueChanged<int> onPicked;
-  const C2120QtyChip({
-    super.key,
-    required this.chip,
-    required this.onPicked,
-    this.locked = false,
-  });
-
-  @override
-  State<C2120QtyChip> createState() => _C2120QtyChipState();
-}
-
-class _C2120QtyChipState extends State<C2120QtyChip> {
-  String? _pending;
-
-  @override
-  void didUpdateWidget(C2120QtyChip old) {
-    super.didUpdateWidget(old);
-    // The server answered — whatever it says wins, even if it clamped the pick.
-    _pending = c2120PendingAfterPayload(
-        pending: _pending,
-        oldLabel: _label(old.chip),
-        newLabel: _label(widget.chip));
-  }
-
-  static String _label(Map<String, dynamic> m) => (m['label'] ?? '').toString();
-
-  Future<void> _open() async {
-    final picked = await showQtyPickerChoice(
-      context,
-      packType: (widget.chip['pack_type'] ?? '').toString(),
-      current: (widget.chip['qty'] as num?)?.toInt() ?? 0,
-    );
-    if (picked == null || !mounted) return;
-    setState(() => _pending = picked.label);
-    widget.onPicked(picked.value);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (widget.chip['has'] != true) return const SizedBox.shrink();
-    final text = c2120ChipText(pending: _pending, payload: _label(widget.chip));
-    if (text.isEmpty) return const SizedBox.shrink();
-    final tint = widget.locked ? Ds.c.danger : Ds.c.brand;
-    return Semantics(
-      identifier: 'cart_qty_chip',
-      button: true,
-      label: (widget.chip['hint'] ?? '').toString(),
-      child: InkWell(
-        onTap: widget.locked ? null : _open,
-        borderRadius: BorderRadius.circular(Ds.r.chip),
-        child: Container(
-          height: Ds.touch.minTarget,
-          padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(Ds.r.chip),
-            border: Border.all(color: tint),
-          ),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Flexible(
-              child: Text(text,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Ds.t.body
-                      .copyWith(color: tint, fontWeight: FontWeight.w600)),
-            ),
-            SizedBox(width: Ds.space.x4),
-            Icon(Icons.keyboard_arrow_down, size: Ds.space.x16, color: tint),
-          ]),
-        ),
-      ),
-    );
-  }
-}
+    rowQtyChipText(pending: pending, payload: payload);
 
 /// CMD #2025 — the one thing a failed save is allowed to do: say so on its own
 /// row, and offer to send it again.

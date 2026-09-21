@@ -109,12 +109,16 @@ class _MobileBottomBar extends StatelessWidget {
     // badges; only the drawing changed. The shop badge is a notifier of its
     // own, so the dock listens to it rather than reading it once.
     final found = slots.indexWhere((s) => pageOf(s) == index);
-    final lit = pageOf(slots[found < 0 ? 0 : found]);
+    final bottomNavIndex = found < 0 ? 0 : found;
     return ValueListenableBuilder(
       valueListenable: ShopBadge.value,
       builder: (context, _, _) => FloatingDock(
-        activePage: lit,
-        onPageTap: onPageTap,
+        activeIndex: bottomNavIndex,
+        // The one map, read once, used for both halves of the question: which
+        // slots exist (the tabs) and where each one goes (here).
+        onTap: (i) {
+          if (i >= 0 && i < slots.length) onPageTap(pageOf(slots[i]));
+        },
         tabs: [for (final s in slots) _dockTab(s, cart)],
       ),
     );
@@ -132,7 +136,6 @@ class _MobileBottomBar extends StatelessWidget {
     return DockTab(
       key: (s['key'] ?? '').toString(),
       label: (s['label'] ?? '').toString(),
-      page: pageOf(s),
       icon: pair?.icon ?? Icons.widgets_outlined,
       activeIcon: pair?.active ?? Icons.widgets,
       badge: badge,

@@ -234,8 +234,7 @@ class SearchHeaderBar extends StatefulWidget {
   final Future<ScanResult> Function(String code)? scanResolver;
 
   /// One height for both screens, so the two headers cannot drift apart.
-  /// CMD #2147 — 44, the header v2 search bar (and the touch minimum).
-  static const double fieldHeight = 44;
+  static const double fieldHeight = 46;
 
   /// CMD #2117 — the semantics address of the field itself, so a browser
   /// journey taps the search box rather than a rounded rectangle.

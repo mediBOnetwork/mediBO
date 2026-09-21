@@ -24,7 +24,6 @@ class DockTab {
   const DockTab({
     required this.key,
     required this.label,
-    required this.page,
     required this.icon,
     required this.activeIcon,
     this.badge = '',
@@ -35,8 +34,6 @@ class DockTab {
   final String key;
   final String label;
 
-  /// The shell page the row opens (`page_index`).
-  final int page;
   final IconData icon, activeIcon;
 
   /// The badge text, verbatim; '' = no badge.
@@ -50,13 +47,17 @@ class FloatingDock extends StatelessWidget {
   const FloatingDock({
     super.key,
     required this.tabs,
-    required this.activePage,
-    required this.onPageTap,
+    required this.activeIndex,
+    required this.onTap,
   });
 
   final List<DockTab> tabs;
-  final int activePage;
-  final ValueChanged<int> onPageTap;
+
+  /// The lit tab's POSITION in [tabs]; the shell resolves it from the rows.
+  final int activeIndex;
+
+  /// Hands back the tapped tab's position; the shell maps it to its row.
+  final ValueChanged<int> onTap;
 
   /// The dock's own height, its float above the screen edges, and the pill.
   static double get dockHeight => Ds.space.x48 + Ds.space.x12;
@@ -77,12 +78,11 @@ class FloatingDock extends StatelessWidget {
   Widget build(BuildContext context) {
     if (tabs.length < 2) return const SizedBox.shrink();
     final still = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
-    final found = tabs.indexWhere((t) => t.page == activePage);
-    final active = found < 0 ? 0 : found;
+    final active = activeIndex.clamp(0, tabs.length - 1);
     RenderLog.write('c2147_dock', '${tabs.length}:${tabs[active].key}');
     final safe = MediaQuery.viewPaddingOf(context).bottom;
     return Padding(
-      padding: EdgeInsets.fromLTRB(edge, 0, edge, edge + safe),
+      padding: EdgeInsets.only(left: edge, right: edge, bottom: edge + safe),
       child: Container(
         height: dockHeight,
         decoration: BoxDecoration(
@@ -133,7 +133,7 @@ class FloatingDock extends StatelessWidget {
                 curve: spring,
                 width: geo.widths[i],
                 height: dockHeight,
-                child: _tab(tabs[i], i == active, still),
+                child: _tab(tabs[i], i, i == active, still),
               ),
           ],
         ),
@@ -141,7 +141,7 @@ class FloatingDock extends StatelessWidget {
     );
   }
 
-  Widget _tab(DockTab t, bool on, bool still) {
+  Widget _tab(DockTab t, int i, bool on, bool still) {
     final d = Duration(milliseconds: still ? 0 : 150);
     return Semantics(
       container: true,
@@ -152,7 +152,7 @@ class FloatingDock extends StatelessWidget {
       child: InkResponse(
         onTap: () {
           HapticFeedback.lightImpact();
-          onPageTap(t.page);
+          onTap(i);
         },
         radius: pillHeight,
         containedInkWell: false,

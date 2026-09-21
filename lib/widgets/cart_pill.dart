@@ -418,9 +418,9 @@ class _ThumbStack extends StatelessWidget {
       height: ui.thumb,
       decoration: BoxDecoration(color: Ds.c.surface, shape: BoxShape.circle),
       alignment: Alignment.center,
-      child: url.isEmpty
-          ? pack
-          : Stack(alignment: Alignment.center, children: [
+      // The pack icon is painted first; ProductImage (its own placeholder
+      // when there is no picture) sits on top.
+      child: Stack(alignment: Alignment.center, children: [
               pack,
               ProductImage(
                 url: url,

@@ -43,8 +43,15 @@ class OrderHoursModel extends ChangeNotifier with WidgetsBindingObserver {
   String? autoCloseLabel; // "6:00 PM" — 12-hour, ready to print
   String? nowLabel; // "12:30 AM"
 
+  // CMD #2147 — the header pill and the sheet it opens, exactly as
+  // order_hours_state() sends them: {state, label, tone{bg,fg,dot}, pulse,
+  // pulse_ms, refresh_s} and {title, hours, note}. Empty until loaded.
+  Map<String, dynamic> pill = const {};
+  Map<String, dynamic> sheet = const {};
+
   LiveFeedHandle? _channel;
   Timer? _debounce;
+  Timer? _pillTick;
 
   OrderHoursModel() {
     _init();
@@ -91,6 +98,9 @@ class OrderHoursModel extends ChangeNotifier with WidgetsBindingObserver {
       autoOpenLabel = map['auto_open_label'] as String?;
       autoCloseLabel = map['auto_close_label'] as String?;
       nowLabel = map['now_label'] as String?;
+      pill = Map<String, dynamic>.from((map['pill'] as Map?) ?? const {});
+      sheet = Map<String, dynamic>.from((map['sheet'] as Map?) ?? const {});
+      _schedulePillTick();
       loaded = true;
       fetchedAt = DateTime.now();
       RenderLog.write('c444_is_open', isOpen.toString());
@@ -102,6 +112,7 @@ class OrderHoursModel extends ChangeNotifier with WidgetsBindingObserver {
       RenderLog.write('c456_open_label', autoOpenLabel ?? '');
       RenderLog.write('c456_close_label', autoCloseLabel ?? '');
       RenderLog.write('c456_schedule', scheduleLabel ?? '');
+      RenderLog.write('c2147_pill_state', (pill['state'] ?? '').toString());
       notifyListeners();
     } catch (_) {
       // D3 FAIL OPEN on the fetch — never invent a "closed" message on a
@@ -109,6 +120,14 @@ class OrderHoursModel extends ChangeNotifier with WidgetsBindingObserver {
       // above, if this is the very first call) in place; do not flip
       // canOrder to false just because the RPC failed.
     }
+  }
+
+  /// CMD #2147 — ask again when the BACKEND says the pill can next change
+  /// (`refresh_s`). No clock arithmetic here: the number is the server's.
+  void _schedulePillTick() {
+    _pillTick?.cancel();
+    final s = (pill['refresh_s'] as num?)?.toInt() ?? 0;
+    if (s > 0) _pillTick = Timer(Duration(seconds: s), refresh);
   }
 
   void _subscribe() {
@@ -153,6 +172,7 @@ class OrderHoursModel extends ChangeNotifier with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _debounce?.cancel();
+    _pillTick?.cancel();
     _channel?.unsubscribe();
     super.dispose();
   }

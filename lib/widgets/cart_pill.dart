@@ -4,6 +4,7 @@ import '../app_state.dart';
 import '../models/cart_model.dart';
 import '../design_tokens.dart';
 import '../utils/render_log.dart';
+import 'card_pack_icon.dart';
 import 'product_image.dart';
 
 /// CMD #2089 — the floating "View cart" pill: compact, brand green, no bubble.
@@ -399,23 +400,36 @@ class _ThumbStack extends StatelessWidget {
   /// A circle of the product's own picture inside a white ring, so two
   /// overlapping tiles still read as two.
   Widget _tile(Map<String, dynamic> t) {
-    final url = (t['image_url'] ?? '').toString();
+    final url = (t['image_url'] ?? '').toString().trim();
     final inner = ui.thumb - CartPill.kThumbRing * 2;
+    // CMD #2147 — never an empty white circle: the pack-type icon is always
+    // painted, and the product's own picture (when it has one) sits on top.
+    final pack = Container(
+      width: inner,
+      height: inner,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(color: Ds.c.brandSoft, shape: BoxShape.circle),
+      child: CardPackIcon(
+          kind: (t['pack_type'] ?? t['pack_kind'] ?? '').toString(),
+          size: inner * 0.6),
+    );
     return Container(
       width: ui.thumb,
       height: ui.thumb,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        shape: BoxShape.circle,
-      ),
+      decoration: BoxDecoration(color: Ds.c.surface, shape: BoxShape.circle),
       alignment: Alignment.center,
-      child: ProductImage(
-        url: url,
-        width: inner,
-        height: inner,
-        fit: BoxFit.cover,
-        radius: BorderRadius.circular(inner / 2),
-      ),
+      child: url.isEmpty
+          ? pack
+          : Stack(alignment: Alignment.center, children: [
+              pack,
+              ProductImage(
+                url: url,
+                width: inner,
+                height: inner,
+                fit: BoxFit.cover,
+                radius: BorderRadius.circular(inner / 2),
+              ),
+            ]),
     );
   }
 }

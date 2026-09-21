@@ -105,33 +105,40 @@ class _MobileBottomBar extends StatelessWidget {
     // Which slot is lit is a LOOKUP over the same list the taps resolve
     // through, so hiding a slot cannot leave a page pointing at one that no
     // longer exists (a hidden page 11 finds no slot and falls back to Home).
+    // CMD #2147 — the floating dock. Same rows, same order, same pages, same
+    // badges; only the drawing changed. The shop badge is a notifier of its
+    // own, so the dock listens to it rather than reading it once.
     final found = slots.indexWhere((s) => pageOf(s) == index);
-    final bottomNavIndex = found < 0 ? 0 : found;
-    return BottomNavigationBar(
-      currentIndex: bottomNavIndex,
-      type: BottomNavigationBarType.fixed,
-      selectedItemColor: Brand.green,
-      unselectedItemColor: Brand.inkMuted,
-      selectedFontSize: 10,
-      unselectedFontSize: 10,
-      elevation: 8,
-      // The one map, read once, used for both halves of the question: which
-      // slots exist (below) and where each one goes (here).
-      onTap: (i) {
-        if (i >= 0 && i < slots.length) onPageTap(pageOf(slots[i]));
-      },
-      items: [
-        for (final s in slots)
-          BottomNavigationBarItem(
-            // CMD #2080 — a stable handle on each tab, named by the ROW's own
-            // key, so a browser journey can tap "Orders" without a test
-            // knowing which position the registry currently sorts it into.
-            icon: _identified(s, _glyph(s, cart, active: false)),
-            activeIcon: _identified(s, _glyph(s, cart, active: true)),
-            // The word is the backend's, from ui_copy, like every other label.
-            label: (s['label'] ?? '').toString(),
-          ),
-      ],
+    final lit = pageOf(slots[found < 0 ? 0 : found]);
+    return ValueListenableBuilder(
+      valueListenable: ShopBadge.value,
+      builder: (context, _, _) => FloatingDock(
+        activePage: lit,
+        onPageTap: onPageTap,
+        tabs: [for (final s in slots) _dockTab(s, cart)],
+      ),
+    );
+  }
+
+  /// A `customer_nav` row → a [DockTab]: its label, its page, its glyph pair
+  /// and its badge, all the row's own answers.
+  static DockTab _dockTab(Map<String, dynamic> s, CartModel cart) {
+    final pair = _kBottomNavGlyphs[(s['icon_key'] ?? '').toString()];
+    final badge = switch ((s['badge_key'] ?? '').toString()) {
+      'cart' => cart.orders.isEmpty ? '' : '${cart.orders.length}',
+      'shop' => ShopBadge.show ? ShopBadge.label : '',
+      _ => '',
+    };
+    return DockTab(
+      key: (s['key'] ?? '').toString(),
+      label: (s['label'] ?? '').toString(),
+      page: pageOf(s),
+      icon: pair?.icon ?? Icons.widgets_outlined,
+      activeIcon: pair?.active ?? Icons.widgets,
+      badge: badge,
+      avatarLetter: s['icon_key'] == 'avatar'
+          ? (s['avatar_label'] ?? '').toString()
+          : null,
     );
   }
 
@@ -684,16 +691,23 @@ class _CartBadgePulseState extends State<_CartBadgePulse>
 Widget shellBottomStack(VoidCallback onTap, int page, {bool staff = false}) =>
     ValueListenableBuilder<List<Map<String, dynamic>>>(
       valueListenable: CustomerNav.value,
-      builder: (_, slots, __) => Positioned(
+      // CMD #2147 — with the floating dock the body runs to the screen's
+      // bottom (`extendBody`) and hands down the dock's height as its bottom
+      // padding: the stack sits just above the dock, on it, never under it.
+      builder: (ctx, slots, __) => Positioned(
         left: 0,
         right: 0,
-        bottom: 0,
+        bottom: bottomNavVisible(ctx) ? MediaQuery.paddingOf(ctx).bottom : 0,
         child: StorefrontBottomStack(
           onCartTap: staff ? null : onTap,
           showPill: !staff && CartPill.floatsOnPage(slots, page),
         ),
       ),
     );
+
+/// CMD #2147 — Home, Catalogue and Profile: their scroll views pad by
+/// `MediaQuery` / [BottomStackSpacer], so the page can run behind the chrome.
+const Set<int> _kFloatingPages = {0, 12, 15};
 
 /// CMD #2140 — the page host for every shell tab: staff pages clear the bar,
 /// customer tabs clear the bar AND, on a tab that floats it, the View cart
@@ -705,5 +719,8 @@ Widget shellHost(Widget child, {required bool staff, required int page}) =>
             valueListenable: CustomerNav.value,
             child: child,
             builder: (_, slots, host) => shellPageHost(host!,
-                staff: false, pill: CartPill.floatsOnPage(slots, page)),
+                staff: false, pill: CartPill.floatsOnPage(slots, page),
+                // CMD #2147 — the tabs whose lists take their bottom room
+                // from MediaQuery float behind the pill and the dock.
+                float: _kFloatingPages.contains(page)),
           );

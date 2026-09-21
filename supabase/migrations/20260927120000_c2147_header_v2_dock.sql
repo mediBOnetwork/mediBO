@@ -220,3 +220,9 @@ begin
   perform public.ui_design_set(jsonb_build_object('touch',
     coalesce(_touch, '{}'::jsonb) || jsonb_build_object('headerBand', 52)));
 end $$;
+
+-- ── 4. the floating dock never hides on scroll ───────────────────────────────
+-- The dock floats over the page (Scaffold.extendBody); hiding it on scroll
+-- would re-pad the body every frame. One flag row, so it is an UPDATE to undo.
+insert into public.ui_copy(key, value) values ('shell.nav_hide_on_scroll', to_jsonb('false'::text))
+on conflict (key) do update set value = excluded.value, updated_at = now();

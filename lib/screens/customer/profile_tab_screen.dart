@@ -8,7 +8,6 @@ import '../../services/ui_copy.dart';
 import '../../user_state.dart';
 import '../../utils/render_log.dart';
 import '../../widgets/animations.dart' show Shimmer, SkeletonBox;
-import '../../widgets/cart_pill.dart';
 import '../admin/nav_registry_view.dart' show navIcon;
 import '../auth/login_screen.dart';
 import '../pharmacy/my_shop_screen.dart';
@@ -238,7 +237,9 @@ class _ProfileTabScreenState extends State<ProfileTabScreen> {
       color: Ds.c.brand,
       onRefresh: _load,
       child: ListView(
-        padding: EdgeInsets.only(bottom: CartPill.bottomInset + Ds.space.x16),
+        // CMD #2147 — the floating host hands down the pill + dock room.
+        padding: EdgeInsets.only(
+            bottom: MediaQuery.paddingOf(context).bottom + Ds.space.x16),
         children: [
           _Header(header: header),
           for (final s in sections)

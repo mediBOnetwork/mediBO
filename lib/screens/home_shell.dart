@@ -27,7 +27,7 @@ import '../widgets/animations.dart';
 import '../widgets/search_surface.dart';
 import '../widgets/bottom_stack.dart'; // CMD #2051 — the one bottom stack
 import '../widgets/cart_pill.dart'; // C636
-import '../widgets/notification_bell.dart'; // CHANGE #298
+import '../widgets/notification_bell.dart'; import '../widgets/order_hours_pill.dart'; import '../widgets/floating_dock.dart'; // CHANGE #298 · CMD #2147
 import '../widgets/scope_chip.dart'; // CMD #1947 — the header date·zone chip
 import '../widgets/test_mode_badge.dart'; // CMD #1964 — the header TEST badge
 import '../services/push_service.dart'; // CHANGE #298
@@ -1779,7 +1779,7 @@ class _HomeShellState extends State<HomeShell> {
   Widget _buildMobile(List<Widget> pages, VoidCallback onLogoTap, bool isAdmin) {
     final isTablet = isAdmin && MediaQuery.sizeOf(context).width >= 600; // CHANGE #1017 (6)
     return Scaffold(
-      backgroundColor: Ds.c.bg,
+      backgroundColor: Ds.c.bg, extendBody: !isAdmin, // CMD #2147 — the dock floats over the page
       bottomNavigationBar: isAdmin && !isTablet
           ? _AdminMobileBottomBar(
               index: _index,
@@ -1866,7 +1866,7 @@ class _HomeShellState extends State<HomeShell> {
                 // both screens. The brand band that used to sit behind the
                 // field and the chips is gone with the two widgets that drew
                 // it; this is the Catalogue's header, verbatim.
-                if (_index == 0) _shellSearchHeader(this),
+                if (_index == 0) _shellSearchHeader(this, sticky: !isAdmin), // CMD #2147
                 Expanded(
                   // CMD #2070 — a staff page ends ABOVE the update bar; the
                   // reasoning lives with the stack, not twice in the shell.

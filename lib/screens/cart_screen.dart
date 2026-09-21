@@ -2449,6 +2449,21 @@ class C2120SaleBadge extends StatelessWidget {
 ///
 /// `locked` is cart_render()'s `qty_locked`, carried through: the chip is dead
 /// and tinted danger on the strength of that flag, never on a local check.
+/// CMD #2120 — the chip's ONE decision, pure so it can be held down.
+///
+/// After a pick the chip prints the label the PICKER handed back (still a
+/// backend string), and it keeps printing it until the payload's own label
+/// changes — which is the server answering, whatever it answered. It is never
+/// a Dart-composed sentence and it never outlives the round trip.
+String? c2120PendingAfterPayload(
+    {required String? pending,
+    required String oldLabel,
+    required String newLabel}) =>
+    oldLabel == newLabel ? pending : null;
+
+String c2120ChipText({required String? pending, required String payload}) =>
+    (pending != null && pending.isNotEmpty) ? pending : payload;
+
 class C2120QtyChip extends StatefulWidget {
   final Map<String, dynamic> chip;
   final bool locked;
@@ -2471,7 +2486,10 @@ class _C2120QtyChipState extends State<C2120QtyChip> {
   void didUpdateWidget(C2120QtyChip old) {
     super.didUpdateWidget(old);
     // The server answered — whatever it says wins, even if it clamped the pick.
-    if (_label(old.chip) != _label(widget.chip)) _pending = null;
+    _pending = c2120PendingAfterPayload(
+        pending: _pending,
+        oldLabel: _label(old.chip),
+        newLabel: _label(widget.chip));
   }
 
   static String _label(Map<String, dynamic> m) => (m['label'] ?? '').toString();
@@ -2490,7 +2508,7 @@ class _C2120QtyChipState extends State<C2120QtyChip> {
   @override
   Widget build(BuildContext context) {
     if (widget.chip['has'] != true) return const SizedBox.shrink();
-    final text = _pending ?? _label(widget.chip);
+    final text = c2120ChipText(pending: _pending, payload: _label(widget.chip));
     if (text.isEmpty) return const SizedBox.shrink();
     final tint = widget.locked ? Ds.c.danger : Ds.c.brand;
     return Semantics(

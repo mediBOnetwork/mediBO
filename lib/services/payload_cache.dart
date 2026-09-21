@@ -130,11 +130,64 @@ class PayloadState {
       );
 }
 
+/// CMD #2144 — the device storage the caches write to, behind a seam so the
+/// protected suite can fill it up and watch the quota path on the Dart VM.
+abstract class PayloadDisk {
+  Future<Set<String>> keys();
+  Future<String?> get(String key);
+
+  /// May throw — on the web a full localStorage raises QuotaExceededError.
+  Future<void> set(String key, String value);
+  Future<void> remove(String key);
+}
+
+class _PrefsDisk implements PayloadDisk {
+  const _PrefsDisk();
+  @override
+  Future<Set<String>> keys() async =>
+      (await SharedPreferences.getInstance()).getKeys();
+  @override
+  Future<String?> get(String key) async =>
+      (await SharedPreferences.getInstance()).getString(key);
+  @override
+  Future<void> set(String key, String value) async {
+    final ok = await (await SharedPreferences.getInstance()).setString(key, value);
+    if (!ok) throw StateError('storage refused $key');
+  }
+  @override
+  Future<void> remove(String key) async =>
+      (await SharedPreferences.getInstance()).remove(key);
+}
+
 /// The on-device store. One JSON blob per screen key.
+///
+/// CMD #2144 — AND IT HAS A BUDGET. localStorage is ~5 M characters for the
+/// whole origin, shared with the Supabase session. One anonymous home visit
+/// was writing 3.5 M of cache (storefront_home_v2 alone 2.7 M), so a second
+/// payload filled the origin and the SDK's `sb-…-auth-token` write threw
+/// QuotaExceededError — the session could not be saved and boot hung. The
+/// caches are a render fallback; the credential is not. So:
+///   * an entry bigger than [maxEntryChars] stays in memory only;
+///   * all cache keys ([cachePrefixes]) together stay under [maxTotalChars],
+///     oldest evicted first — enforced at boot, BEFORE Supabase starts;
+///   * a write that hits the quota evicts every cache key and retries once;
+///   * logout clears them all ([clearAll]) — they are the previous account's.
 class PayloadStore {
   PayloadStore._();
 
   static const _prefix = 'payload_cache_v1.';
+
+  /// Every SharedPreferences key family that is a disposable screen cache:
+  /// this store's, and resilient_http's last-good responses.
+  static const List<String> cachePrefixes = [_prefix, 'rc:'];
+
+  /// Bigger than this is kept in memory only (characters of JSON).
+  static int maxEntryChars = 600000;
+
+  /// All cache keys together stay under this (characters of JSON).
+  static int maxTotalChars = 1500000;
+
+  static PayloadDisk disk = const _PrefsDisk();
 
   /// In-memory mirror so a rebuild, and a test, never touch disk.
   static final Map<String, Map<String, dynamic>> _mem = {};
@@ -153,13 +206,14 @@ class PayloadStore {
   @visibleForTesting
   static void debugClear() => _mem.clear();
 
+  static bool _isCacheKey(String k) => cachePrefixes.any(k.startsWith);
+
   static Future<Map<String, dynamic>?> read(String key) async {
     final hit = _mem[key];
     if (hit != null) return hit;
     if (!diskEnabled) return null;
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString('$_prefix$key');
+      final raw = await disk.get('$_prefix$key');
       if (raw == null || raw.isEmpty) return null;
       final decoded = jsonDecode(raw);
       if (decoded is! Map) return null;
@@ -180,13 +234,83 @@ class PayloadStore {
     };
     _mem[key] = env;
     if (!diskEnabled) return;
+    final k = '$_prefix$key';
     try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('$_prefix$key', jsonEncode(env));
+      final json = jsonEncode(env);
+      if (json.length > maxEntryChars) {
+        // Too big to be worth the origin's storage: memory only, and an
+        // older on-disk copy of it goes too.
+        await disk.remove(k);
+        return;
+      }
+      await enforceBudget(reserve: json.length, keep: k);
+      try {
+        await disk.set(k, json);
+      } catch (_) {
+        // QuotaExceededError (or any refusal): evict every cache and retry
+        // ONCE. Still refused → memory only; never loop, never throw.
+        await evictAll();
+        try {
+          await disk.set(k, json);
+        } catch (_) {}
+      }
     } catch (_) {
-      // Storage full or unavailable — the in-memory mirror still stands in for
-      // this session, which is the whole point.
+      // Storage unavailable — the in-memory mirror stands in for this session.
     }
+  }
+
+  /// Keep every cache key together under [maxTotalChars] (minus [reserve]),
+  /// evicting the oldest first. Oversized entries always go. Safe to call at
+  /// boot before anything else touches storage; never throws.
+  static Future<int> enforceBudget({int reserve = 0, String? keep}) async {
+    var evicted = 0;
+    try {
+      final sized = <(String, int, int)>[]; // key, chars, saved_at_ms
+      var total = 0;
+      for (final k in await disk.keys()) {
+        if (!_isCacheKey(k) || k == keep) continue;
+        final v = await disk.get(k) ?? '';
+        if (v.length > maxEntryChars) {
+          await disk.remove(k);
+          evicted++;
+          continue;
+        }
+        var at = 0;
+        final m = RegExp(r'"saved_at_ms":(\d+)').firstMatch(v);
+        if (m != null) at = int.tryParse(m.group(1)!) ?? 0;
+        sized.add((k, v.length, at));
+        total += v.length;
+      }
+      sized.sort((a, b) => a.$3.compareTo(b.$3));
+      for (final e in sized) {
+        if (total + reserve <= maxTotalChars) break;
+        await disk.remove(e.$1);
+        total -= e.$2;
+        evicted++;
+      }
+    } catch (_) {}
+    return evicted;
+  }
+
+  /// Remove every cache key from the device (memory mirror untouched).
+  static Future<int> evictAll() async {
+    var n = 0;
+    try {
+      for (final k in (await disk.keys()).where(_isCacheKey).toList()) {
+        await disk.remove(k);
+        n++;
+      }
+    } catch (_) {}
+    return n;
+  }
+
+  /// CMD #2144 — logout: the previous account's cached screens, memory AND
+  /// device. The memory mirror goes synchronously, before the first await, so
+  /// the fresh public home can never paint from it.
+  static Future<void> clearAll() async {
+    _mem.clear();
+    if (!diskEnabled) return;
+    await evictAll();
   }
 }
 

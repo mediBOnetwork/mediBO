@@ -170,6 +170,9 @@ class _ProfileTabScreenState extends State<ProfileTabScreen> {
         break;
       case ProfileTabDoor.logout:
         await UserState.read(context).signOut();
+        // CMD #2144 — signOut() already replaced the whole stack with a fresh
+        // public home; this tab's shell is gone, so there is nothing to steer.
+        if (!mounted) return;
         // The public home, not the tab the shopper was standing on.
         widget.navigate('home');
         break;

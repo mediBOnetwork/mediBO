@@ -132,7 +132,7 @@ import 'admin/admin_demand_engine_screen.dart'; // CMD #427 — /admin/go/demand
 import 'profile_screen.dart';
 import '../models/shell_nav.dart';
 import 'storefront_screen.dart';
-import 'supplier/supplier_shell.dart';
+import 'supplier/supplier_shell.dart'; import '../services/live_instance.dart'; // CMD #2144
 // #745 — drawn by this library's `part` files (mobile + desktop chrome).
 import '../widgets/customer_surface_widgets.dart';
 
@@ -158,14 +158,15 @@ part 'shell/shell_admin_chrome.dart';
 part 'shell/shell_sidebar.dart';
 part 'shell/shell_view_as.dart';
 
-/// App shell: responsive — desktop gets a top nav + sidebar, mobile/tablet
-/// keeps the existing header + quick-nav chips + bottom nav layout.
+/// App shell: responsive (desktop top nav + sidebar; mobile header + bottom nav).
+/// CMD #2144 — no GlobalKey: a logout mounts a fresh shell over the old one for
+/// a frame, and a shared key broke that frame (see services/live_instance.dart).
 class HomeShell extends StatefulWidget {
-  static final _shellKey = GlobalKey<_HomeShellState>();
-  HomeShell() : super(key: _shellKey);
+  static final live = LiveInstance<_HomeShellState>();
+  HomeShell({super.key});
 
   /// Switch to the Bulk Upload tab (index 2). Called by Convert-to-Order flow.
-  static void switchToBulkUpload() => _shellKey.currentState?._setIndex(2);
+  static void switchToBulkUpload() => live.current?._setIndex(2);
 
   /// Destinations that gate themselves on the CALLER's own account rather than
   /// on an admin role, so opening them from a link grants nothing: each one
@@ -339,6 +340,7 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void initState() {
     super.initState();
+    HomeShell.live.attach(this); // CMD #2144
     BulkUploadScreen.navToBulkUpload = () { if (mounted) setState(() => _index = 2); };
     // CHANGE #559: a rejected cart write shows the SERVER's message verbatim.
     // The client never substitutes copy of its own.
@@ -1386,7 +1388,8 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   void dispose() {
-    if (BulkUploadScreen.navToBulkUpload != null) BulkUploadScreen.navToBulkUpload = null;
+    if (HomeShell.live.isCurrent(this)) BulkUploadScreen.navToBulkUpload = null;
+    HomeShell.live.detach(this); // CMD #2144 — the leaving shell never clears the new one
     if (kIsWeb) HardwareKeyboard.instance.removeHandler(_globalKeyHandler);
     DeliveryRoleState.instance.removeListener(_onDeliveryRoleChanged); // C629
     Access.instance.removeListener(_onAccessChanged); // C653
@@ -1488,8 +1491,7 @@ class _HomeShellState extends State<HomeShell> {
     final auth = UserState.of(context);
     final viewAs = ViewAsState.of(context);
 
-    // View As (Dev): super-admin previewing another account's interface.
-    // In-memory only — a page refresh returns to the real admin.
+    // View As (Dev): super-admin previewing another account (in-memory only).
     final isCustomerViewAs = viewAs.isActive && auth.isSuperAdmin && viewAs.role == ViewAsRole.customer;
 
     if (viewAs.isActive && auth.isSuperAdmin && !isCustomerViewAs) {
@@ -1526,14 +1528,12 @@ class _HomeShellState extends State<HomeShell> {
       ]);
     }
 
-    // Customer ViewAs: fall through to the real customer UI below.
-    // Banner is added by wrapping the LayoutBuilder result at the bottom of build().
+    // Customer ViewAs: fall through to the real customer UI (banner wrapped below).
     if (isCustomerViewAs) {
       RenderLog.write('view_as_active', 'customer:${viewAs.identity!.id}');
     }
 
-    // CHANGE #308: while role is resolving after sign-in, show a brief spinner
-    // instead of flashing the customer "Not Registered" profile for admins/suppliers.
+    // CHANGE #308: brief spinner while the role resolves (no "Not Registered" flash).
     if (auth.profileLoading && !viewAs.isActive) {
       return const Scaffold(
         backgroundColor: Color(0xFFF5F6F8),

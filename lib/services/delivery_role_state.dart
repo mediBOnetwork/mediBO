@@ -107,7 +107,7 @@ class DeliveryRoleState extends ChangeNotifier {
       // whatever my_session() already decided.
       final res = await Supabase.instance.client
           .rpc('my_delivery_run')
-          .timeout(const Duration(seconds: 6));
+          .timeout(const Duration(seconds: 4)); // CMD #2144 — the gate budget
       // The credential may have changed while the call was in flight.
       final nowLive = Supabase.instance.client.auth.currentUser?.id ?? '';
       if (nowLive != live) {

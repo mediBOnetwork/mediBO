@@ -49,7 +49,7 @@ import '../../widgets/backend_chip.dart'; // CHANGE #606
 import '../../widgets/backend_table.dart'; // CHANGE #607
 import '../../widgets/bill_actions_row.dart'; // CHANGE #465
 import '../../widgets/bill_viewer.dart'; // CHANGE #465
-import '../../widgets/import_customer_sheet.dart'; // CHANGE #547
+import 'add_customer_flow.dart'; // CMD #2129 — the one Add customer flow
 import '../../widgets/route_view_panel.dart'; // CMD #1917 — the ONE route component
 import '../../widgets/native_signed_image.dart'; // CHANGE #550
 import '../../widgets/cash_payment_sheet.dart';
@@ -506,141 +506,32 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     _load(showSpinner: false);
   }
 
-  // ── CHANGE #547: Import Customer ─────────────────────────────────────────
-  // Anchor for the popup menu. Deliberately a menu AT THE BUTTON, not the
-  // centred dialog the Import Supplier popover uses.
-  final GlobalKey _importCustomerKey = GlobalKey();
-  bool _extracting = false;
-
-  Future<void> _openImportCustomerMenu() async {
-    final box =
-        _importCustomerKey.currentContext?.findRenderObject() as RenderBox?;
-    final overlay =
-        Overlay.of(context).context.findRenderObject() as RenderBox?;
-    if (box == null || overlay == null) return;
-    final origin = box.localToGlobal(Offset.zero, ancestor: overlay);
-    RenderLog.write('c547_menu_open', 'true');
-
-    final choice = await showMenu<String>(
-      context: context,
-      color: Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      position: RelativeRect.fromLTRB(
-        origin.dx,
-        origin.dy + box.size.height + 4,
-        (overlay.size.width - origin.dx - box.size.width)
-            .clamp(0.0, overlay.size.width),
-        0,
-      ),
-      items: [
-        PopupMenuItem<String>(
-          value: 'manual',
-          child: Row(children: [
-            const Icon(Icons.edit_outlined, size: 18, color: Color(0xFF6B7280)),
-            const SizedBox(width: 10),
-            Text(c('admin_customer.import_manually'), style: const TextStyle(fontSize: 14)),
-          ]),
-        ),
-        PopupMenuItem<String>(
-          value: 'file',
-          child: Row(children: [
-            const Icon(Icons.photo_library_outlined, size: 18, color: Color(0xFF6B7280)),
-            const SizedBox(width: 10),
-            Text(c('admin_customer.import_by_file'), style: const TextStyle(fontSize: 14)),
-          ]),
-        ),
-      ],
-    );
-    if (!mounted || choice == null) return;
-
-    if (choice == 'manual') {
-      final saved = await ImportCustomerSheet.open(context);
-      if (saved == true && mounted) _load(showSpinner: false);
-    } else {
-      await _importCustomerByFile();
+  // ── CMD #2129: Add customer ──────────────────────────────────────────────
+  // ONE button, ONE flow. Manual entry and the old "Import by file" are the
+  // same screen now: the flow's first card photographs the board or GST
+  // certificate and fills the form from it.
+  Future<void> _addCustomer() async {
+    final saved = await AddCustomerFlow.open(context);
+    if (saved == true && mounted) {
+      _load(showSpinner: false);
+      _loadCusConsole();
     }
   }
 
-  /// Multi-select photos, ALL belonging to ONE customer -> customer-import
-  /// 'extract' -> the same registration form, pre-filled and fully editable.
-  Future<void> _importCustomerByFile() async {
-    final picked = await FilePicker.pickFiles(
-      type: FileType.image,
-      allowMultiple: true,
-      withData: true,
-    );
-    if (picked == null || picked.files.isEmpty || !mounted) return;
-
-    // The edge function accepts at most 8 images per customer.
-    final files = picked.files.where((f) => f.bytes != null).take(8).toList();
-    if (files.isEmpty) return;
-
-    setState(() => _extracting = true);
-    try {
-      final images = [for (final f in files) base64Encode(f.bytes!)];
-      RenderLog.write('c547_extract_send', 'images=${images.length}');
-
-      final res = await Supabase.instance.client.functions.invoke(
-        'customer-import',
-        body: {
-          'mode': 'extract',
-          'images': images,
-          'mime_type': 'image/jpeg',
-        },
-      );
-      final data = res.data;
-      final m =
-          data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
-      if (!mounted) return;
-      setState(() => _extracting = false);
-
-      if (m['error'] != null) {
-        // Backend copy, verbatim.
-        showToast(context, m['error'].toString(), isError: true);
-        return;
-      }
-
-      final saved = await ImportCustomerSheet.open(context, extracted: m);
-      if (saved == true && mounted) _load(showSpinner: false);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _extracting = false);
-      final msg = e is FunctionException
-          ? ((e.details is Map && (e.details as Map)['error'] != null)
-              ? (e.details as Map)['error'].toString()
-              : (e.details?.toString() ?? e.reasonPhrase ?? '$e'))
-          : '$e';
-      showToast(context, msg, isError: true);
-    }
-  }
-
-  Widget _buildImportCustomerButton() {
+  Widget _buildAddCustomerButton(bool isDesktop) {
+    final pad = isDesktop ? Ds.space.x24 : Ds.space.x16;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 20),
+      padding: EdgeInsets.fromLTRB(pad, 0, pad, Ds.space.x12),
       child: Align(
-        alignment: Alignment.centerLeft,
-        child: SizedBox(
-          width: 220,
-          child: ElevatedButton.icon(
-            key: _importCustomerKey,
-            onPressed: _extracting ? null : _openImportCustomerMenu,
-            icon: _extracting
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white))
-                : const Icon(Icons.upload_file_outlined, size: 18),
-            label: Text(c('admin_customer.import_customer')),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF1B7A43),
-              foregroundColor: Colors.white,
-              textStyle:
-                  const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              shape:
-                  RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              elevation: 0,
+        alignment: Alignment.centerRight,
+        child: Semantics(
+          identifier: 'addcust_open',
+          button: true,
+          child: SizedBox(
+            height: Ds.touch.minTarget,
+            child: FilledButton(
+              onPressed: _addCustomer,
+              child: Text(c('addcust.button')),
             ),
           ),
         ),
@@ -849,8 +740,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     if (panel != 'import') return;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
-      final saved = await ImportCustomerSheet.open(context);
-      if (saved == true && mounted) _load(showSpinner: false);
+      await _addCustomer();
     });
   }
 
@@ -2307,12 +2197,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     // Approved customers view
     if (_isApprovedView) {
       RenderLog.write('c367_wa_removed', 'tab:customers');
-      RenderLog.write('c547_import_customer_btn', 'true');
+      RenderLog.write('c2129_add_customer_btn', 'true');
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // CHANGE #547 — Import Customer, mirroring Import Supplier's styling.
-          _buildImportCustomerButton(),
+          // CMD #2129 — the one "+ Add customer" door.
+          _buildAddCustomerButton(isDesktop),
           // CHANGE #810 — the console replaces the tall per-customer card.
           _buildCustomersConsole(isDesktop),
           const SizedBox(height: 32),
@@ -12029,11 +11919,8 @@ class _SLeadsTabState extends State<_SLeadsTab> {
 
       final customer =
           m['customer'] is Map ? Map<String, dynamic>.from(m['customer'] as Map) : <String, dynamic>{};
-      final missing =
-          (m['missing'] as List?)?.map((e) => e.toString()).toList() ?? const <String>[];
-
       final saved =
-          await ImportCustomerSheet.open(context, prefill: customer, missing: missing);
+          await AddCustomerFlow.open(context, leadId: leadId, prefill: customer);
       if (saved == true && mounted) {
         await _refreshLeadCard(leadId);
         await _loadRows(reset: true);
@@ -14733,12 +14620,8 @@ class _RoutesTabState extends State<_RoutesTab> {
       final customer = m['customer'] is Map
           ? Map<String, dynamic>.from(m['customer'] as Map)
           : <String, dynamic>{};
-      final missing =
-          (m['missing'] as List?)?.map((e) => e.toString()).toList() ??
-              const <String>[];
-
-      final saved = await ImportCustomerSheet.open(context,
-          prefill: customer, missing: missing, leadId: leadId);
+      final saved = await AddCustomerFlow.open(context,
+          leadId: leadId, prefill: customer);
       if (saved == true && mounted && routeId != null) {
         RouteViewPanel.refresh(routeId);
         await _refreshToday();
@@ -16129,11 +16012,8 @@ class _CheckInSheetState extends State<_CheckInSheet> {
       final customer = m['customer'] is Map
           ? Map<String, dynamic>.from(m['customer'] as Map)
           : <String, dynamic>{};
-      final missing = (m['missing'] as List?)?.map((e) => e.toString()).toList() ??
-          const <String>[];
-
-      final saved = await ImportCustomerSheet.open(context,
-          prefill: customer, missing: missing);
+      final saved = await AddCustomerFlow.open(context,
+          leadId: (leadId as num).toInt(), prefill: customer);
       if (saved == true && mounted) {
         // Refetch the sheet so import_customer.show flips false and the button
         // is replaced by the backend's already_label.

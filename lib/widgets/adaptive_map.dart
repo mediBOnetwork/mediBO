@@ -396,6 +396,12 @@ class _TileMapState extends State<_TileMap> {
         return;
       }
       final pts = _points();
+      final ctr = widget.host.center;
+      if (pts.isEmpty && ctr != null && widget.host.cameraSignature.isNotEmpty) {
+        _controller.move(ll.LatLng(ctr.lat, ctr.lng),
+            widget.host.zoom ?? _controller.camera.zoom);
+        return;
+      }
       if (!widget.host.fitToContent || pts.isEmpty) return;
       if (pts.length == 1) {
         _controller.move(pts.first, 14);
@@ -600,6 +606,16 @@ class _GoogleJsMapState extends State<_GoogleJsMap> {
         return;
       }
       final pts = _points();
+      // CMD #2141 — a pin picker has no pins, only a centre: a new camera
+      // signature (e.g. "Use my location") moves the map to that centre at
+      // the host's zoom. Before this, the map stayed where it was and the
+      // GPS fix never reached the screen.
+      final ctr = widget.host.center;
+      if (pts.isEmpty && ctr != null && widget.host.cameraSignature.isNotEmpty) {
+        await c.animateCamera(gm.CameraUpdate.newLatLngZoom(
+            gm.LatLng(ctr.lat, ctr.lng), widget.host.zoom ?? 16));
+        return;
+      }
       if (!widget.host.fitToContent || pts.isEmpty) return;
       if (pts.length == 1) {
         await c.animateCamera(gm.CameraUpdate.newLatLngZoom(pts.first, 14));

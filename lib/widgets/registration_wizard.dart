@@ -30,11 +30,16 @@ class RegistrationProgressBar extends StatelessWidget {
     required this.steps,
     required this.current,
     required this.onJump,
+    this.currentComplete,
   });
 
   final List<Map<String, dynamic>> steps;
   final int current;
   final ValueChanged<int> onJump;
+
+  /// CMD #2141 — the current step's own "done" as its surface knows it live
+  /// (the Documents block's `required_complete`). Null → the backend's flag.
+  final bool? currentComplete;
 
   @override
   Widget build(BuildContext context) {
@@ -49,16 +54,24 @@ class RegistrationProgressBar extends StatelessWidget {
     );
   }
 
+  /// CMD #2141 — v4: a bar is green ONLY when its step is complete (a step
+  /// already passed with Continue, or one the backend calls complete); the
+  /// current step is grey until it is done. Labels never carry a ✓ — the
+  /// current one is bold, a done one green, the rest grey.
   Widget _segment(int i) {
     final active = i == current;
-    final done = !active && (i < current || steps[i]['complete'] == true);
+    final done = active
+        ? (currentComplete ?? false)
+        : (i < current || steps[i]['complete'] == true);
     final reachable = wizardStepReachable(steps, i, current);
-    final label = ((done ? steps[i]['done_label'] : null) ?? steps[i]['label'] ?? '')
+    final label = ((done && !active ? steps[i]['done_label'] : null) ??
+            steps[i]['label'] ??
+            '')
         .toString();
     // CMD #2135 — every label sits centred under its own bar.
     const align = TextAlign.center;
     final style = active
-        ? Ds.t.caption.copyWith(color: Ds.c.brand, fontWeight: FontWeight.w700)
+        ? Ds.t.caption.copyWith(color: Ds.c.text, fontWeight: FontWeight.w700)
         : done
             ? Ds.t.caption.copyWith(color: Ds.c.brand)
             : Ds.t.caption;
@@ -77,7 +90,7 @@ class RegistrationProgressBar extends StatelessWidget {
               Container(
                 height: Ds.space.x4,
                 decoration: BoxDecoration(
-                  color: (done || active) ? Ds.c.brand : Ds.c.divider,
+                  color: done ? Ds.c.brand : Ds.c.divider,
                   borderRadius: Ds.r.rChip,
                 ),
               ),

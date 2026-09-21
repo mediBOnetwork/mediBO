@@ -75,6 +75,12 @@ class _RegistrationLocationStepState extends State<RegistrationLocationStep> {
   bool _denied = false;
   Timer? _settle;
 
+  // CMD #2141 — "Use my location" zooms to street level (the backend's
+  // street_zoom) and says so on the map until the pin is dragged away.
+  double? _zoom;
+  bool _zoomed = false;
+  bool get _v4 => widget.map.containsKey('turn_on_label');
+
   // CMD #2135 — the inline form under the map (map.form / resolve().form):
   // four boxes the shop can type in, and the State + District pickers.
   Map<String, dynamic> _form = const {};
@@ -196,6 +202,9 @@ class _RegistrationLocationStepState extends State<RegistrationLocationStep> {
         _lat = fix.lat;
         _lng = fix.lng;
         _signature = 'device:${fix.lat},${fix.lng}';
+        final z = widget.map['street_zoom'];
+        if (z is num) _zoom = z.toDouble();
+        _zoomed = true;
       }
     });
     RenderLog.write('c2127_loc_device', fix == null ? 'denied' : 'ok');
@@ -206,6 +215,14 @@ class _RegistrationLocationStepState extends State<RegistrationLocationStep> {
   /// lookup waits for the map to stand still — one read per placement, not
   /// one per frame.
   void _onCentre(double lat, double lng) {
+    // The camera's own glide to the GPS fix reports centres too; only a real
+    // drag away from the fix drops "Zoomed to you".
+    if (_zoomed &&
+        _lat != null &&
+        _lng != null &&
+        ((lat - _lat!).abs() > 0.0003 || (lng - _lng!).abs() > 0.0003)) {
+      setState(() => _zoomed = false);
+    }
     _lat = lat;
     _lng = lng;
     _settle?.cancel();
@@ -292,6 +309,27 @@ class _RegistrationLocationStepState extends State<RegistrationLocationStep> {
     // v3: a successful read shows the form's own "filled" banner; only a
     // failed read (or no permission) keeps the older note line.
     final showNote = _note.isNotEmpty && (!v3 || _tone != 'success');
+    if (_v4) {
+      // CMD #2141 — ONE banner at a time: reading, else location off (with
+      // Turn on), else what the read said (found you / couldn't read).
+      final Widget? banner = _reading
+          ? _banner(_s('reading_label'), Ds.c.infoSoft)
+          : _denied
+              ? _deniedBanner()
+              : (_note.isNotEmpty ? _noteLine() : null);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _mapCard(has),
+          if (banner != null) ...[
+            SizedBox(height: Ds.space.x12),
+            Semantics(identifier: 'reg_loc_banner', child: banner),
+          ],
+          SizedBox(height: Ds.space.x16),
+          v3 ? _formCard() : _addressCard(),
+        ],
+      );
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -309,6 +347,40 @@ class _RegistrationLocationStepState extends State<RegistrationLocationStep> {
       ],
     );
   }
+
+  Widget _deniedBanner() => Container(
+        width: double.infinity,
+        padding: EdgeInsets.symmetric(
+            horizontal: Ds.space.x12, vertical: Ds.space.x8),
+        decoration:
+            BoxDecoration(color: Ds.c.warningSoft, borderRadius: Ds.r.rCard),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(_s('denied_label'), style: Ds.t.caption),
+            if (_s('turn_on_label').isNotEmpty)
+              Semantics(
+                identifier: 'reg_loc_turn_on',
+                button: true,
+                child: InkWell(
+                  onTap: _useDevice,
+                  child: ConstrainedBox(
+                    constraints:
+                        BoxConstraints(minHeight: Ds.touch.minTarget),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(_s('turn_on_label'),
+                          style: Ds.t.caption.copyWith(
+                              color: Ds.c.warning,
+                              fontWeight: FontWeight.w700,
+                              decoration: TextDecoration.underline)),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      );
 
   Widget _banner(String text, Color bg) => Container(
         width: double.infinity,
@@ -445,7 +517,7 @@ class _RegistrationLocationStepState extends State<RegistrationLocationStep> {
           AdaptiveMap(
             height: widget.height,
             center: centre,
-            zoom: (widget.map['default_zoom'] as num?)?.toDouble() ?? 16,
+            zoom: _zoom ?? (widget.map['default_zoom'] as num?)?.toDouble() ?? 16,
             fitToContent: false,
             centerCounts: true,
             cameraSignature: _signature,
@@ -488,6 +560,7 @@ class _RegistrationLocationStepState extends State<RegistrationLocationStep> {
 
   String _pillText() {
     if (_locating) return _s('locating_label');
+    if (_v4) return _zoomed ? _s('zoomed_label') : _s('drag_hint');
     if (_reading) return _s('reading_label');
     if (_denied) return _s('denied_label');
     if (_lat == null || _lng == null) return _s('drag_hint');

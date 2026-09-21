@@ -15,6 +15,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../design_tokens.dart';
@@ -70,6 +71,46 @@ class CustomerFormController extends ChangeNotifier {
   /// backend's own copy for the two ways it can be wrong.
   Map<String, dynamic> get gst =>
       Map<String, dynamic>.from((_schema?['gst'] as Map?) ?? const {});
+
+  // ── CMD #2141 — Registration v4: live checks and the "Required" pass ─────
+  //
+  // The verdict for each checked box is the backend's (custreg_contact_check):
+  // what the box prints at its end, its tone, whether Continue may go, and the
+  // "already registered" card. The form only remembers the latest one.
+  final Map<String, Map<String, dynamic>> verdicts = {};
+  final Set<String> checking = {};
+
+  /// Set by a step's Continue: empty required boxes turn red with the
+  /// backend's "Required" until they are filled.
+  bool showRequired = false;
+
+  /// True while any checked box is being judged or was judged not usable.
+  bool get checksBlock =>
+      checking.isNotEmpty || verdicts.values.any((v) => v['blocks'] == true);
+
+  void setVerdict(String key, Map<String, dynamic>? v) {
+    checking.remove(key);
+    if (v == null) {
+      verdicts.remove(key);
+    } else {
+      verdicts[key] = v;
+    }
+    notifyListeners();
+  }
+
+  void markChecking(String key) {
+    checking.add(key);
+    notifyListeners();
+  }
+
+  /// Required keys among [keys] that are still empty — one step's own list.
+  List<String> missingAmong(List<String> keys) =>
+      missingRequired().where(keys.contains).toList();
+
+  void revealRequired() {
+    showRequired = true;
+    notifyListeners();
+  }
 
   String get _latKey => (geo['lat_key'] ?? 'latitude').toString();
   String get _lngKey => (geo['lng_key'] ?? 'longitude').toString();
@@ -289,9 +330,40 @@ class CustomerRegistrationForm extends StatefulWidget {
     this.chips = const {},
     this.notes = const {},
     this.below = const {},
+    this.v4 = const {},
+    this.checkRpc,
+    this.customerId,
   });
 
   final CustomerFormController controller;
+
+  /// CMD #2141 — the wizard's v4 blocks verbatim: `prefix` (Mr/Ms before the
+  /// owner's name), `autofill`, `checks`, `check_debounce_ms`,
+  /// `required_label`, `checking_label`, `phone_prefix`. Empty → v3 form.
+  final Map<String, dynamic> v4;
+
+  /// The transport for custreg_contact_check (each surface's own seam).
+  final Future<dynamic> Function(String fn, Map<String, dynamic> params)? checkRpc;
+
+  /// Staff Add customer: the customer being edited, so its own number and
+  /// email never read as "already registered".
+  final String? customerId;
+
+  /// CMD #2141 — "Login" on an already-registered card: remember the number
+  /// the login screen pre-fills, sign out of this session and open login.
+  static Future<void> openLogin(BuildContext context, String number) async {
+    final nav = Navigator.of(context);
+    try {
+      if (number.isNotEmpty) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('medibo_last_login_number', number);
+      }
+    } catch (_) {}
+    try {
+      await Supabase.instance.client.auth.signOut();
+    } catch (_) {}
+    nav.pushNamedAndRemoveUntil('/login', (r) => false);
+  }
 
   /// CMD #2126 — one STEP of the registration flow: exactly these field keys,
   /// in this order (the backend's `wizard.steps[].fields`), with no section
@@ -332,13 +404,79 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
     // which is the only case that ever shows the skeleton.
     if (!widget.controller.ready) widget.controller.seedFromSurface();
     if (!widget.controller.ready) widget.controller.load();
+    _wireChecks();
   }
 
   @override
   void dispose() {
     widget.controller.removeListener(_onChange);
+    for (final e in _checkListeners.entries) {
+      widget.controller.controllerFor(e.key).removeListener(e.value);
+    }
+    for (final t in _checkTimers.values) {
+      t.cancel();
+    }
     super.dispose();
   }
+
+  // ── CMD #2141 — live format + uniqueness check, no OTP ───────────────────
+  Map<String, dynamic> get _v4 => widget.v4;
+  Map<String, dynamic> _mm(dynamic v) =>
+      v is Map ? Map<String, dynamic>.from(v) : const {};
+  Map<String, dynamic> get _checks => _mm(_v4['checks']);
+  final Map<String, VoidCallback> _checkListeners = {};
+  final Map<String, Timer> _checkTimers = {};
+  final Map<String, String> _checkedFor = {};
+
+  void _wireChecks() {
+    if (widget.checkRpc == null) return;
+    final only = widget.onlyFields;
+    for (final key in _checks.keys) {
+      if (only != null && !only.contains(key)) continue;
+      final ctl = widget.controller.controllerFor(key);
+      void listener() => _scheduleCheck(key);
+      _checkListeners[key] = listener;
+      ctl.addListener(listener);
+      // A value already in the box (login prefill, saved draft) is judged now.
+      if (ctl.text.trim().isNotEmpty) _scheduleCheck(key, immediate: true);
+    }
+  }
+
+  void _scheduleCheck(String key, {bool immediate = false}) {
+    final ctrl = widget.controller;
+    final v = ctrl.controllerFor(key).text.trim();
+    if (_checkedFor[key] == v) return;
+    _checkedFor[key] = v;
+    _checkTimers[key]?.cancel();
+    if (v.isEmpty) {
+      ctrl.setVerdict(key, null);
+      return;
+    }
+    ctrl.markChecking(key);
+    final ms = (_v4['check_debounce_ms'] as num?)?.toInt() ?? 400;
+    _checkTimers[key] = Timer(Duration(milliseconds: immediate ? 0 : ms), () async {
+      try {
+        final res = await widget.checkRpc!('custreg_contact_check', {
+          'p_field': key,
+          'p_value': v,
+          'p_customer_id': widget.customerId,
+        });
+        if (!mounted || _checkedFor[key] != v) return;
+        final m = _mm(res);
+        ctrl.setVerdict(key, m['ok'] == true ? m : null);
+        RenderLog.write('c2141_check', '$key=${m['state'] ?? ''}');
+      } catch (_) {
+        if (mounted && _checkedFor[key] == v) ctrl.setVerdict(key, null);
+      }
+    });
+  }
+
+  Color _toneColor(String tone) => switch (tone) {
+        'success' => Ds.c.brand,
+        'danger' => Ds.c.danger,
+        'warning' => Ds.c.warning,
+        _ => Ds.c.textSecondary,
+      };
 
   void _onChange() {
     if (mounted) setState(() {});
@@ -412,7 +550,9 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
         'ctx=${ctrl.formContext};sections=${ctrl.sections.length};'
         'fields=${ctrl.fields.length}');
 
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: children);
+    final col =
+        Column(crossAxisAlignment: CrossAxisAlignment.start, children: children);
+    return _v4.isEmpty ? col : AutofillGroup(child: col);
   }
 
   Widget _sectionTitle(String title) => Padding(
@@ -434,6 +574,16 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
 
     final labelText =
         required ? '$label${ctrl.text('required_suffix')}' : label;
+    // CMD #2141 — an empty required box after Continue is red + "Required".
+    final missing = ctrl.showRequired &&
+        required &&
+        type != 'geo' &&
+        type != 'checkbox' &&
+        ctrl.controllerFor(key).text.trim().isEmpty &&
+        (widget.chips[key]?.isNotEmpty != true);
+    final verdict = ctrl.verdicts[key];
+    final card = _mm(verdict?['card']);
+    final prefix = _mm(_mm(_v4['prefix'])[key]);
 
     // The checkbox prints its own label beside the tick, so the field header
     // would say it twice.
@@ -471,8 +621,26 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
           _chips(key, widget.chips[key]!)
         else if (type == 'select' && options.isNotEmpty)
           _dropdown(key, options, flagged)
+        else if (prefix.isNotEmpty)
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            _prefixPicker(prefix),
+            SizedBox(width: Ds.space.x8),
+            Expanded(
+                child: _input(key, type, hint, f['max_lines'], flagged,
+                    missing: missing)),
+          ])
         else
-          _input(key, type, hint, f['max_lines'], flagged),
+          _input(key, type, hint, f['max_lines'], flagged, missing: missing),
+        if (missing && _s4('required_label').isNotEmpty) ...[
+          SizedBox(height: Ds.space.x4),
+          Text(_s4('required_label'),
+              style: Ds.t.caption.copyWith(
+                  color: Ds.c.danger, fontWeight: FontWeight.w600)),
+        ],
+        if (card.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x8),
+          _takenCard(key, card),
+        ],
         if ((widget.notes[key] ?? '').isNotEmpty) ...[
           SizedBox(height: Ds.space.x4),
           Text(widget.notes[key]!, style: Ds.t.caption),
@@ -526,13 +694,56 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
         border: OutlineInputBorder(borderRadius: Ds.r.rButton),
       );
 
+  String _s4(String k) => (_v4[k] ?? '').toString();
+
   Widget _input(
-      String key, String type, String hint, Object? maxLines, bool flagged) {
+      String key, String type, String hint, Object? maxLines, bool flagged,
+      {bool missing = false}) {
     final lines = maxLines is num ? maxLines.toInt() : 1;
+    final ctrl = widget.controller;
+    final verdict = ctrl.verdicts[key];
+    final isChecking = ctrl.checking.contains(key);
+    final suffix = isChecking
+        ? _s4('checking_label')
+        : (verdict?['suffix'] ?? '').toString();
+    final tone = isChecking ? 'warning' : (verdict?['tone'] ?? '').toString();
+    final hints = _mm(_v4['autofill']);
+    var deco = _decoration(hint, flagged);
+    if (_v4.isNotEmpty) {
+      final edge = missing
+          ? Ds.c.danger
+          : switch (tone) {
+              'success' => Ds.c.brand,
+              'danger' => Ds.c.danger,
+              'warning' => Ds.c.warning,
+              _ => flagged ? Ds.c.warning : Ds.c.divider,
+            };
+      deco = deco.copyWith(
+        fillColor: Ds.c.surface,
+        enabledBorder: OutlineInputBorder(
+            borderRadius: Ds.r.rButton, borderSide: BorderSide(color: edge)),
+        prefixText: type == 'phone' && _s4('phone_prefix').isNotEmpty
+            ? '${_s4('phone_prefix')}  '
+            : null,
+        prefixStyle: Ds.t.body.copyWith(color: Ds.c.textSecondary),
+        suffixIcon: suffix.isEmpty
+            ? null
+            : Padding(
+                padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
+                child: Text(suffix,
+                    style: Ds.t.caption.copyWith(
+                        color: _toneColor(tone), fontWeight: FontWeight.w600)),
+              ),
+        suffixIconConstraints: const BoxConstraints(),
+      );
+    }
+    final hint4 = (hints[key] ?? '').toString();
     return TextField(
       controller: widget.controller.controllerFor(key),
       maxLines: lines,
       style: Ds.t.body,
+      autofillHints: hint4.isEmpty ? null : [hint4],
+      onChanged: missing ? (_) => setState(() {}) : null,
       keyboardType: switch (type) {
         'phone' => TextInputType.phone,
         'number' => TextInputType.number,
@@ -543,7 +754,83 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
       inputFormatters: (type == 'phone' || type == 'number')
           ? [FilteringTextInputFormatter.digitsOnly]
           : null,
-      decoration: _decoration(hint, flagged),
+      decoration: deco,
+    );
+  }
+
+  /// CMD #2141 — Mr / Ms before the owner's name: a compact box with the
+  /// backend's options, writing the backend's key (owner_salutation).
+  Widget _prefixPicker(Map<String, dynamic> prefix) {
+    final key = (prefix['key'] ?? '').toString();
+    final opts = RegChip.parse(prefix['options']);
+    final ctl = widget.controller.controllerFor(key);
+    if (ctl.text.trim().isEmpty) ctl.text = (prefix['default'] ?? '').toString();
+    final current = ctl.text.trim();
+    return Semantics(
+      identifier: 'reg_prefix_$key',
+      button: true,
+      child: Container(
+        constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+        padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rButton,
+          border: Border.all(color: Ds.c.divider),
+        ),
+        child: DropdownButtonHideUnderline(
+          child: DropdownButton<String>(
+            value: opts.any((o) => o.value == current) ? current : null,
+            iconEnabledColor: Ds.c.brand,
+            style: Ds.t.bodyStrong,
+            items: [
+              for (final o in opts)
+                DropdownMenuItem<String>(
+                    value: o.value, child: Text(o.label, style: Ds.t.bodyStrong)),
+            ],
+            onChanged: (v) => setState(() => ctl.text = v ?? current),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// CMD #2141 — "This number has an account" + Login (customer) or the plain
+  /// line (staff). Every word is the verdict's.
+  Widget _takenCard(String key, Map<String, dynamic> card) {
+    final login = (card['login_label'] ?? '').toString();
+    return Semantics(
+      identifier: 'reg_taken_$key',
+      child: Container(
+        padding: EdgeInsets.symmetric(
+            horizontal: Ds.space.x12, vertical: Ds.space.x8),
+        decoration: BoxDecoration(
+          color: Ds.c.warningSoft,
+          borderRadius: Ds.r.rButton,
+          border: Border.all(color: Ds.c.warning),
+        ),
+        child: Row(children: [
+          Expanded(
+            child: Text((card['line'] ?? '').toString(),
+                style: Ds.t.caption.copyWith(
+                    color: Ds.c.text, fontWeight: FontWeight.w600)),
+          ),
+          if (login.isNotEmpty) ...[
+            SizedBox(width: Ds.space.x8),
+            Semantics(
+              identifier: 'reg_taken_login_$key',
+              button: true,
+              child: SizedBox(
+                height: Ds.touch.minTarget,
+                child: FilledButton(
+                  onPressed: () => CustomerRegistrationForm.openLogin(
+                      context, (card['login_number'] ?? '').toString()),
+                  child: Text(login),
+                ),
+              ),
+            ),
+          ],
+        ]),
+      ),
     );
   }
 

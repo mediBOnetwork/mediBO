@@ -159,6 +159,14 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
     super.dispose();
   }
 
+  void _onFormChange() {
+    if (mounted) setState(() {});
+  }
+
+  /// CMD #2141 — the SAME v4 General step the customer's own registration
+  /// draws (Mr/Ms, required contacts, live checks).
+  bool get _v4 => _s(_wiz, 'layout') == 'v4';
+
   Map<String, dynamic> get _wiz => _m(_p['wizard']);
   List<Map<String, dynamic>> get _steps => wizardSteps(_wiz);
   Map<String, dynamic> get _cur =>
@@ -188,8 +196,11 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
         return;
       }
       _form?.controllerFor('whatsapp_no').removeListener(_onNumber);
+      _form?.removeListener(_onFormChange);
       _form?.dispose();
       final ctrl = CustomerFormController(formContext: 'signup');
+      // CMD #2141 — a live-check verdict repaints Continue.
+      ctrl.addListener(_onFormChange);
       final schema = _m(p['schema']);
       if (schema.isNotEmpty) ctrl.seed(schema);
       ctrl.applyMap(_m(p['prefill']));
@@ -412,6 +423,17 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
           await _finish();
           return;
         }
+        if (_v4 && !_isDocs && _m(_cur['map']).isEmpty) {
+          final ctrl = _form;
+          final fields = ((_cur['fields'] as List?) ?? const [])
+              .map((e) => e.toString())
+              .toList();
+          if (ctrl != null && ctrl.missingAmong(fields).isNotEmpty) {
+            ctrl.revealRequired();
+            return;
+          }
+          if (ctrl?.checksBlock ?? false) return;
+        }
         if (!_isDocs) {
           final res = await _saveStep(_stepKey);
           if (res == null) return;
@@ -513,10 +535,13 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
       if (row['reads'] == true) {
         Map<String, dynamic> fields = const {};
         try {
+          // CMD #2141 — the OCR fix: read the stored paper by its path, never
+          // re-send the photo as a multi-megabyte JSON body.
           final res = await Supabase.instance.client.functions.invoke(
             'licence-ocr',
             body: {
-              'image_base64': base64Encode(f.bytes),
+              'bucket': _s(p, 'bucket'),
+              'path': stored,
               'mime_type': mime,
               'kind': key,
             },
@@ -690,6 +715,9 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
             child: _capped(RegistrationProgressBar(
               steps: steps,
               current: _step,
+              currentComplete: _isDocs && _lic['show'] == true
+                  ? _lic['required_complete'] == true
+                  : null,
               onJump: (i) {
                 if (i < _step) setState(() => _step = i);
               },
@@ -707,6 +735,10 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
                   if (_step == 0 && _s(_p, 'note').isNotEmpty)
                     _note(_s(_p, 'note'), Ds.c.infoSoft),
                   if (_step == 0) ...[
+                    if (_v4 && _s(step, 'title').isNotEmpty) ...[
+                      Text(_s(step, 'title'), style: Ds.t.title),
+                      SizedBox(height: Ds.space.x16),
+                    ],
                     _photoCard(),
                     SizedBox(height: Ds.space.x16),
                   ] else ...[
@@ -759,6 +791,9 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
                       chips: chips,
                       notes: notes,
                       below: {'whatsapp_no': _numberVerdict()},
+                      v4: _v4 ? _wiz : const {},
+                      checkRpc: (fn, params) => AddCustomerFlow.rpc(fn, params),
+                      customerId: _customerId,
                     ),
                   if (_message.isNotEmpty) ...[
                     SizedBox(height: Ds.space.x12),

@@ -20,10 +20,10 @@ List<Map<String, dynamic>> wizardSteps(Map<String, dynamic> wizard) =>
 bool wizardStepReachable(List<Map<String, dynamic>> steps, int i, int current) =>
     i < current || (i != current && steps[i]['complete'] == true);
 
-/// The approved design (Image A): three bars, and under each its own label —
-/// the first left, the middle centred, the last right. The current step is
-/// bold brand; a finished step reads "✓ 1 Shop" (the backend's done_label),
-/// underlined and tappable; a step not reached yet is grey.
+/// The approved design (Registration v3): three bars, and under each its own
+/// label, centred. The current step is bold brand; a finished step reads
+/// "✓ General" (the backend's done_label), tappable; a step not reached yet is
+/// grey. No numbers — the words are the backend's.
 class RegistrationProgressBar extends StatelessWidget {
   const RegistrationProgressBar({
     super.key,
@@ -55,16 +55,12 @@ class RegistrationProgressBar extends StatelessWidget {
     final reachable = wizardStepReachable(steps, i, current);
     final label = ((done ? steps[i]['done_label'] : null) ?? steps[i]['label'] ?? '')
         .toString();
-    final align = i == 0
-        ? TextAlign.left
-        : (i == steps.length - 1 ? TextAlign.right : TextAlign.center);
+    // CMD #2135 — every label sits centred under its own bar.
+    const align = TextAlign.center;
     final style = active
         ? Ds.t.caption.copyWith(color: Ds.c.brand, fontWeight: FontWeight.w700)
         : done
-            ? Ds.t.caption.copyWith(
-                color: Ds.c.brand,
-                decoration: TextDecoration.underline,
-                decorationColor: Ds.c.brand)
+            ? Ds.t.caption.copyWith(color: Ds.c.brand)
             : Ds.t.caption;
     return Semantics(
       identifier: 'reg_step_$i',

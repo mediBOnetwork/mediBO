@@ -90,6 +90,10 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
   final Map<String, int> _pages = {};
   bool _scanning = false;
 
+  // CMD #2135 — Documents v3: rows whose photo is being read right now.
+  final Set<String> _reading = {};
+  bool get _instant => _s(_lic, 'layout') == 'v3';
+
   // CMD #2126 — the 3-step flow. Where the person is, whether the resume
   // point has been taken from the payload yet, and whether Submit landed.
   int _step = 0;
@@ -333,6 +337,117 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
       _skips.remove(key);
       _thumbUrls.remove(key);
     });
+    // CMD #2135 — saved the moment it lands, then read.
+    if (_instant) unawaited(_saveNow(key));
+  }
+
+  /// CMD #2135 — an upload is SAVED at once (it survives leaving and coming
+  /// back) and then READ: the photo goes to licence-ocr and whatever it read
+  /// is handed to the backend, which maps it onto the row. A brand-new signup
+  /// gets its profile row first — the backend makes it from what is filled.
+  Future<void> _saveNow(String key) async {
+    final doc = _picked[key];
+    final ctrl = _form;
+    if (doc == null || ctrl == null) return;
+    final row = _licRows.firstWhere((r) => _s(r, 'key') == key,
+        orElse: () => const {});
+    setState(() {
+      _reading.add(key);
+      _message = '';
+    });
+    try {
+      var cid = _s(_lic, 'customer_id');
+      if (cid.isEmpty) {
+        final made = _map(await OneRegistrationScreen.rpc(
+            'custreg_ensure_profile', {'p_values': ctrl.payload()}));
+        cid = _s(made, 'customer_id');
+        if (made['ok'] != true || cid.isEmpty) {
+          throw StateError(_s(made, 'message'));
+        }
+        _lic = {..._lic, 'customer_id': cid};
+      }
+      final stored = await _upload(cid, key, doc);
+      if (!stored) throw StateError('upload');
+      Map<String, dynamic> block = const {};
+      if (row['reads'] == true) {
+        Map<String, dynamic> fields = const {};
+        try {
+          final res = await Supabase.instance.client.functions.invoke(
+            'licence-ocr',
+            body: {
+              'image_base64': base64Encode(doc.bytes),
+              'mime_type': switch (doc.ext) {
+                'pdf' => 'application/pdf',
+                'png' => 'image/png',
+                _ => 'image/jpeg',
+              },
+              'kind': key,
+            },
+          );
+          fields = _map(_map(res.data)['fields']);
+        } catch (_) {
+          // An unread photo is still a saved photo: the row says "tap to type".
+        }
+        final saved = _map(await OneRegistrationScreen.rpc(
+            'custreg_doc_read_save', {'p_kind': key, 'p_ocr': fields}));
+        block = _map(saved['block']);
+        RenderLog.write('c2135_doc_read', '${saved['read'] == true ? 1 : 0}');
+      }
+      if (!mounted) return;
+      setState(() {
+        _reading.remove(key);
+        _picked.remove(key);
+        if (block.isNotEmpty) _lic = {..._lic, ...block};
+      });
+      if (block.isEmpty) await _loadLicences();
+      unawaited(_signThumbs());
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _reading.remove(key);
+        _message = _s(_lic, 'upload_failed_label');
+      });
+    }
+  }
+
+  /// CMD #2135 — Edit / Type: the row's sheet; Looks right saves through the
+  /// backend, which answers with the refreshed list or its own error line.
+  Future<void> _editDoc(Map<String, dynamic> row) async {
+    final key = _s(row, 'key');
+    final edit = _map(row['edit']);
+    if (edit.isEmpty) return _viewDoc(row);
+    var retake = false;
+    await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (ctx) => DocReadEditSheet(
+        edit: edit,
+        thumb: docEditThumb(row, _thumbUrls[key] ?? '', _picked[key]),
+        onViewPhoto: () => _viewDoc(row),
+        onRetake: () {
+          retake = true;
+          Navigator.of(ctx).pop(false);
+        },
+        onConfirm: (values) async {
+          try {
+            final res = _map(await OneRegistrationScreen.rpc(
+                'custreg_doc_read_edit', {'p_kind': key, 'p_values': values}));
+            if (res['ok'] != true) return _s(res, 'message');
+            final block = _map(res['block']);
+            if (mounted && block.isNotEmpty) {
+              setState(() => _lic = {..._lic, ...block});
+            }
+            RenderLog.write('c2135_doc_edit', key);
+            return null;
+          } catch (_) {
+            return _s(_p, 'error_label');
+          }
+        },
+      ),
+    );
+    if (retake && mounted) await _pickForRow(row);
   }
 
   /// Tap a thumbnail: the paper opens INSIDE the app. Never a share sheet,
@@ -667,14 +782,14 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
     Navigator.of(context).popUntil((r) => r.isFirst);
   }
 
-  Future<void> _upload(String customerId, String kind, PickedDoc doc) async {
-    if (customerId.isEmpty) return;
+  Future<bool> _upload(String customerId, String kind, PickedDoc doc) async {
+    if (customerId.isEmpty) return false;
     setState(() => _busyDoc = kind);
     try {
       final p = _map(await CustomerDocumentsTransport.call(
           'customer_doc_upload_path',
           {'p_customer_id': customerId, 'p_kind': kind, 'p_ext': doc.ext}));
-      if (p['ok'] != true) return;
+      if (p['ok'] != true) return false;
       final mime = switch (doc.ext) {
         'pdf' => 'application/pdf',
         'png' => 'image/png',
@@ -691,9 +806,11 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
         'p_bytes': doc.bytes.length,
         'p_pages': _pages[kind] ?? 1,
       });
+      return true;
     } catch (_) {
       // A file that would not go up is not a failed registration: the profile
       // is saved, the paper is simply still owed and the banner says so.
+      return false;
     } finally {
       if (mounted) setState(() => _busyDoc = '');
     }
@@ -854,10 +971,9 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
         .map((e) => e.toString())
         .toList();
     final mapBlock = _map(step['map']);
-    final chips = <String, List<String>>{
+    final chips = <String, List<RegChip>>{
       for (final e in _map(_wiz['chips']).entries)
-        if (e.value is List)
-          e.key: (e.value as List).map((o) => o.toString()).toList(),
+        if (e.value is List) e.key: RegChip.parse(e.value),
     };
     final notes = <String, String>{
       for (final e in _map(_wiz['field_notes']).entries)
@@ -960,6 +1076,8 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
                               onView: _viewDoc,
                               onSkipToggle: _toggleSkip,
                               onScan: _scanLicence,
+                              onEdit: _editDoc,
+                              reading: _reading,
                             )
                           : RegistrationDocumentsSection(
                               block: _docs,

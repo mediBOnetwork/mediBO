@@ -53,6 +53,8 @@ class RegistrationLicencesSection extends StatelessWidget {
     required this.onScan,
     this.busyKey = '',
     this.scanning = false,
+    this.onEdit,
+    this.reading = const {},
   });
 
   /// custreg_licences_block() verbatim.
@@ -75,6 +77,12 @@ class RegistrationLicencesSection extends StatelessWidget {
   final String busyKey;
   final bool scanning;
 
+  /// CMD #2135 — Edit / Type on a v3 row (the row's own `edit` sheet).
+  final void Function(Map<String, dynamic> row)? onEdit;
+
+  /// CMD #2135 — rows whose photo is being read right now.
+  final Set<String> reading;
+
   List<Map<String, dynamic>> get _groups => _list(block['groups']);
 
   @override
@@ -91,9 +99,22 @@ class RegistrationLicencesSection extends StatelessWidget {
     final scan = _m(block['scan']);
     final groups = _groups.where((g) => _list(g['rows']).isNotEmpty).toList();
 
+    final saved = _s(block, 'saved_note');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (saved.isNotEmpty) ...[
+          Semantics(
+            identifier: 'reg_doc_saved_note',
+            child: Container(
+              padding: EdgeInsets.all(Ds.space.x12),
+              decoration: BoxDecoration(
+                  color: Ds.c.successSoft, borderRadius: Ds.r.rCard),
+              child: Text(saved, style: Ds.t.caption),
+            ),
+          ),
+          SizedBox(height: Ds.space.x24),
+        ],
         if (scan['show'] == true) ...[
           _ScanCard(scan: scan, busy: scanning, onTap: onScan),
           SizedBox(height: Ds.space.x24),
@@ -160,6 +181,7 @@ class RegistrationLicencesSection extends StatelessWidget {
   }
 
   Widget _row(Map<String, dynamic> row) {
+    if (row['act'] is Map) return _rowV3(row);
     final key = _s(row, 'key');
     final local = picked[key];
     final isSkipped = skipped.contains(key);
@@ -246,6 +268,160 @@ class RegistrationLicencesSection extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+  /// CMD #2135 — the Registration v3 row: the number read off the photo in
+  /// bold, "Valid till …" under it, and Edit on the right; "Reading the
+  /// number…" while the photo is being read; "Couldn't read — tap to type"
+  /// with Type when it could not be; View for a photo-only paper. Every word,
+  /// and which of these a row is, comes from the row.
+  Widget _rowV3(Map<String, dynamic> row) {
+    final key = _s(row, 'key');
+    final act = _m(row['act']);
+    final kind = _s(act, 'kind');
+    final dontHave = _m(row['dont_have']);
+    final isSkipped = skipped.contains(key) || dontHave['on'] == true;
+    final busy = busyKey == key;
+    final isReading = reading.contains(key);
+    final canView = row['can_view'] == true;
+    final number = _s(row, 'number');
+    final validLine = _s(row, 'valid_line');
+    final line = _s(row, 'line');
+    final status = _s(row, 'status_label');
+
+    final lines = <Widget>[];
+    if (isReading) {
+      lines.addAll([
+        SizedBox(height: Ds.space.x4),
+        Row(children: [
+          SizedBox(
+            width: Ds.space.x12,
+            height: Ds.space.x12,
+            child: CircularProgressIndicator(
+                strokeWidth: Ds.space.hairline * 2, color: Ds.c.brand),
+          ),
+          SizedBox(width: Ds.space.x8),
+          Flexible(
+            child: Text(_s(block, 'reading_label'),
+                style: Ds.t.caption.copyWith(
+                    color: Ds.c.brand, fontWeight: FontWeight.w600)),
+          ),
+        ]),
+        SizedBox(height: Ds.space.x8),
+        ClipRRect(
+          borderRadius: Ds.r.rChip,
+          child: LinearProgressIndicator(
+              minHeight: Ds.space.x4,
+              color: Ds.c.brand,
+              backgroundColor: Ds.c.divider),
+        ),
+      ]);
+    } else if (number.isNotEmpty) {
+      lines.addAll([
+        SizedBox(height: Ds.space.x4),
+        Text(number, style: Ds.t.bodyStrong),
+        if (validLine.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x4),
+          Text(validLine, style: Ds.t.caption),
+        ],
+      ]);
+    } else if (line.isNotEmpty) {
+      lines.addAll([
+        SizedBox(height: Ds.space.x4),
+        Text(line,
+            style: Ds.t.caption.copyWith(
+                color: licTone(_s(row, 'line_tone')),
+                fontWeight: FontWeight.w600)),
+      ]);
+    } else if (status.isNotEmpty) {
+      lines.addAll([
+        SizedBox(height: Ds.space.x4),
+        Text(isSkipped ? _s(dontHave, 'label') : status,
+            style: Ds.t.caption.copyWith(
+                color: licTone(isSkipped ? 'neutral' : _s(row, 'status_tone')),
+                fontWeight: FontWeight.w600)),
+      ]);
+    }
+
+    Widget trailing;
+    if (kind == 'upload' || isReading) {
+      trailing = Row(mainAxisSize: MainAxisSize.min, children: [
+        if (dontHave['show'] == true && !isReading)
+          Semantics(
+            identifier: 'reg_lic_skip_$key',
+            button: true,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+              child: TextButton(
+                onPressed: busy ? null : () => onSkipToggle(row),
+                child: Text(
+                    isSkipped ? _s(dontHave, 'undo_label') : _s(dontHave, 'label'),
+                    style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+              ),
+            ),
+          ),
+        SizedBox(width: Ds.space.x4),
+        _ActionCircle(
+          action: _m(row['action']),
+          done: false,
+          busy: busy || isReading,
+          docKey: key,
+          onTap: () => onUpload(row),
+        ),
+      ]);
+    } else {
+      final tap = switch (kind) {
+        'edit' || 'type' => () => (onEdit ?? onView)(row),
+        'retake' => () => onUpload(row),
+        _ => () => onView(row),
+      };
+      trailing = Semantics(
+        identifier: 'reg_doc_act_$key',
+        button: true,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+              minHeight: Ds.touch.minTarget, minWidth: Ds.touch.minTarget),
+          child: TextButton(
+            onPressed: busy ? null : tap,
+            child: Text(_s(act, 'label'),
+                style: Ds.t.bodyStrong.copyWith(
+                    color: kind == 'retake' ? Ds.c.danger : Ds.c.brand)),
+          ),
+        ),
+      );
+    }
+
+    return Semantics(
+      identifier: 'reg_lic_row_$key',
+      child: Container(
+        constraints: BoxConstraints(minHeight: Ds.touch.minTarget + Ds.space.x12),
+        padding: EdgeInsets.symmetric(
+            horizontal: Ds.space.x16, vertical: Ds.space.x12),
+        child: Row(children: [
+          if (canView || isReading || picked.containsKey(key)) ...[
+            _Thumb(
+              row: row,
+              local: picked[key],
+              url: thumbUrls[key] ?? '',
+              onTap: canView ? () => onView(row) : null,
+            ),
+          ],
+          Expanded(
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(_s(row, 'label'), style: Ds.t.body),
+                  ...lines,
+                ],
+              ),
+            ),
+          ),
+          trailing,
+        ]),
       ),
     );
   }
@@ -449,3 +625,172 @@ class _ActionCircle extends StatelessWidget {
     );
   }
 }
+
+/// CMD #2135 — "Tap Edit → check what we read". The row's own `edit` block:
+/// its title, its line, one box per field with the backend's "Read ✓" beside
+/// a value that came off the photo, Retake photo and Looks right. Tapping the
+/// photo opens the viewer. `onConfirm` saves and answers with the backend's
+/// error sentence (null = saved), so a bad date keeps the sheet open.
+class DocReadEditSheet extends StatefulWidget {
+  const DocReadEditSheet({
+    super.key,
+    required this.edit,
+    required this.thumb,
+    required this.onConfirm,
+    required this.onRetake,
+    required this.onViewPhoto,
+  });
+
+  final Map<String, dynamic> edit;
+  final Widget thumb;
+  final Future<String?> Function(Map<String, String> values) onConfirm;
+  final VoidCallback onRetake;
+  final VoidCallback onViewPhoto;
+
+  @override
+  State<DocReadEditSheet> createState() => _DocReadEditSheetState();
+}
+
+class _DocReadEditSheetState extends State<DocReadEditSheet> {
+  final Map<String, TextEditingController> _ctl = {};
+  bool _saving = false;
+  String _error = '';
+
+  List<Map<String, dynamic>> get _fields => _list(widget.edit['fields']);
+
+  @override
+  void initState() {
+    super.initState();
+    for (final f in _fields) {
+      _ctl[_s(f, 'key')] = TextEditingController(text: _s(f, 'value'));
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final c in _ctl.values) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _confirm() async {
+    setState(() {
+      _saving = true;
+      _error = '';
+    });
+    final err = await widget.onConfirm({
+      for (final e in _ctl.entries) e.key: e.value.text.trim(),
+    });
+    if (!mounted) return;
+    if (err == null) {
+      Navigator.of(context).pop(true);
+      return;
+    }
+    setState(() {
+      _saving = false;
+      _error = err;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final e = widget.edit;
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+        child: SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(
+              Ds.space.x16, Ds.space.x24, Ds.space.x16, Ds.space.x16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Semantics(
+                  identifier: 'reg_doc_edit_photo',
+                  button: true,
+                  child: InkWell(onTap: widget.onViewPhoto, child: widget.thumb),
+                ),
+                SizedBox(width: Ds.space.x12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(_s(e, 'title'), style: Ds.t.title),
+                      SizedBox(height: Ds.space.x4),
+                      Text(_s(e, 'line'), style: Ds.t.bodySecondary),
+                    ],
+                  ),
+                ),
+              ]),
+              SizedBox(height: Ds.space.x24),
+              for (final f in _fields) ...[
+                Row(children: [
+                  Expanded(child: Text(_s(f, 'label'), style: Ds.t.caption)),
+                  if (f['read'] == true)
+                    Text(_s(f, 'read_label'),
+                        style: Ds.t.caption.copyWith(
+                            color: Ds.c.brand, fontWeight: FontWeight.w600)),
+                ]),
+                SizedBox(height: Ds.space.x4),
+                Semantics(
+                  identifier: 'reg_doc_edit_${_s(f, 'key')}',
+                  textField: true,
+                  child: TextField(
+                    controller: _ctl[_s(f, 'key')],
+                    style: Ds.t.body,
+                    textCapitalization: _s(f, 'key') == 'number'
+                        ? TextCapitalization.characters
+                        : TextCapitalization.words,
+                  ),
+                ),
+                SizedBox(height: Ds.space.x16),
+              ],
+              if (_error.isNotEmpty) ...[
+                Text(_error, style: Ds.t.caption.copyWith(color: Ds.c.danger)),
+                SizedBox(height: Ds.space.x12),
+              ],
+              Row(children: [
+                Expanded(
+                  child: Semantics(
+                    identifier: 'reg_doc_edit_retake',
+                    button: true,
+                    child: SizedBox(
+                      height: Ds.touch.minTarget,
+                      child: OutlinedButton(
+                        onPressed: _saving ? null : widget.onRetake,
+                        child: Text(_s(e, 'retake_label'),
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                      ),
+                    ),
+                  ),
+                ),
+                SizedBox(width: Ds.space.x12),
+                Expanded(
+                  child: Semantics(
+                    identifier: 'reg_doc_edit_confirm',
+                    button: true,
+                    child: SizedBox(
+                      height: Ds.touch.minTarget,
+                      child: FilledButton(
+                        onPressed: _saving ? null : _confirm,
+                        child: Text(_s(e, 'confirm_label'),
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                      ),
+                    ),
+                  ),
+                ),
+              ]),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The document tile the Edit sheet shows beside its title.
+Widget docEditThumb(Map<String, dynamic> row, String url, PickedDoc? local) =>
+    _Thumb(row: row, local: local, url: url, onTap: null);

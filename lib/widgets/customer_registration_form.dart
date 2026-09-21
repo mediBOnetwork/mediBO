@@ -298,8 +298,10 @@ class CustomerRegistrationForm extends StatefulWidget {
   final List<String>? onlyFields;
 
   /// CMD #2126 — select fields drawn as tappable chips instead of a dropdown,
-  /// with the backend's own option list (`wizard.chips`).
-  final Map<String, List<String>> chips;
+  /// with the backend's own option list (`wizard.chips`). CMD #2135 — each
+  /// chip carries a short label and the value it stores ("Retail" stores
+  /// "Retail Pharmacy"); both come from the backend.
+  final Map<String, List<RegChip>> chips;
 
   /// CMD #2126 — a caption under a field, from the backend
   /// (`wizard.field_notes`, e.g. "Pre-filled from your login — you can change
@@ -536,41 +538,58 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
     );
   }
 
-  /// CMD #2126 — one tap picks, a second tap on the same chip clears. Chips
-  /// wrap onto as many lines as the phone needs; each is a full touch target.
-  Widget _chips(String key, List<String> options) {
+  /// CMD #2126 — one tap picks, a second tap on the same chip clears.
+  /// CMD #2135 — ONE horizontal row: the chips share the width equally, and a
+  /// list too long for the phone scrolls sideways instead of wrapping.
+  Widget _chips(String key, List<RegChip> options) {
     final ctl = widget.controller.controllerFor(key);
     final current = ctl.text.trim();
-    return Wrap(
-      spacing: Ds.space.x8,
-      runSpacing: Ds.space.x8,
-      children: [
-        for (final o in options)
-          Semantics(
-            identifier: 'reg_chip_${key}_${options.indexOf(o)}',
-            button: true,
-            selected: o == current,
-            child: InkWell(
+    Widget chip(int i) {
+      final o = options[i];
+      final on = o.value == current;
+      return Semantics(
+        identifier: 'reg_chip_${key}_$i',
+        button: true,
+        selected: on,
+        child: InkWell(
+          borderRadius: Ds.r.rChip,
+          onTap: () => setState(() => ctl.text = on ? '' : o.value),
+          child: Container(
+            constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+            padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: on ? Ds.c.brandSoft : Ds.c.surface,
               borderRadius: Ds.r.rChip,
-              onTap: () => setState(() => ctl.text = o == current ? '' : o),
-              child: Container(
-                constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
-                padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: o == current ? Ds.c.brandSoft : Ds.c.surface,
-                  borderRadius: Ds.r.rChip,
-                  border: Border.all(
-                      color: o == current ? Ds.c.brand : Ds.c.divider),
-                ),
-                child: Text(o,
-                    style: o == current
-                        ? Ds.t.bodyStrong.copyWith(color: Ds.c.brand)
-                        : Ds.t.body),
-              ),
+              border: Border.all(color: on ? Ds.c.brand : Ds.c.divider),
             ),
+            child: Text(o.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: on
+                    ? Ds.t.bodyStrong.copyWith(color: Ds.c.brand)
+                    : Ds.t.body),
           ),
-      ],
+        ),
+      );
+    }
+
+    if (options.length <= 4) {
+      return Row(children: [
+        for (var i = 0; i < options.length; i++) ...[
+          if (i > 0) SizedBox(width: Ds.space.x8),
+          Expanded(child: chip(i)),
+        ],
+      ]);
+    }
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(children: [
+        for (var i = 0; i < options.length; i++) ...[
+          if (i > 0) SizedBox(width: Ds.space.x8),
+          chip(i),
+        ],
+      ]),
     );
   }
 
@@ -640,4 +659,21 @@ class FormFieldsSkeleton extends StatelessWidget {
       ),
     );
   }
+}
+
+/// CMD #2135 — one store-type chip: what it says and what it stores. The
+/// backend sends either a plain string (label = value) or {label, value}.
+class RegChip {
+  const RegChip(this.label, this.value);
+  final String label;
+  final String value;
+
+  static List<RegChip> parse(dynamic raw) => [
+        for (final o in (raw is List ? raw : const []))
+          if (o is Map)
+            RegChip((o['label'] ?? o['value'] ?? '').toString(),
+                (o['value'] ?? o['label'] ?? '').toString())
+          else
+            RegChip(o.toString(), o.toString()),
+      ];
 }

@@ -3,11 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../app_state.dart';
 import '../design_tokens.dart';
+import '../models/product.dart';
 import '../services/ui_copy.dart';
 import '../utils/render_log.dart';
-import '../utils/toast.dart';
+import '../widgets/product_card_grid.dart';
 
 class WishlistScreen extends StatefulWidget {
   const WishlistScreen({super.key});
@@ -29,8 +29,6 @@ class _WishlistScreenState extends State<WishlistScreen> {
 
   bool _loading = true;
   bool _error = false;
-  final Set<String> _removing = {};
-  final Set<String> _adding = {};
 
   @override
   void initState() {
@@ -49,6 +47,7 @@ class _WishlistScreenState extends State<WishlistScreen> {
               : <String, dynamic>{});
       if (mounted) setState(() { _payload = p; _loading = false; });
       RenderLog.write('wishlist_screen', 'loaded:${_items(p).length}');
+      RenderLog.write('c2146_wishlist_cards', _cards(p).length);
       unawaited(_loadAlerts());
     } catch (_) {
       if (mounted) setState(() { _error = true; _loading = false; });
@@ -76,34 +75,18 @@ class _WishlistScreenState extends State<WishlistScreen> {
     return raw.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
   }
 
+  /// CMD #2146 — `wishlist_get().cards`: the shared card payload per item.
+  List<Product> _cards(Map<String, dynamic>? p) {
+    final raw = p?['cards'];
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map>()
+        .map((e) => Product.fromHomeCard(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
   String _s(Map<String, dynamic>? p, String key) =>
       (p?[key] ?? '').toString();
-
-  Future<void> _remove(String productId) async {
-    if (_removing.contains(productId)) return;
-    setState(() => _removing.add(productId));
-    try {
-      await Supabase.instance.client
-          .rpc('wishlist_remove', params: {'p_product_id': int.parse(productId)});
-      if (mounted) {
-        showToast(context, c('wishlist.remove_toast'));
-        await _load();
-      }
-    } catch (_) {
-      if (mounted) setState(() => _removing.remove(productId));
-    }
-  }
-
-  void _addToCart(String productId) {
-    if (_adding.contains(productId)) return;
-    setState(() => _adding.add(productId));
-    try {
-      AppState.of(context).addId(productId);
-      showToast(context, c('wishlist.cart_toast'));
-    } finally {
-      if (mounted) setState(() => _adding.remove(productId));
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -220,170 +203,18 @@ class _WishlistScreenState extends State<WishlistScreen> {
             _AlertStrip(payload: _alerts!),
             SizedBox(height: Ds.space.x24),
           ],
-          ...items.map((item) => _WishlistCard(
-                item: item,
-                removing: _removing.contains(item['product_id']?.toString() ?? ''),
-                adding: _adding.contains(item['product_id']?.toString() ?? ''),
-                onRemove: () => _remove(item['product_id']?.toString() ?? ''),
-                onAddToCart: () => _addToCart(item['product_id']?.toString() ?? ''),
-              )),
+          // CMD #2146 — the ONE shared ProductCard (v5), fed by the same
+          // `_cat_cards` payload every other surface draws.
+          ProductCardGrid(
+            items: _cards(p),
+            onOpen: (prod) =>
+                Navigator.of(context).pushNamed('/product/${prod.id}'),
+          ),
         ],
       ),
     );
   }
 }
-
-class _WishlistCard extends StatelessWidget {
-  final Map<String, dynamic> item;
-  final bool removing;
-  final bool adding;
-  final VoidCallback onRemove;
-  final VoidCallback onAddToCart;
-
-  const _WishlistCard({
-    required this.item,
-    required this.removing,
-    required this.adding,
-    required this.onRemove,
-    required this.onAddToCart,
-  });
-
-  String _s(String key) => (item[key] ?? '').toString();
-
-  @override
-  Widget build(BuildContext context) {
-    final canAdd = item['can_add'] == true;
-    final ctaLabel = _s('cta_label').isNotEmpty ? _s('cta_label') : c('wishlist.add_cart_btn');
-
-    return Container(
-      margin: EdgeInsets.only(bottom: Ds.space.x12),
-      decoration: BoxDecoration(
-        color: Ds.c.surface,
-        borderRadius: Ds.r.rCard,
-        border: Border.all(color: Ds.c.divider),
-        boxShadow: Ds.elevation.e1,
-      ),
-      child: Padding(
-        padding: EdgeInsets.all(Ds.space.x16),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _thumbnail(),
-            SizedBox(width: Ds.space.x12),
-            Expanded(child: _info(canAdd, ctaLabel)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _thumbnail() {
-    final url = _s('image_url');
-    return Container(
-      width: 64,
-      height: 64,
-      decoration: BoxDecoration(
-        color: Ds.c.bg,
-        borderRadius: BorderRadius.circular(Ds.r.button),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: url.isNotEmpty
-          ? Image.network(url, fit: BoxFit.contain,
-              errorBuilder: (_, __, ___) => _placeholderIcon())
-          : _placeholderIcon(),
-    );
-  }
-
-  Widget _placeholderIcon() => Center(
-        child: Icon(Icons.medication_outlined,
-            size: 28, color: Ds.c.textSecondary),
-      );
-
-  Widget _info(bool canAdd, String ctaLabel) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          _s('name'),
-          style: Ds.t.body.copyWith(fontWeight: FontWeight.w600),
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-        ),
-        if (_s('company').isNotEmpty) ...[
-          SizedBox(height: Ds.space.x4),
-          Text(_s('company'), style: Ds.t.caption, maxLines: 1,
-              overflow: TextOverflow.ellipsis),
-        ],
-        if (_s('pack_label').isNotEmpty) ...[
-          SizedBox(height: Ds.space.x4),
-          Text(_s('pack_label'), style: Ds.t.caption),
-        ],
-        if (_s('price_display').isNotEmpty) ...[
-          SizedBox(height: Ds.space.x8),
-          Text(_s('price_display'),
-              style: Ds.t.body.copyWith(
-                  color: Ds.c.brand, fontWeight: FontWeight.w700)),
-        ],
-        SizedBox(height: Ds.space.x12),
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton(
-                onPressed: removing ? null : onRemove,
-                style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: Ds.c.divider),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: Ds.r.rButton),
-                  padding: EdgeInsets.symmetric(vertical: Ds.space.x8),
-                  minimumSize: const Size(0, 40),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-                child: removing
-                    ? SizedBox(
-                        width: 16, height: 16,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Ds.c.textSecondary))
-                    : Text(c('wishlist.remove_btn'),
-                        style: TextStyle(
-                            color: Ds.c.textSecondary,
-                            fontSize: Ds.t.captionSize,
-                            fontWeight: FontWeight.w600)),
-              ),
-            ),
-            SizedBox(width: Ds.space.x8),
-            Expanded(
-              flex: 2,
-              child: ElevatedButton(
-                onPressed: (canAdd && !adding) ? onAddToCart : null,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Ds.c.brand,
-                  disabledBackgroundColor: Ds.c.divider,
-                  foregroundColor: Ds.c.surface,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: Ds.r.rButton),
-                  padding: EdgeInsets.symmetric(vertical: Ds.space.x8),
-                  elevation: 0,
-                  minimumSize: const Size(0, 40),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-                child: adding
-                    ? SizedBox(
-                        width: 16, height: 16,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Ds.c.surface))
-                    : Text(ctaLabel,
-                        style: TextStyle(
-                            fontSize: Ds.t.captionSize,
-                            fontWeight: FontWeight.w600)),
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-}
-
 
 /// CMD #410 — the wishlist's price and stock alerts.
 ///

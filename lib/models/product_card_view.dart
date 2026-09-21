@@ -121,3 +121,87 @@ class ProductCardView {
     );
   }
 }
+
+/// CMD #2124 — what the card's action says after a tap, before the next read.
+///
+/// `card.action` carries every word the card can move to — the pill template
+/// ("{qty} strip"), the in-cart foot template, Notify / Notified and their two
+/// foot lines — and `card.foot_idle` is the foot once the pack leaves the
+/// cart. This class only picks between those backend strings and fills the
+/// `{qty}` slot with the cart's own number. A payload without `action` (built
+/// before #2124) gets null and the card keeps its older controls.
+class CardAction {
+  final String pickerRpc;
+  final String packType;
+  final String qtyTpl;
+  final String qtyFootTpl;
+  final String notifyLabel;
+  final String notifiedLabel;
+  final String notifyLine;
+  final String notifiedLine;
+  final bool notified;
+  final int payloadQty;
+  final String idleFoot;
+  final String idleFootTone;
+
+  const CardAction({
+    required this.pickerRpc,
+    required this.packType,
+    required this.qtyTpl,
+    required this.qtyFootTpl,
+    required this.notifyLabel,
+    required this.notifiedLabel,
+    required this.notifyLine,
+    required this.notifiedLine,
+    required this.notified,
+    required this.payloadQty,
+    required this.idleFoot,
+    required this.idleFootTone,
+  });
+
+  static String _s(Object? v) => (v ?? '').toString();
+
+  static CardAction? of(Map<String, dynamic>? card) {
+    final a = card?['action'];
+    if (a is! Map) return null;
+    final picker = a['picker'] is Map ? a['picker'] as Map : const {};
+    final notify = a['notify'] is Map ? a['notify'] as Map : const {};
+    final idle = card?['foot_idle'] is Map ? card!['foot_idle'] as Map : const {};
+    final idleTone = idle['tone'] is Map ? idle['tone'] as Map : const {};
+    return CardAction(
+      pickerRpc: _s(picker['rpc']),
+      packType: _s(picker['pack_type']),
+      qtyTpl: _s(a['qty_tpl']),
+      qtyFootTpl: _s(a['qty_foot_tpl']),
+      notifyLabel: _s(notify['label']),
+      notifiedLabel: _s(notify['done_label']),
+      notifyLine: _s(notify['idle_line']),
+      notifiedLine: _s(notify['done_line']),
+      notified: notify['notified'] == true || card?['notified'] == true,
+      payloadQty: (card?['qty_in_cart'] as num?)?.toInt() ?? 0,
+      idleFoot: _s(idle['label']),
+      idleFootTone: _s(idleTone['name']),
+    );
+  }
+
+  /// "5 strip" — the pill, the backend's template with the cart's number.
+  String pillLabel(int qty) => qtyTpl.replaceAll('{qty}', '$qty');
+
+  /// The ONE line under the price for the state the card is in right now.
+  /// Returns (label, tone name); an empty label means print nothing.
+  (String, String) foot({
+    required ProductCardView view,
+    required bool soldOut,
+    required bool notifiedNow,
+    required int qty,
+  }) {
+    if (soldOut) {
+      return (notifiedNow || notified)
+          ? (notifiedLine, 'muted')
+          : (notifyLine, 'danger');
+    }
+    if (qty > 0) return (qtyFootTpl.replaceAll('{qty}', '$qty'), 'brand');
+    if (payloadQty > 0) return (idleFoot, idleFootTone);
+    return (view.hasFoot ? view.footLabel : '', view.footTone);
+  }
+}

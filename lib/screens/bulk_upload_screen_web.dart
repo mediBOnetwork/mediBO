@@ -5339,33 +5339,25 @@ bool _formMatches(String productName, String form) {
 
 // ─── Manual search helpers ────────────────────────────────────────────────────
 
-/// Queries MEDICINE via the priority RPC (falls back to ILIKE).
-/// Returns up to [limit] candidates.
+/// CMD #2137 — the panel's Search asks bulk_search_products(), which ranks
+/// like the storefront search but returns every product in the SAME payload a
+/// matched row gets from bulk_match_items() (pack, sale-price badge,
+/// availability, qty unit, composition). So a searched result — and the
+/// product then picked — prints the identical four lines. No thin fallback:
+/// a row without those fields is exactly the bug this replaced.
 Future<List<Product>> _manualSearchProducts(String query, {int limit = 3}) async {
   final q = query.trim();
   if (q.isEmpty) return [];
   try {
-    final rows = await Supabase.instance.client.rpc('search_medicines_priority', params: {
-      'search_term': q,
-      'category_filter': 'All',
-      'page_offset': 0,
-      'page_limit': limit,
-    });
-    return List<Map<String, dynamic>>.from(rows as List)
-        .map((m) => Product.fromMap(m))
+    final raw = await Supabase.instance.client.rpc('bulk_search_products',
+        params: {'p_term': q, 'p_limit': limit});
+    final rows = ((raw as Map)['rows'] as List<dynamic>? ?? const []);
+    try { RenderLog.write('c2137_search_card_rows', '${rows.length}'); } catch (_) {}
+    return List<Map<String, dynamic>>.from(rows)
+        .map((m) => Product.fromBulkMatch(m))
         .toList();
   } catch (_) {
-    try {
-      final raw = await Supabase.instance.client.rpc('medicine_search_available',
-          params: {'p_term': q, 'p_limit': limit});
-      final results = (((raw is List ? raw.first : raw) as Map)['rows']
-          as List<dynamic>? ?? const []);
-      return List<Map<String, dynamic>>.from(results)
-          .map((m) => Product.fromMap(m))
-          .toList();
-    } catch (_) {
-      return [];
-    }
+    return [];
   }
 }
 

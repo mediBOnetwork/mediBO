@@ -185,6 +185,12 @@ class AdaptiveMap extends StatefulWidget {
   /// its screen's backend copy; this file writes no user-facing string.
   final Widget? unavailableState;
 
+  /// CMD #2127 — a PICKER has something to draw even with no pins: the point
+  /// it is centred on. Without this, AdaptiveMap read "no pins" as "nothing to
+  /// plot" and printed map_config's empty sentence INSTEAD of the map, which
+  /// is why #1888's shop-pin field was a grey box with a button under it.
+  final bool centerCounts;
+
   const AdaptiveMap({
     super.key,
     this.pins = const [],
@@ -203,6 +209,7 @@ class AdaptiveMap extends StatefulWidget {
     this.onCenterChanged,
     this.requireProvider,
     this.unavailableState,
+    this.centerCounts = false,
   });
 
   @override
@@ -250,7 +257,8 @@ class _AdaptiveMapState extends State<AdaptiveMap> {
         // CHANGE #754 — unless the caller asked for the copy to OVERLAY, which
         // keeps the one map instance alive across an empty day.
         Widget? empty;
-        if (_allPoints.isEmpty) {
+        if (_allPoints.isEmpty &&
+            !(widget.centerCounts && widget.center != null)) {
           empty = widget.emptyState ?? _configEmpty(cfg);
           if (empty != null) {
             RenderLog.write('c634_map_empty', 1);

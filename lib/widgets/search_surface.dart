@@ -193,10 +193,21 @@ class SearchHeaderBar extends StatefulWidget {
     this.trailing,
     this.bar = SearchBarSpec.fallback,
     this.scanResolver,
+    this.leading,
+    this.trailingBare,
   });
 
   final TextEditingController controller;
   final FocusNode? focusNode;
+
+  /// CMD #2147 — a control LEFT of the field (the sticky bar's m mark, or ←
+  /// on the search screen). It sizes itself, gap included, so an empty one
+  /// costs no width.
+  final Widget? leading;
+
+  /// CMD #2147 — a control RIGHT of the field that brings its own spacing
+  /// (the sticky bell), unlike [trailing] which is always given a gap.
+  final Widget? trailingBare;
 
   /// `search_page().placeholder`. Empty means no hint rather than one invented
   /// here.
@@ -314,6 +325,7 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
           Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x8),
       child: Row(
         children: [
+          if (widget.leading != null) widget.leading!,
           Expanded(
             child: Container(
               height: SearchHeaderBar.fieldHeight,
@@ -404,6 +416,7 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
             SizedBox(width: Ds.space.x12),
             widget.trailing!,
           ],
+          if (widget.trailingBare != null) widget.trailingBare!,
         ],
       ),
     );
@@ -1132,7 +1145,13 @@ class SearchChrome extends StatefulWidget {
     this.surface = 'unknown',
     this.minChars = 2,
     this.idleInBody = false,
+    this.leading,
+    this.trailingBare,
   });
+
+  /// CMD #2147 — see [SearchHeaderBar.leading] / [SearchHeaderBar.trailingBare].
+  final Widget? leading;
+  final Widget? trailingBare;
 
   /// CMD #2044 — the host draws the whole focused-and-empty state in the BODY
   /// ([SearchIdleOverlay]), so the header must not draw the rail a second
@@ -1339,6 +1358,8 @@ class _SearchChromeState extends State<SearchChrome> {
           onSubmit: _submit,
           onClear: widget.onClear,
           trailing: widget.trailing,
+          leading: widget.leading,
+          trailingBare: widget.trailingBare,
         ),
         SearchFilterChips(
           filters: p?.filters ?? SearchFilters.empty,

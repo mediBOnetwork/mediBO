@@ -146,8 +146,12 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
   /// no update pending and an empty cart. This is neither: two booleans read
   /// from the same place the stack reads them, so the feed ends where the
   /// chrome does — and changes only when the chrome itself appears or goes.
+  ///
+  /// CMD #2147 — plus the floating dock's own room: the feed runs behind the
+  /// dock, and its last row scrolls clear of it.
   double _updateBarClearance(BuildContext context) =>
-      bottomStackLiveOf(context, pill: true).height;
+      bottomStackLiveOf(context, pill: true).height +
+      floatingDockClearanceOf(context);
 
   @override
   void didUpdateWidget(covariant HomeSectionsView old) {

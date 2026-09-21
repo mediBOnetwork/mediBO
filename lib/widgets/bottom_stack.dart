@@ -571,7 +571,11 @@ class BottomStackSpacer extends StatelessWidget {
     // inside it owes only the page's own air. Counting the chrome twice is
     // the dead band this avoids.
     if (context.dependOnInheritedWidgetOfExactType<_ChromeCleared>() != null) {
-      return SizedBox(height: extra);
+      // CMD #2147 — plus whatever bottom padding the host handed down that no
+      // scroll view above this box has already applied: a floating host's
+      // chrome, inside a CustomScrollView. A ListView consumes (and removes)
+      // it, so there this is 0 and nothing is counted twice.
+      return SizedBox(height: extra + MediaQuery.paddingOf(context).bottom);
     }
     return BottomStackLive(
         pill: pill,
@@ -593,10 +597,51 @@ class BottomStackSpacer extends StatelessWidget {
 
 /// CMD #2140 — marks a subtree whose host already clears the bottom chrome.
 class _ChromeCleared extends InheritedWidget {
-  const _ChromeCleared({required super.child});
+  const _ChromeCleared({required super.child, this.dock = 0});
+
+  /// CMD #2147 — on a FLOATING host, the room under the bottom stack that
+  /// the floating dock takes (0 on a padded host, which already cleared it).
+  final double dock;
 
   @override
-  bool updateShouldNotify(_ChromeCleared oldWidget) => false;
+  bool updateShouldNotify(_ChromeCleared oldWidget) => oldWidget.dock != dock;
+}
+
+/// CMD #2147 — the floating dock's share of the bottom a page must clear, on
+/// top of [bottomStackLiveOf]'s. 0 anywhere but a floating customer host.
+double floatingDockClearanceOf(BuildContext context) =>
+    context.dependOnInheritedWidgetOfExactType<_ChromeCleared>()?.dock ?? 0;
+
+/// CMD #2147 — a FLOATING page host: the page runs the full height, behind
+/// the View cart pill, the bars and the floating dock, and is TOLD how much of
+/// its bottom they cover through `MediaQuery.padding.bottom` — which a
+/// ListView / GridView applies as scroll padding by itself, and which
+/// [BottomStackSpacer] reads for a CustomScrollView. So the page shows through
+/// around the pill (no solid strip behind it) and its last row still scrolls
+/// clear of everything.
+class _FloatingClearance extends StatelessWidget {
+  const _FloatingClearance({required this.child, required this.pill});
+  final Widget child;
+  final bool pill;
+
+  @override
+  Widget build(BuildContext context) => BottomStackLive(
+        pill: pill,
+        builder: (context, live) {
+          final mq = MediaQuery.of(context);
+          // With `extendBody`, the Scaffold hands its body the dock's height
+          // as bottom padding; that is the part under the stack.
+          final dock = mq.padding.bottom;
+          try {
+            RenderLog.write('c2147_float_clear', (live.height + dock).round());
+          } catch (_) {}
+          return MediaQuery(
+            data: mq.copyWith(
+                padding: mq.padding.copyWith(bottom: dock + live.height)),
+            child: _ChromeCleared(dock: dock, child: child),
+          );
+        },
+      );
 }
 
 /// How much bottom chrome a surface that floats NO cart pill can cover.
@@ -665,11 +710,18 @@ class BottomStackClearance extends StatelessWidget {
           // thing below the page is the system gesture area, and the stack
           // clears it itself, so the host owes the chrome nothing.
           final safeBottom = hasNav ? 0.0 : viewPaddingBottom;
+          // CMD #2147 — under a floating dock (`extendBody`) the body's own
+          // bottom padding IS the dock: a padded host clears it too, and takes
+          // it off its child so nothing inside counts it again.
+          final dock = hasNav ? MediaQuery.paddingOf(context).bottom : 0.0;
           return AnimatedPadding(
             duration: BottomStackLive.motion,
             curve: BottomStackLive.motionCurve,
-            padding: EdgeInsets.only(bottom: live.height + safeBottom),
-            child: _ChromeCleared(child: child),
+            padding: EdgeInsets.only(bottom: live.height + safeBottom + dock),
+            child: MediaQuery.removePadding(
+                context: context,
+                removeBottom: true,
+                child: _ChromeCleared(child: child)),
           );
         },
       );
@@ -699,8 +751,15 @@ Widget staffPageHost(Widget child, {required bool staff}) =>
 /// chrome (bar, plus the pill and its air on a tab that floats one) for the
 /// whole page host, so no tab has to remember — and the spacers that did are
 /// told so ([_ChromeCleared]) and stop counting it a second time.
-Widget shellPageHost(Widget child, {required bool staff, bool pill = false}) =>
-    BottomStackClearance(pill: !staff && pill, child: child);
+///
+/// CMD #2147 — [float]: a customer tab whose scroll views take their bottom
+/// room from `MediaQuery` (Home, Catalogue, Profile) FLOATS instead: the page
+/// shows behind the pill and the dock, and its last row still clears them.
+Widget shellPageHost(Widget child,
+        {required bool staff, bool pill = false, bool float = false}) =>
+    !staff && float
+        ? _FloatingClearance(pill: pill, child: child)
+        : BottomStackClearance(pill: !staff && pill, child: child);
 
 /// The same box for a `CustomScrollView`.
 class BottomStackSliverSpacer extends StatelessWidget {

@@ -40,7 +40,10 @@ class _LocationHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    RenderLog.write('c2125_header', isAdmin ? 'staff' : 'logo_only');
+    RenderLog.write('c2125_header', isAdmin ? 'staff' : 'v2');
+    // CMD #2147 — the customer header v2: ONE row, logo left with the
+    // order-hours pill beside it, the bell right. No WhatsApp, profile or cart.
+    if (!isAdmin) return _CustomerHeaderRow(onLogoTap: onLogoTap, bellKey: bellKey);
     return SafeArea(
       bottom: false,
       child: Container(
@@ -158,6 +161,69 @@ class _LocationHeader extends StatelessWidget {
         }),
       ),
     );
+  }
+}
+
+/// CMD #2147 — the customer header row, [Ds.touch.headerBand] tall (52 from
+/// the backend token): logo + [OrderHoursHeaderPill] on the left, the inbox
+/// bell on the right. The pill is Flexible so a long backend label truncates
+/// before it can push the bell off the row at 320 px.
+class _CustomerHeaderRow extends StatelessWidget {
+  const _CustomerHeaderRow({required this.onLogoTap, this.bellKey});
+  final VoidCallback onLogoTap;
+  final GlobalKey<NotificationBellState>? bellKey;
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+        bottom: false,
+        child: Container(
+          width: double.infinity,
+          height: Ds.touch.headerBand,
+          color: Ds.c.surface,
+          padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+          child: Row(children: [
+            Semantics(
+              identifier: 'c2147_logo',
+              button: true,
+              child: GestureDetector(
+                onTap: onLogoTap,
+                child: const _BrandLockup(),
+              ),
+            ),
+            SizedBox(width: Ds.space.x8),
+            const Flexible(child: OrderHoursHeaderPill()),
+            const Spacer(),
+            Semantics(
+              identifier: 'c2147_bell',
+              child: NotificationBell(key: bellKey),
+            ),
+          ]),
+        ),
+      );
+}
+
+/// The mediBO lock-up: the m mark + wordmark. [markOnly] draws the m alone —
+/// the sticky bar's left edge once the logo row has scrolled away.
+class _BrandLockup extends StatelessWidget {
+  const _BrandLockup({this.markOnly = false});
+  final bool markOnly;
+
+  @override
+  Widget build(BuildContext context) {
+    final mark = Image.asset('assets/images/medibo_logo.png',
+        width: Ds.space.x24 + Ds.space.x4, height: Ds.space.x24 + Ds.space.x4);
+    if (markOnly) return mark;
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      mark,
+      SizedBox(width: Ds.space.x8),
+      Text.rich(TextSpan(
+        style: Ds.t.title.copyWith(fontWeight: FontWeight.w800),
+        children: [
+          TextSpan(text: 'medi', style: TextStyle(color: Ds.c.brandDark)),
+          TextSpan(text: 'BO', style: TextStyle(color: Ds.c.brand)),
+        ],
+      )),
+    ]);
   }
 }
 

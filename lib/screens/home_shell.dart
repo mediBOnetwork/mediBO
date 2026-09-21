@@ -1569,7 +1569,7 @@ class _HomeShellState extends State<HomeShell> {
         RenderLog.write('c629_surface', 'delivery');
         return const DeliveryHomeScreen();
       }
-      if (!deliveryRole.resolved && deliveryRole.loading) {
+      if (deliveryRole.holdShell()) { // CMD #2137 — first paint only
         return const Scaffold(
           backgroundColor: Color(0xFFF5F6F8),
           body: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43))),

@@ -318,6 +318,13 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   bool get _isLoading => _step != _LoadStep.idle;
 
+  // CMD #2137 — a pick that came back to a disposed State. If anything ever
+  // unmounts this screen while the camera/file picker is open, the file the
+  // user just chose is parked here and the NEXT State ingests it on mount,
+  // instead of being dropped on the floor ("first pick lost").
+  static final List<({String name, Uint8List bytes})> _pendingPicks = [];
+  static _BulkUploadScreenState? _liveState;
+
   static const _kSessionKey = 'bulk_upload_session';
   static const _kImageKey = 'bulk_upload_image';
   static const _kImageMetaKey = 'bulk_upload_image_meta';
@@ -366,6 +373,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   @override
   void dispose() {
+    if (_liveState == this) _liveState = null;
     if (_gWaConvertTrigger == _checkAndStartConvert) _gWaConvertTrigger = null;
     if (BulkUploadScreen.onWaOrderPlaced == _doWaFinalize) BulkUploadScreen.onWaOrderPlaced = null;
     _scrollCtrl.dispose();
@@ -375,6 +383,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   @override
   void initState() {
     super.initState();
+    _liveState = this;
     _gWaConvertTrigger = _checkAndStartConvert;
     // Pick up any pending convert that was set before initState ran.
     if (BulkUploadScreen._pendingWaConvert != null) {
@@ -383,8 +392,19 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       });
     } else if (widget.preloadedItems != null) {
       _loadPreloadedItems();
+    } else if (_pendingPicks.isNotEmpty) {
+      // CMD #2137 — a pick handed back to a State that no longer existed.
+      WidgetsBinding.instance.addPostFrameCallback((_) => _drainPendingPicks());
     } else {
       _loadSession();
+    }
+  }
+
+  Future<void> _drainPendingPicks() async {
+    while (mounted && _pendingPicks.isNotEmpty) {
+      final p = _pendingPicks.removeAt(0);
+      try { RenderLog.write('c2137_pick_recovered', p.name); } catch (_) {}
+      await _processPickedFile(p.name, p.bytes);
     }
   }
 
@@ -810,6 +830,18 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   // CHANGE #312: shared ingest entry — both camera and upload feed here.
   Future<void> _processPickedFile(String fileName, Uint8List fileBytes) async {
+    if (!mounted) {
+      // The screen was rebuilt while the picker was open. Hand the file to
+      // the State that replaced this one; park it if none is mounted yet.
+      final live = _liveState;
+      if (live != null && live != this && live.mounted) {
+        try { RenderLog.write('c2137_pick_recovered', fileName); } catch (_) {}
+        return live._processPickedFile(fileName, fileBytes);
+      }
+      _pendingPicks.add((name: fileName, bytes: fileBytes));
+      try { RenderLog.write('c2137_pick_parked', fileName); } catch (_) {}
+      return;
+    }
     try { RenderLog.write('c312_ingest_start', fileName); } catch (_) {}
     // Always start fresh — clear any stale session (including old bbox coordinates)
     // so the previous result never bleeds into the new upload's crop display.
@@ -5307,33 +5339,25 @@ bool _formMatches(String productName, String form) {
 
 // ─── Manual search helpers ────────────────────────────────────────────────────
 
-/// Queries MEDICINE via the priority RPC (falls back to ILIKE).
-/// Returns up to [limit] candidates.
+/// CMD #2137 — the panel's Search asks bulk_search_products(), which ranks
+/// like the storefront search but returns every product in the SAME payload a
+/// matched row gets from bulk_match_items() (pack, sale-price badge,
+/// availability, qty unit, composition). So a searched result — and the
+/// product then picked — prints the identical four lines. No thin fallback:
+/// a row without those fields is exactly the bug this replaced.
 Future<List<Product>> _manualSearchProducts(String query, {int limit = 3}) async {
   final q = query.trim();
   if (q.isEmpty) return [];
   try {
-    final rows = await Supabase.instance.client.rpc('search_medicines_priority', params: {
-      'search_term': q,
-      'category_filter': 'All',
-      'page_offset': 0,
-      'page_limit': limit,
-    });
-    return List<Map<String, dynamic>>.from(rows as List)
-        .map((m) => Product.fromMap(m))
+    final raw = await Supabase.instance.client.rpc('bulk_search_products',
+        params: {'p_term': q, 'p_limit': limit});
+    final rows = ((raw as Map)['rows'] as List<dynamic>? ?? const []);
+    try { RenderLog.write('c2137_search_card_rows', '${rows.length}'); } catch (_) {}
+    return List<Map<String, dynamic>>.from(rows)
+        .map((m) => Product.fromBulkMatch(m))
         .toList();
   } catch (_) {
-    try {
-      final raw = await Supabase.instance.client.rpc('medicine_search_available',
-          params: {'p_term': q, 'p_limit': limit});
-      final results = (((raw is List ? raw.first : raw) as Map)['rows']
-          as List<dynamic>? ?? const []);
-      return List<Map<String, dynamic>>.from(results)
-          .map((m) => Product.fromMap(m))
-          .toList();
-    } catch (_) {
-      return [];
-    }
+    return [];
   }
 }
 

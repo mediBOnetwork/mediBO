@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'models/app_session.dart';
+import 'models/auth_refresh_policy.dart'; // CMD #2137
 import 'screens/auth/google_flow.dart';
 import 'services/gis_auth.dart';
 import 'services/delivery_role_state.dart'; // C629: is this login a delivery account?
@@ -445,17 +446,27 @@ class AuthNotifier extends ChangeNotifier {
         RenderLog.write('auth_email', user.email ?? 'unknown');
         // RULE: on ANY auth change, drop all account state FIRST, then refetch,
         // then render. Never render a session resolved against a different user.
+        // CMD #2137 — decide BEFORE the clear below wipes authUserId: a
+        // refresh of the account already on screen must not blank the shell.
+        final blanks = AuthRefreshPolicy.blanksShell(
+            eventUserId: user.id, renderedUserId: _session.authUserId);
         if (user.id != _session.authUserId) _clearAccountState();
         if (_loading) {
           _initDone = true;
           await _loadSession();
           _loading = false;
           notifyListeners();
-        } else {
+        } else if (blanks) {
           _profileLoading = true;
           notifyListeners();
           await _loadSession();
           _profileLoading = false;
+          notifyListeners();
+        } else {
+          // Same account (a token refresh on resume from the camera/picker):
+          // re-read silently, keep every page mounted.
+          RenderLog.write('c2137_silent_refresh', state.event.name);
+          await _loadSession();
           notifyListeners();
         }
         // CHANGE #210 — fire login notify for customer/supplier only.

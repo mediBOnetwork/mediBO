@@ -384,7 +384,9 @@ void main() {
       expect(find.text('1 Strip'), findsWidgets);
       expect(find.text('₹236.20'), findsWidgets,
           reason: 'price_display verbatim — never mrp × (1 - pct)');
-      expect(find.text('Add to cart'), findsOneWidget,
+      // CHANGED BY CMD #2122 — the approved universal card (image A) adds with a
+      // floating round +; the backend's add word is its tooltip and label.
+      expect(find.byTooltip('Add to cart'), findsOneWidget,
           reason: 'cta_label verbatim, only on the available card');
     });
 

@@ -183,7 +183,7 @@ class CompactProductCard extends StatelessWidget {
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(_padX, _gapL, _padX, 0),
+                padding: const EdgeInsets.only(left: _padX, top: _gapL, right: _padX),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -239,14 +239,22 @@ class CompactProductCard extends StatelessWidget {
       ),
     );
 
+    // CMD #2122 — a stable handle for the browser journeys (Flutter web
+    // renders to canvas; the semantics tree is the only thing a script taps).
+    final tagged = Semantics(
+      identifier: 'product_card',
+      container: true,
+      child: card,
+    );
+
     return RepaintBoundary(
       child: !_showsCompare
-          ? card
+          ? tagged
           : Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                card,
+                tagged,
                 const SizedBox(height: _gapS),
                 SizedBox(
                   height: compareRowH,
@@ -266,8 +274,7 @@ class CompactProductCard extends StatelessWidget {
 /// struck beside it, or — locked — the green PTR pill ([CardSaleLine]) that
 /// opens the backend's own prompt. Every branch is a backend boolean
 /// (`has_mrp`, `strike_mrp`, `price_locked`); the words and amounts are
-/// printed verbatim. The MRP keeps the backend's own caption (`mrp_label`) so
-/// a card never shows a bare struck number without saying what it is.
+/// printed verbatim.
 class CardPriceRow extends StatelessWidget {
   final CardPrice? price;
   final double height;
@@ -279,63 +286,74 @@ class CardPriceRow extends StatelessWidget {
     final p = price;
     if (p == null) return const SizedBox.shrink();
 
-    if (p.priceLocked) {
+    final hasSale = p.priceDisplay.isNotEmpty;
+    final mrpLabel = (!hasSale && p.mrpLabel.isNotEmpty)
+        ? Text(
+            p.mrpLabel,
+            maxLines: 1,
+            style: AppType.t2.copyWith(color: Brand.inkFaint),
+          )
+        : null;
+    final mrp = !p.hasMrp
+        ? null
+        : Text(
+            p.mrpDisplay,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: AppType.t1.copyWith(
+              color: Brand.inkFaint,
+              decoration: p.strikeMrp
+                  ? TextDecoration.lineThrough
+                  : TextDecoration.none,
+              decorationColor: Brand.inkFaint,
+            ),
+          );
+
+    // Locked: the backend's word ("PTR") on the green pill that opens its
+    // prompt, the struck ceiling beside it.
+    if (hasSale && p.priceLocked) {
       return Row(
         children: [
           Flexible(
             child: CardSaleLine(price: p, height: height, showLabel: false),
           ),
+          if (mrp != null) ...[
+            const SizedBox(width: CompactProductCard._gapM),
+            Flexible(child: mrp),
+          ],
         ],
       );
     }
 
-    final hasSale = p.priceDisplay.isNotEmpty;
-    final mrp = !p.hasMrp
-        ? null
-        : Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (p.mrpLabel.isNotEmpty) ...[
-                Text(
-                  p.mrpLabel,
-                  maxLines: 1,
-                  style: AppType.t2.copyWith(color: Brand.inkFaint),
-                ),
-                const SizedBox(width: CompactProductCard._gapS),
-              ],
-              Flexible(
-                child: Text(
-                  p.mrpDisplay,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppType.t1.copyWith(
-                    color: Brand.inkFaint,
-                    decoration: p.strikeMrp
-                        ? TextDecoration.lineThrough
-                        : TextDecoration.none,
-                    decorationColor: Brand.inkFaint,
-                  ),
-                ),
+    // Unlocked: the amount bold, the MRP struck beside it. The caption only
+    // when the MRP stands alone (an `mrp_only` payload, where it IS the
+    // headline) — beside a sale amount the approved design prints the
+    // ceiling bare. On the narrowest rail a long amount scales down rather
+    // than being cut: a price is never truncated.
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.centerLeft,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (hasSale)
+            Text(
+              p.priceDisplay,
+              maxLines: 1,
+              style: AppType.l4.copyWith(
+                color: Ds.c.text,
+                fontWeight: FontWeight.w800,
               ),
-            ],
-          );
-
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        if (hasSale) ...[
-          Text(
-            p.priceDisplay,
-            maxLines: 1,
-            style: AppType.l4.copyWith(
-              color: Ds.c.text,
-              fontWeight: FontWeight.w800,
             ),
-          ),
-          if (mrp != null) const SizedBox(width: CompactProductCard._gapM),
+          if (hasSale && mrp != null)
+            const SizedBox(width: CompactProductCard._gapM),
+          if (mrpLabel != null) ...[
+            mrpLabel,
+            const SizedBox(width: CompactProductCard._gapS),
+          ],
+          ?mrp,
         ],
-        if (mrp != null) Flexible(child: mrp),
-      ],
+      ),
     );
   }
 }
@@ -547,8 +565,26 @@ class _Artwork extends StatelessWidget {
             ],
           ),
         ),
+        // A pre-#2121 payload's sold-out word, bottom-left on the plate.
+        if (view.soldOutChip.isNotEmpty)
+          Positioned(
+            left: _edge,
+            bottom: _edge,
+            right: CompactProductCard.stepperW,
+            child: Row(
+              children: [
+                Flexible(
+                  child: _MiniChip(
+                    text: view.soldOutChip,
+                    bgColor: Ds.c.dangerSoft,
+                    fgColor: Ds.c.danger,
+                  ),
+                ),
+              ],
+            ),
+          ),
         // CMD #791 — the one-tap re-order badge, bottom-left on the plate.
-        if (product.purchase.has)
+        if (product.purchase.has && view.soldOutChip.isEmpty)
           Positioned(
             left: _edge,
             bottom: _edge,
@@ -797,6 +833,7 @@ class _PlusButton extends StatelessWidget {
       ),
     );
     return Semantics(
+      identifier: 'card_plus',
       button: true,
       label: label,
       child: label.isEmpty ? button : Tooltip(message: label, child: button),

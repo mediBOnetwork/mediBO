@@ -501,14 +501,16 @@ void main() {
           reason: 'the PTR is what a pharmacy buys on and it prints verbatim');
       expect(find.text('₹117.19'), findsOneWidget,
           reason: '#1895 — the printed ceiling is back, struck, on every card');
-      expect(find.text('ABBOTT'), findsOneWidget);
+      // CHANGED BY CMD #2122 — the approved universal card (image A) has no company
+      // line, and adds with a floating + whose tooltip is cta_short.
+      expect(find.text('ABBOTT'), findsNothing);
       // CHANGED BY CMD #2118 — ONE pack label per card: the pack SENTENCE on
       // the artwork. The pack-type chip beside ADD said the same thing three
       // centimetres lower and is gone. The sentence is still its own key and
       // nothing here falls back to pack_size.
       expect(find.text('10.0 tablets in 1 strip'), findsOneWidget);
       expect(find.text('Strip'), findsNothing);
-      expect(find.text('ADD'), findsOneWidget,
+      expect(find.byTooltip('ADD'), findsOneWidget,
           reason: 'the add word is the payload\'s cta_short');
     });
   });

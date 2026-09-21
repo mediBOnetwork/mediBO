@@ -31,6 +31,11 @@ class ProductCardView {
   final String footTone;
   final Object? footFg;
 
+  /// A pre-#2121 payload's sold-out word, drawn on the plate as it always
+  /// was. The card object says it in [footLabel] instead, so this is empty
+  /// for a `card` payload.
+  final String soldOutChip;
+
   const ProductCardView({
     required this.unitWord,
     required this.packLine,
@@ -47,6 +52,7 @@ class ProductCardView {
     required this.footLabel,
     required this.footTone,
     this.footFg,
+    this.soldOutChip = '',
   });
 
   static Map<String, dynamic>? _map(Object? raw) =>
@@ -67,26 +73,25 @@ class ProductCardView {
     final offerText = (!hasBadge && p.hasOffer) ? p.offerChip : '';
     final av = p.availability;
     final soldOut = av != null && !av.canAdd;
-    final rxTone = p.rxTone;
     return ProductCardView(
-      unitWord: p.packTypeLabel,
+      // The older payload's rules stand for it (#2118: one pack label, the
+      // sentence; #2040: no Rx class on a card). The unit chip and the Rx dot
+      // arrive with the card object, which says so explicitly.
+      unitWord: '',
       packLine: p.packQtyLabel,
-      hasRx: p.hasRxBadge && p.isRx && p.rxLabel.isNotEmpty,
-      rxLabel: p.rxLabel,
-      rxBg: rxTone?['bg'],
-      rxFg: rxTone?['fg'],
+      hasRx: false,
+      rxLabel: '',
       hasOffer: hasBadge || offerText.isNotEmpty,
       offerLabel: hasBadge ? badge.label : offerText,
       offerBg: hasBadge ? badge.bg : null,
       offerFg: hasBadge ? badge.fg : null,
       price: pricing?.cardPrice,
-      // Sold out, the older payload's own word for it is the line; otherwise
-      // its zone availability sentence.
-      hasFoot: soldOut
-          ? av.ctaLabel.isNotEmpty
-          : (av?.availabilityLabel.isNotEmpty ?? false),
-      footLabel: soldOut ? av.ctaLabel : (av?.availabilityLabel ?? ''),
-      footTone: soldOut ? 'danger' : (av?.availabilityTone ?? ''),
+      // Its zone availability sentence is the foot line; sold out, its own
+      // out-of-stock word also rides on the plate, as it did before #2122.
+      hasFoot: av?.availabilityLabel.isNotEmpty ?? false,
+      footLabel: av?.availabilityLabel ?? '',
+      footTone: av?.availabilityTone ?? '',
+      soldOutChip: soldOut ? av.ctaLabel : '',
     );
   }
 

@@ -1229,6 +1229,9 @@ class CardSaleLine extends StatelessWidget {
     );
 
     return Row(
+      // CMD #2146 — on the grid card the pill hugs its word so the struck MRP
+      // sits right beside it.
+      mainAxisSize: showLabel ? MainAxisSize.max : MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         if (showLabel && price.saleLabel.isNotEmpty) ...[
@@ -1808,20 +1811,23 @@ class _V5PackChip extends StatelessWidget {
         identifier: 'card_pack_chip',
         child: Container(
           height: CompactProductCard.chipH,
-          alignment: Alignment.centerLeft,
           padding: EdgeInsets.symmetric(horizontal: Ds.space.x8),
           decoration: BoxDecoration(
             color: Ds.c.surface,
             borderRadius: BorderRadius.circular(Ds.space.x8),
             border: Border.all(color: Ds.c.divider),
           ),
-          child: Text(
-            label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: AppType.t2.copyWith(
-              color: Ds.c.text,
-              fontWeight: FontWeight.w700,
+          // No alignment: the chip hugs its label instead of spanning the plate.
+          child: Center(
+            widthFactor: 1,
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppType.t2.copyWith(
+                color: Ds.c.text,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
         ),

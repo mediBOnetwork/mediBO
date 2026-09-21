@@ -2,7 +2,8 @@ part of '../home_shell.dart';
 
 // CHANGE #327 · LAYER 1 — sharded out of home_shell.dart.
 //
-// Mobile chrome: the location header, the profile avatar, the cart icon, the search bar and the category chips.
+// Mobile chrome: the location header and the staff profile avatar (CMD #2125 —
+// the customer header is the logo alone; the cart icon is gone).
 //
 // It is a `part`, not a new library, on purpose: nearly every widget in
 // the shell is library-private and used by the others, so extracting them
@@ -39,7 +40,7 @@ class _LocationHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cartItems = AppState.of(context).distinctItems;
+    RenderLog.write('c2125_header', isAdmin ? 'staff' : 'logo_only');
     return SafeArea(
       bottom: false,
       child: Container(
@@ -118,8 +119,10 @@ class _LocationHeader extends StatelessWidget {
               // with the bell: it rides the avatar (ProfileUnreadDot).
               Row(
                 children: [
-                  // LEFT: profile avatar
-                  _MobileProfileAvatar(
+                  // LEFT: staff keep the profile avatar. CMD #2125 — a customer's
+                  // header is the logo alone; the avatar's doors live on the
+                  // Profile tab (the fifth bottom tab) now.
+                  if (isAdmin) _MobileProfileAvatar(
                       onAdminNav: onAdminNav,
                       isSuperAdmin: isSuperAdmin,
                       deletionCount: deletionCount,
@@ -145,11 +148,9 @@ class _LocationHeader extends StatelessWidget {
                   ),
                   const Spacer(),
                   // RIGHT: staff get the date·zone chip that replaced the old
-                  // second row of filters; a customer keeps the cart.
-                  if (isAdmin)
-                    ScopeChip(maxWidth: sideMax)
-                  else
-                    _MobileCartIcon(cartItems: cartItems, onCart: onCart),
+                  // second row of filters. CMD #2125 — a customer gets nothing:
+                  // the floating "View cart" pill is the cart's one door.
+                  if (isAdmin) ScopeChip(maxWidth: sideMax),
                 ],
               ),
             ],
@@ -336,122 +337,6 @@ class _MobileProfileAvatarState extends State<_MobileProfileAvatar> {
               builder: (_, items, __) =>
                   AdminProfileMenuTiles(items: items, nav: nav),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────── Mobile cart icon (right) ────────────────────────────
-
-class _MobileCartIcon extends StatefulWidget {
-  final int cartItems;
-  final VoidCallback onCart;
-  const _MobileCartIcon({required this.cartItems, required this.onCart});
-
-  @override
-  State<_MobileCartIcon> createState() => _MobileCartIconState();
-}
-
-class _MobileCartIconState extends State<_MobileCartIcon>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _badgeCtrl;
-  late final Animation<double> _badgeScale;
-  int _prevCount = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _prevCount = widget.cartItems;
-    _badgeCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 400),
-    );
-    _badgeScale = TweenSequence<double>([
-      TweenSequenceItem(tween: Tween(begin: 1.0, end: 1.4), weight: 30),
-      TweenSequenceItem(tween: Tween(begin: 1.4, end: 0.85), weight: 30),
-      TweenSequenceItem(
-        tween: Tween(begin: 0.85, end: 1.0)
-            .chain(CurveTween(curve: Curves.elasticOut)),
-        weight: 40,
-      ),
-    ]).animate(_badgeCtrl);
-  }
-
-  @override
-  void didUpdateWidget(_MobileCartIcon old) {
-    super.didUpdateWidget(old);
-    if (widget.cartItems != _prevCount) {
-      _badgeCtrl.forward(from: 0);
-      _prevCount = widget.cartItems;
-    }
-  }
-
-  @override
-  void dispose() {
-    _badgeCtrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return PressEffect(
-      scale: 0.92,
-      child: GestureDetector(
-        onTap: widget.onCart,
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            Container(
-              // CMD #2030 — same token target as the avatar; its right edge is
-              // the search bar's right edge.
-              width: Ds.touch.minTarget,
-              height: Ds.touch.minTarget,
-              decoration: BoxDecoration(
-                color: Brand.mint,
-                shape: BoxShape.circle,
-                border: Border.all(color: const Color(0xFFBBF7D0), width: 1.5),
-                boxShadow: [
-                  BoxShadow(
-                    color: Brand.green.withValues(alpha: 0.18),
-                    blurRadius: 6,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: const Icon(Icons.shopping_bag_outlined,
-                  color: Brand.green, size: 20),
-            ),
-            if (widget.cartItems > 0)
-              Positioned(
-                top: -2,
-                right: -2,
-                child: ScaleTransition(
-                  scale: _badgeScale,
-                  child: Container(
-                    width: 18,
-                    height: 18,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFDC2626),
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white, width: 2),
-                    ),
-                    child: Center(
-                      child: Text(
-                        // CHANGE #559: badge string comes from cart_state().
-                        AppState.of(context).badge ?? '',
-                        style: const TextStyle(
-                          fontSize: 9,
-                          fontWeight: FontWeight.w800,
-                          color: Colors.white,
-                          height: 1,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
           ],
         ),
       ),

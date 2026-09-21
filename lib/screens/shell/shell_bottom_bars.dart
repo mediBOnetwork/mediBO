@@ -135,6 +135,21 @@ class _MobileBottomBar extends StatelessWidget {
     );
   }
 
+  static Widget _avatarGlyph(String letter, {required bool active}) =>
+      Container(
+        width: Ds.space.x24,
+        height: Ds.space.x24,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+            color: active ? Ds.c.brand : Ds.c.textSecondary,
+            shape: BoxShape.circle),
+        child: letter.isEmpty
+            ? Icon(Icons.person, size: Ds.space.x16, color: Ds.c.surface)
+            : Text(letter,
+                style: Ds.t.caption.copyWith(
+                    color: Ds.c.surface, fontWeight: FontWeight.w700, height: 1)),
+      );
+
   /// CMD #2080 — the tab's own handle, for a browser journey.
   ///
   /// The name is the registry row's `slot_key`, so re-ordering the bar or
@@ -160,7 +175,12 @@ class _MobileBottomBar extends StatelessWidget {
   Widget _glyph(Map<String, dynamic> slot, CartModel cart,
       {required bool active}) {
     final pair = _kBottomNavGlyphs[(slot['icon_key'] ?? '').toString()];
-    final icon = Icon(pair == null
+    // CMD #2125 — the Profile tab wears the pharmacy's initial, which is
+    // customer_nav()'s own `avatar_label`; an empty one draws the person glyph.
+    final letter = (slot['avatar_label'] ?? '').toString();
+    final icon = slot['icon_key'] == 'avatar'
+        ? _avatarGlyph(letter, active: active)
+        : Icon(pair == null
         ? Icons.widgets_outlined
         : (active ? pair.active : pair.icon));
     switch ((slot['badge_key'] ?? '').toString()) {

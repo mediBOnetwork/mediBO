@@ -180,6 +180,18 @@ class RegistrationLicencesSection extends StatelessWidget {
     );
   }
 
+  /// CMD #2129 — the staff flow's words for a skipped paper ("Customer will
+  /// add"); the customer's own flow sends none and keeps "Don't have".
+  String _skippedLabel(Map<String, dynamic> dontHave) {
+    final staff = _s(dontHave, 'skipped_label');
+    return staff.isNotEmpty ? staff : _s(dontHave, 'label');
+  }
+
+  String _skippedTone(Map<String, dynamic> dontHave) {
+    final t = _s(dontHave, 'skipped_tone');
+    return t.isNotEmpty ? t : 'neutral';
+  }
+
   Widget _row(Map<String, dynamic> row) {
     if (row['act'] is Map) return _rowV3(row);
     final key = _s(row, 'key');
@@ -225,12 +237,14 @@ class RegistrationLicencesSection extends StatelessWidget {
                         onTap: canView ? () => onView(row) : null,
                         child: Text(
                           isSkipped && !hasLocal && state != 'uploaded'
-                              ? _s(dontHave, 'label')
+                              ? _skippedLabel(dontHave)
                               : statusLabel,
                           style: Ds.t.caption.copyWith(
                             color: licTone(hasLocal
                                 ? 'success'
-                                : _s(row, 'status_tone')),
+                                : isSkipped && state != 'uploaded'
+                                    ? _skippedTone(dontHave)
+                                    : _s(row, 'status_tone')),
                             fontWeight: FontWeight.w600,
                           ),
                         ),
@@ -337,9 +351,10 @@ class RegistrationLicencesSection extends StatelessWidget {
     } else if (status.isNotEmpty) {
       lines.addAll([
         SizedBox(height: Ds.space.x4),
-        Text(isSkipped ? _s(dontHave, 'label') : status,
+        Text(isSkipped ? _skippedLabel(dontHave) : status,
             style: Ds.t.caption.copyWith(
-                color: licTone(isSkipped ? 'neutral' : _s(row, 'status_tone')),
+                color: licTone(
+                    isSkipped ? _skippedTone(dontHave) : _s(row, 'status_tone')),
                 fontWeight: FontWeight.w600)),
       ]);
     }

@@ -288,6 +288,7 @@ class CustomerRegistrationForm extends StatefulWidget {
     this.onlyFields,
     this.chips = const {},
     this.notes = const {},
+    this.below = const {},
   });
 
   final CustomerFormController controller;
@@ -307,6 +308,10 @@ class CustomerRegistrationForm extends StatefulWidget {
   /// (`wizard.field_notes`, e.g. "Pre-filled from your login — you can change
   /// it" under WhatsApp). Absent key → nothing drawn.
   final Map<String, String> notes;
+
+  /// CMD #2129 — a surface's own widget under one field (the staff flow's
+  /// live WhatsApp-number verdict). Absent key → nothing drawn.
+  final Map<String, Widget> below;
 
   /// Surface-specific actions (scan documents, fetch location) that sit above
   /// the fields. They write into the same controller.
@@ -471,6 +476,10 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
         if ((widget.notes[key] ?? '').isNotEmpty) ...[
           SizedBox(height: Ds.space.x4),
           Text(widget.notes[key]!, style: Ds.t.caption),
+        ],
+        if (widget.below[key] != null) ...[
+          SizedBox(height: Ds.space.x4),
+          widget.below[key]!,
         ],
       ]),
     );

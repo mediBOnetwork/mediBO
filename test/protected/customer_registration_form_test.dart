@@ -33,7 +33,6 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/widgets/customer_registration_form.dart';
-import 'package:pharma_b2b/widgets/import_customer_sheet.dart';
 
 /// A schema shaped exactly like customer_form_schema(): sections out of
 /// alphabetical order, fields whose sort_order is sparse, one select with the
@@ -284,27 +283,12 @@ void main() {
     expect(ctrl.text('missing_required_message'), 'PAYLOAD MISSING:');
   });
 
-  test('the three surfaces ask for their own schema, and Convert lead says so',
-      () {
-    // Import customer, opened empty or from a file, is the admin schema.
-    expect(const ImportCustomerSheet().schemaContext, 'admin');
-    expect(
-        const ImportCustomerSheet(extracted: {'pharmacy_name': 'X'})
-            .schemaContext,
-        'admin');
-    // A sheet opened with a LEAD prefill is the Convert-lead surface, so the
-    // S Leads call sites get the right title and field list without naming it.
-    expect(
-        const ImportCustomerSheet(prefill: {'pharmacy_name': 'X'})
-            .schemaContext,
-        'lead_convert');
-    // An explicit context always wins.
-    expect(
-        const ImportCustomerSheet(
-                prefill: {'pharmacy_name': 'X'}, formContext: 'admin')
-            .schemaContext,
-        'admin');
-    // Self-signup names its own.
+  // CMD #2129 changed this protected behaviour on purpose: Import customer,
+  // Import by file and Convert lead were separate surfaces with their own
+  // schemas; they are now ONE staff flow (AddCustomerFlow, pinned by
+  // add_customer_flow_test.dart), which reads the self-signup schema so the
+  // staff and the customer fill the very same form.
+  test('self-signup names its own schema', () {
     expect(CustomerFormController(formContext: 'signup').formContext, 'signup');
   });
 

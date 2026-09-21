@@ -231,6 +231,7 @@ begin
   return jsonb_build_object('ok', true, 'field', p_field, 'state', 'ok', 'blocks', false,
     'suffix', public._c('custreg.v4_ok'), 'tone', 'success', 'value', v_n);
 end $$;
+revoke all on function public.custreg_contact_check(text, text, uuid) from public, anon;
 grant execute on function public.custreg_contact_check(text, text, uuid) to authenticated;
 
 -- ── 6. Documents block v4 (full definition) ──

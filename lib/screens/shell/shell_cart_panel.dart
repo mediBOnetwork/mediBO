@@ -206,6 +206,28 @@ class _CartPanelContentState extends State<_CartPanelContent> {
     ));
   }
 
+  // CMD #2139 — the confirm the v2 design asks for, then the same
+  // clear-with-Undo as before.
+  Future<void> _confirmClear() async {
+    final cart = AppState.of(context);
+    final b = v2Map(cart.v2Block['clear']);
+    final pick = await showCartV2Popup(
+        context,
+        {
+          'key': 'clear',
+          'icon': 'delete',
+          'tone': 'danger',
+          'title': b['title'],
+          'body': b['body'],
+          'primary': {'label': b['confirm']},
+          'secondary': {'has': true, 'label': b['keep']},
+        },
+        dangerPrimary: true);
+    if (!mounted || pick != 'primary') return;
+    RenderLog.write('c2139_cart_cleared', '1');
+    await _clearCart();
+  }
+
   @override
   Widget build(BuildContext context) {
     final cart = AppState.of(context);
@@ -366,6 +388,15 @@ class _CartPanelContentState extends State<_CartPanelContent> {
                                               color: Ds.c.textSecondary),
                                         ),
                                       ),
+                                      // CMD #2139 — Cart v2: the red Clear
+                                      // pill is back (no "..."), and it asks
+                                      // first; the backend words both.
+                                      if (cart.hasV2)
+                                        _ClearPill(
+                                          label: v2s(v2Map(cart.v2Block['clear']), 'label'),
+                                          onTap: _confirmClear,
+                                        )
+                                      else if (cart.v2Block.isEmpty)
                                       // CMD #1912 — "..." replaces the red
                                       // Clear Cart pill. Both overlays hang
                                       // off this one anchor.
@@ -479,3 +510,43 @@ class _CartOverflowMenu extends StatelessWidget {
 }
 
 // ─────────────────────── Login panel (web desktop) ───────────────────────
+
+// CMD #2139 — the red Clear pill in the cart header.
+class _ClearPill extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  const _ClearPill({required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        identifier: 'cart_clear',
+        button: true,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: Ds.r.rChip,
+          child: SizedBox(
+            height: Ds.touch.minTarget,
+            child: Center(
+              widthFactor: 1,
+              child: Container(
+                margin: EdgeInsets.only(left: Ds.space.x8),
+                padding: EdgeInsets.symmetric(
+                    horizontal: Ds.space.x12, vertical: Ds.space.x4),
+                decoration: BoxDecoration(
+                  borderRadius: Ds.r.rChip,
+                  border: Border.all(color: Ds.c.danger.withValues(alpha: 0.4)),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.delete_outline,
+                      size: Ds.space.x16, color: Ds.c.danger),
+                  SizedBox(width: Ds.space.x4),
+                  Text(label,
+                      style: Ds.t.caption.copyWith(
+                          color: Ds.c.danger, fontWeight: FontWeight.w600)),
+                ]),
+              ),
+            ),
+          ),
+        ),
+      );
+}

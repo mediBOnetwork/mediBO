@@ -182,6 +182,8 @@ class _BulkQtyPickerDialogState extends State<_BulkQtyPickerDialog> {
         final o = opts[i];
         final v = (o['value'] as num?)?.toInt() ?? 0;
         final isSel = selected != null && v == selected;
+        // CMD #2139 — the backend marks its "Remove" row; it reads as removal.
+        final isRemove = o['remove'] == true;
         return Semantics(
           identifier: 'bulk_qty_option_$v',
           button: true,
@@ -194,11 +196,19 @@ class _BulkQtyPickerDialogState extends State<_BulkQtyPickerDialog> {
               padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
               alignment: Alignment.centerLeft,
               child: Row(children: [
+                if (isRemove) ...[
+                  Icon(Icons.delete_outline,
+                      size: Ds.space.x16, color: Ds.c.danger),
+                  SizedBox(width: Ds.space.x8),
+                ],
                 Expanded(
                   child: Text((o['label'] ?? '').toString(),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: isSel
+                      style: isRemove
+                          ? Ds.t.body.copyWith(
+                              color: Ds.c.danger, fontWeight: FontWeight.w600)
+                          : isSel
                           ? Ds.t.body.copyWith(
                               color: Ds.c.brand, fontWeight: FontWeight.w700)
                           : Ds.t.body),

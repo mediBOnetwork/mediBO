@@ -35,6 +35,10 @@ import 'customer/my_account_screen.dart'; // CMD #1815 — the notice's action
 import '../services/idempotency.dart';
 import '../widgets/registration_sheet.dart';
 import '../widgets/product_row_card.dart';
+import '../widgets/cart_v2_widgets.dart';
+// CMD #2139 — the shell's cart header (a part of home_shell, which is at its
+// line cap) reaches the v2 popup through this file's import.
+export '../widgets/cart_v2_widgets.dart' show v2Map, v2s, showCartV2Popup;
 
 class CartScreen extends StatefulWidget {
   final VoidCallback? onOrderPlaced;
@@ -47,6 +51,7 @@ class CartScreen extends StatefulWidget {
 
 class _CartScreenState extends State<CartScreen> {
   bool _orderInProgress = false;
+  bool _receiveBusy = false; // CMD #2139 — a mode write is in flight
 
   /// CHANGE #472 — the key for the order the buyer is currently committing to.
   /// It is minted on the first attempt and REUSED by every retry, so the
@@ -832,6 +837,142 @@ class _CartScreenState extends State<CartScreen> {
     }
   }
 
+  // ── CMD #2139 — Cart v2 Place order ────────────────────────────────────
+  //
+  // ONE backend question on the tap: `cart_place_block()` answers with the
+  // first blocking popup (not logged in → registration → verification → on
+  // hold → outside area → hours closed) or, when nothing blocks, the confirm
+  // sheet. Every word is its own. An unanswerable question falls back to the
+  // older gate chain in [_placeOrder] rather than placing on a guess.
+  Future<void> _placeOrderV2() async {
+    if (_orderInProgress) return;
+    final cart = AppState.of(context);
+    await _refreshAvailability(cart.lines);
+    if (!mounted) return;
+    if (_blockingLabel != null) {
+      RenderLog.write('c2139_place_unavailable', _blockingLabel!);
+      showToast(context, _blockingLabel!, isError: true);
+      _itemListKey.currentState?.scrollToFirstUnavailable();
+      return;
+    }
+    Map<String, dynamic> blk;
+    try {
+      final raw = await Supabase.instance.client.rpc('cart_place_block');
+      blk = v2Map(raw is List ? (raw.isEmpty ? null : raw.first) : raw);
+    } catch (_) {
+      blk = const {};
+    }
+    if (!mounted) return;
+    if (blk.isEmpty) return _placeOrder();
+
+    if (blk['blocked'] == true) {
+      final pop = v2Map(blk['popup']);
+      RenderLog.write('c2139_place_popup', v2s(pop, 'key'));
+      final pick = await showCartV2Popup(context, pop);
+      if (!mounted || pick == null) return;
+      final act = v2Map(pop[pick]);
+      final route = v2s(act, 'route');
+      if (v2s(act, 'action') == 'route' && route.isNotEmpty) {
+        await Navigator.of(context).pushNamed(route,
+            arguments: <String, dynamic>{'anchor': v2s(pop, 'anchor')});
+        if (!mounted) return;
+        await UserState.read(context).refreshSession();
+        if (mounted) setState(() {});
+      }
+      return;
+    }
+
+    final pick = await showCartV2Popup(context, v2Map(blk['confirm']));
+    if (!mounted || pick != 'primary') return;
+    await _commitV2(blk);
+  }
+
+  Future<void> _commitV2(Map<String, dynamic> blk) async {
+    final cart = AppState.of(context);
+    setState(() => _orderInProgress = true);
+    try {
+      final raw = await Supabase.instance.client
+          .rpc('place_order_v2', params: {'p_client_action_id': _placeKey.key});
+      final res = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
+      if (res is! Map) throw StateError('place_order_v2 returned no payload');
+      final placed = res.cast<String, dynamic>();
+      final refusal = CartOrderRefusal.from(placed);
+      if (refusal.isUnavailableInCart) {
+        await cart.refresh();
+        if (!mounted) return;
+        if (refusal.message.isNotEmpty) {
+          showToast(context, refusal.message, isError: true);
+        }
+        _itemListKey.currentState?.scrollToFirstUnavailable();
+        return;
+      }
+      final orderId = (placed['id'] ?? '').toString();
+      if (orderId.isEmpty) {
+        final msg = (placed['message'] ?? '').toString();
+        showToast(context, msg.isNotEmpty ? msg : c('cart.place_order_failed'),
+            isError: true);
+        await cart.refresh();
+        return;
+      }
+      _placeKey.done();
+      cart.refresh();
+      cart.fetchOrders();
+      RenderLog.write('c2139_order_placed', orderId);
+
+      var paid = false;
+      if (blk['pay_now'] == true) {
+        final code = (placed['order_code'] ?? '').toString();
+        final amount = (placed['amount_display'] ?? '').toString();
+        while (mounted) {
+          await _showCheckoutQr(orderId, code, amount);
+          if (!mounted) return;
+          try {
+            final d = await Supabase.instance.client.rpc('rzp_checkout_state',
+                params: {'p_order_id': orderId, 'p_kind': 'advance'});
+            paid = d is Map && d['paid'] == true;
+          } catch (_) {
+            paid = false;
+          }
+          if (paid || !mounted) break;
+          RenderLog.write('c2139_payment_failed', orderId);
+          final again =
+              await showCartV2Popup(context, v2Map(blk['payment_failed']));
+          if (again != 'primary') break;
+        }
+        if (!mounted) return;
+      }
+
+      Map<String, dynamic> done = const {};
+      try {
+        done = v2Map(await Supabase.instance.client.rpc('cart_v2_placed',
+            params: {'p_order_id': orderId, 'p_paid': paid}));
+      } catch (_) {}
+      if (!mounted) return;
+      if (done['has'] == true) {
+        final pick = await showCartV2Popup(context, done);
+        if (!mounted) return;
+        if (pick == 'primary') widget.onOrderPlaced?.call();
+      } else {
+        widget.onOrderPlaced?.call();
+      }
+    } on PostgrestException catch (e) {
+      if (!mounted) return;
+      final hours = e.message.contains('order_hours_closed');
+      if (hours) {
+        // The hours closed between the check and the insert: ask again, and
+        // the backend's own popup explains it.
+        setState(() => _orderInProgress = false);
+        return _placeOrderV2();
+      }
+      showToast(context, c('cart.place_order_failed'), isError: true);
+    } catch (_) {
+      if (!mounted) return;
+      showToast(context, c('cart.place_order_failed'), isError: true);
+    } finally {
+      if (mounted) setState(() => _orderInProgress = false);
+    }
+  }
+
   // CHANGE #548: the order number is stamped by the SERVER (next_order_number),
   // never derived from the device clock — a client-guessed number could
   // disagree with the stored record.
@@ -1105,6 +1246,77 @@ class _CartScreenState extends State<CartScreen> {
                 nudges: _schemeNudges,
               )
             : null;
+
+        // CMD #2139 — Cart v2 on the phone: CD strip over the list, bill and
+        // receive box after the rows, the swipe tip, then ONE green bar.
+        if (cart.hasV2) {
+          final v2 = cart.v2Block;
+          final tip = v2Map(v2['swipe_tip']);
+          RenderLog.write('c2139_cart_v2',
+              'cd=${v2List(v2Map(v2['cd_strip'])['slides']).length}'
+              ';bill=${v2Map(v2['bill'])['has'] == true ? 1 : 0}'
+              ';receive=${v2s(v2Map(v2['receive']), 'selected')}'
+              ';tip=${tip['show'] == true ? 1 : 0}');
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (banner != null) banner,
+              ?availBanner,
+              ?unresolvedNote,
+              ?unavailableChip,
+              CartCdStrip(block: v2Map(v2['cd_strip'])),
+              Expanded(
+                child: _C2090CartBody(
+                  rows: _ItemList(
+                    key: _itemListKey,
+                    cart: cart,
+                    externalSearchQuery: widget.externalSearchQuery,
+                    viewAsChecked: cart.isViewAs ? _viewAsChecked : null,
+                    onViewAsToggle:
+                        cart.isViewAs ? _toggleViewAsChecked : null,
+                    lineAvailability: _lineAvailability,
+                  ),
+                  rails: rails,
+                  bill: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      CartBillV2(block: v2Map(v2['bill'])),
+                      CartReceiveBox(
+                        block: v2Map(v2['receive']),
+                        busy: _receiveBusy,
+                        onSelect: (m) async {
+                          setState(() => _receiveBusy = true);
+                          await cart.setReceiveMode(m);
+                          if (mounted) setState(() => _receiveBusy = false);
+                        },
+                      ),
+                      SizedBox(height: Ds.space.x16),
+                    ],
+                  ),
+                ),
+              ),
+              if (schemeSection != null) schemeSection,
+              CartSwipeTip(block: tip, onOk: cart.swipeTipSeen),
+              if (cart.isViewAs)
+                _CheckoutBar(
+                  cart: cart,
+                  onPlaceOrder: _placeOrder,
+                  placeOrderLabel: _placeOrderLabel,
+                  onNoticeAction: _openNoticeAction,
+                  selectedTotal: selectedTotal,
+                  selectedSubtotalLine: _selectedSubtotalLine,
+                  availabilityBlocked: blocked,
+                )
+              else
+                CartV2Bar(
+                  block: v2Map(v2['bar']),
+                  busy: _orderInProgress,
+                  onPlace: _placeOrderV2,
+                ),
+            ],
+          );
+        }
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2239,13 +2451,14 @@ class _CartItemCard extends StatelessWidget {
     // CMD #2123 — the row IS the shared card's row variant. The cart hands it
     // the payload's four lines and keeps only what is the cart's own: the ✕
     // (or the ViewAs checkbox), and the blocking chips under the row.
-    return Padding(
-      padding: EdgeInsets.symmetric(vertical: Ds.space.x12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ProductRowCard(
+    // CMD #2139 — Cart v2: no Rx/OTC chip, no ✕, the quantity chip sits on
+    // the price line at badge height, and a left swipe reveals Remove. The
+    // picker is the backend's cart sheet, which ends with "Remove from cart".
+    final v2 = cart.hasV2;
+    final v2Row = v2Map(cart.v2Block['row']);
+    final canSwipe = v2 && viewAsChecked == null && !line.qtyLocked;
+    void removeWithUndo() => c2139RemoveWithUndo(context, cart, line);
+    final card = ProductRowCard(
             surface: 'cart',
             product: p,
             name: line.rows('name').isNotEmpty ? line.rows('name') : p.name,
@@ -2254,10 +2467,14 @@ class _CartItemCard extends StatelessWidget {
             line4: RowQtyChip(
               chip: line.rowMap('qty_chip'),
               locked: line.qtyLocked,
-              onPicked: (qty) => cart.setQuantity(p, qty),
+              compact: v2,
+              pickerRpc: v2 ? v2s(v2Row, 'picker_rpc') : '',
+              onPicked: (qty) =>
+                  v2 && qty == 0 ? removeWithUndo() : cart.setQuantity(p, qty),
             ),
             line4IsControl: true,
-            rx: line.rowMap('rx_chip'),
+            inlineControl: v2,
+            rx: v2 ? const {} : line.rowMap('rx_chip'),
             onOpen: canOpen ? openProduct : null,
             nameOpens: true,
             // CHANGE #324: ViewAs → checkbox; normal → the ✕. Both sit where
@@ -2274,8 +2491,21 @@ class _CartItemCard extends StatelessWidget {
                       visualDensity: VisualDensity.compact,
                     ),
                   )
-                : _C1912Remove(
-                    onTap: () => cart.remove(p), danger: line.unavailable),
+                : v2
+                    ? null
+                    : _C1912Remove(
+                        onTap: () => cart.remove(p), danger: line.unavailable),
+          );
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: v2 ? Ds.space.x8 : Ds.space.x12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          CartSwipeRow(
+            removeLabel: v2s(v2Row, 'remove'),
+            onRemove: canSwipe ? removeWithUndo : null,
+            child: card,
           ),
           // CHANGE #553 / #639 — the backend's verdict for this line, in the
           // backend's own label and colours. It is the one thing still allowed
@@ -2309,6 +2539,38 @@ class _CartItemCard extends StatelessWidget {
   }
 }
 
+
+/// CMD #2139 — remove a line and offer the backend's Undo for its window.
+/// Undo puts the same quantity back through the normal write path.
+void c2139RemoveWithUndo(BuildContext context, CartModel cart, CartLine line) {
+  final row = v2Map(cart.v2Block['row']);
+  final messenger = ScaffoldMessenger.of(context);
+  final product = line.product;
+  final qty = line.quantity;
+  final name = line.rows('name').isNotEmpty ? line.rows('name') : product.name;
+  cart.remove(product);
+  RenderLog.write('c2139_row_removed', product.id);
+  final seconds = (row['undo_s'] as num?)?.toInt() ?? 0;
+  if (seconds <= 0) return;
+  messenger
+    ..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(
+      content: Text(v2s(row, 'removed').replaceAll('{name}', name),
+          maxLines: 1, overflow: TextOverflow.ellipsis),
+      duration: Duration(seconds: seconds),
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+      margin: EdgeInsets.all(Ds.space.x16),
+      action: SnackBarAction(
+        label: v2s(row, 'undo'),
+        textColor: Ds.c.brandSoft,
+        onPressed: () {
+          RenderLog.write('c2139_row_undo', product.id);
+          cart.setQuantity(product, qty);
+        },
+      ),
+    ));
+}
 
 /// The phone breakpoint this screen already splits on. Below it the cart row
 /// is the shared ProductRowCard; at or above it the desktop row is untouched.

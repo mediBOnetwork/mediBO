@@ -1148,6 +1148,31 @@ class CartModel extends ChangeNotifier {
   Map<String, dynamic> get billBlock =>
       (_cart['bill'] as Map?)?.cast<String, dynamic>() ?? const {};
 
+  /// CMD #2139 — Cart v2: CD strip, bill, receive mode, bar, swipe tip and
+  /// every Clear/Remove word, in one block. Empty when the backend has none.
+  Map<String, dynamic> get v2Block =>
+      (_cart['v2'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  bool get hasV2 => v2Block['has'] == true;
+
+  /// Saves Delivery / Self pickup on the cart, then re-reads so the box is
+  /// the server's answer.
+  Future<void> setReceiveMode(String mode) async {
+    try {
+      await _rpc('cart_set_receive_mode', {'p_mode': mode});
+      RenderLog.write('c2139_receive_mode', mode);
+    } catch (_) {}
+    await refresh();
+  }
+
+  /// The swipe tip is shown once; "Got it" records it on the server.
+  Future<void> swipeTipSeen() async {
+    try {
+      await _rpc('cart_swipe_tip_seen');
+    } catch (_) {}
+    await refresh();
+  }
+
   Map<String, dynamic> get railBlock =>
       (_cart['rail'] as Map?)?.cast<String, dynamic>() ?? const {};
 

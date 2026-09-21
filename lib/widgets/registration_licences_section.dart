@@ -100,9 +100,14 @@ class RegistrationLicencesSection extends StatelessWidget {
     final groups = _groups.where((g) => _list(g['rows']).isNotEmpty).toList();
 
     final saved = _s(block, 'saved_note');
+    final progress = _m(block['progress']);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (progress.isNotEmpty) ...[
+          _ProgressCard(progress: progress),
+          SizedBox(height: Ds.space.x24),
+        ],
         if (saved.isNotEmpty) ...[
           Semantics(
             identifier: 'reg_doc_saved_note',
@@ -193,6 +198,7 @@ class RegistrationLicencesSection extends StatelessWidget {
   }
 
   Widget _row(Map<String, dynamic> row) {
+    if (row['circle'] is Map) return _rowV4(row);
     if (row['act'] is Map) return _rowV3(row);
     final key = _s(row, 'key');
     final local = picked[key];
@@ -442,6 +448,179 @@ class RegistrationLicencesSection extends StatelessWidget {
   }
 }
 
+/// CMD #2141 — Registration v4: every row is a thumbnail, the paper's name,
+/// ONE sub-line (Needed / Optional / the number · till date / Uploaded /
+/// Couldn't read — tap to type / Rejected — reason) and ONE circle: ↑ still
+/// needed, ✓ green when it is in, ✎ when it could not be read, ↻ when it was
+/// rejected. "Don't have" sits beside ↑ when the zone allows it. The row and
+/// its circle decide nothing: `sub` and `circle` are the backend's.
+extension _RowV4 on RegistrationLicencesSection {
+  Widget _rowV4(Map<String, dynamic> row) {
+    final key = _s(row, 'key');
+    final circle = _m(row['circle']);
+    final sub = _m(row['sub']);
+    final dontHave = _m(row['dont_have']);
+    final busy = busyKey == key;
+    final isReading = reading.contains(key);
+    final canView = row['can_view'] == true;
+    final tap = switch (_s(circle, 'tap')) {
+      'edit' => () => (onEdit ?? onView)(row),
+      'view' => () => onView(row),
+      _ => () => onUpload(row),
+    };
+    final showDontHave = dontHave['show'] == true &&
+        !isReading &&
+        _s(circle, 'tap') == 'upload' &&
+        row['required'] == true;
+    final subText = isReading
+        ? _s(block, 'reading_label')
+        : (skipped.contains(key) ? _s(dontHave, 'label') : _s(sub, 'text'));
+    final subTone = isReading ? 'success' : (skipped.contains(key) ? 'neutral' : _s(sub, 'tone'));
+
+    return Semantics(
+      identifier: 'reg_lic_row_$key',
+      child: Container(
+        constraints: BoxConstraints(minHeight: Ds.touch.minTarget + Ds.space.x12),
+        padding: EdgeInsets.symmetric(
+            horizontal: Ds.space.x16, vertical: Ds.space.x12),
+        child: Row(children: [
+          if (_s(_m(row['thumb']), 'kind') == 'none' && picked[key] == null)
+            // Nothing on file yet: a quiet "+" tile where the photo will sit.
+            InkWell(
+              onTap: busy ? null : () => onUpload(row),
+              borderRadius: Ds.r.rChip,
+              child: Container(
+                width: Ds.space.x48,
+                height: Ds.space.x48,
+                decoration: BoxDecoration(
+                  color: Ds.c.bg,
+                  borderRadius: Ds.r.rChip,
+                  border: Border.all(color: Ds.c.divider),
+                ),
+                child: Icon(Icons.add, color: Ds.c.textSecondary),
+              ),
+            )
+          else
+            _Thumb(
+              row: row,
+              local: picked[key],
+              url: thumbUrls[key] ?? '',
+              onTap: canView ? () => onView(row) : null,
+            ),
+          Expanded(
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(_s(row, 'label'), style: Ds.t.bodyStrong),
+                  if (subText.isNotEmpty) ...[
+                    SizedBox(height: Ds.space.x4),
+                    Text(subText,
+                        style: Ds.t.caption.copyWith(
+                            color: licTone(subTone),
+                            fontWeight: subTone == 'neutral'
+                                ? FontWeight.w500
+                                : FontWeight.w600)),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          if (showDontHave || skipped.contains(key))
+            Semantics(
+              identifier: 'reg_lic_skip_$key',
+              button: true,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+                child: TextButton(
+                  onPressed: busy ? null : () => onSkipToggle(row),
+                  child: Text(
+                      skipped.contains(key)
+                          ? _s(dontHave, 'undo_label')
+                          : _s(dontHave, 'label'),
+                      style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+                ),
+              ),
+            ),
+          _ActionCircle(
+            action: {'icon': _s(circle, 'icon'), 'tone': _s(circle, 'tone')},
+            done: false,
+            filled: circle['filled'] == true,
+            busy: busy || isReading,
+            docKey: key,
+            onTap: tap,
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+/// CMD #2141 — the ONE card at the top of Documents: "Required papers ·
+/// 2 of 3 done", a bar, and "Still needed: …" — or "Needs your attention ·
+/// 1 paper" once a paper is rejected. The words, tone and fill are the
+/// backend's `progress` block.
+class _ProgressCard extends StatelessWidget {
+  const _ProgressCard({required this.progress});
+
+  final Map<String, dynamic> progress;
+
+  @override
+  Widget build(BuildContext context) {
+    final tone = _s(progress, 'tone');
+    final colour = tone == 'brand' ? Ds.c.brand : licTone(tone);
+    final line = _s(progress, 'line');
+    final fraction = (progress['fraction'] as num?)?.toDouble() ?? 0;
+    return Semantics(
+      identifier: 'reg_doc_progress',
+      child: Container(
+        padding: EdgeInsets.all(Ds.space.x16),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          border: Border.all(
+              color: tone == 'danger' ? Ds.c.danger : Ds.c.divider),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(children: [
+              Expanded(
+                  child: Text(_s(progress, 'title'), style: Ds.t.bodyStrong)),
+              SizedBox(width: Ds.space.x8),
+              Text(_s(progress, 'count_label'),
+                  style: Ds.t.bodyStrong.copyWith(color: colour)),
+            ]),
+            if (progress['bar'] == true) ...[
+              SizedBox(height: Ds.space.x12),
+              ClipRRect(
+                borderRadius: Ds.r.rChip,
+                child: LinearProgressIndicator(
+                  value: fraction.clamp(0, 1),
+                  minHeight: Ds.space.x4,
+                  color: Ds.c.brand,
+                  backgroundColor: Ds.c.divider,
+                ),
+              ),
+            ],
+            if (line.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x8),
+              Text(line,
+                  style: Ds.t.caption.copyWith(
+                      color: licTone(_s(progress, 'line_tone')),
+                      fontWeight: _s(progress, 'line_tone') == 'success'
+                          ? FontWeight.w600
+                          : FontWeight.w400)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// The green band at the top of the step (approved design, Image A): one tap
 /// takes a photo of a licence and the backend fills the numbers.
 class _ScanCard extends StatelessWidget {
@@ -585,10 +764,14 @@ class _ActionCircle extends StatelessWidget {
     required this.busy,
     required this.docKey,
     required this.onTap,
+    this.filled = false,
   });
 
   final Map<String, dynamic> action;
   final bool done;
+
+  /// CMD #2141 — the backend's `circle.filled` (✓ on a green disc).
+  final bool filled;
   final bool busy;
   final String docKey;
   final VoidCallback onTap;
@@ -596,6 +779,7 @@ class _ActionCircle extends StatelessWidget {
   IconData get _icon => switch (_s(action, 'icon')) {
         'check' => Icons.check_rounded,
         'retry' => Icons.refresh_rounded,
+        'edit' => Icons.edit_rounded,
         _ => Icons.arrow_upward_rounded,
       };
 
@@ -603,7 +787,7 @@ class _ActionCircle extends StatelessWidget {
   Widget build(BuildContext context) {
     final tone = done ? 'success' : _s(action, 'tone');
     final colour = tone == 'brand' ? Ds.c.brand : licTone(tone);
-    final filled = done;
+    final filled = done || this.filled;
     return Semantics(
       identifier: 'reg_lic_action_$docKey',
       button: true,

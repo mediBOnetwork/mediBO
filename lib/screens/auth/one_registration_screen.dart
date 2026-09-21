@@ -106,9 +106,17 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
     _load();
   }
 
+  void _onFormChange() {
+    if (mounted) setState(() {});
+  }
+
+  /// CMD #2141 — the wizard's v4 blocks, handed to the shared form as is.
+  bool get _v4 => _s(_wiz, 'layout') == 'v4';
+
   @override
   void dispose() {
     _scroll.dispose();
+    _form?.removeListener(_onFormChange);
     _form?.dispose();
     super.dispose();
   }
@@ -137,7 +145,10 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
       final p = _map(raw is List && raw.isNotEmpty ? raw.first : raw);
       if (!mounted) return;
 
+      final fresh = _form == null;
       final ctrl = _form ?? CustomerFormController(formContext: 'signup');
+      // CMD #2141 — a live-check verdict repaints Continue.
+      if (fresh) ctrl.addListener(_onFormChange);
       final schema = _map(p['schema']);
       if (schema.isNotEmpty) ctrl.seed(schema);
       // Prefill first, then the draft: what the person typed last time wins
@@ -366,23 +377,18 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
         }
         _lic = {..._lic, 'customer_id': cid};
       }
-      final stored = await _upload(cid, key, doc);
-      if (!stored) throw StateError('upload');
+      final stored = await _uploadTo(cid, key, doc);
+      if (stored == null) throw StateError('upload');
       Map<String, dynamic> block = const {};
       if (row['reads'] == true) {
         Map<String, dynamic> fields = const {};
         try {
+          // CMD #2141 — the OCR fix: the paper is already in storage, so the
+          // function fetches it by path. The phone never re-sends the photo
+          // as a multi-megabyte JSON body (that POST was being dropped).
           final res = await Supabase.instance.client.functions.invoke(
             'licence-ocr',
-            body: {
-              'image_base64': base64Encode(doc.bytes),
-              'mime_type': switch (doc.ext) {
-                'pdf' => 'application/pdf',
-                'png' => 'image/png',
-                _ => 'image/jpeg',
-              },
-              'kind': key,
-            },
+            body: {...stored, 'kind': key},
           );
           fields = _map(_map(res.data)['fields']);
         } catch (_) {
@@ -708,6 +714,18 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
     if (ctrl == null || _saving) return;
     final steps = _steps;
     final key = (steps[_step]['key'] ?? '').toString();
+    // CMD #2141 — v4: an empty required box turns red with "Required" right
+    // here, the backend's required list deciding which boxes those are.
+    if (_v4) {
+      final fields = ((steps[_step]['fields'] as List?) ?? const [])
+          .map((e) => e.toString())
+          .toList();
+      if (ctrl.missingAmong(fields).isNotEmpty) {
+        ctrl.revealRequired();
+        return;
+      }
+      if (ctrl.checksBlock) return;
+    }
     setState(() {
       _saving = true;
       _message = '';
@@ -782,14 +800,20 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
     Navigator.of(context).popUntil((r) => r.isFirst);
   }
 
-  Future<bool> _upload(String customerId, String kind, PickedDoc doc) async {
-    if (customerId.isEmpty) return false;
+  Future<bool> _upload(String customerId, String kind, PickedDoc doc) async =>
+      (await _uploadTo(customerId, kind, doc)) != null;
+
+  /// Uploads and registers the file; answers where it landed (bucket, path,
+  /// mime_type) so the reader can fetch it, or null when it did not go up.
+  Future<Map<String, String>?> _uploadTo(
+      String customerId, String kind, PickedDoc doc) async {
+    if (customerId.isEmpty) return null;
     setState(() => _busyDoc = kind);
     try {
       final p = _map(await CustomerDocumentsTransport.call(
           'customer_doc_upload_path',
           {'p_customer_id': customerId, 'p_kind': kind, 'p_ext': doc.ext}));
-      if (p['ok'] != true) return false;
+      if (p['ok'] != true) return null;
       final mime = switch (doc.ext) {
         'pdf' => 'application/pdf',
         'png' => 'image/png',
@@ -806,11 +830,11 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
         'p_bytes': doc.bytes.length,
         'p_pages': _pages[kind] ?? 1,
       });
-      return true;
+      return {'bucket': _s(p, 'bucket'), 'path': stored, 'mime_type': mime};
     } catch (_) {
       // A file that would not go up is not a failed registration: the profile
       // is saved, the paper is simply still owed and the banner says so.
-      return false;
+      return null;
     } finally {
       if (mounted) setState(() => _busyDoc = '');
     }
@@ -1005,7 +1029,12 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
             color: Ds.c.surface,
             padding: EdgeInsets.fromLTRB(pad, Ds.space.x8, pad, Ds.space.x4),
             child: capped(RegistrationProgressBar(
-                steps: steps, current: _step, onJump: _goTo)),
+                steps: steps,
+                current: _step,
+                onJump: _goTo,
+                currentComplete: step['docs'] == true && _lic['show'] == true
+                    ? _lic['required_complete'] == true
+                    : null)),
           ),
           Expanded(
             child: SingleChildScrollView(
@@ -1020,11 +1049,11 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
                     SizedBox(height: Ds.space.x4),
                     Text(_s(step, 'subtitle'), style: Ds.t.bodySecondary),
                   ],
-                  if (_step == 0 && imported['is'] == true && _s(imported, 'note').isNotEmpty)
+                  if (!_v4 && _step == 0 && imported['is'] == true && _s(imported, 'note').isNotEmpty)
                     _note(_s(imported, 'note'), Ds.c.infoSoft),
-                  if (_step == 0 && _p['has_draft'] == true && _s(_p, 'draft_note').isNotEmpty)
+                  if (!_v4 && _step == 0 && _p['has_draft'] == true && _s(_p, 'draft_note').isNotEmpty)
                     _note(_s(_p, 'draft_note'), Ds.c.surface),
-                  if (step['docs'] == true && pending['show'] == true && _s(pending, 'line').isNotEmpty)
+                  if (!_v4 && step['docs'] == true && pending['show'] == true && _s(pending, 'line').isNotEmpty)
                     _note(_s(pending, 'line'), Ds.c.warningSoft),
                   SizedBox(height: Ds.space.x16),
                   // CMD #2127 — the location step is a MAP, not five boxes:
@@ -1056,6 +1085,9 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
                       onlyFields: fields,
                       chips: chips,
                       notes: notes,
+                      v4: _v4 ? _wiz : const {},
+                      checkRpc: (fn, params) =>
+                          OneRegistrationScreen.rpc(fn, params),
                     ),
                   if (step['docs'] == true)
                     Container(
@@ -1123,7 +1155,12 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
                   child: SizedBox(
                     height: Ds.touch.minTarget,
                     child: FilledButton(
-                      onPressed: _saving ? null : _continue,
+                      onPressed: _saving ||
+                              (_v4 && (_form?.checksBlock ?? false) &&
+                                  step['docs'] != true &&
+                                  mapBlock.isEmpty)
+                          ? null
+                          : _continue,
                       child: Text(continueLabel,
                           maxLines: 1, overflow: TextOverflow.ellipsis),
                     ),

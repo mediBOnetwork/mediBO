@@ -73,7 +73,9 @@ FIELD BY FIELD:
   document_number- for any OTHER licence or certificate, its main number verbatim, or "".
   name           - the person or firm the PAN card / FSSAI licence / other paper is issued to, verbatim.
 
-A single paper can carry BOTH a 20B and a 21B number - read the whole page and fill both.`
+A single paper can carry BOTH a 20B and a 21B number - read the whole page and fill both.
+A number that itself names its form (RLF20..., RLF21..., 20B/..., 21B/..., "Form 20" / "Form 21")
+goes under licence_20b (Form 20/20B) or licence_21b (Form 21/21B), verbatim.`
 
 async function getAccessToken(saJson: string): Promise<string> {
   const sa = JSON.parse(saJson) as Record<string, string>
@@ -161,9 +163,37 @@ serve(async (req: Request) => {
     // CMD #2135 — every Documents upload is read by itself; `kind` is the row
     // it belongs to (dl_20b, gst, pan …), kept for the logs only:
     // the prompt reads whatever is printed and the backend maps it per kind.
-    const body = await req.json() as { image_base64?: string; mime_type?: string; kind?: string }
-    const image_base64 = body.image_base64 ?? ''
-    const mime_type = body.mime_type ?? 'image/jpeg'
+    const body = await req.json() as {
+      image_base64?: string; mime_type?: string; kind?: string; bucket?: string; path?: string
+    }
+    let image_base64 = body.image_base64 ?? ''
+    let mime_type = body.mime_type ?? 'image/jpeg'
+    // CMD #2141 — the OCR fix. Registration sent the whole photo as base64 in
+    // the request body; on a phone that POST never reached this function
+    // (only its OPTIONS preflight is in the logs), so a 20B photo was saved
+    // with no number. The paper is already in storage by then, so the app now
+    // sends its bucket + path and the file is fetched HERE with the caller's
+    // own token — storage policies still decide who may read it.
+    if (!image_base64 && body.bucket && body.path) {
+      const base = Deno.env.get('SUPABASE_URL') ?? ''
+      const anon = Deno.env.get('SUPABASE_ANON_KEY') ?? ''
+      const auth = req.headers.get('Authorization') ?? `Bearer ${anon}`
+      const path = body.path.split('/').map(encodeURIComponent).join('/')
+      const obj = await fetch(`${base}/storage/v1/object/authenticated/${encodeURIComponent(body.bucket)}/${path}`,
+        { headers: { Authorization: auth, apikey: anon } })
+      if (!obj.ok) {
+        return new Response(JSON.stringify({ ok: false, error: `storage ${obj.status}`, fields: {} }),
+          { headers: { ...cors, 'Content-Type': 'application/json' } })
+      }
+      const ct = (obj.headers.get('content-type') ?? '').split(';')[0].trim()
+      if (ct === 'application/pdf' || ct.startsWith('image/')) mime_type = ct
+      const bytes = new Uint8Array(await obj.arrayBuffer())
+      let bin = ''
+      for (let i = 0; i < bytes.length; i += 0x8000) {
+        bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+      }
+      image_base64 = btoa(bin)
+    }
     if (!image_base64) {
       return new Response(JSON.stringify({ ok: false, error: 'image_base64 required' }),
         { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } })

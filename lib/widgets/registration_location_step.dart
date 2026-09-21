@@ -75,24 +75,87 @@ class _RegistrationLocationStepState extends State<RegistrationLocationStep> {
   bool _denied = false;
   Timer? _settle;
 
+  // CMD #2135 — the inline form under the map (map.form / resolve().form):
+  // four boxes the shop can type in, and the State + District pickers.
+  Map<String, dynamic> _form = const {};
+  final Map<String, TextEditingController> _ctl = {};
+
   @override
   void initState() {
     super.initState();
     _values = Map<String, String>.from(widget.values);
     _card = _m(widget.map['card']);
+    _form = _m(widget.map['form']);
+    _syncControllers();
     _lat = double.tryParse(_values['latitude'] ?? '');
     _lng = double.tryParse(_values['longitude'] ?? '');
-    // Nothing pinned yet: open on the device, so the common case is one nudge
-    // rather than a hunt across the country.
+    // Nothing pinned yet: ask for the device's location the moment the step
+    // opens, so the pin jumps to the shop. Already pinned: one backend pass
+    // turns an imported spelling ("Raypur") into the official name.
     if (_lat == null || _lng == null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _useDevice());
+    } else if (_form.isNotEmpty) {
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _resolve(geocode: false));
     }
   }
 
   @override
   void dispose() {
     _settle?.cancel();
+    for (final c in _ctl.values) {
+      c.dispose();
+    }
     super.dispose();
+  }
+
+  List<Map<String, dynamic>> get _formFields =>
+      ((_form['fields'] as List?) ?? const []).map(_m).toList();
+
+  /// The boxes show what the backend last answered; a pin move rewrites them.
+  void _syncControllers() {
+    for (final f in _formFields) {
+      final k = (f['key'] ?? '').toString();
+      final v = _values[k] ?? (f['value'] ?? '').toString();
+      final c = _ctl.putIfAbsent(k, () => TextEditingController());
+      if (c.text != v) c.text = v;
+    }
+  }
+
+  void _typed(String key, String text) {
+    _values = {..._values, key: text};
+    widget.onValues({key: text});
+  }
+
+  /// State / District: the official list in a searchable sheet. The choice
+  /// goes back through resolve, which answers with the official spelling and
+  /// re-draws the form (a district from another state is flagged there).
+  Future<void> _pickPlace(String which) async {
+    final state = _values['state'] ?? '';
+    Map<String, dynamic> opts = const {};
+    try {
+      opts = _m(await widget.rpc(
+          which == 'state' ? 'geo_state_options' : 'geo_district_options',
+          which == 'state' ? const {} : {'p_state': state}));
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    final current = (_m(_form[which])['value'] ?? '').toString();
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (ctx) => PlacePickerSheet(
+          block: opts, current: current, semanticsPrefix: 'reg_loc_$which'),
+    );
+    if (picked == null || !mounted) return;
+    final patch = <String, String>{which: picked};
+    setState(() => _values = {..._values, ...patch});
+    widget.onValues(patch);
+    RenderLog.write('c2135_loc_pick', which);
+    await _resolve(geocode: false);
   }
 
   Map<String, dynamic> _m(dynamic v) =>
@@ -174,6 +237,8 @@ class _RegistrationLocationStepState extends State<RegistrationLocationStep> {
           for (final e in vals.entries) e.key: (e.value ?? '').toString()
         };
         _card = _m(res['card']);
+        if (_m(res['form']).isNotEmpty) _form = _m(res['form']);
+        _syncControllers();
         _note = (res['note'] ?? '').toString();
         _tone = (res['tone'] ?? 'neutral').toString();
       });
@@ -221,17 +286,152 @@ class _RegistrationLocationStepState extends State<RegistrationLocationStep> {
   Widget build(BuildContext context) {
     final has = _lat != null && _lng != null;
     RenderLog.write('c2127_loc_step', has ? 'pin' : 'empty');
+    final v3 = _form.isNotEmpty;
+    if (v3) RenderLog.write('c2135_loc_form', 'fields=${_formFields.length}');
+    final filled = (_form['filled_note'] ?? '').toString();
+    // v3: a successful read shows the form's own "filled" banner; only a
+    // failed read (or no permission) keeps the older note line.
+    final showNote = _note.isNotEmpty && (!v3 || _tone != 'success');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _mapCard(has),
-        if (_note.isNotEmpty) ...[
+        if (v3 && filled.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x12),
+          _banner(filled, Ds.c.successSoft),
+        ],
+        if (showNote) ...[
           SizedBox(height: Ds.space.x12),
           _noteLine(),
         ],
         SizedBox(height: Ds.space.x16),
-        _addressCard(),
+        v3 ? _formCard() : _addressCard(),
       ],
+    );
+  }
+
+  Widget _banner(String text, Color bg) => Container(
+        width: double.infinity,
+        padding: EdgeInsets.all(Ds.space.x12),
+        decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rCard),
+        child: Text(text, style: Ds.t.caption),
+      );
+
+  /// CMD #2135 — Shop address, Area / landmark, City + Pincode side by side,
+  /// then State + District pickers side by side. Labels above the boxes.
+  Widget _formCard() {
+    final fields = _formFields;
+    final full = fields.where((f) => f['half'] != true).toList();
+    final half = fields.where((f) => f['half'] == true).toList();
+    return Container(
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        boxShadow: Ds.elevation.e1,
+      ),
+      padding: EdgeInsets.all(Ds.space.x16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final f in full) ...[
+            _labelled(f['label'], _input(f)),
+            SizedBox(height: Ds.space.x16),
+          ],
+          if (half.isNotEmpty) ...[
+            _pair([for (final f in half) _labelled(f['label'], _input(f))]),
+            SizedBox(height: Ds.space.x16),
+          ],
+          _pair([
+            _labelled(_m(_form['state'])['label'], _picker('state')),
+            _labelled(_m(_form['district'])['label'], _picker('district')),
+          ]),
+          if ((_m(_form['district'])['flag_line'] ?? '').toString().isNotEmpty) ...[
+            SizedBox(height: Ds.space.x8),
+            Text((_m(_form['district'])['flag_line']).toString(),
+                style: Ds.t.caption.copyWith(color: Ds.c.warning)),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _pair(List<Widget> kids) => Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (var i = 0; i < kids.length; i++) ...[
+            if (i > 0) SizedBox(width: Ds.space.x12),
+            Expanded(child: kids[i]),
+          ],
+        ],
+      );
+
+  Widget _labelled(dynamic label, Widget child) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text((label ?? '').toString(),
+              style: Ds.t.caption, maxLines: 1, overflow: TextOverflow.ellipsis),
+          SizedBox(height: Ds.space.x4),
+          child,
+        ],
+      );
+
+  Widget _input(Map<String, dynamic> f) {
+    final key = (f['key'] ?? '').toString();
+    final numeric = f['numeric'] == true;
+    return Semantics(
+      identifier: 'reg_loc_$key',
+      textField: true,
+      child: TextField(
+        controller: _ctl.putIfAbsent(key, () => TextEditingController()),
+        keyboardType: numeric ? TextInputType.number : TextInputType.streetAddress,
+        inputFormatters: numeric
+            ? [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(6)]
+            : null,
+        style: Ds.t.body,
+        decoration: const InputDecoration(isDense: false),
+        onChanged: (t) => _typed(key, t.trim()),
+      ),
+    );
+  }
+
+  /// A dropdown-looking box that opens the official list.
+  Widget _picker(String which) {
+    final b = _m(_form[which]);
+    final value = (b['value'] ?? '').toString();
+    final flagged = b['flagged'] == true;
+    final text = value.isNotEmpty
+        ? value
+        : ((flagged ? b['flag_label'] : b['placeholder']) ?? '').toString();
+    return Semantics(
+      identifier: 'reg_loc_pick_$which',
+      button: true,
+      child: InkWell(
+        borderRadius: Ds.r.rButton,
+        onTap: () => _pickPlace(which),
+        child: Container(
+          constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+          padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
+          decoration: BoxDecoration(
+            color: Ds.c.surface,
+            borderRadius: Ds.r.rButton,
+            border: Border.all(color: flagged ? Ds.c.warning : Ds.c.divider),
+          ),
+          child: Row(children: [
+            Expanded(
+              child: Text(text,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: value.isNotEmpty
+                      ? Ds.t.body
+                      : Ds.t.body.copyWith(
+                          color: flagged ? Ds.c.warning : Ds.c.textSecondary)),
+            ),
+            Icon(Icons.arrow_drop_down,
+                color: flagged ? Ds.c.warning : Ds.c.brand),
+          ]),
+        ),
+      ),
     );
   }
 
@@ -524,6 +724,127 @@ class _EditSheet extends StatelessWidget {
               ),
             ]),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// CMD #2135 — the State / District sheet: the backend's title, subtitle
+/// ("Chhattisgarh · 33 districts"), search hint and official rows; the current
+/// one ticked. Filtering is a plain contains-match on what the backend sent —
+/// it narrows the list, it never invents a name.
+class PlacePickerSheet extends StatefulWidget {
+  const PlacePickerSheet({
+    super.key,
+    required this.block,
+    required this.current,
+    this.semanticsPrefix = 'reg_loc_pick',
+  });
+
+  final Map<String, dynamic> block;
+  final String current;
+  final String semanticsPrefix;
+
+  @override
+  State<PlacePickerSheet> createState() => _PlacePickerSheetState();
+}
+
+class _PlacePickerSheetState extends State<PlacePickerSheet> {
+  String _q = '';
+
+  String _s(String k) => (widget.block[k] ?? '').toString();
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = ((widget.block['rows'] as List?) ?? const [])
+        .map((r) => (r is Map ? r['name'] : r).toString())
+        .toList();
+    final q = _q.toLowerCase();
+    final shown = q.isEmpty ? rows : rows.where((r) => r.toLowerCase().contains(q)).toList();
+    final h = MediaQuery.of(context).size.height;
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+        child: SizedBox(
+          height: h * 0.8,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: EdgeInsets.fromLTRB(
+                    Ds.space.x16, Ds.space.x24, Ds.space.x16, Ds.space.x12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(_s('title'), style: Ds.t.title),
+                    if (_s('subtitle').isNotEmpty) ...[
+                      SizedBox(height: Ds.space.x4),
+                      Text(_s('subtitle'), style: Ds.t.bodySecondary),
+                    ],
+                    SizedBox(height: Ds.space.x12),
+                    Semantics(
+                      identifier: '${widget.semanticsPrefix}_search',
+                      textField: true,
+                      child: TextField(
+                        autofocus: false,
+                        style: Ds.t.body,
+                        decoration: InputDecoration(
+                          hintText: _s('search_hint'),
+                          prefixIcon: Icon(Icons.search, color: Ds.c.textSecondary),
+                        ),
+                        onChanged: (t) => setState(() => _q = t.trim()),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: shown.isEmpty
+                    ? Padding(
+                        padding: EdgeInsets.all(Ds.space.x16),
+                        child: Text(_s('empty_label'), style: Ds.t.bodySecondary),
+                      )
+                    : ListView.separated(
+                        padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+                        itemCount: shown.length,
+                        separatorBuilder: (_, _) =>
+                            Divider(height: Ds.space.hairline, color: Ds.c.divider),
+                        itemBuilder: (ctx, i) {
+                          final name = shown[i];
+                          final on = name == widget.current;
+                          return Semantics(
+                            identifier: '${widget.semanticsPrefix}_row_$i',
+                            button: true,
+                            selected: on,
+                            child: InkWell(
+                              onTap: () => Navigator.of(ctx).pop(name),
+                              child: Container(
+                                constraints:
+                                    BoxConstraints(minHeight: Ds.touch.minTarget),
+                                alignment: Alignment.centerLeft,
+                                padding: EdgeInsets.symmetric(vertical: Ds.space.x12),
+                                child: Row(children: [
+                                  if (on) ...[
+                                    Icon(Icons.check, size: Ds.space.x16, color: Ds.c.brand),
+                                    SizedBox(width: Ds.space.x8),
+                                  ],
+                                  Expanded(
+                                    child: Text(name,
+                                        style: on
+                                            ? Ds.t.bodyStrong.copyWith(color: Ds.c.brand)
+                                            : Ds.t.body),
+                                  ),
+                                ]),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
         ),
       ),
     );

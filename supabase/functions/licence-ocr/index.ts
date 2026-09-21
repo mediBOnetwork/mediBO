@@ -30,13 +30,14 @@ function endpoint(projectId: string): string {
 // VERBATIM-ONLY CONTRACT — the same one kyc-verify carries. A licence number
 // that is "corrected" into a plausible one is worse than an empty field: an
 // empty field is handled, an invented one is filed.
-const LICENCE_PROMPT = `You are reading ONE Indian pharmacy statutory document: a DRUG LICENCE
-(Form 20, 21, 20B, 21B or a state equivalent) or a GST REGISTRATION CERTIFICATE (Form GST REG-06).
+const LICENCE_PROMPT = `You are reading ONE Indian pharmacy document: a DRUG LICENCE (Form 20, 21,
+20B, 21B or a state equivalent), a GST REGISTRATION CERTIFICATE (Form GST REG-06), a PAN CARD,
+an FSSAI LICENCE / REGISTRATION, or another shop licence or certificate.
 
 Return STRICT JSON only - no markdown, no code fences, no commentary. Exactly this shape:
 
 {
-  "doc_type": "drug_licence|gst|unknown",
+  "doc_type": "drug_licence|gst|pan|fssai|other|unknown",
   "licence_20b": "",
   "licence_21b": "",
   "licence_number": "",
@@ -45,6 +46,10 @@ Return STRICT JSON only - no markdown, no code fences, no commentary. Exactly th
   "valid_to": "",
   "gstin": "",
   "legal_name": "",
+  "pan": "",
+  "fssai": "",
+  "document_number": "",
+  "name": "",
   "confidence": "high|medium|low"
 }
 
@@ -52,7 +57,7 @@ RULES - copy what is printed. You are a camera, not a database.
   - Never invent, expand, correct, complete or reformat a value. If a field is not printed, return "".
   - Never substitute a parent, group, acquirer or successor company.
   - Never use world knowledge to fill anything in.
-  - If the image is neither a drug licence nor a GST certificate, return {"doc_type":"unknown"} and nothing else.
+  - If the image is not a document at all, return {"doc_type":"unknown"} and nothing else.
 
 FIELD BY FIELD:
   doc_type       - "drug_licence" for a Form 20/21/20B/21B licence, "gst" for a GST REG-06 certificate.
@@ -63,6 +68,10 @@ FIELD BY FIELD:
   valid_from / valid_to - printed validity dates, normalised to yyyy-mm-dd, or "".
   gstin          - the 15-character GSTIN exactly as printed, or "".
   legal_name     - the GST "Legal Name" field, verbatim, or "".
+  pan            - the 10-character PAN exactly as printed on a PAN card, or "".
+  fssai          - the 14-digit FSSAI licence / registration number exactly as printed, or "".
+  document_number- for any OTHER licence or certificate, its main number verbatim, or "".
+  name           - the person or firm the PAN card / FSSAI licence / other paper is issued to, verbatim.
 
 A single paper can carry BOTH a 20B and a 21B number - read the whole page and fill both.`
 
@@ -149,7 +158,10 @@ serve(async (req: Request) => {
     const projectId = (JSON.parse(saJson) as Record<string, string>).project_id
     if (!projectId) throw new Error('project_id missing from GCP_SA_KEY')
 
-    const body = await req.json() as { image_base64?: string; mime_type?: string }
+    // CMD #2135 — every Documents upload is read by itself; `kind` is the row
+    // it belongs to (dl_20b, gst, pan …), kept for the logs only:
+    // the prompt reads whatever is printed and the backend maps it per kind.
+    const body = await req.json() as { image_base64?: string; mime_type?: string; kind?: string }
     const image_base64 = body.image_base64 ?? ''
     const mime_type = body.mime_type ?? 'image/jpeg'
     if (!image_base64) {
@@ -177,7 +189,8 @@ serve(async (req: Request) => {
 
     const s = (k: string) => String(parsed[k] ?? '').trim()
     const docType = s('doc_type') || 'unknown'
-    const anyField = ['licence_20b', 'licence_21b', 'licence_number', 'gstin'].some((k) => s(k) !== '')
+    const anyField = ['licence_20b', 'licence_21b', 'licence_number', 'gstin', 'pan', 'fssai',
+      'document_number'].some((k) => s(k) !== '')
     if (docType === 'unknown' || !anyField) {
       // No sentence is composed here — the caller prints the backend's own
       // "could not read that photo" copy from custreg_licence_scan_review().
@@ -185,7 +198,7 @@ serve(async (req: Request) => {
         { headers: { ...cors, 'Content-Type': 'application/json' } })
     }
 
-    // Shaped for custreg_licence_scan_review(p_fields) and nothing else.
+    // Shaped for custreg_licence_scan_review(p_fields) and custreg_doc_read_save(p_ocr).
     return new Response(JSON.stringify({
       ok: true,
       fields: {
@@ -196,6 +209,12 @@ serve(async (req: Request) => {
         valid_from: s('valid_from'),
         valid_to: s('valid_to'),
         gstin: s('gstin'),
+        licensee_name: s('licensee_name'),
+        legal_name: s('legal_name'),
+        pan: s('pan'),
+        fssai: s('fssai'),
+        document_number: s('document_number'),
+        name: s('name'),
         confidence: s('confidence'),
       },
       ocr_payload: parsed,

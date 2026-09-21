@@ -722,6 +722,11 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
           .toList();
       if (ctrl.missingAmong(fields).isNotEmpty) {
         ctrl.revealRequired();
+        // Continue still AUTO-SAVES what is typed (#2126) — it just stays on
+        // this step, so nothing is lost while the red boxes are filled.
+        unawaited(OneRegistrationScreen.rpc('customer_registration_step_save',
+                {'p_step': key, 'p_values': ctrl.payload(), 'p_goto': key})
+            .catchError((_) => null));
         return;
       }
       if (ctrl.checksBlock) return;

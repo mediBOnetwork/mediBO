@@ -1870,10 +1870,10 @@ class _HomeShellState extends State<HomeShell> {
                 Expanded(
                   // CMD #2070 — a staff page ends ABOVE the update bar; the
                   // reasoning lives with the stack, not twice in the shell.
-                  child: staffPageHost(
+                  child: shellHost(
                     _shellSearchIdleWrap(
                         this, IndexedStack(index: _index, children: pages)),
-                    staff: isAdmin,
+                    staff: isAdmin, page: _index,
                   ),
                 ),
               ],
@@ -1953,7 +1953,7 @@ class _HomeShellState extends State<HomeShell> {
               if (_index == 0) _shellSearchHeader(this),
               Expanded(
                 // CMD #2070 — same clearance on the wide layout, same reason.
-                child: staffPageHost(
+                child: shellHost(
                   NotificationListener<ScrollNotification>(
                     onNotification: (n) {
                       if (_index != 0) return false;
@@ -1966,7 +1966,7 @@ class _HomeShellState extends State<HomeShell> {
                     child: _shellSearchIdleWrap(
                         this, IndexedStack(index: _index, children: pages)),
                   ),
-                  staff: isAdmin,
+                  staff: isAdmin, page: _index,
                 ),
               ),
             ],

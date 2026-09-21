@@ -89,7 +89,13 @@ class ProductRowCard extends StatelessWidget {
 
   /// CMD #2139 — the cart row: three lines, the control sits on the price
   /// line beside the badge, and the photo is exactly those three lines tall.
+  /// CMD #2140 — Bulk Upload v4 uses the same three lines with its state
+  /// badge (not a control) beside the price.
   final bool inlineControl;
+
+  /// The photo's side for the three-line shape.
+  static double threeLineHeight({bool controlLine = false}) =>
+      lineH * 2 + (controlLine ? Ds.touch.minTarget : lineH);
 
   /// One text line of the block.
   static double get lineH => Ds.space.x24;
@@ -103,8 +109,12 @@ class ProductRowCard extends StatelessWidget {
     try {
       RenderLog.write('c2123_row_card_$surface', '1');
     } catch (_) {}
+    // CMD #2140 — the inline line is a 44px control line only when line 4
+    // IS a control (the cart); Bulk Upload's state badge keeps it one text
+    // line, so its photo is exactly three lines tall.
+    final inlineH = line4IsControl ? Ds.touch.minTarget : lineH;
     final side = inlineControl
-        ? lineH * 2 + Ds.touch.minTarget
+        ? lineH * 2 + inlineH
         : blockHeight(controlLine: line4IsControl);
     Widget nameText = Text(
       name,
@@ -145,11 +155,14 @@ class ProductRowCard extends StatelessWidget {
             ),
             if (inlineControl)
               _RowLine(
-                height: Ds.touch.minTarget,
+                height: inlineH,
                 child: Row(children: [
                   Flexible(child: price ?? const SizedBox.shrink()),
                   SizedBox(width: Ds.space.x8),
-                  ?line4,
+                  if (line4IsControl)
+                    ?line4
+                  else if (line4 != null)
+                    Flexible(child: line4!),
                 ]),
               )
             else ...[

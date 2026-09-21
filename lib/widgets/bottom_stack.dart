@@ -565,7 +565,15 @@ class BottomStackSpacer extends StatelessWidget {
   final bool pill;
 
   @override
-  Widget build(BuildContext context) => BottomStackLive(
+  Widget build(BuildContext context) {
+    // CMD #2140 — the shell's page host already holds the chrome's room back
+    // for the whole tab ([BottomStackClearance]), so an end-of-list box
+    // inside it owes only the page's own air. Counting the chrome twice is
+    // the dead band this avoids.
+    if (context.dependOnInheritedWidgetOfExactType<_ChromeCleared>() != null) {
+      return SizedBox(height: extra);
+    }
+    return BottomStackLive(
         pill: pill,
         builder: (context, live) {
           // The same unconditional read the stack itself makes, for the same
@@ -580,6 +588,15 @@ class BottomStackSpacer extends StatelessWidget {
           );
         },
       );
+  }
+}
+
+/// CMD #2140 — marks a subtree whose host already clears the bottom chrome.
+class _ChromeCleared extends InheritedWidget {
+  const _ChromeCleared({required super.child});
+
+  @override
+  bool updateShouldNotify(_ChromeCleared oldWidget) => false;
 }
 
 /// How much bottom chrome a surface that floats NO cart pill can cover.
@@ -652,7 +669,7 @@ class BottomStackClearance extends StatelessWidget {
             duration: BottomStackLive.motion,
             curve: BottomStackLive.motionCurve,
             padding: EdgeInsets.only(bottom: live.height + safeBottom),
-            child: child,
+            child: _ChromeCleared(child: child),
           );
         },
       );
@@ -673,6 +690,17 @@ class BottomStackClearance extends StatelessWidget {
 /// down to its bottom nav.
 Widget staffPageHost(Widget child, {required bool staff}) =>
     staff ? BottomStackClearance(child: child) : child;
+
+/// CMD #2140 — EVERY shell tab ends above the chrome, customer tabs too.
+///
+/// Bulk Upload v4: the registration bar covered "Add matched to cart", the
+/// progress bar and the last review cards, because only Home and Catalogue
+/// ever remembered a [BottomStackSpacer]. The shell now clears the live
+/// chrome (bar, plus the pill and its air on a tab that floats one) for the
+/// whole page host, so no tab has to remember — and the spacers that did are
+/// told so ([_ChromeCleared]) and stop counting it a second time.
+Widget shellPageHost(Widget child, {required bool staff, bool pill = false}) =>
+    BottomStackClearance(pill: !staff && pill, child: child);
 
 /// The same box for a `CustomScrollView`.
 class BottomStackSliverSpacer extends StatelessWidget {

@@ -577,6 +577,45 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
     if (choice == DocViewerChoice.retake) await _upload(row);
   }
 
+  /// CMD #2141 (Om, 22 Sep) — the SAME edit sheet as registration: the photo
+  /// (tap to zoom), the row's own fields with "✓ read" on what came off the
+  /// photo, Retake and Save → custreg_doc_read_edit for this customer.
+  Future<void> _editDoc(Map<String, dynamic> row) async {
+    final cid = _customerId;
+    final key = _s(row, 'key');
+    final edit = _m(row['edit']);
+    if (cid == null || edit.isEmpty) return _view(row);
+    var retake = false;
+    await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (ctx) => DocReadEditSheet(
+        edit: edit,
+        thumb: docEditThumb(row, _thumbUrls[key] ?? '', null),
+        onViewPhoto: () => _view(row),
+        onRetake: () {
+          retake = true;
+          Navigator.of(ctx).pop(false);
+        },
+        onConfirm: (values) async {
+          try {
+            final res = _m(await AddCustomerFlow.rpc('custreg_doc_read_edit',
+                {'p_kind': key, 'p_values': values, 'p_owner': cid}));
+            if (res['ok'] != true) return _s(res, 'message');
+            await _refreshLic();
+            RenderLog.write('c2141_addcust_doc_edit', key);
+            return null;
+          } catch (_) {
+            return _s(_p, 'error_label');
+          }
+        },
+      ),
+    );
+    if (retake && mounted) await _upload(row);
+  }
+
   void _toggleSkip(Map<String, dynamic> row) {
     final key = _s(row, 'key');
     setState(() => _skips.contains(key) ? _skips.remove(key) : _skips.add(key));
@@ -765,6 +804,7 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
                             onView: _view,
                             onSkipToggle: _toggleSkip,
                             onScan: _scanFirst,
+                            onEdit: _editDoc,
                             reading: _docReading,
                           )
                         : const SizedBox.shrink()

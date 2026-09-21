@@ -25,6 +25,7 @@ import 'package:syncfusion_flutter_pdf/pdf.dart';
 
 import '../../design_tokens.dart';
 import '../../services/registration_bar.dart';
+import '../../services/ui_copy.dart';
 import '../../utils/doc_capture.dart';
 import '../../utils/doc_scan.dart';
 import '../../utils/render_log.dart';
@@ -63,6 +64,20 @@ class OneRegistrationScreen extends StatefulWidget {
     return Supabase.instance.client.rpc(fn, params: params);
   }
 
+  /// CMD #2141 — a paper is uploaded (and read) the moment it is picked on
+  /// the v3 AND v4 Documents blocks, the same way staff Add customer does.
+  /// Only v3 was listed before, so on v4 a picked DL 20B showed its thumbnail
+  /// and "Mandatory" and never reached storage.
+  static bool uploadsOnPick(Map<String, dynamic> licencesBlock) =>
+      const {'v3', 'v4'}.contains((licencesBlock['layout'] ?? '').toString());
+
+  /// CMD #2141 — Submit waits for every Mandatory paper: the backend's
+  /// `required_complete`, and no paper still on its way up.
+  static bool docsBlockSubmit(
+          Map<String, dynamic> licencesBlock, bool uploading) =>
+      licencesBlock['show'] == true &&
+      (licencesBlock['required_complete'] != true || uploading);
+
   @override
   State<OneRegistrationScreen> createState() => _OneRegistrationScreenState();
 }
@@ -92,7 +107,7 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
 
   // CMD #2135 — Documents v3: rows whose photo is being read right now.
   final Set<String> _reading = {};
-  bool get _instant => _s(_lic, 'layout') == 'v3';
+  bool get _instant => OneRegistrationScreen.uploadsOnPick(_lic);
 
   // CMD #2126 — the 3-step flow. Where the person is, whether the resume
   // point has been taken from the payload yet, and whether Submit landed.
@@ -996,6 +1011,12 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
     final pending = _map(_p['docs_pending']);
     final imported = _map(_p['imported']);
     final last = _step >= steps.length - 1;
+    // CMD #2141 (Om, 22 Sep) — Mandatory means mandatory: Submit stays off
+    // until every Mandatory paper is in and none is still uploading.
+    final docsGate = last &&
+        step['docs'] == true &&
+        OneRegistrationScreen.docsBlockSubmit(_lic, _reading.isNotEmpty);
+    final gateLine = docsGate ? c('custreg.v4_submit_gate') : '';
     final fields = ((step['fields'] as List?) ?? const [])
         .map((e) => e.toString())
         .toList();
@@ -1133,6 +1154,16 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
               )),
             ),
           ),
+          if (gateLine.isNotEmpty)
+            Padding(
+              padding: EdgeInsets.fromLTRB(pad, Ds.space.x12, pad, 0),
+              child: capped(Semantics(
+                identifier: 'reg_submit_gate',
+                child: Text(gateLine,
+                    textAlign: TextAlign.center,
+                    style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+              )),
+            ),
           Padding(
             padding: EdgeInsets.fromLTRB(pad, Ds.space.x12, pad, Ds.space.x16),
             child: capped(Row(children: [
@@ -1161,6 +1192,7 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
                     height: Ds.touch.minTarget,
                     child: FilledButton(
                       onPressed: _saving ||
+                              docsGate ||
                               (_v4 && (_form?.checksBlock ?? false) &&
                                   step['docs'] != true &&
                                   mapBlock.isEmpty)

@@ -191,8 +191,15 @@ class _CustomerHeaderRow extends StatelessWidget {
               ),
             ),
             SizedBox(width: Ds.space.x8),
-            const Flexible(child: OrderHoursHeaderPill()),
-            const Spacer(),
+            // The pill takes ALL the room between the logo and the bell (a
+            // Spacer beside it would take half, truncating "Open till 12 pm"
+            // at 360 px), and only ellipsizes when there truly is none left.
+            const Expanded(
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: OrderHoursHeaderPill(),
+              ),
+            ),
             Semantics(
               identifier: 'c2147_bell',
               child: NotificationBell(key: bellKey),

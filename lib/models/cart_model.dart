@@ -926,6 +926,17 @@ class CartModel extends ChangeNotifier {
       if (summary['pill'] is Map) {
         render['pill'] = Map<String, dynamic>.from(summary['pill'] as Map);
       }
+      // CMD #2152 — the tap's own Cart v2 block (bill MRP total + item
+      // count, advance in the bill and the green bar, CD strip). Adopted
+      // whole, so every v2 number moves on the tap, not on the next render.
+      if (summary['v2'] is Map) {
+        _cart = {
+          ..._cart,
+          'v2': Map<String, dynamic>.from(summary['v2'] as Map),
+        };
+        RenderLog.write('c2152_v2_live',
+            '${((summary['v2'] as Map)['bar'] as Map?)?['advance_value'] ?? ''}');
+      }
       _cart = {
         ..._cart,
         'render': render,
@@ -1150,27 +1161,79 @@ class CartModel extends ChangeNotifier {
 
   /// CMD #2139 — Cart v2: CD strip, bill, receive mode, bar, swipe tip and
   /// every Clear/Remove word, in one block. Empty when the backend has none.
-  Map<String, dynamic> get v2Block =>
-      (_cart['v2'] as Map?)?.cast<String, dynamic>() ?? const {};
+  ///
+  /// CMD #2152 — two taps land on screen before their write answers, as the
+  /// spec asks: the Delivery / Self pickup choice ([_receivePick]) and the
+  /// swipe tip's "Got it" ([_swipeTipHidden]). Both are overlays on the
+  /// backend's own block; the next payload replaces them.
+  Map<String, dynamic> get v2Block {
+    final raw = (_cart['v2'] as Map?)?.cast<String, dynamic>() ?? const {};
+    if (_receivePick == null && !_swipeTipHidden) return raw;
+    final v2 = Map<String, dynamic>.from(raw);
+    final pick = _receivePick;
+    if (pick != null && v2['receive'] is Map) {
+      v2['receive'] = {
+        ...(v2['receive'] as Map).cast<String, dynamic>(),
+        'selected': pick,
+      };
+    }
+    if (_swipeTipHidden && v2['swipe_tip'] is Map) {
+      v2['swipe_tip'] = {
+        ...(v2['swipe_tip'] as Map).cast<String, dynamic>(),
+        'show': false,
+      };
+    }
+    return v2;
+  }
+
+  /// The mode the customer just tapped, shown until cart_set_receive_mode
+  /// answers (then its `receive` block is adopted and this clears).
+  String? _receivePick;
+
+  /// "Got it" was tapped this session; cart_swipe_tip_seen() makes it stick.
+  bool _swipeTipHidden = false;
 
   bool get hasV2 => v2Block['has'] == true;
 
-  /// Saves Delivery / Self pickup on the cart, then re-reads so the box is
-  /// the server's answer.
+  /// CMD #2152 — Delivery / Self pickup selects INSTANTLY: the tap is on
+  /// screen this frame and cart_set_receive_mode saves in the background. Its
+  /// answer carries the `receive` block, which is adopted as-is — on ok:false
+  /// that block is the server's own (unchanged) choice, so a refused pick
+  /// falls back without a second read.
   Future<void> setReceiveMode(String mode) async {
+    _receivePick = mode;
+    notifyListeners();
+    dynamic res;
     try {
-      await _rpc('cart_set_receive_mode', {'p_mode': mode});
+      res = await _rpc('cart_set_receive_mode', {'p_mode': mode});
       RenderLog.write('c2139_receive_mode', mode);
     } catch (_) {}
-    await refresh();
+    if (_receivePick != mode) return; // a newer tap owns the box now
+    final receive = res is Map ? res['receive'] : null;
+    _receivePick = null;
+    if (receive is Map) {
+      final v2 = Map<String, dynamic>.from(
+          (_cart['v2'] as Map?)?.cast<String, dynamic>() ?? const {});
+      v2['receive'] = Map<String, dynamic>.from(receive);
+      _cart = {..._cart, 'v2': v2};
+      RenderLog.write('c2152_receive_live',
+          '$mode:${res['ok'] == true ? 'saved' : 'refused'}');
+      notifyListeners();
+    } else {
+      await refresh();
+    }
   }
 
-  /// The swipe tip is shown once; "Got it" records it on the server.
+  /// CMD #2152 — "Got it" hides the tip in the same frame and records it with
+  /// cart_swipe_tip_seen() in the background; the server's flag is what keeps
+  /// it gone after a reload. No re-read: nothing else on the page changed.
   Future<void> swipeTipSeen() async {
+    _swipeTipHidden = true;
+    notifyListeners();
+    RenderLog.write('c2152_swipe_tip', 'hidden');
     try {
       await _rpc('cart_swipe_tip_seen');
     } catch (_) {}
-    await refresh();
   }
 
   Map<String, dynamic> get railBlock =>

@@ -51,7 +51,6 @@ class CartScreen extends StatefulWidget {
 
 class _CartScreenState extends State<CartScreen> {
   bool _orderInProgress = false;
-  bool _receiveBusy = false; // CMD #2139 — a mode write is in flight
 
   /// CHANGE #472 — the key for the order the buyer is currently committing to.
   /// It is minted on the first attempt and REUSED by every retry, so the
@@ -1151,12 +1150,17 @@ class _CartScreenState extends State<CartScreen> {
     final bill = CartBillSummary.fromPayload(cart.billBlock);
     void openProduct(Product p) =>
         Navigator.of(context).pushNamed('/product/${p.id}');
-    final rail = CartWishlistRail.fromPayload(cart.railBlock, openProduct);
+    // CMD #2152 — a heart tap on a rail card re-reads the cart, so the
+    // Wishlist rail is the backend's answer the moment the toggle lands.
+    void wishChanged() => unawaited(cart.refresh());
+    final rail = CartWishlistRail.fromPayload(cart.railBlock, openProduct,
+        onWishChanged: wishChanged);
     // CMD #2087 — the SECOND rail: what pharmacies buy together with this
     // basket, off the same order-history evidence the companion strip reads.
     // It is one more `{has, title, items}` block, so it is the same widget.
-    final alsoLike =
-        CartWishlistRail.fromPayload(cart.alsoLikeBlock, openProduct);
+    final alsoLike = CartWishlistRail.fromPayload(
+        cart.alsoLikeBlock, openProduct,
+        onWishChanged: wishChanged);
     if (bill != null) RenderLog.write('c2014_bill_rows', bill.rows.length);
     if (rail != null) RenderLog.write('c2014_rail_cards', rail.items.length);
     if (alsoLike != null) {
@@ -1264,9 +1268,11 @@ class _CartScreenState extends State<CartScreen> {
               ?availBanner,
               ?unresolvedNote,
               ?unavailableChip,
-              CartCdStrip(block: v2Map(v2['cd_strip'])),
               Expanded(
                 child: _C2090CartBody(
+                  // CMD #2152 — the CD strip is the first block of the page
+                  // scroll: it scrolls away with the rows, never pinned.
+                  top: CartCdStrip(block: v2Map(v2['cd_strip'])),
                   rows: _ItemList(
                     key: _itemListKey,
                     cart: cart,
@@ -1284,12 +1290,9 @@ class _CartScreenState extends State<CartScreen> {
                       CartBillV2(block: v2Map(v2['bill'])),
                       CartReceiveBox(
                         block: v2Map(v2['receive']),
-                        busy: _receiveBusy,
-                        onSelect: (m) async {
-                          setState(() => _receiveBusy = true);
-                          await cart.setReceiveMode(m);
-                          if (mounted) setState(() => _receiveBusy = false);
-                        },
+                        // CMD #2152 — selects in this frame; the save runs
+                        // in the background (CartModel.setReceiveMode).
+                        onSelect: (m) => unawaited(cart.setReceiveMode(m)),
                       ),
                       SizedBox(height: Ds.space.x16),
                     ],
@@ -1865,11 +1868,15 @@ class C2090StillPhysics extends ScrollPhysics {
 /// rails is never stale: a lazily-dropped rows sliver was a layout the
 /// compensation could not see.
 class _C2090CartBody extends StatefulWidget {
+  /// CMD #2152 — a block ABOVE the rows inside the same scroll (the CD
+  /// strip). Constant height, so it sits outside the rails' probe.
+  final Widget? top;
   final Widget rows;
   final List<Widget> rails;
   final Widget? bill;
 
   const _C2090CartBody({
+    this.top,
     required this.rows,
     required this.rails,
     this.bill,
@@ -1900,6 +1907,7 @@ class _C2090CartBodyState extends State<_C2090CartBody> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
+          ?widget.top,
           // Everything the rails sit under. Its height IS the compensation.
           _C2090AboveProbe(anchor: _anchor, child: widget.rows),
           ...widget.rails,

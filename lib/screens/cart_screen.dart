@@ -963,7 +963,12 @@ class _CartScreenState extends State<CartScreen> {
         setState(() => _orderInProgress = false);
         return _placeOrderV2();
       }
-      showToast(context, c('cart.place_order_failed'), isError: true);
+      // CMD #2162 — a refusal the backend raised with its own words
+      // (order_gate_blocked, empty_cart …) carries them in the hint; show
+      // those, never the generic line.
+      final said = (e.hint ?? '').trim();
+      showToast(context, said.isNotEmpty ? said : c('cart.place_order_failed'),
+          isError: true);
     } catch (_) {
       if (!mounted) return;
       showToast(context, c('cart.place_order_failed'), isError: true);
@@ -2566,6 +2571,11 @@ void c2139RemoveWithUndo(BuildContext context, CartModel cart, CartLine line) {
       content: Text(v2s(row, 'removed').replaceAll('{name}', name),
           maxLines: 1, overflow: TextOverflow.ellipsis),
       duration: Duration(seconds: seconds),
+      // CMD #2162 — a SnackBar with an action PERSISTS by default on this
+      // Flutter (persist = action != null), so the bar never went away. It
+      // must fade after the backend's undo window like any other snack; a
+      // new remove replaces it (hideCurrentSnackBar above) and restarts it.
+      persist: false,
       behavior: SnackBarBehavior.floating,
       shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
       margin: EdgeInsets.all(Ds.space.x16),

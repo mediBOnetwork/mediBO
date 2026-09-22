@@ -69,8 +69,15 @@ IconData v2Icon(String name) {
 
 // ── CD strip ────────────────────────────────────────────────────────────────
 
-/// Every active discount slab, one at a time, sliding on the backend's
+/// Every active discount slab, one at a time, rolling on the backend's
 /// interval. `has:false` draws nothing.
+///
+/// CMD #2162 — one slide is ONE row: the orange pill carries `lead` ("5% CD")
+/// and the text carries `rest` only, so the discount is never said twice.
+/// Every `interval_ms` the whole row rolls: the current row moves up and fades
+/// out while the next rises from below and fades in, together, over
+/// [kCdRollMs]. Everything is clipped inside the strip. Touch pauses the roll,
+/// reduced motion cross-fades in place, and a single slab never moves.
 class CartCdStrip extends StatefulWidget {
   final Map<String, dynamic> block;
   const CartCdStrip({super.key, required this.block});
@@ -79,18 +86,23 @@ class CartCdStrip extends StatefulWidget {
   State<CartCdStrip> createState() => _CartCdStripState();
 }
 
+/// CMD #2162 — how long one roll between two slides lasts.
+const int kCdRollMs = 400;
+
 class _CartCdStripState extends State<CartCdStrip>
     with SingleTickerProviderStateMixin {
   Timer? _t;
   int _i = 0;
+  int? _prev;
+  bool _held = false;
 
-  /// CMD #2152 — the cash-discount burst: the badge rises from below, a ring
-  /// bursts around it, then it floats up and fades out at the top. One
-  /// controller, [kCdBurstMs] long, restarted each time the discount shown
-  /// appears or changes. It runs on the display's own vsync (120 Hz panels
-  /// get 120 frames a second).
-  late final AnimationController _burst = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: kCdBurstMs));
+  late final AnimationController _roll = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: kCdRollMs))
+    ..addStatusListener((st) {
+      if (st == AnimationStatus.completed && mounted) {
+        setState(() => _prev = null);
+      }
+    });
 
   List<Map<String, dynamic>> get _slides => v2List(widget.block['slides']);
 
@@ -100,44 +112,43 @@ class _CartCdStripState extends State<CartCdStrip>
   void initState() {
     super.initState();
     _arm();
-    if (_showing) _fire();
   }
 
   @override
   void didUpdateWidget(CartCdStrip old) {
     super.didUpdateWidget(old);
-    final was = old.block['has'] == true && v2List(old.block['slides']).isNotEmpty;
     if (_i >= _slides.length) _i = 0;
-    // Appeared, or the backend sent a different discount list.
-    if (_showing &&
-        (!was || '${old.block['slides']}' != '${widget.block['slides']}')) {
-      _fire();
+    if (_prev != null && _prev! >= _slides.length) _prev = null;
+    if (old.block['interval_ms'] != widget.block['interval_ms'] ||
+        v2List(old.block['slides']).length != _slides.length) {
+      _arm();
     }
-  }
-
-  void _fire() {
-    RenderLog.write('c2152_cd_burst', '${_i % (_slides.isEmpty ? 1 : _slides.length)}');
-    _burst.forward(from: 0);
   }
 
   void _arm() {
     _t?.cancel();
     final ms = (widget.block['interval_ms'] as num?)?.toInt() ?? 0;
-    if (ms <= 0) return;
-    _t = Timer.periodic(Duration(milliseconds: ms), (_) {
-      if (!mounted) return;
-      final n = _slides.length;
-      if (n > 1) {
-        setState(() => _i = (_i + 1) % n);
-        _fire();
-      }
+    // One slab (or none) is static: no timer at all.
+    if (ms <= 0 || _slides.length < 2) return;
+    _t = Timer.periodic(Duration(milliseconds: ms), (_) => _next());
+  }
+
+  void _next() {
+    if (!mounted || _held || !_showing) return;
+    final n = _slides.length;
+    if (n < 2) return;
+    setState(() {
+      _prev = _i;
+      _i = (_i + 1) % n;
     });
+    RenderLog.write('c2162_cd_roll', '$_i');
+    _roll.forward(from: 0);
   }
 
   @override
   void dispose() {
     _t?.cancel();
-    _burst.dispose();
+    _roll.dispose();
     super.dispose();
   }
 
@@ -147,196 +158,124 @@ class _CartCdStripState extends State<CartCdStrip>
     if (!_showing) {
       return const SizedBox.shrink();
     }
-    final s = slides[_i % slides.length];
     final ink = Ds.c.warning;
+    final reduce = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final cur = _i % slides.length;
     return Semantics(
       identifier: 'cart_cd_strip',
-      child: Container(
-        margin: EdgeInsets.fromLTRB(
-            Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x4),
-        padding: EdgeInsets.symmetric(
-            horizontal: Ds.space.x12, vertical: Ds.space.x8),
-        decoration: BoxDecoration(
-          color: Ds.c.warningSoft,
-          borderRadius: Ds.r.rButton,
-          border: Border.all(color: ink.withValues(alpha: 0.35)),
-        ),
-        child: Row(children: [
-          CdBurstBadge(
-            progress: _burst,
-            label: v2s(s, 'lead'),
-            ink: ink,
+      child: Listener(
+        onPointerDown: (_) => _held = true,
+        onPointerUp: (_) => _held = false,
+        onPointerCancel: (_) => _held = false,
+        child: Container(
+          margin: EdgeInsets.fromLTRB(
+              Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x4),
+          padding: EdgeInsets.symmetric(
+              horizontal: Ds.space.x12, vertical: Ds.space.x8),
+          decoration: BoxDecoration(
+            color: Ds.c.warningSoft,
+            borderRadius: Ds.r.rButton,
+            border: Border.all(color: ink.withValues(alpha: 0.35)),
           ),
-          SizedBox(width: Ds.space.x12),
-          Expanded(
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 300),
-              transitionBuilder: (child, anim) => SlideTransition(
-                position: Tween<Offset>(
-                        begin: const Offset(0, 0.6), end: Offset.zero)
-                    .animate(anim),
-                child: FadeTransition(opacity: anim, child: child),
-              ),
-              child: Text.rich(
-                TextSpan(children: [
-                  TextSpan(
-                      text: v2s(s, 'lead'),
-                      style: const TextStyle(fontWeight: FontWeight.w700)),
-                  const TextSpan(text: ' '),
-                  TextSpan(text: v2s(s, 'rest')),
-                ]),
-                key: ValueKey(_i),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Ds.t.caption.copyWith(color: Ds.c.text),
+          child: Row(children: [
+            Expanded(
+              // Clipped: a rolling row never paints past the strip's edge.
+              child: ClipRect(
+                child: AnimatedBuilder(
+                  animation: _roll,
+                  builder: (context, _) {
+                    final t = Curves.easeInOut.transform(_roll.value);
+                    final moving = _prev != null && _roll.isAnimating;
+                    return Stack(children: [
+                      if (moving)
+                        Positioned.fill(
+                          child: CdRollRow(
+                            slide: slides[_prev!],
+                            ink: ink,
+                            dy: reduce ? 0 : -t,
+                            opacity: 1 - t,
+                          ),
+                        ),
+                      CdRollRow(
+                        key: ValueKey('cd_row_$cur'),
+                        slide: slides[cur],
+                        ink: ink,
+                        dy: moving && !reduce ? 1 - t : 0,
+                        opacity: moving ? t : 1,
+                      ),
+                    ]);
+                  },
+                ),
               ),
             ),
+            SizedBox(width: Ds.space.x8),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (var k = 0; k < slides.length; k++)
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: kCdRollMs),
+                    curve: Curves.easeInOut,
+                    margin: EdgeInsets.only(left: k == 0 ? 0 : Ds.space.x4 / 2),
+                    width: k == cur ? Ds.space.x16 : Ds.space.x4,
+                    height: Ds.space.x4,
+                    decoration: BoxDecoration(
+                      color: k == cur ? ink : ink.withValues(alpha: 0.35),
+                      borderRadius: Ds.r.rChip,
+                    ),
+                  ),
+              ],
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// CMD #2162 — one CD slide: the orange `lead` pill, then `rest`. [dy] is a
+/// fraction of the row's own height (−1 = one row up, +1 = one row below),
+/// so the pill and the text always travel together.
+class CdRollRow extends StatelessWidget {
+  final Map<String, dynamic> slide;
+  final Color ink;
+  final double dy;
+  final double opacity;
+  const CdRollRow(
+      {super.key,
+      required this.slide,
+      required this.ink,
+      this.dy = 0,
+      this.opacity = 1});
+
+  @override
+  Widget build(BuildContext context) {
+    return FractionalTranslation(
+      translation: Offset(0, dy),
+      child: Opacity(
+        opacity: opacity.clamp(0.0, 1.0),
+        child: Row(children: [
+          Container(
+            padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x8, vertical: Ds.space.x4),
+            decoration: BoxDecoration(color: ink, borderRadius: Ds.r.rChip),
+            child: Text(v2s(slide, 'lead'),
+                maxLines: 1,
+                softWrap: false,
+                style: Ds.t.caption.copyWith(
+                    color: Ds.c.surface, fontWeight: FontWeight.w700)),
           ),
           SizedBox(width: Ds.space.x8),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (var k = 0; k < slides.length; k++)
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 250),
-                  margin: EdgeInsets.only(left: k == 0 ? 0 : Ds.space.x4 / 2),
-                  width: k == _i % slides.length ? Ds.space.x16 : Ds.space.x4,
-                  height: Ds.space.x4,
-                  decoration: BoxDecoration(
-                    color: k == _i % slides.length
-                        ? ink
-                        : ink.withValues(alpha: 0.35),
-                    borderRadius: Ds.r.rChip,
-                  ),
-                ),
-            ],
+          Expanded(
+            child: Text(v2s(slide, 'rest'),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Ds.t.caption.copyWith(color: Ds.c.text)),
           ),
         ]),
       ),
     );
   }
-}
-
-/// CMD #2152 — how long one cash-discount burst lasts.
-const int kCdBurstMs = 900;
-
-/// The CD strip's badge and its burst. At rest it is the % tile. When
-/// [progress] runs (0→1 over [kCdBurstMs]) a pill carrying the backend's
-/// [label] rises from below (0–0.28), a ring bursts around it (0.18–0.62),
-/// then it floats up and fades out at the top (0.62–1). Nothing here is
-/// laid out differently while it plays — the pill and ring are painted over
-/// the tile, so the strip never changes height.
-class CdBurstBadge extends StatelessWidget {
-  final Animation<double> progress;
-  final String label;
-  final Color ink;
-  const CdBurstBadge(
-      {super.key, required this.progress, required this.label, required this.ink});
-
-  /// Phase edges, as fractions of the burst.
-  static const double riseEnd = 0.28;
-  static const double ringStart = 0.18;
-  static const double ringEnd = 0.62;
-  static const double floatStart = 0.62;
-
-  static double _seg(double t, double a, double b) =>
-      ((t - a) / (b - a)).clamp(0.0, 1.0);
-
-  @override
-  Widget build(BuildContext context) {
-    final tile = Ds.space.x24;
-    return SizedBox(
-      width: tile,
-      height: tile,
-      child: AnimatedBuilder(
-        animation: progress,
-        builder: (context, _) {
-          final t = progress.value;
-          final playing = progress.isAnimating || (t > 0 && t < 1);
-          final rise = Curves.easeOutBack.transform(_seg(t, 0, riseEnd));
-          final ring = Curves.easeOut.transform(_seg(t, ringStart, ringEnd));
-          final fl = Curves.easeIn.transform(_seg(t, floatStart, 1));
-          final travel = Ds.space.x24;
-          final dy = (1 - rise) * travel - fl * travel;
-          final pillOpacity = (_seg(t, 0, riseEnd * 0.6) * (1 - fl)).clamp(0.0, 1.0);
-          return Stack(
-            clipBehavior: Clip.none,
-            alignment: Alignment.center,
-            children: [
-              Container(
-                width: tile,
-                height: tile,
-                decoration:
-                    BoxDecoration(color: ink, borderRadius: Ds.r.rButton),
-                alignment: Alignment.center,
-                child: Icon(Icons.percent,
-                    size: Ds.space.x16, color: Ds.c.surface),
-              ),
-              if (playing && ring > 0 && ring < 1)
-                IgnorePointer(
-                  child: CustomPaint(
-                    size: Size.square(tile),
-                    painter: _CdRingPainter(
-                        progress: ring, color: ink, base: tile / 2),
-                  ),
-                ),
-              if (playing && label.isNotEmpty && pillOpacity > 0)
-                Positioned(
-                  left: 0,
-                  top: dy - Ds.space.x4,
-                  child: IgnorePointer(
-                    child: Opacity(
-                      opacity: pillOpacity,
-                      child: Transform.scale(
-                        scale: 0.8 + 0.2 * rise,
-                        alignment: Alignment.centerLeft,
-                        child: Container(
-                          padding: EdgeInsets.symmetric(
-                              horizontal: Ds.space.x8,
-                              vertical: Ds.space.x4),
-                          decoration: BoxDecoration(
-                            color: ink,
-                            borderRadius: Ds.r.rChip,
-                            boxShadow: Ds.elevation.e2,
-                          ),
-                          child: Text(label,
-                              maxLines: 1,
-                              softWrap: false,
-                              style: Ds.t.caption.copyWith(
-                                  color: Ds.c.surface,
-                                  fontWeight: FontWeight.w700)),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _CdRingPainter extends CustomPainter {
-  final double progress;
-  final Color color;
-  final double base;
-  _CdRingPainter({required this.progress, required this.color, required this.base});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final r = base * (1 + 1.6 * progress);
-    final paint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = (1 - progress) * base * 0.35 + 1
-      ..color = color.withValues(alpha: (1 - progress) * 0.8);
-    canvas.drawCircle(size.center(Offset.zero), r, paint);
-  }
-
-  @override
-  bool shouldRepaint(_CdRingPainter old) =>
-      old.progress != progress || old.color != color || old.base != base;
 }
 
 // ── Swipe-to-reveal Remove ──────────────────────────────────────────────────
@@ -813,25 +752,79 @@ class CartReceiveBox extends StatelessWidget {
               ),
             ),
           ]),
-          SizedBox(height: Ds.space.x8),
-          Container(
-            width: double.infinity,
-            padding: EdgeInsets.symmetric(
-                horizontal: Ds.space.x8, vertical: Ds.space.x4),
-            decoration: BoxDecoration(
-                color: Ds.c.warningSoft, borderRadius: Ds.r.rButton),
-            child: Row(children: [
-              Icon(Icons.payments_outlined,
-                  size: Ds.space.x12, color: Ds.c.warning),
-              SizedBox(width: Ds.space.x8),
-              Expanded(
-                child: Text(v2s(b, 'note'),
-                    style: Ds.t.caption.copyWith(
-                        color: Ds.c.text, fontWeight: FontWeight.w600)),
-              ),
-            ]),
-          ),
+          // CMD #2162 — two lines: the green advance badge, then the orange
+          // remaining-due badge. Words are the backend's.
+          ...CartModeBadges.lines(b),
         ]),
+      );
+}
+
+/// CMD #2162 — the payment lines for a receive mode: a green badge for
+/// `advance_note` ("Pay advance now") and an orange one for `note` (the
+/// remaining due). Shared by the receive box and the Place order popup, so
+/// both always say the same thing. An empty field draws nothing.
+class CartModeBadges {
+  CartModeBadges._();
+
+  static List<Widget> lines(Map<String, dynamic> b) => [
+        if (v2s(b, 'advance_note').isNotEmpty) ...[
+          SizedBox(height: Ds.space.x8),
+          _badge(v2s(b, 'advance_note'), Icons.check_circle_outline,
+              Ds.c.successSoft, Ds.c.brand, 'cart_mode_advance'),
+        ],
+        if (v2s(b, 'note').isNotEmpty) ...[
+          SizedBox(height: Ds.space.x8),
+          _badge(v2s(b, 'note'), Icons.payments_outlined, Ds.c.warningSoft,
+              Ds.c.warning, 'cart_mode_due'),
+        ],
+      ];
+
+  static Widget _badge(
+          String text, IconData icon, Color bg, Color ink, String id) =>
+      Semantics(
+        identifier: id,
+        child: Container(
+          width: double.infinity,
+          padding: EdgeInsets.symmetric(
+              horizontal: Ds.space.x8, vertical: Ds.space.x4),
+          decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rButton),
+          child: Row(children: [
+            Icon(icon, size: Ds.space.x12, color: ink),
+            SizedBox(width: Ds.space.x8),
+            Expanded(
+              child: Text(text,
+                  style: Ds.t.caption
+                      .copyWith(color: Ds.c.text, fontWeight: FontWeight.w600)),
+            ),
+          ]),
+        ),
+      );
+
+  /// The popup's block for the SELECTED mode: bold title with its icon, then
+  /// the two badges.
+  static Widget modeBlock(Map<String, dynamic> m) => Semantics(
+        identifier: 'cart_popup_mode',
+        child: Container(
+          width: double.infinity,
+          padding: EdgeInsets.all(Ds.space.x12),
+          decoration:
+              BoxDecoration(color: Ds.c.bg, borderRadius: Ds.r.rButton),
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Icon(v2Icon(v2s(m, 'icon')),
+                      size: Ds.space.x16, color: Ds.c.brand),
+                  SizedBox(width: Ds.space.x8),
+                  Expanded(
+                    child: Text(v2s(m, 'title'),
+                        style:
+                            Ds.t.body.copyWith(fontWeight: FontWeight.w700)),
+                  ),
+                ]),
+                ...lines(m),
+              ]),
+        ),
       );
 }
 
@@ -917,11 +910,15 @@ Future<String?> showCartV2Popup(BuildContext context, Map<String, dynamic> p,
   final primary = v2Map(p['primary']);
   final secondary = v2Map(p['secondary']);
   final chip = v2s(p, 'chip');
+  final mode = v2Map(p['mode']);
   return showModalBottomSheet<String>(
     context: context,
     useSafeArea: true,
+    // CMD #2162 — the mode block made the sheet taller than the default 9/16
+    // cap on short phones; size to content and scroll if a phone is shorter.
+    isScrollControlled: true,
     backgroundColor: Colors.transparent,
-    builder: (ctx) => Padding(
+    builder: (ctx) => SingleChildScrollView(
       padding: EdgeInsets.all(Ds.space.x16),
       child: Container(
         padding: EdgeInsets.all(Ds.space.x24),
@@ -949,7 +946,12 @@ Future<String?> showCartV2Popup(BuildContext context, Map<String, dynamic> p,
                   textAlign: TextAlign.center,
                   style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
             ],
-            if (chip.isNotEmpty) ...[
+            // CMD #2162 — the selected receive mode as three lines replaces
+            // the one-line chip whenever the backend sends it.
+            if (mode['has'] == true) ...[
+              SizedBox(height: Ds.space.x12),
+              CartModeBadges.modeBlock(mode),
+            ] else if (chip.isNotEmpty) ...[
               SizedBox(height: Ds.space.x12),
               Container(
                 padding: EdgeInsets.symmetric(

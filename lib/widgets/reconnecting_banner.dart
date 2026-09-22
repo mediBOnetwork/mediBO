@@ -10,6 +10,7 @@ import '../design_tokens.dart';
 import '../services/resilient_http.dart';
 import '../services/ui_copy.dart';
 import '../user_state.dart';
+import '../utils/customer_error.dart';
 import '../utils/render_log.dart';
 
 class ReconnectingBanner extends StatelessWidget {
@@ -21,12 +22,10 @@ class ReconnectingBanner extends StatelessWidget {
   /// Injected in tests; the app reads the session's own role flags.
   final bool? staffOverride;
 
-  /// Staff = an admin, partner or supplier session. Everyone else — a guest
-  /// or a pharmacy — is on the customer app.
   static bool isStaff(BuildContext context) {
-    final u = context.dependOnInheritedWidgetOfExactType<UserState>()?.notifier;
-    if (u == null) return false;
-    return u.isAdmin || u.isPartner || u.isSupplier || u.isPendingSupplier;
+    // Subscribe, so a sign-in re-decides; the rule itself is CustomerError's.
+    context.dependOnInheritedWidgetOfExactType<UserState>();
+    return CustomerError.isStaff(context);
   }
 
   @override

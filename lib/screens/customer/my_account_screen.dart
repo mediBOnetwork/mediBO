@@ -27,6 +27,7 @@ import '../../widgets/payout_upi_card.dart';
 import '../customer_documents_screen.dart'; // CMD #1937
 import '../kyc/kyc_panel.dart';
 import 'profile_account_menu.dart' show customerMenuScreen;
+import '../../utils/customer_error.dart';
 
 class MyAccountScreen extends StatefulWidget {
   /// A tab_key from the backend registry. Anything the registry does not offer
@@ -141,7 +142,7 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
     } catch (e) {
       setState(() {
         _loadingPage = false;
-        _error = e.toString();
+        _error = CustomerError.text(e);
       });
     }
   }
@@ -175,7 +176,7 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
       setState(() {
         _tab = null;
         _loadingTab = false;
-        _error = e.toString();
+        _error = CustomerError.text(e);
       });
     }
   }
@@ -918,7 +919,12 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
       body: _loadingPage
           ? const Center(child: CircularProgressIndicator())
           : page == null
-              ? Center(child: Text(_error, style: Ds.t.bodySecondary))
+              ? Center(child: CustomerLoadFailedCard(
+                  message: _error,
+                  onRetry: () {
+                    setState(() => _loadingPage = true);
+                    _loadPage();
+                  }))
               : Column(children: [
                   _header(page),
                   _tabBar(page),
@@ -1010,9 +1016,12 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
     if (_loadingTab) return const Center(child: CircularProgressIndicator());
     final tab = _tab;
     if (tab == null) {
+      if (_error.isNotEmpty) {
+        return Center(
+            child: CustomerLoadFailedCard(message: _error, onRetry: _loadTab));
+      }
       return Center(
-          child: Text(_error.isEmpty ? _s(page['empty_label']) : _error,
-              style: Ds.t.bodySecondary));
+          child: Text(_s(page['empty_label']), style: Ds.t.bodySecondary));
     }
     if (tab['ok'] != true) {
       return Center(child: Text(_s(tab['message']), style: Ds.t.bodySecondary));

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../design_tokens.dart';
+import '../utils/customer_error.dart';
 
 /// CMD #366 row 176 — the ONE substitute chooser, shared by all three
 /// surfaces Om asked for: the admin's customer order tab, the customer's own
@@ -104,7 +105,7 @@ class _SubstituteChoiceState extends State<SubstituteChoice> {
         }
       }
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
+      if (mounted) setState(() => _error = CustomerError.text(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }

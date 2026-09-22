@@ -11,6 +11,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'qr_saver.dart';
 import '../services/ui_copy.dart';
 import '../utils/render_log.dart';
+import '../utils/customer_error.dart';
 
 /// Canonical UPI URI builder — single source of truth.
 /// All call sites must go through this; never hand-build upi:// strings.
@@ -132,7 +133,7 @@ class _UpiPaySheetState extends State<_UpiPaySheet> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-            SnackBar(content: Text(cf('upi_pay.snack_qr_save_failed', {'error': '$e'}))));
+            SnackBar(content: Text(cf('upi_pay.snack_qr_save_failed', {'error': CustomerError.text(e)}))));
       }
     } finally {
       if (mounted) setState(() => _savingQr = false);

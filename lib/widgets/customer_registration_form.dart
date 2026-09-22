@@ -572,6 +572,17 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
     RenderLog.write('c1887_form_rendered',
         'ctx=${ctrl.formContext};sections=${ctrl.sections.length};'
         'fields=${ctrl.fields.length}');
+    // CMD #2171 — the render-log counts the two words the General step is
+    // judged on: how many boxes were starred and how many said "optional".
+    // A zero on either side means the mandatory set did not reach the screen.
+    if (_s4('optional_label').isNotEmpty) {
+      final drawn = groups.expand((g) => g.value).toList();
+      RenderLog.write(
+          'c2171_general',
+          'fields=${drawn.length};'
+          'required=${drawn.where((f) => f['required'] == true).length};'
+          'optional=${drawn.where((f) => f['required'] != true && f['type'] != 'geo').length}');
+    }
 
     final col =
         Column(crossAxisAlignment: CrossAxisAlignment.start, children: children);
@@ -617,6 +628,14 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         if (showHeader) Row(children: [
           Flexible(child: Text(labelText, style: Ds.t.bodyStrong)),
+          // CMD #2171 — every box that is NOT mandatory says so, in the
+          // backend's own word (`wizard.optional_label`). It is the only
+          // thing on the screen that tells the customer's required set from
+          // staff's, and the payload carried nothing to print until now.
+          if (!required && type != 'geo' && _s4('optional_label').isNotEmpty) ...[
+            SizedBox(width: Ds.space.x8),
+            Text(_s4('optional_label'), style: Ds.t.caption),
+          ],
           if (flagged) ...[
             SizedBox(width: Ds.space.x8),
             Container(

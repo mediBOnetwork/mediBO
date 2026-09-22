@@ -891,12 +891,21 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
 
   Widget _body() {
     if (_loading) {
-      return Center(
-          child: SizedBox(
-        width: Ds.space.x24,
-        height: Ds.space.x24,
-        child: CircularProgressIndicator(color: Ds.c.brand),
-      ));
+      // CMD #2171 — the first paint is the shape of the form, not a bare
+      // spinner on an empty page: the General step is five boxes, so five
+      // grey bars stand where they will be. (Design QA, state rule 6.)
+      return LayoutBuilder(builder: (context, box) {
+        final pad = box.maxWidth >= 600 ? Ds.space.x24 : Ds.space.x16;
+        return SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(pad, Ds.space.x24, pad, Ds.space.x24),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: const FormFieldsSkeleton(rows: 5),
+            ),
+          ),
+        );
+      });
     }
     if (_failed) {
       return Center(

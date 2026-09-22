@@ -18,6 +18,7 @@
 // exactly as the web file does, and the backend owns every word shown about it.
 
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/services.dart';
 
@@ -39,10 +40,18 @@ class DeviceLocation {
   /// Test seam — the same shape every service in this app uses.
   static Future<dynamic> Function(String method, [dynamic args])? transport;
 
+  /// The channel exists in MainActivity.kt — Android only. On iOS, on desktop
+  /// and in a test host nothing answers it, and an unanswered platform call
+  /// does not fail: it never completes, which would leave the map picker
+  /// spinning "locating" for ever instead of printing the backend's denied
+  /// line. So anywhere the bridge does not exist, there is simply no fix.
+  static bool get _hasBridge => Platform.isAndroid;
+
   static Future<T?> _call<T>(String method, [dynamic args]) async {
     final t = transport;
     try {
       if (t != null) return (await t(method, args)) as T?;
+      if (!_hasBridge) return null;
       return await _ch.invokeMethod<T>(method, args);
     } on MissingPluginException {
       // iOS / desktop / a debug host with no channel: no fix, same as before.

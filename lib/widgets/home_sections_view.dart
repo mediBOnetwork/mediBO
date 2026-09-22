@@ -438,13 +438,10 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
     // them — [PayloadController] is already retrying on the backend's schedule,
     // and pull-to-refresh below is still there for an impatient thumb.
     if (d == null || !d.ok) {
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          PayloadStatusLine(state: _payloadState),
-          const Flexible(child: _FeedSkeleton()),
-        ],
+      // CMD #2156 — the pill floats over the skeleton; nothing moves.
+      return PayloadStatusOverlay(
+        state: _payloadState,
+        child: const _FeedSkeleton(),
       );
     }
 
@@ -470,13 +467,11 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
 
     // The loaded feed carries the same quiet line: a slow or failing refresh
     // says so above the content instead of replacing it.
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        PayloadStatusLine(state: _payloadState),
-        Flexible(
-          child: RefreshIndicator(
+    // CMD #2156 — as ONE small pill floating under the search bar, over the
+    // feed, so the feed never jumps when it comes or goes.
+    return PayloadStatusOverlay(
+      state: _payloadState,
+      child: RefreshIndicator(
       onRefresh: () => _payload == null ? _load() : _payload!.refresh(),
       child: ListView.builder(
         key: const PageStorageKey('home-sections'),
@@ -533,9 +528,7 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
           );
         },
       ),
-          ),
-        ),
-      ],
+      ),
     );
   }
 }

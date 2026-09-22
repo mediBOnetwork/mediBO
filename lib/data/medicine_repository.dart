@@ -397,9 +397,12 @@ class MedicineRepository {
           .toList(growable: false),
       // A real envelope. Cacheable.
       degraded: false,
-      companies: env['companies'] is Map
-          ? CompanyHits.fromMap(Map<String, dynamic>.from(env['companies'] as Map))
-          : CompanyHits.none,
+      // CMD #2165 — the Companies block is now top-level on the envelope
+      // (`companies` / `companies_has` / `companies_title` / `companies_rpc`
+      // / `companies_style`), already capped at three and already withheld on
+      // a short query or a later page. `companies_has` is the backend's
+      // answer to "draw a block?"; nothing here counts rows to decide.
+      companies: CompanyHits.fromEnvelope(env),
     );
   }
 

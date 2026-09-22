@@ -135,16 +135,89 @@ class CompanyHit {
   final String label;
   final String countLabel;
 
+  /// CMD #2165 — the single character the row's tile shows. It is the
+  /// BACKEND's letter: taking `label[0]` in Dart is a rule about names
+  /// (leading punctuation, a numeral, an accented initial) and rules about
+  /// names live in Postgres. Empty means the payload sent none and the tile
+  /// stays blank rather than inventing a mark.
+  final String iconLetter;
+
   const CompanyHit({
     required this.key,
     required this.label,
     required this.countLabel,
+    this.iconLetter = '',
   });
 
   factory CompanyHit.fromMap(Map<String, dynamic> m) => CompanyHit(
         key: m['key']?.toString() ?? '',
         label: m['label']?.toString() ?? '',
         countLabel: m['count_label']?.toString() ?? '',
+        iconLetter: m['icon_letter']?.toString() ?? '',
+      );
+}
+
+/// CMD #2165 — every size and colour the Companies block draws with, as
+/// `storefront_search_page().companies_style` sends them.
+///
+/// The design fixes a 60dp row, a 40dp tile and 14.5 / 12.5 / 13 sp text —
+/// numbers that sit between the Ds type steps. Rather than writing them into
+/// the widget (which the design-literal gate rightly refuses) they travel in
+/// the payload, so the redline is retuned with one `app_settings` UPDATE and
+/// no deploy. Every field falls back to its Ds token when the payload omits
+/// it, which is what makes a missing settings row harmless.
+class CompanyBlockStyle {
+  final double? rowH;
+  final double? tile;
+  final double? tileRadius;
+  final double? titleSize;
+  final double? titleTracking;
+  final double? labelSize;
+  final double? countSize;
+  final double? gap;
+  final double? padH;
+  final double? divider;
+  final double? chevron;
+
+  /// Hex strings (`#E8F5EE`), resolved against a Ds colour by the widget.
+  final String tileBg;
+  final String tileFg;
+
+  const CompanyBlockStyle({
+    this.rowH,
+    this.tile,
+    this.tileRadius,
+    this.titleSize,
+    this.titleTracking,
+    this.labelSize,
+    this.countSize,
+    this.gap,
+    this.padH,
+    this.divider,
+    this.chevron,
+    this.tileBg = '',
+    this.tileFg = '',
+  });
+
+  static const CompanyBlockStyle none = CompanyBlockStyle();
+
+  static double? _d(Object? v) => v is num ? v.toDouble() : null;
+
+  factory CompanyBlockStyle.fromMap(Map<String, dynamic> m) =>
+      CompanyBlockStyle(
+        rowH: _d(m['row_h']),
+        tile: _d(m['tile']),
+        tileRadius: _d(m['tile_radius']),
+        titleSize: _d(m['title_size']),
+        titleTracking: _d(m['title_tracking']),
+        labelSize: _d(m['label_size']),
+        countSize: _d(m['count_size']),
+        gap: _d(m['gap']),
+        padH: _d(m['pad_h']),
+        divider: _d(m['divider']),
+        chevron: _d(m['chevron']),
+        tileBg: m['tile_bg']?.toString() ?? '',
+        tileFg: m['tile_fg']?.toString() ?? '',
       );
 }
 
@@ -160,12 +233,22 @@ class CompanyHits {
   final String emptyLabel;
   final List<CompanyHit> rows;
 
+  /// CMD #2165 — the block's redline, as the payload sent it.
+  final CompanyBlockStyle style;
+
+  /// CMD #2165 — the RPC a tapped row opens, named by the backend
+  /// (`storefront_company_page`). The route itself still belongs to the
+  /// screen; this is the payload saying WHICH page a row means.
+  final String rpc;
+
   const CompanyHits({
     required this.ok,
     required this.title,
     required this.hint,
     required this.emptyLabel,
     required this.rows,
+    this.style = CompanyBlockStyle.none,
+    this.rpc = '',
   });
 
   static const CompanyHits none = CompanyHits(
@@ -188,6 +271,32 @@ class CompanyHits {
             .map((e) => CompanyHit.fromMap(Map<String, dynamic>.from(e)))
             .toList(growable: false),
       );
+
+  /// CMD #2165 — the block as the SEARCH envelope carries it.
+  ///
+  /// `storefront_search_page` decides everything: it caps the list at three,
+  /// withholds it below the minimum query length and on every page after the
+  /// first, and answers `companies_has` outright. So "is there a block?" is
+  /// read from that flag — never inferred from a row count, and never from a
+  /// rule the client keeps its own copy of.
+  factory CompanyHits.fromEnvelope(Map<String, dynamic> env) {
+    final rows = ((env['companies'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => CompanyHit.fromMap(Map<String, dynamic>.from(e)))
+        .toList(growable: false);
+    return CompanyHits(
+      ok: env['companies_has'] == true,
+      title: env['companies_title']?.toString() ?? '',
+      hint: '',
+      emptyLabel: '',
+      rows: rows,
+      rpc: env['companies_rpc']?.toString() ?? '',
+      style: env['companies_style'] is Map
+          ? CompanyBlockStyle.fromMap(
+              Map<String, dynamic>.from(env['companies_style'] as Map))
+          : CompanyBlockStyle.none,
+    );
+  }
 }
 
 /// Result of `wishlist_toggle(p_product_id)`.

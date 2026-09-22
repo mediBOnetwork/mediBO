@@ -53,14 +53,47 @@ Map<String, dynamic> _hits({List<Map<String, dynamic>>? rows}) => {
               'key': 'sun pharmaceutical industries',
               'label': 'SUN PHARMACEUTICAL INDUSTRIES LTD',
               'count_label': '2,510 products',
+              'icon_letter': 'S',
             },
             {
               'key': 'sun pharma laboratories',
               'label': 'SUN PHARMA LABORATORIES LTD',
               'count_label': '318 products',
+              'icon_letter': 'S',
             },
           ],
     };
+
+// CMD #2165 — the SEARCH envelope's own shape: the block is top-level, already
+// capped at three, and `companies_has` is the backend's yes/no.
+Map<String, dynamic> _env({
+  List<Map<String, dynamic>>? rows,
+  bool? has,
+}) {
+  final r = rows ?? (_hits()['rows'] as List).cast<Map<String, dynamic>>();
+  return {
+    'items': const [],
+    'companies': r,
+    'companies_has': has ?? r.isNotEmpty,
+    'companies_title': 'COMPANIES',
+    'companies_rpc': 'storefront_company_page',
+    'companies_style': const {
+      'row_h': 60,
+      'tile': 40,
+      'tile_radius': 12,
+      'title_size': 13,
+      'title_tracking': 0.8,
+      'label_size': 14.5,
+      'count_size': 12.5,
+      'gap': 12,
+      'pad_h': 16,
+      'divider': 1,
+      'chevron': 20,
+      'tile_bg': '#E8F5EE',
+      'tile_fg': '#1B7A43',
+    },
+  };
+}
 
 Map<String, dynamic> _card({required int id, required String name}) => {
       'id': id,
@@ -207,6 +240,108 @@ void main() {
         CompanyHitsBlock(hits: CompanyHits.fromMap(_hits()), onOpen: (_) {}),
       );
       expect(CompanyHitsBlock.rowH, greaterThanOrEqualTo(44));
+    });
+
+    // ── CMD #2165 — the block reads the SEARCH envelope, and the redline
+    //    travels in the payload rather than living in the widget.
+    test('the envelope decides the block, not a row count in Dart', () {
+      final hits = CompanyHits.fromEnvelope(_env());
+      expect(hits.has, isTrue);
+      expect(hits.title, 'COMPANIES');
+      expect(hits.rpc, 'storefront_company_page');
+      expect(hits.rows.first.iconLetter, 'S');
+
+      // companies_has:false is the backend saying "no block" — even when it
+      // happens to have sent rows. The client never overrules it.
+      expect(CompanyHits.fromEnvelope(_env(has: false)).has, isFalse);
+      expect(CompanyHits.fromEnvelope(_env(rows: const [])).has, isFalse);
+      expect(CompanyHits.fromEnvelope(const {}).has, isFalse);
+    });
+
+    test('every size and colour in the block is the payload\'s', () {
+      final st = CompanyHits.fromEnvelope(_env()).style;
+      expect(st.rowH, 60);
+      expect(st.tile, 40);
+      expect(st.tileRadius, 12);
+      expect(st.titleSize, 13);
+      expect(st.labelSize, 14.5);
+      expect(st.countSize, 12.5);
+      expect(st.divider, 1);
+      expect(st.tileBg, '#E8F5EE');
+      expect(st.tileFg, '#1B7A43');
+
+      // A payload with no style block must still render: every field is
+      // nullable and the widget falls back to its Ds token.
+      final bare = CompanyHits.fromEnvelope(const {
+        'companies': [
+          {'key': 'k', 'label': 'L', 'count_label': '1 product'}
+        ],
+        'companies_has': true,
+      });
+      expect(bare.has, isTrue);
+      expect(bare.style.rowH, isNull);
+      expect(bare.style.tileBg, '');
+    });
+
+    testWidgets('the row is drawn to the payload redline, and never shrinks '
+        'its text to fit', (tester) async {
+      await _pump(
+        tester,
+        SizedBox(
+          width: 360,
+          child: CompanyHitsBlock(
+            hits: CompanyHits.fromEnvelope(_env()),
+            onOpen: (_) {},
+          ),
+        ),
+      );
+
+      expect(find.text('COMPANIES'), findsOneWidget);
+      // The tile prints the BACKEND's letter.
+      expect(find.text('S'), findsNWidgets(2));
+
+      // 60dp rows, 40dp tiles — the numbers the payload sent.
+      for (final row in find.byType(InkWell).evaluate()) {
+        expect(tester.getSize(find.byWidget(row.widget)).height, 60);
+      }
+      final tileSize = tester.getSize(find
+          .ancestor(of: find.text('S').first, matching: find.byType(Container))
+          .first);
+      expect(tileSize.width, 40);
+      expect(tileSize.height, 40);
+
+      // Long names ellipsize; they are never auto-shrunk.
+      expect(find.byType(FittedBox), findsNothing);
+      final label = tester.widget<Text>(
+          find.text('SUN PHARMACEUTICAL INDUSTRIES LTD'));
+      expect(label.maxLines, 1);
+      expect(label.overflow, TextOverflow.ellipsis);
+      expect(label.style?.fontSize, 14.5);
+      expect(label.style?.fontWeight, FontWeight.w700);
+      expect(
+        tester.widget<Text>(find.text('2,510 products')).style?.fontSize,
+        12.5,
+      );
+    });
+
+    testWidgets('the tile stays blank when the payload sent no letter',
+        (tester) async {
+      await _pump(
+        tester,
+        CompanyHitsBlock(
+          hits: CompanyHits.fromEnvelope(const {
+            'companies': [
+              {'key': 'k', 'label': '3M Health Care', 'count_label': '4 products'}
+            ],
+            'companies_has': true,
+          }),
+          onOpen: (_) {},
+        ),
+      );
+      // No letter in the payload means no letter on screen — the widget does
+      // not fall back to label[0], which is a rule about names.
+      expect(find.text('3'), findsNothing);
+      expect(find.text('3M Health Care'), findsOneWidget);
     });
   });
 

@@ -729,9 +729,10 @@ Widget shellBottomStack(VoidCallback onTap, int page, {bool staff = false}) =>
       ),
     );
 
-/// CMD #2147 — Home, Catalogue and Profile: their scroll views pad by
-/// `MediaQuery` / [BottomStackSpacer], so the page can run behind the chrome.
-const Set<int> _kFloatingPages = {0, 12, 15};
+/// CMD #2147 — every customer tab (Home, Orders, Bulk, Catalogue, Profile):
+/// their scroll views pad by `MediaQuery` / [BottomStackSpacer], so the page
+/// runs behind the View cart pill and the dock with no band anywhere.
+const Set<int> _kFloatingPages = {0, 1, 2, 12, 15};
 
 /// CMD #2140 — the page host for every shell tab: staff pages clear the bar,
 /// customer tabs clear the bar AND, on a tab that floats it, the View cart

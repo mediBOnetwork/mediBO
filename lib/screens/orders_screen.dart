@@ -679,8 +679,9 @@ class _OrdersScreenState extends State<OrdersScreen> {
     return RefreshIndicator(
       onRefresh: _fetch,
       child: ListView.separated(
-        padding: EdgeInsets.fromLTRB(
-            Ds.space.x16, Ds.space.x8, Ds.space.x16, Ds.space.x24),
+        // CMD #2147 — + the floating pill/dock room the shell hands down.
+        padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x8, Ds.space.x16,
+            Ds.space.x24 + MediaQuery.paddingOf(context).bottom),
         physics: platformScrollPhysics(),
         itemCount: _cards.length,
         separatorBuilder: (_, _) => SizedBox(height: Ds.space.x12),
@@ -831,7 +832,10 @@ class _OrdersEmpty extends StatelessWidget {
       onRefresh: onRefresh,
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.symmetric(horizontal: Ds.space.x24),
+        padding: EdgeInsets.only(
+            left: Ds.space.x24,
+            right: Ds.space.x24,
+            bottom: MediaQuery.paddingOf(context).bottom),
         children: [
           SizedBox(height: MediaQuery.of(context).size.height * 0.2),
           Icon(icon, size: Ds.space.x48, color: Ds.c.textSecondary),
@@ -1122,8 +1126,8 @@ class _CustomerOrderDetailScreenState extends State<CustomerOrderDetailScreen> {
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView(
-        padding: EdgeInsets.fromLTRB(
-            Ds.space.x16, Ds.space.x16, Ds.space.x16, Ds.space.x32),
+        padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x16, Ds.space.x16,
+            Ds.space.x32 + MediaQuery.paddingOf(context).bottom),
         physics: platformScrollPhysics(),
         children: [
           if (card != null) _DetailHeader(card: card),

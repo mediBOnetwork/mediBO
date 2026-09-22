@@ -39,7 +39,7 @@ class ScanSearchButton extends StatelessWidget {
       key: const Key('c409_scan_button'),
       tooltip: c('storefront.scan_button'),
       onPressed: () => openScanSheet(context, resolver: resolver),
-      icon: Icon(Icons.qr_code_scanner, size: 20, color: color),
+      icon: Icon(Icons.qr_code_scanner, size: Ds.header.searchIcon, color: color),
       visualDensity: VisualDensity.compact,
       constraints: BoxConstraints(
           minWidth: Ds.touch.minTarget, minHeight: Ds.touch.minTarget),
@@ -74,7 +74,7 @@ class VoiceSearchButton extends StatelessWidget {
           onQuery: onQuery,
           configLoader: configLoader,
           transcriber: transcriber),
-      icon: Icon(Icons.mic_none, size: 20, color: color),
+      icon: Icon(Icons.mic_none, size: Ds.header.searchIcon, color: color),
       visualDensity: VisualDensity.compact,
       constraints: BoxConstraints(
           minWidth: Ds.touch.minTarget, minHeight: Ds.touch.minTarget),

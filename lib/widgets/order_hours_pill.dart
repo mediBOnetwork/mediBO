@@ -24,6 +24,13 @@ import 'customer_order_item_card.dart' show hexColor;
 class OrderHoursHeaderPill extends StatelessWidget {
   const OrderHoursHeaderPill({super.key});
 
+  /// The label the header pill is showing right now ('' before the backend
+  /// has sent one) — the header measures it so nothing in the row scales.
+  static String labelOf(BuildContext context) {
+    final st = context.dependOnInheritedWidgetOfExactType<OrderHoursState>();
+    return (st?.notifier?.pill['label'] ?? '').toString();
+  }
+
   @override
   Widget build(BuildContext context) {
     final st = context.dependOnInheritedWidgetOfExactType<OrderHoursState>();
@@ -41,6 +48,26 @@ class OrderHoursPill extends StatelessWidget {
   final Map<String, dynamic> sheet;
 
   static const String semanticsId = 'c2147_hours_pill';
+
+  /// The label's style — one place, so the header can measure the pill.
+  static TextStyle labelStyle(Color fg) => Ds.t.caption.copyWith(
+        color: fg,
+        fontSize: Ds.touch.headerPillText,
+        fontWeight: FontWeight.w600,
+        height: 1,
+      );
+
+  /// The pill's full width for [label]: 12 + dot + 6 + text + 12.
+  static double widthFor(String label) {
+    if (label.isEmpty) return 0;
+    final tp = TextPainter(
+      text: TextSpan(text: label, style: labelStyle(Ds.c.text)),
+      maxLines: 1,
+      textDirection: TextDirection.ltr,
+      textScaler: TextScaler.noScaling,
+    )..layout();
+    return Ds.space.x12 * 2 + Ds.space.x8 + Ds.space.x4 + Ds.space.x4 / 2 + tp.width;
+  }
 
   Map<String, dynamic> get _tone =>
       Map<String, dynamic>.from((pill['tone'] as Map?) ?? const {});
@@ -86,32 +113,27 @@ class OrderHoursPill extends StatelessWidget {
                 height: Ds.touch.headerPill,
                 alignment: Alignment.centerLeft,
                 padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
-                decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rChip),
+                decoration: BoxDecoration(
+                  color: bg,
+                  borderRadius: BorderRadius.circular(Ds.header.pillRadius),
+                ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     LiveDot(color: dot, pulse: pulse, periodMs: ms),
                     SizedBox(width: Ds.space.x4 + Ds.space.x4 / 2),
-                    Flexible(
-                      child: AnimatedSwitcher(
-                        duration: Duration(milliseconds: still ? 0 : 150),
-                        // Om: never ellipsize — the full label on one
-                        // line; only a phone too narrow for it scales it down.
-                        child: FittedBox(
-                          key: ValueKey(label),
-                          fit: BoxFit.scaleDown,
-                          alignment: Alignment.centerLeft,
-                          child: Text(
-                            label,
-                            maxLines: 1,
-                            softWrap: false,
-                            style: Ds.t.caption.copyWith(
-                              color: fg,
-                              fontSize: Ds.touch.headerPillText,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
+                    // CMD #2164 — the label at its own size, always: no
+                    // FittedBox, no Flexible, no OS text scaling. The pill
+                    // is as wide as its text.
+                    AnimatedSwitcher(
+                      duration: Duration(milliseconds: still ? 0 : 150),
+                      child: Text(
+                        label,
+                        key: ValueKey(label),
+                        maxLines: 1,
+                        softWrap: false,
+                        textScaler: TextScaler.noScaling,
+                        style: labelStyle(fg),
                       ),
                     ),
                   ],

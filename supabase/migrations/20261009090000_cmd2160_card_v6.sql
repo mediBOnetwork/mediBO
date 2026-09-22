@@ -41,7 +41,7 @@ as $function$
       left join public.supplier_profiles sp on sp.id = ss.supplier_id
       cross join z
      where ss.product_id = m.id
-       and ss.active
+       and ss.active and ss.scheme_type = 'free_goods'
        and coalesce(ss.order_qty, 0) > 0 and coalesce(ss.free_qty, 0) > 0
        and (ss.valid_from is null or ss.valid_from <= (now() at time zone 'Asia/Kolkata')::date)
        and (ss.valid_to   is null or ss.valid_to   >= (now() at time zone 'Asia/Kolkata')::date)

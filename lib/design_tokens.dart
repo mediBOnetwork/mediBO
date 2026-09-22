@@ -408,6 +408,9 @@ class DsTouch {
   /// and every bar in the slot is the same rectangle whatever it says.
   final double barActionWidth;
 
+  /// CMD #2147 (Om) — the header's own measurements, one token each.
+  final double headerTile, headerTileRadius, headerTileMark, headerTop, headerWord, headerWordGap, headerGap, headerPill, headerPillText;
+
   const DsTouch({
     required this.minTarget,
     required this.listRowMinHeight,
@@ -416,6 +419,15 @@ class DsTouch {
     required this.headerBand,
     required this.headerHysteresis,
     required this.headerSettleMs,
+    required this.headerTile,
+    required this.headerTileRadius,
+    required this.headerTileMark,
+    required this.headerTop,
+    required this.headerWord,
+    required this.headerWordGap,
+    required this.headerGap,
+    required this.headerPill,
+    required this.headerPillText,
   });
   factory DsTouch._defaults() => const DsTouch(
       minTarget: 44,
@@ -439,7 +451,16 @@ class DsTouch {
       headerHysteresis: 40,
       // CMD #2052 — the settle. Long enough to read as a movement, short
       // enough that a fast scroller never sees a half-open header.
-      headerSettleMs: 180);
+      headerSettleMs: 180,
+      headerTile: 40, // the logo tile, the header row, the sticky search field and the bell box
+      headerTileRadius: 11, // the logo tile corner
+      headerTileMark: 28, // the tile's "m"
+      headerTop: 12, // header row inset from the top
+      headerWord: 29, // the mediBO wordmark
+      headerWordGap: 6, // tile → wordmark
+      headerGap: 10, // wordmark → pill, and tile → sticky search
+      headerPill: 36, // the order-hours pill height
+      headerPillText: 14); // the order-hours pill label
   factory DsTouch._from(Map m, DsTouch f) => DsTouch(
         minTarget: Ds._num(m['minTarget'], f.minTarget),
         listRowMinHeight: Ds._num(m['listRowMinHeight'], f.listRowMinHeight),
@@ -450,5 +471,14 @@ class DsTouch {
             Ds._num(m['headerHysteresis'], f.headerHysteresis),
         headerSettleMs:
             Ds._num(m['headerSettleMs'], f.headerSettleMs),
+        headerTile: Ds._num(m['headerTile'], f.headerTile),
+        headerTileRadius: Ds._num(m['headerTileRadius'], f.headerTileRadius),
+        headerTileMark: Ds._num(m['headerTileMark'], f.headerTileMark),
+        headerTop: Ds._num(m['headerTop'], f.headerTop),
+        headerWord: Ds._num(m['headerWord'], f.headerWord),
+        headerWordGap: Ds._num(m['headerWordGap'], f.headerWordGap),
+        headerGap: Ds._num(m['headerGap'], f.headerGap),
+        headerPill: Ds._num(m['headerPill'], f.headerPill),
+        headerPillText: Ds._num(m['headerPillText'], f.headerPillText),
       );
 }

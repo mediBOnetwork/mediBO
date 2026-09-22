@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'customer_error.dart';
+
 /// Shows a compact floating toast pill just below the app header.
 ///
 /// Position: horizontally centred, top-anchored 12 px below the header.
@@ -12,6 +14,13 @@ void showToast(
   bool isError = false,
   Duration duration = const Duration(seconds: 4),
 }) {
+  // CMD #2156 — on the customer app an error toast never carries plumbing
+  // (PostgrestException, 57014, raw JSON …): CustomerError keeps a human
+  // backend sentence and swaps anything else for net.load_failed.
+  if (isError && !CustomerError.isStaff(context)) {
+    message = CustomerError.text(message);
+    if (message.isEmpty) return;
+  }
   final overlay = Overlay.of(context, rootOverlay: true);
   final screenWidth = MediaQuery.of(context).size.width;
   final topPadding = MediaQuery.of(context).padding.top;

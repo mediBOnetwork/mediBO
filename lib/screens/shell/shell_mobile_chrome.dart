@@ -174,63 +174,111 @@ class _CustomerHeaderRow extends StatelessWidget {
   final GlobalKey<NotificationBellState>? bellKey;
 
   @override
-  Widget build(BuildContext context) => SafeArea(
-        bottom: false,
-        child: Container(
-          width: double.infinity,
-          height: Ds.touch.headerBand,
-          color: Ds.c.surface,
-          padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-          child: Row(children: [
-            Semantics(
-              identifier: 'c2147_logo',
-              button: true,
-              child: GestureDetector(
-                onTap: onLogoTap,
-                child: const _BrandLockup(),
-              ),
-            ),
-            SizedBox(width: Ds.space.x8 + Ds.space.x4 / 2),
-            // The pill takes ALL the room between the logo and the bell (a
-            // Spacer beside it would take half, truncating "Open till 12 pm"
-            // at 360 px), and only ellipsizes when there truly is none left.
-            const Expanded(
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: OrderHoursHeaderPill(),
-              ),
-            ),
-            Semantics(
-              identifier: 'c2147_bell',
-              child: NotificationBell(key: bellKey),
-            ),
-          ]),
+  Widget build(BuildContext context) {
+    final t = Ds.touch;
+    return SafeArea(
+      bottom: false,
+      child: Container(
+        width: double.infinity,
+        height: Ds.touch.headerBand,
+        color: Ds.c.surface,
+        // Om: one [t.headerTile] row, [t.headerTop] from the top, 16 at the
+        // sides — the same box the sticky search row puts its tile in, so the
+        // tile never moves between the two states.
+        padding: EdgeInsets.only(
+          left: Ds.space.x16,
+          right: Ds.space.x16,
+          top: t.headerTop,
         ),
-      );
+        alignment: Alignment.topLeft,
+        child: SizedBox(
+          height: t.headerTile,
+          child: Row(
+            children: [
+              Semantics(
+                identifier: 'c2147_logo',
+                button: true,
+                child: GestureDetector(
+                  onTap: onLogoTap,
+                  child: const _BrandLockup(),
+                ),
+              ),
+              SizedBox(width: t.headerGap),
+              // The pill sits right after the wordmark (Om); the free room goes
+              // between it and the bell. It only scales down when a phone is
+              // too narrow for its label.
+              const Flexible(child: OrderHoursHeaderPill()),
+              const Spacer(),
+              Semantics(
+                identifier: 'c2147_bell',
+                child: SizedBox.square(
+                  dimension: t.headerTile,
+                  child: NotificationBell(key: bellKey),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
-/// The mediBO lock-up: the m mark + wordmark. [markOnly] draws the m alone —
-/// the sticky bar's left edge once the logo row has scrolled away.
+/// The mediBO lock-up: the m tile + wordmark. [markOnly] draws the tile alone
+/// — the sticky bar's left edge once the logo row has scrolled away. The tile
+/// is ONE constant size in both states (Om): it never grows or shrinks.
 class _BrandLockup extends StatelessWidget {
   const _BrandLockup({this.markOnly = false});
   final bool markOnly;
 
   @override
   Widget build(BuildContext context) {
-    final mark = Image.asset('assets/images/medibo_logo.png',
-        width: Ds.space.x24 + Ds.space.x4, height: Ds.space.x24 + Ds.space.x4);
+    final t = Ds.touch;
+    final mark = Container(
+      width: t.headerTile,
+      height: t.headerTile,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Ds.c.brand,
+        borderRadius: BorderRadius.all(Radius.circular(t.headerTileRadius)),
+      ),
+      child: Text(
+        'm',
+        style: Ds.t.title.copyWith(
+          fontSize: t.headerTileMark,
+          height: 1,
+          color: Ds.c.surface,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
     if (markOnly) return mark;
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      mark,
-      SizedBox(width: Ds.space.x8),
-      Text.rich(TextSpan(
-        style: Ds.t.title.copyWith(fontWeight: FontWeight.w800),
-        children: [
-          TextSpan(text: 'medi', style: TextStyle(color: Ds.c.brandDark)),
-          TextSpan(text: 'BO', style: TextStyle(color: Ds.c.brand)),
-        ],
-      )),
-    ]);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        mark,
+        SizedBox(width: t.headerWordGap),
+        Text.rich(
+          TextSpan(
+            style: Ds.t.title.copyWith(
+              fontSize: t.headerWord,
+              height: 1,
+              fontWeight: FontWeight.w700,
+            ),
+            children: [
+              TextSpan(
+                text: 'medi',
+                style: TextStyle(color: Ds.c.brandDark),
+              ),
+              TextSpan(
+                text: 'BO',
+                style: TextStyle(color: Ds.c.brand),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 }
 

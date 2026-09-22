@@ -51,8 +51,10 @@ class OrderHoursPill extends StatelessWidget {
     if (label.isEmpty) return const SizedBox.shrink();
     final still = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     final bg = hexColor((_tone['bg'] ?? '').toString(), fallback: Ds.c.bg);
-    final fg = hexColor((_tone['fg'] ?? '').toString(),
-        fallback: Ds.c.textSecondary);
+    final fg = hexColor(
+      (_tone['fg'] ?? '').toString(),
+      fallback: Ds.c.textSecondary,
+    );
     final dot = hexColor((_tone['dot'] ?? '').toString(), fallback: fg);
     final pulse = pill['pulse'] == true && !still;
     final ms = (pill['pulse_ms'] as num?)?.toInt() ?? 1600;
@@ -65,9 +67,10 @@ class OrderHoursPill extends StatelessWidget {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: () => showOrderHoursSheet(context, sheet),
-        // The pill is ~28 px tall; the hit box is the full 44 px row.
+        // The pill is [Ds.touch.headerPill] tall; the hit box is the whole
+        // header row ([Ds.touch.headerTile]).
         child: ConstrainedBox(
-          constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+          constraints: BoxConstraints(minHeight: Ds.touch.headerTile),
           // Left-aligned (Om): the pill sits right after the logo; the free
           // room goes between it and the bell, never around it.
           child: Align(
@@ -80,9 +83,9 @@ class OrderHoursPill extends StatelessWidget {
               child: AnimatedContainer(
                 duration: colorMs,
                 curve: Curves.easeOut,
-                padding: EdgeInsets.symmetric(
-                    horizontal: Ds.space.x8 + Ds.space.x4 / 2,
-                    vertical: Ds.space.x4 + Ds.space.x4 / 2),
+                height: Ds.touch.headerPill,
+                alignment: Alignment.centerLeft,
+                padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
                 decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rChip),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -99,12 +102,15 @@ class OrderHoursPill extends StatelessWidget {
                           fit: BoxFit.scaleDown,
                           alignment: Alignment.centerLeft,
                           child: Text(
-                          label,
-                          maxLines: 1,
-                          softWrap: false,
-                          style: Ds.t.caption
-                              .copyWith(color: fg, fontWeight: FontWeight.w600),
-                        ),
+                            label,
+                            maxLines: 1,
+                            softWrap: false,
+                            style: Ds.t.caption.copyWith(
+                              color: fg,
+                              fontSize: Ds.touch.headerPillText,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -123,8 +129,12 @@ class OrderHoursPill extends StatelessWidget {
 /// the dot and fades out, once every [periodMs]. The ring is a scale + opacity
 /// on a layer the size of the dot's box, so its growth never moves layout.
 class LiveDot extends StatefulWidget {
-  const LiveDot(
-      {super.key, required this.color, required this.pulse, this.periodMs = 1600});
+  const LiveDot({
+    super.key,
+    required this.color,
+    required this.pulse,
+    this.periodMs = 1600,
+  });
 
   final Color color;
   final bool pulse;
@@ -136,7 +146,9 @@ class LiveDot extends StatefulWidget {
 
 class _LiveDotState extends State<LiveDot> with SingleTickerProviderStateMixin {
   late final AnimationController _c = AnimationController(
-      vsync: this, duration: Duration(milliseconds: widget.periodMs));
+    vsync: this,
+    duration: Duration(milliseconds: widget.periodMs),
+  );
 
   @override
   void initState() {
@@ -185,7 +197,10 @@ class _LiveDotState extends State<LiveDot> with SingleTickerProviderStateMixin {
                 animation: _c,
                 builder: (_, child) => Opacity(
                   opacity: (1 - _c.value) * 0.55,
-                  child: Transform.scale(scale: 1 + _c.value * 1.6, child: child),
+                  child: Transform.scale(
+                    scale: 1 + _c.value * 1.6,
+                    child: child,
+                  ),
                 ),
                 child: dotBox,
               ),
@@ -199,7 +214,9 @@ class _LiveDotState extends State<LiveDot> with SingleTickerProviderStateMixin {
 
 /// The sheet the pill opens: `order_hours_state().sheet`, verbatim.
 Future<void> showOrderHoursSheet(
-    BuildContext context, Map<String, dynamic> sheet) {
+  BuildContext context,
+  Map<String, dynamic> sheet,
+) {
   final title = (sheet['title'] ?? '').toString();
   final hours = (sheet['hours'] ?? '').toString();
   final note = (sheet['note'] ?? '').toString();
@@ -209,11 +226,16 @@ Future<void> showOrderHoursSheet(
     context: context,
     backgroundColor: Ds.c.surface,
     shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet))),
+      borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet)),
+    ),
     builder: (ctx) => SafeArea(
       child: Padding(
         padding: EdgeInsets.fromLTRB(
-            Ds.space.x24, Ds.space.x24, Ds.space.x24, Ds.space.x32),
+          Ds.space.x24,
+          Ds.space.x24,
+          Ds.space.x24,
+          Ds.space.x32,
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,

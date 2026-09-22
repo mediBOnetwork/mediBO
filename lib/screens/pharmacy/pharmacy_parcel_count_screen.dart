@@ -24,6 +24,7 @@ import '../../services/pharmacy_vault_api.dart';
 import '../../utils/render_log.dart';
 import '../../widgets/image_pick.dart';
 import '../admin/feature_gaps_screen.dart' show toneColor, toneSoft;
+import '../../utils/customer_error.dart';
 
 String _s(Object? v) => v == null ? '' : v.toString();
 Map<String, dynamic> _m(Object? v) =>
@@ -175,7 +176,7 @@ class _ParcelCountHomeScreenState extends State<ParcelCountHomeScreen>
       setState(() => _data = r);
       RenderLog.write('c431_parcel_home', 1);
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
+      if (mounted) setState(() => _error = CustomerError.text(e));
     }
   }
 

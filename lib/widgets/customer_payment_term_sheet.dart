@@ -17,6 +17,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../design_tokens.dart';
 import '../utils/render_log.dart';
+import '../utils/customer_error.dart';
 
 class CustomerPaymentTermSheet extends StatefulWidget {
   const CustomerPaymentTermSheet({super.key, required this.customerId});
@@ -73,7 +74,7 @@ class _CustomerPaymentTermSheetState extends State<CustomerPaymentTermSheet> {
       });
       RenderLog.write('c1888_term_panel', (_p?['ok'] == true) ? 'ok' : 'blocked');
     } catch (e) {
-      if (mounted) setState(() => _error = '$e');
+      if (mounted) setState(() => _error = CustomerError.text(e));
     }
   }
 
@@ -111,12 +112,8 @@ class _CustomerPaymentTermSheetState extends State<CustomerPaymentTermSheet> {
     }
   }
 
-  String _message(Object e) {
-    if (e is PostgrestException) {
-      return e.message;
-    }
-    return '$e';
-  }
+  // CMD #2156 — a human backend sentence reads through; plumbing never does.
+  String _message(Object e) => CustomerError.text(e);
 
   @override
   Widget build(BuildContext context) {

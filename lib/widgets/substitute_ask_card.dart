@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../design_tokens.dart';
+import '../utils/customer_error.dart';
 
 /// CHANGE #698 — the ONE widget that draws a substitute offer.
 ///
@@ -123,7 +124,7 @@ class _SubstituteAskCardState extends State<SubstituteAskCard> {
       if (mounted) {
         setState(() {
           _busy = false;
-          _error = e.toString();
+          _error = CustomerError.text(e);
         });
       }
     }

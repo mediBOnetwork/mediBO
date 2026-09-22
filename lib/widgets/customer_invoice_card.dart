@@ -24,6 +24,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../design_tokens.dart';
 import 'delivery_proof_card.dart';
 import 'bill_actions_row.dart';
+import '../utils/customer_error.dart';
 
 class CustomerInvoiceCard extends StatefulWidget {
   final String orderId;
@@ -63,7 +64,7 @@ class _CustomerInvoiceCardState extends State<CustomerInvoiceCard> {
     } catch (e) {
       // The backend owns the copy for every state it knows about; a transport
       // failure is the one thing it cannot word, so it is shown as itself.
-      if (mounted) setState(() { _error = e.toString(); _loading = false; });
+      if (mounted) setState(() { _error = CustomerError.text(e); _loading = false; });
     }
   }
 

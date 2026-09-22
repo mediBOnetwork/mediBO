@@ -1866,7 +1866,7 @@ class _HomeShellState extends State<HomeShell> {
                 // both screens. The brand band that used to sit behind the
                 // field and the chips is gone with the two widgets that drew
                 // it; this is the Catalogue's header, verbatim.
-                if (_index == 0) _shellSearchHeader(this, sticky: !isAdmin), // CMD #2147
+                if (_index == 0) _shellSearchHeader(this, sticky: !isAdmin) else if (_shellWantsSearchJump(this, isAdmin)) _shellSearchJump(this), // CMD #2147 · #2156
                 Expanded(
                   // CMD #2070 — a staff page ends ABOVE the update bar; the
                   // reasoning lives with the stack, not twice in the shell.

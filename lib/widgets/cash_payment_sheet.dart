@@ -9,6 +9,7 @@ import 'image_pick.dart';
 import 'selfie_preview.dart';
 import '../services/ui_copy.dart';
 import '../utils/render_log.dart';
+import '../utils/customer_error.dart';
 
 class CashPaymentSheet extends StatefulWidget {
   final String orderId;
@@ -265,7 +266,7 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
         });
       }
     } catch (e) {
-      if (mounted) setState(() { _error = e.toString(); _submitting = false; _uploadProgress = 0.0; });
+      if (mounted) setState(() { _error = CustomerError.text(e); _submitting = false; _uploadProgress = 0.0; });
     }
   }
 

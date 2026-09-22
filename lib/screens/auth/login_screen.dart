@@ -452,7 +452,11 @@ class _LoginScreenState extends State<LoginScreen> {
       } catch (_) {}
       // Already signed in (e.g. returning to /login with a live session).
       try {
-        if (mounted && Supabase.instance.client.auth.currentUser != null) {
+        // CMD #2159 — ?preview=login keeps a signed-in session on the
+        // login screen (the feature journey only ever runs signed in).
+        if (mounted &&
+            Uri.base.queryParameters['preview'] != 'login' &&
+            Supabase.instance.client.auth.currentUser != null) {
           _resolveHome();
         }
       } catch (_) {}

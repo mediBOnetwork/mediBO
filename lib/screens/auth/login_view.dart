@@ -346,6 +346,8 @@ class _LoginViewState extends State<LoginView> {
       _numCtrl.selection =
           TextSelection.collapsed(offset: _numCtrl.text.length);
     });
+    // CMD #2159 — proof the number box (autocomplete="tel") painted.
+    RenderLog.write('c2159_number_box', 'tel');
   }
 
   /// CMD #2159 — the code step's back arrow returns to the number box with the
@@ -760,10 +762,14 @@ class _LoginViewState extends State<LoginView> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _primaryButton(
-            label: _s('whatsapp_label'),
-            onPressed: _openNumber,
-            busy: false,
+          Semantics(
+            identifier: 'login_whatsapp',
+            button: true,
+            child: _primaryButton(
+              label: _s('whatsapp_label'),
+              onPressed: _openNumber,
+              busy: false,
+            ),
           ),
           const SizedBox(height: 12),
           _secondaryButton(

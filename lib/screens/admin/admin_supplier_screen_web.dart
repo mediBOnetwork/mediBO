@@ -243,8 +243,12 @@ class AdminSupplierScreen extends StatefulWidget {
       : super(key: key ?? _screenKey);
 
   /// Called by the shell when this screen becomes the active page.
-  static void triggerFocus() =>
-      _screenKey.currentState?._onScreenFocus();
+  /// CMD #2154 — [subject] is a pending registration's id (an alert's View):
+  /// the screen opens Pending Approval with that one open.
+  static void triggerFocus([String? subject]) {
+    _screenKey.currentState?._onScreenFocus();
+    if ((subject ?? '').isNotEmpty) openPending(subject!);
+  }
 
   /// CMD #1891 — open one of this screen's own sub-tabs on the shell's
   /// instance, by the SAME key the tab row uses (`pending`, `staging`, …).
@@ -263,6 +267,19 @@ class AdminSupplierScreen extends StatefulWidget {
     if (tries <= 0) return;
     WidgetsBinding.instance
         .addPostFrameCallback((_) => openTab(filterName, tries: tries - 1));
+  }
+
+  /// CMD #2154 — an alert's View: Pending Approval with THAT supplier open.
+  static void openPending(String id, {int tries = 60}) {
+    if (id.isEmpty) return;
+    final st = _screenKey.currentState;
+    if (st != null) {
+      st._openPending(id);
+      return;
+    }
+    if (tries <= 0) return;
+    Timer(const Duration(milliseconds: 250),
+        () => openPending(id, tries: tries - 1));
   }
 
   @override
@@ -499,6 +516,15 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   /// CMD #1891 — see [AdminSupplierScreen.openTab]. The grant check is the
   /// same one initState uses, so a tile can never open a tab #528 hid.
+  void _openPending(String id) {
+    if (!mounted || !_filterAllowed(_SupFilter.pending)) return;
+    setState(() {
+      _filter = _SupFilter.pending;
+      _expandedSupplierId = id;
+    });
+    RenderLog.write('c2154_alert_view_opened', 'supplier');
+  }
+
   void _openTabByName(String filterName) {
     for (final f in _SupFilter.values) {
       if (f.name != filterName || !_filterAllowed(f)) continue;

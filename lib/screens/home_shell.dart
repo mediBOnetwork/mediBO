@@ -857,12 +857,12 @@ class _HomeShellState extends State<HomeShell> {
       case 'suppliers':
       case 'add_supplier':
         setState(() { _index = 5; _cartOpen = false; });
-        WidgetsBinding.instance.addPostFrameCallback((_) => AdminSupplierScreen.triggerFocus());
+        WidgetsBinding.instance.addPostFrameCallback((_) => AdminSupplierScreen.triggerFocus(seed));
         break;
       case 'customers':
       case 'add_customer':
         setState(() { _index = 6; _cartOpen = false; });
-        WidgetsBinding.instance.addPostFrameCallback((_) => AdminCustomerScreen.triggerFocus());
+        WidgetsBinding.instance.addPostFrameCallback((_) => AdminCustomerScreen.triggerFocus(seed));
         break;
       case 'bags':
         Navigator.push(context,
@@ -1766,7 +1766,7 @@ class _HomeShellState extends State<HomeShell> {
         }
         if (!isAdmin) return shell;
         return AdminAlertOverlay(
-          onOrderTap: () => _handleAdminNav('customers'),
+          onOrderTap: () => _handleAdminNav('customers'), onViewRoute: _handleAdminNav, // #2154
           onOrderStageTap: (id) => shellOpenOrderStage(id, _handleAdminNav),
           child: shell,
         );

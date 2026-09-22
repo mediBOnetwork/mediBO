@@ -7,9 +7,18 @@
 //    prints the backend's words;
 //  • the WhatsApp number is judged by addcust_number_check and its label and
 //    buttons print verbatim (an already-taken number shows Open / Use another);
-//  • Save sends the form through addcust_save('save') then addcust_finish,
-//    and the Saved screen prints the backend's title, invite pill, checklist
-//    and note verbatim, with Open customer / Add another.
+//  • Save sends the form through addcust_save('save') and STAYS on the step,
+//    printing the backend's own saved line — CMD #2171 (Om, APK 1.3.33): it
+//    used to run addcust_finish too, so tapping Save on General threw the
+//    staff onto the done screen with Location, Documents and Invite never
+//    seen. Only the last step finishes;
+//  • the Saved screen prints the backend's title, invite pill, checklist and
+//    note verbatim, with Open customer / Add another — and the invite pill is
+//    whatever addcust_finish says (sent / queued / not sent + reason). It
+//    never claims sent;
+//  • CMD #2171: ONE verdict on the number. addcust_number_check is this
+//    screen's only judge, its `value` is what the box shows, and its `allow`
+//    is the only thing that may disable Continue.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pharma_b2b/screens/admin/add_customer_flow.dart';
@@ -116,16 +125,35 @@ void main() {
                     {'key': 'use_another', 'label': 'PAYLOAD Use another'},
                   ],
                 }
-              : {'ok': true, 'state': 'new', 'allow': true, 'tone': 'success', 'label': 'PAYLOAD New', 'actions': []};
+              : {
+                  'ok': true,
+                  'state': 'new',
+                  'allow': true,
+                  'tone': 'success',
+                  'value': '9827144310',
+                  'label': 'PAYLOAD New',
+                  'actions': [],
+                };
         case 'addcust_save':
-          return {'ok': true, 'customer_id': 'c-9', 'licences': {}, 'terms': {}};
+          return {
+            'ok': true,
+            'customer_id': 'c-9',
+            'licences': {},
+            'terms': {},
+            'saved': {'show': true, 'tone': 'success', 'label': 'PAYLOAD Saved, carry on'},
+          };
         case 'addcust_finish':
           return {
             'ok': true,
             'customer_id': 'c-9',
             'title': 'PAYLOAD Customer added',
             'line': 'PAYLOAD Shraddha Medical Store · Raipur',
-            'invite': {'show': true, 'tone': 'success', 'label': 'PAYLOAD Invite sent to 98271 44310'},
+            'invite': {
+              'show': true,
+              'state': 'not_sent',
+              'tone': 'warning',
+              'label': 'PAYLOAD Invite not sent to 98271 44310 — the template is still draft with Meta',
+            },
             'checklist': [
               {'label': 'PAYLOAD Shop details', 'value': 'PAYLOAD Done', 'tone': 'success'},
               {'label': 'PAYLOAD Drug licences', 'value': 'PAYLOAD Customer will add', 'tone': 'warning'},
@@ -165,21 +193,123 @@ void main() {
     expect(find.text('PAYLOAD New'), findsOneWidget);
     expect(calls['addcust_number_check']?['p_number'], '9827144310');
 
-    // Save → addcust_save('save') → addcust_finish → Saved screen verbatim.
+    // CMD #2171 — Save saves and STAYS: addcust_save('save') runs, its own
+    // line is printed where the staff are standing, addcust_finish is NOT
+    // called and the General step is still on screen.
     await tester.tap(find.text('PAYLOAD Save'));
     await tester.pumpAndSettle();
     expect(calls['addcust_save']?['p_step'], 'save');
     expect(calls['addcust_save']?['p_lead_id'], 42);
     expect((calls['addcust_save']?['p_values'] as Map)['whatsapp_no'], '9827144310');
+    expect(find.text('PAYLOAD Saved, carry on'), findsOneWidget);
+    expect(calls.containsKey('addcust_finish'), isFalse);
+    expect(find.text('PAYLOAD Photograph board or GST certificate'), findsOneWidget);
+    expect(find.text('PAYLOAD Customer added'), findsNothing);
+
+    // Only the last step finishes. Continue through Location and Documents,
+    // then Save customer on Terms.
+    // The Location step draws a live map, which never "settles" — pump it by
+    // hand rather than waiting for a still frame.
+    Future<void> beat() async {
+      for (var i = 0; i < 6; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+    }
+
+    for (var i = 0; i < 3; i++) {
+      await tester.tap(find.text('PAYLOAD Continue'));
+      await beat();
+    }
+    await tester.tap(find.text('PAYLOAD Save customer'));
+    await beat();
     expect(calls['addcust_finish']?['p_customer_id'], 'c-9');
     expect((calls['addcust_finish']?['p_terms'] as Map)['payment_term'], 'Advance Payment');
 
     expect(find.text('PAYLOAD Customer added'), findsOneWidget);
-    expect(find.text('PAYLOAD Invite sent to 98271 44310'), findsOneWidget);
+    // The invite pill is the backend's verdict, whatever it is. It is NOT
+    // "sent" here, and nothing in Dart turns it into that.
+    expect(
+        find.text(
+            'PAYLOAD Invite not sent to 98271 44310 — the template is still draft with Meta'),
+        findsOneWidget);
     expect(find.text('PAYLOAD Customer will add'), findsOneWidget);
     expect(find.text('PAYLOAD When they log in they land on the same form'), findsOneWidget);
     expect(find.text('PAYLOAD Open customer'), findsOneWidget);
     expect(find.text('PAYLOAD Add another'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('CMD #2171 — one verdict: the box takes the checked number and '
+      'only `allow` may stop Continue', (tester) async {
+    tester.view.physicalSize = const Size(412, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    final numbers = <String>[];
+    AddCustomerFlow.rpcTransport = (fn, params) async {
+      if (fn == 'addcust_open') return _open();
+      if (fn == 'addcust_number_check') {
+        final n = (params?['p_number'] ?? '').toString();
+        numbers.add(n);
+        // The backend judges the LAST ten digits and sends them back.
+        final cleaned = n.replaceAll(RegExp(r'\D'), '');
+        final ten = cleaned.length > 10
+            ? cleaned.substring(cleaned.length - 10)
+            : cleaned;
+        return ten == '9826100012'
+            ? {
+                'ok': true,
+                'state': 'customer',
+                'allow': false,
+                'tone': 'warning',
+                'value': ten,
+                'label': 'PAYLOAD Already a customer: Raj Pharmacy',
+                'actions': [
+                  {'key': 'open', 'label': 'PAYLOAD Open', 'customer_id': 'c-1'},
+                ],
+              }
+            : {
+                'ok': true,
+                'state': 'new',
+                'allow': true,
+                'tone': 'success',
+                'value': ten,
+                'label': 'PAYLOAD New',
+                'actions': [],
+              };
+      }
+      return null;
+    };
+
+    await tester.pumpWidget(const MaterialApp(home: AddCustomerFlow()));
+    await tester.pumpAndSettle();
+
+    // A number the phone's own list offered in international form. The box
+    // shows what the backend judged — nothing in Dart cleaned it first.
+    await tester.enterText(find.byType(TextField).at(1), '+448357881873');
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pumpAndSettle();
+    expect(numbers.first, '+448357881873', reason: 'the raw pick is judged');
+    final box = tester.widget<TextField>(find.byType(TextField).at(1));
+    expect(box.controller?.text, '8357881873');
+    expect(find.text('PAYLOAD New'), findsOneWidget);
+
+    // Free number → Continue is live.
+    var primary = tester.widget<FilledButton>(
+        find.widgetWithText(FilledButton, 'PAYLOAD Continue'));
+    expect(primary.onPressed, isNotNull);
+
+    // Taken number → ONE amber verdict with its own button, and Continue is
+    // visibly off rather than dead.
+    await tester.enterText(find.byType(TextField).at(1), '9826100012');
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pumpAndSettle();
+    expect(find.text('PAYLOAD Already a customer: Raj Pharmacy'), findsOneWidget);
+    expect(find.text('PAYLOAD New'), findsNothing);
+    expect(find.text('PAYLOAD Open'), findsOneWidget);
+    primary = tester.widget<FilledButton>(
+        find.widgetWithText(FilledButton, 'PAYLOAD Continue'));
+    expect(primary.onPressed, isNull);
     expect(tester.takeException(), isNull);
   });
 

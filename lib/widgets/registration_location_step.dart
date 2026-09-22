@@ -217,6 +217,20 @@ class _RegistrationLocationStepState extends State<RegistrationLocationStep> {
     if (fix != null) await _resolve(geocode: true);
   }
 
+  /// CMD #2171 (Om, live bug on Android 1.3.33) — the amber bar's "Turn on".
+  ///
+  /// It used to call the same reader as the button, which on a phone that has
+  /// already refused the grant does nothing visible at all: Android will not
+  /// show that dialog twice. So: ask once more, and when the platform answers
+  /// no without asking, escort them to the app's own Settings page — the only
+  /// place the grant can still be given. The words stay the backend's; this
+  /// only decides which door to open.
+  Future<void> _turnOn() async {
+    await _useDevice();
+    if (!mounted || !_denied) return;
+    await DeviceLocation.openSettings();
+  }
+
   /// The map reports its centre continuously while a finger is down. The
   /// lookup waits for the map to stand still — one read per placement, not
   /// one per frame.
@@ -369,7 +383,7 @@ class _RegistrationLocationStepState extends State<RegistrationLocationStep> {
                 identifier: 'reg_loc_turn_on',
                 button: true,
                 child: InkWell(
-                  onTap: _useDevice,
+                  onTap: _turnOn,
                   child: ConstrainedBox(
                     constraints:
                         BoxConstraints(minHeight: Ds.touch.minTarget),

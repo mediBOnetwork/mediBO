@@ -572,6 +572,17 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
     RenderLog.write('c1887_form_rendered',
         'ctx=${ctrl.formContext};sections=${ctrl.sections.length};'
         'fields=${ctrl.fields.length}');
+    // CMD #2171 — the render-log counts the two words the General step is
+    // judged on: how many boxes were starred and how many said "optional".
+    // A zero on either side means the mandatory set did not reach the screen.
+    if (_s4('optional_label').isNotEmpty) {
+      final drawn = groups.expand((g) => g.value).toList();
+      RenderLog.write(
+          'c2171_general',
+          'fields=${drawn.length};'
+          'required=${drawn.where((f) => f['required'] == true).length};'
+          'optional=${drawn.where((f) => f['required'] != true && f['type'] != 'geo').length}');
+    }
 
     final col =
         Column(crossAxisAlignment: CrossAxisAlignment.start, children: children);
@@ -617,6 +628,14 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         if (showHeader) Row(children: [
           Flexible(child: Text(labelText, style: Ds.t.bodyStrong)),
+          // CMD #2171 — every box that is NOT mandatory says so, in the
+          // backend's own word (`wizard.optional_label`). It is the only
+          // thing on the screen that tells the customer's required set from
+          // staff's, and the payload carried nothing to print until now.
+          if (!required && type != 'geo' && _s4('optional_label').isNotEmpty) ...[
+            SizedBox(width: Ds.space.x8),
+            Text(_s4('optional_label'), style: Ds.t.caption),
+          ],
           if (flagged) ...[
             SizedBox(width: Ds.space.x8),
             Container(
@@ -797,7 +816,15 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
         'textarea' => TextInputType.multiline,
         _ => TextInputType.text,
       },
-      inputFormatters: (type == 'phone' || type == 'number')
+      // CMD #2171 — a phone box does NOT clean what it is given. Whatever
+      // arrives (picked, autofilled, pasted or typed) goes to
+      // custreg_contact_check exactly as it came, and the box then takes the
+      // CLEANED value the backend sends back, with the backend's own note
+      // saying what it dropped. That is the one cleaner: "+448357881873" is
+      // judged and shortened to 8357881873 in Postgres, never here. A second
+      // rule in Dart is how the two rules drift apart again.
+      // A pincode is still a plain digits box.
+      inputFormatters: type == 'number'
           ? [FilteringTextInputFormatter.digitsOnly]
           : null,
       decoration: deco,
@@ -814,8 +841,12 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
     try {
       final v = await (kind == 'phone' ? ContactPickers.phone() : ContactPickers.email());
       if (v != null && mounted && ctl.text.trim().isEmpty) {
-        // Raw, as picked: custreg_contact_check cleans and judges it.
-        ctl.text = kind == 'phone' ? v.replaceAll(RegExp(r'[^0-9+]'), '') : v;
+        // CMD #2171 — the picked string goes in exactly as the sheet gave
+        // it ("+448357881873" and all), because setting it runs the live
+        // check, and custreg_contact_check is what drops the country code and
+        // hands the box back 8357881873 with a note. Cleaning it here would
+        // mean the backend never saw what the sheet actually said.
+        ctl.text = v;
         RenderLog.write('c2151_pick', kind);
       }
     } finally {

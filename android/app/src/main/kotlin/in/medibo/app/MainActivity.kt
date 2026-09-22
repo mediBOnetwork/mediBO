@@ -236,17 +236,34 @@ class MainActivity : FlutterActivity() {
 
                     "hasPermission" -> result.success(hasFineLocation())
 
+                    // CMD #2171 — the answer now comes back when the PERSON has
+                    // given it. The old handler raised the dialog and replied
+                    // false in the same breath, which was fine for the rider
+                    // loop (it re-asks) but meant a caller that awaits this —
+                    // the registration Location step — read "refused" while the
+                    // dialog was still on screen. onRequestPermissionsResult
+                    // completes it.
                     "requestPermission" -> {
                         if (hasFineLocation()) {
                             result.success(true)
                         } else {
+                            pendingLocationPermission?.success(false)
+                            pendingLocationPermission = result
                             requestFineLocation()
-                            // The grant lands asynchronously in the system
-                            // dialog; Dart re-asks with hasPermission before it
-                            // starts. Never block on a permission sheet.
-                            result.success(false)
                         }
                     }
+
+                    // CMD #2171 — ONE fix, for a caller that only wants to know
+                    // where the phone is (the shop pin). Nothing is decided
+                    // here: it is the platform's coordinate or nothing.
+                    "fix" -> oneLocationFix(
+                        (call.argument<Int>("timeout_ms") ?: 8000).toLong(),
+                        (call.argument<Double>("good_enough_m") ?: 25.0),
+                        result,
+                    )
+
+                    // CMD #2171 — for a grant Android will not ask about again.
+                    "openSettings" -> result.success(openAppSettings())
 
                     // No foreground service in this build: refuse the start so
                     // Dart keeps its in-app loop; token/stop have nothing to do.
@@ -292,7 +309,132 @@ class MainActivity : FlutterActivity() {
 
     private fun hasFineLocation(): Boolean =
         ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
+
+    /**
+     * CMD #2171 — the pending "requestPermission" call, completed from
+     * onRequestPermissionsResult with what the person actually chose.
+     */
+    private var pendingLocationPermission: MethodChannel.Result? = null
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 7002) {
+            val pending = pendingLocationPermission
+            pendingLocationPermission = null
+            try {
+                pending?.success(hasFineLocation())
+            } catch (_: Throwable) {
+                // The engine can be gone by the time the sheet is answered.
+            }
+        }
+    }
+
+    /**
+     * CMD #2171 — ONE location fix, or null.
+     *
+     * Plain LocationManager, no Play-Services dependency: it listens on every
+     * enabled provider for [timeoutMs], keeps the tightest reading it sees and
+     * answers early once that reading is inside [goodEnoughM]. A phone whose
+     * providers never fire falls back to the last known position, and a phone
+     * with nothing at all answers null — which the screen already draws as its
+     * amber "location is off" bar.
+     */
+    private fun oneLocationFix(timeoutMs: Long, goodEnoughM: Double, result: MethodChannel.Result) {
+        if (!hasFineLocation()) { result.success(null); return }
+        val lm = getSystemService(android.content.Context.LOCATION_SERVICE) as? android.location.LocationManager
+        if (lm == null) { result.success(null); return }
+
+        val answered = java.util.concurrent.atomic.AtomicBoolean(false)
+        var best: android.location.Location? = null
+        val main = android.os.Handler(android.os.Looper.getMainLooper())
+        var listener: android.location.LocationListener? = null
+        var timeout: Runnable? = null
+
+        fun reply() {
+            if (answered.getAndSet(true)) return
+            timeout?.let { main.removeCallbacks(it) }
+            listener?.let { l -> try { lm.removeUpdates(l) } catch (_: Throwable) {} }
+            val loc = best
+            val payload: Map<String, Any>? = if (loc == null) {
+                null
+            } else {
+                hashMapOf<String, Any>(
+                    "lat" to loc.latitude,
+                    "lng" to loc.longitude,
+                    "accuracy" to loc.accuracy.toDouble(),
+                )
+            }
+            try { result.success(payload) } catch (_: Throwable) {}
+        }
+
+        fun offer(loc: android.location.Location?) {
+            if (loc == null) return
+            if (loc.latitude == 0.0 && loc.longitude == 0.0) return
+            val have = best
+            if (have == null || loc.accuracy <= have.accuracy) best = loc
+            val acc = best?.accuracy ?: return
+            if (acc <= goodEnoughM) reply()
+        }
+
+        // A last known position is the floor, never the answer on its own: a
+        // remembered fix from another part of town is exactly what a shop pin
+        // must not be built on, so a live reading still gets its window.
+        val providers = try { lm.getProviders(true) } catch (_: Throwable) { emptyList<String>() }
+        for (p in providers) {
+            try {
+                @Suppress("MissingPermission")
+                val last = lm.getLastKnownLocation(p)
+                if (last != null && android.os.SystemClock.elapsedRealtime() -
+                    (last.elapsedRealtimeNanos / 1_000_000L) < 120_000L
+                ) {
+                    val have = best
+                    if (have == null || last.accuracy <= have.accuracy) best = last
+                }
+            } catch (_: Throwable) {}
+        }
+
+        val l = object : android.location.LocationListener {
+            override fun onLocationChanged(location: android.location.Location) = offer(location)
+            override fun onProviderEnabled(provider: String) {}
+            override fun onProviderDisabled(provider: String) {}
+            @Deprecated("Required by the pre-30 interface")
+            override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) {}
+        }
+        listener = l
+        var listening = false
+        for (p in providers) {
+            try {
+                @Suppress("MissingPermission")
+                lm.requestLocationUpdates(p, 0L, 0f, l, android.os.Looper.getMainLooper())
+                listening = true
+            } catch (_: Throwable) {}
+        }
+        if (!listening && best == null) { reply(); return }
+
+        val t = Runnable { reply() }
+        timeout = t
+        main.postDelayed(t, timeoutMs.coerceIn(2000L, 30000L))
+    }
+
+    /** CMD #2171 — this app's own page in system Settings. */
+    private fun openAppSettings(): Boolean = try {
+        startActivity(
+            android.content.Intent(
+                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                android.net.Uri.parse("package:${applicationContext.packageName}"),
+            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+        true
+    } catch (_: Throwable) {
+        false
+    }
 
     private fun requestFineLocation() {
         val perms = mutableListOf(

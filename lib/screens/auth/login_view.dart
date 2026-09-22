@@ -24,6 +24,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../utils/phone_clean.dart';
 import '../../utils/render_log.dart';
 import 'google_flow.dart';
 
@@ -1234,31 +1235,22 @@ class LoginNumberFormatter extends TextInputFormatter {
   /// CMD #2131 — a whole number from anywhere (picker, autofill, paste) →
   /// its last 10 digits: +91 / 91 / 0 prefixes fall away, the number never
   /// gets cut from the front.
-  static String clean(String raw) {
-    final d = raw.replaceAll(RegExp(r'\D'), '');
-    return d.length > 10 ? d.substring(d.length - 10) : d;
-  }
+  ///
+  /// CMD #2171 — the rule itself moved to PhoneClean, because the registration
+  /// box had its OWN and that one kept the "+" and the country code. One
+  /// cleaner, every surface; these two stay as the names this screen calls.
+  static String clean(String raw) => PhoneClean.clean(raw);
 
-  static int insertedLength(String a, String b) {
-    var p = 0;
-    while (p < a.length && p < b.length && a[p] == b[p]) {
-      p++;
-    }
-    var s = 0;
-    while (s < a.length - p && s < b.length - p &&
-        a[a.length - 1 - s] == b[b.length - 1 - s]) {
-      s++;
-    }
-    return b.length - p - s;
-  }
+  static int insertedLength(String a, String b) =>
+      PhoneClean.insertedLength(a, b);
 
   @override
   TextEditingValue formatEditUpdate(
       TextEditingValue oldValue, TextEditingValue newValue) {
     var d = newValue.text.replaceAll(RegExp(r'\D'), '');
-    final bulk = insertedLength(oldValue.text, newValue.text) >= 2;
+    final bulk = PhoneClean.insertedLength(oldValue.text, newValue.text) >= 2;
     if (d.length > 10) {
-      d = bulk ? d.substring(d.length - 10) : d.substring(0, 10);
+      d = bulk ? PhoneClean.clean(d) : d.substring(0, 10);
     }
     if (bulk && d.length == 10) onBulk?.call(newValue.text, d);
     final out = d.length > 5 ? '${d.substring(0, 5)} ${d.substring(5)}' : d;

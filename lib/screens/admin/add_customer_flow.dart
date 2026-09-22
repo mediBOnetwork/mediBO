@@ -144,6 +144,10 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
 
   Map<String, dynamic>? _saved;
 
+  /// CMD #2171 — the backend's own word for "saved, carry on", printed where
+  /// the staff are rather than on a screen they did not ask for.
+  String _savedNote = '';
+
   /// CMD #2151 — true while a finger is on the Location map.
   final ValueNotifier<bool> _mapTouch = ValueNotifier<bool>(false);
   void _onMapTouch() {
@@ -282,6 +286,17 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
       final res = _m(await AddCustomerFlow.rpc('addcust_number_check',
           {'p_number': v, 'p_customer_id': _customerId}));
       if (!mounted || v != _numFor) return;
+      // CMD #2171 (Om, APK 1.3.33) — the check judged the number AFTER
+      // reducing it to its last ten digits, and it sends that back as
+      // `value`. The box shows what was judged, so a picked "+448357881873"
+      // reads 8357881873. Claiming _numFor first stops the new text starting
+      // a second check of the same number.
+      final cleaned = _s(res, 'value');
+      if (cleaned.isNotEmpty && cleaned != v) {
+        _numFor = cleaned;
+        final key = _s(_m(_p['number']), 'key');
+        _form?.controllerFor(key.isEmpty ? 'whatsapp_no' : key).text = cleaned;
+      }
       setState(() {
         _num = res;
         _numChecking = false;
@@ -421,6 +436,7 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
     setState(() {
       _saving = true;
       _message = '';
+      _savedNote = '';
     });
     try {
       await body();
@@ -431,11 +447,22 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
     }
   }
 
+  /// CMD #2171 — the ONE number verdict decides whether this step may go on.
+  /// `allow` is the backend's word (addcust_number_check); a blocked number
+  /// prints its own amber line with the backend's buttons right above, so the
+  /// disabled Continue is never unexplained.
+  bool get _numBlocks =>
+      _step == 0 &&
+      !_fresh &&
+      _num.isNotEmpty &&
+      _num['allow'] == false;
+
   Future<void> _continue() => _run(() async {
         if (_isTerms) {
           await _finish();
           return;
         }
+        if (_numBlocks) return;
         if (_v4 && !_isDocs && _m(_cur['map']).isEmpty) {
           final ctrl = _form;
           final fields = ((_cur['fields'] as List?) ?? const [])
@@ -459,10 +486,16 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
       });
 
   /// Save — name, WhatsApp and pin are enough; the rest can come later.
+  ///
+  /// CMD #2171 (Om, APK 1.3.33) — Save used to run addcust_finish, so tapping
+  /// it on General threw the staff straight to the "Customer added" screen
+  /// with the Location, Documents and Invite steps never seen. Save saves and
+  /// stays; the backend answers with its own line and the step set is only
+  /// finished by the last step.
   Future<void> _saveNow() => _run(() async {
         final res = await _saveStep('save');
-        if (res == null) return;
-        await _finish();
+        if (res == null || !mounted) return;
+        setState(() => _savedNote = _s(_m(res['saved']), 'label'));
       });
 
   void _back() {
@@ -862,6 +895,18 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
                     Text(_message,
                         style: Ds.t.caption.copyWith(color: Ds.c.danger)),
                   ],
+                  // CMD #2171 — Save answers here, on the step the staff are
+                  // standing on. The sentence is addcust_save's own.
+                  if (_savedNote.isNotEmpty) ...[
+                    SizedBox(height: Ds.space.x12),
+                    Semantics(
+                      identifier: 'addcust_saved_note',
+                      child: Text(_savedNote,
+                          style: Ds.t.caption.copyWith(
+                              color: Ds.c.brand,
+                              fontWeight: FontWeight.w600)),
+                    ),
+                  ],
                 ],
               )),
             ),
@@ -904,7 +949,9 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
                   child: SizedBox(
                     height: Ds.touch.minTarget,
                     child: FilledButton(
-                      onPressed: _saving ? null : _continue,
+                      // CMD #2171 — dead-or-alive, never both: the button is
+                      // enabled exactly when the one number verdict allows it.
+                      onPressed: (_saving || _numBlocks) ? null : _continue,
                       child: Text(primary,
                           maxLines: 1, overflow: TextOverflow.ellipsis),
                     ),

@@ -27,6 +27,15 @@ class DeviceFix {
 class DeviceLocation {
   DeviceLocation._();
 
+  // CMD #2171 — the same three doors the native file has, so one widget can
+  // call them on both platforms. A browser has no separate grant to check and
+  // no settings page to open: it asks on the first read and answers there.
+  static Future<bool> hasPermission() async => true;
+
+  static Future<bool> requestPermission() async => true;
+
+  static Future<bool> openSettings() async => false;
+
   /// Current position, or null on ANY failure (permission denied, timeout, no
   /// GPS, insecure context). Never throws — a delivery action must still be
   /// possible to attempt when the fix fails; the backend decides what to do

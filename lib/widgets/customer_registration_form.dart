@@ -20,6 +20,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../design_tokens.dart';
 import '../services/contact_pickers.dart';
+import '../utils/phone_clean.dart';
 import '../services/registration_payload.dart';
 import '../utils/render_log.dart';
 import 'store_pin_picker.dart';
@@ -750,6 +751,15 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
 
   String _s4(String k) => (_v4[k] ?? '').toString();
 
+  /// CMD #2171 — how long a number is, from the backend (`wizard.phone_digits`).
+  /// The constant is the fallback for a payload that predates the key.
+  int get _phoneDigits {
+    final v = _v4['phone_digits'];
+    if (v is int && v > 0) return v;
+    if (v is num && v > 0) return v.toInt();
+    return PhoneClean.defaultDigits;
+  }
+
   Widget _input(
       String key, String type, String hint, Object? maxLines, bool flagged,
       {bool missing = false}) {
@@ -816,9 +826,13 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
         'textarea' => TextInputType.multiline,
         _ => TextInputType.text,
       },
-      inputFormatters: (type == 'phone' || type == 'number')
-          ? [FilteringTextInputFormatter.digitsOnly]
-          : null,
+      // CMD #2171 — a phone box cleans EVERY source the same way: a picked,
+      // autofilled or pasted number keeps its LAST `phone_digits` digits, so
+      // "+448357881873" lands as 8357881873 instead of failing the check.
+      // A pincode is still a plain digits box.
+      inputFormatters: type == 'phone'
+          ? [PhoneCleanFormatter(digits: _phoneDigits)]
+          : (type == 'number' ? [FilteringTextInputFormatter.digitsOnly] : null),
       decoration: deco,
     );
   }
@@ -833,8 +847,13 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
     try {
       final v = await (kind == 'phone' ? ContactPickers.phone() : ContactPickers.email());
       if (v != null && mounted && ctl.text.trim().isEmpty) {
-        // Raw, as picked: custreg_contact_check cleans and judges it.
-        ctl.text = kind == 'phone' ? v.replaceAll(RegExp(r'[^0-9+]'), '') : v;
+        // CMD #2171 — the picked string used to go in with its "+" and its
+        // country code still on it ("+448357881873"), and the box the sheet
+        // had just filled read Invalid. One cleaner, the same one the login
+        // screen uses. The backend still judges what it is given.
+        ctl.text = kind == 'phone'
+            ? PhoneClean.clean(v, digits: _phoneDigits)
+            : v;
         RenderLog.write('c2151_pick', kind);
       }
     } finally {

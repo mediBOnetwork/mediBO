@@ -32,9 +32,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pharma_b2b/app_state.dart';
 import 'package:pharma_b2b/models/cart_model.dart';
 import 'package:pharma_b2b/models/home_sections.dart';
+import 'package:pharma_b2b/models/search_page.dart';
 import 'package:pharma_b2b/models/storefront_p3.dart';
 import 'package:pharma_b2b/screens/company_screen.dart';
 import 'package:pharma_b2b/widgets/company_hits_block.dart';
+import 'package:pharma_b2b/widgets/product_card_grid.dart';
+import 'package:pharma_b2b/widgets/search_surface.dart';
 import 'package:pharma_b2b/widgets/compact_product_card.dart';
 import 'package:pharma_b2b/widgets/home_sections_view.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
@@ -62,6 +65,64 @@ Map<String, dynamic> _hits({List<Map<String, dynamic>>? rows}) => {
               'icon_letter': 'S',
             },
           ],
+    };
+
+// CMD #2165 — one `search_page()` answer, as Home and the Catalogue read it.
+Map<String, dynamic> _searchEnv({
+  List<Map<String, dynamic>>? companies,
+  List<Map<String, dynamic>>? items,
+}) =>
+    {
+      'ok': true,
+      'query': 'sun pharma',
+      'has_query': true,
+      'header_label': '1 result',
+      'total': 1,
+      'items': items ?? [_card(id: 1, name: 'PANTOCID 40MG TABLET')],
+      'paging': const {'page': 0, 'has_more': false, 'end_label': ''},
+      'empty': const {'title': 'Nothing matched', 'note': ''},
+      'companies': companies ??
+          [
+            {
+              'key': 'sun pharmaceutical industries',
+              'label': 'SUN PHARMACEUTICAL INDUSTRIES LTD',
+              'count_label': '2,510 products',
+              'icon_letter': 'S',
+              'kind': 'company',
+            },
+            {
+              'key': 'sun pharma laboratories',
+              'label': 'SUN PHARMA LABORATORIES LTD',
+              'count_label': '21 products',
+              'icon_letter': 'S',
+              'kind': 'company',
+            },
+            {
+              'key': 'sunny drug pharma',
+              'label': 'SUNNY DRUG PHARMA',
+              'count_label': '8 products',
+              'icon_letter': 'S',
+              'kind': 'company',
+            },
+          ],
+      'companies_has': companies == null || companies.isNotEmpty,
+      'companies_title': 'COMPANIES',
+      'companies_rpc': 'storefront_company_page',
+      'companies_style': const {
+        'row_h': 60,
+        'tile': 40,
+        'tile_radius': 12,
+        'title_size': 13,
+        'title_tracking': 0.8,
+        'label_size': 14.5,
+        'count_size': 12.5,
+        'gap': 12,
+        'pad_h': 16,
+        'divider': 1,
+        'chevron': 20,
+        'tile_bg': '#E8F5EE',
+        'tile_fg': '#1B7A43',
+      },
     };
 
 // CMD #2165 — the SEARCH envelope's own shape: the block is top-level, already
@@ -322,6 +383,59 @@ void main() {
         tester.widget<Text>(find.text('2,510 products')).style?.fontSize,
         12.5,
       );
+    });
+
+    // ── CMD #2165 — THE BLOCK MUST RIDE ON THE RPC THE SCREEN CALLS.
+    //    CMD #2118 hung it on `storefront_search_page`; Home and the Catalogue
+    //    had already moved to `search_page` (CMD #1906), so the block existed,
+    //    compiled and never once rendered. This pair holds that down: the
+    //    SEARCH payload carries it, and the SEARCH surface draws it.
+    test('search_page\'s payload carries the block', () {
+      final p = SearchPagePayload.fromMap(_searchEnv());
+      expect(p.companies.has, isTrue);
+      expect(p.companies.rows.length, 3);
+      expect(p.companies.title, 'COMPANIES');
+      expect(p.companies.rows.first.iconLetter, 'S');
+      expect(p.companies.style.rowH, 60);
+
+      // A later page sends no block, and appending must not erase page 0's.
+      final more = SearchPagePayload.fromMap(_searchEnv(companies: const []));
+      expect(more.companies.has, isFalse);
+      expect(p.appended(more).companies.has, isTrue);
+    });
+
+    testWidgets('the search surface draws the block ABOVE the products',
+        (tester) async {
+      await _pump(
+        tester,
+        SearchResultsView(
+          surface: 'home',
+          payload: SearchPagePayload.fromMap(_searchEnv()),
+          onOpenProduct: (_) {},
+          onLoadMore: () {},
+          onEmptyAction: (_) {},
+        ),
+      );
+      expect(find.byType(CompanyHitsBlock), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(CompanyHitsBlock)).dy,
+        lessThan(tester.getTopLeft(find.byType(ProductCardGrid)).dy),
+      );
+    });
+
+    testWidgets('an empty product list still shows the company matches',
+        (tester) async {
+      await _pump(
+        tester,
+        SearchResultsView(
+          surface: 'home',
+          payload: SearchPagePayload.fromMap(_searchEnv(items: const [])),
+          onOpenProduct: (_) {},
+          onLoadMore: () {},
+          onEmptyAction: (_) {},
+        ),
+      );
+      expect(find.byType(CompanyHitsBlock), findsOneWidget);
     });
 
     testWidgets('the tile stays blank when the payload sent no letter',

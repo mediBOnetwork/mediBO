@@ -13,6 +13,7 @@ import 'compact_product_card.dart';
 import '../models/product.dart';
 import '../services/search_chrome_focus.dart';
 import '../services/storefront_fast_order.dart';
+import 'company_hits_block.dart';
 import 'product_card_grid.dart';
 import 'scan_mic_search_controls.dart';
 
@@ -811,15 +812,43 @@ class SearchResultsView extends StatelessWidget {
   /// proves the code compiled, never that the widget rendered.
   final String surface;
 
+  /// CMD #2165 — the company matches, above whatever the products do next.
+  ///
+  /// A shopper who types "sun pharma" has named a MAKER, and page 1 of its
+  /// molecules is not that answer. The block is the payload's: it appears only
+  /// when `companies_has` is true, and it sits above the results AND above the
+  /// empty state, because "no medicine matched" is exactly when knowing the
+  /// company matched is worth most.
+  Widget _companies(BuildContext context) {
+    RenderLog.write('c2165_company_rows_$surface', payload.companies.rows.length);
+    if (!payload.companies.has) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+          Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x24),
+      child: CompanyHitsBlock(
+        hits: payload.companies,
+        onOpen: (h) => Navigator.of(context)
+            .pushNamed('/company/${Uri.encodeComponent(h.key)}'),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     RenderLog.write('c1906_rows_$surface', payload.items.length);
     if (payload.items.isEmpty) {
-      return SearchEmptyView(empty: payload.empty, onAction: onEmptyAction);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _companies(context),
+          SearchEmptyView(empty: payload.empty, onAction: onEmptyAction),
+        ],
+      );
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        _companies(context),
         if (payload.headerLabel.isNotEmpty)
           Padding(
             padding: EdgeInsets.fromLTRB(

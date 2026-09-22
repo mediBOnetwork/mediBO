@@ -1,5 +1,6 @@
 import 'package:flutter/widgets.dart';
 import 'product.dart';
+import 'storefront_p3.dart';
 
 /// CMD #1906 — the ONE search payload, for Home and for Catalogue.
 ///
@@ -384,6 +385,15 @@ class SearchPagePayload {
   /// payload without the block falls back to what CMD #2010 shipped.
   final SearchBarSpec searchBar;
 
+  /// CMD #2165 — up to three COMPANY matches, drawn above the products.
+  ///
+  /// `search_page` ranks them, caps them at three, gives each row the letter
+  /// its tile shows and answers `companies_has` outright — so a search that
+  /// names a maker is answered by the maker. [CompanyHits.none] is the
+  /// backend saying there is no block: a short query, a later page, or
+  /// nothing matched.
+  final CompanyHits companies;
+
   /// CMD #2026 — the WHOLE chip-row rule, in the backend's words.
   ///
   /// Above RESULTS the row is never drawn ([SearchBarSpec.chipRowOnResults] is
@@ -409,6 +419,7 @@ class SearchPagePayload {
     required this.items,
     this.chipRowSurfaces,
     this.searchBar = SearchBarSpec.fallback,
+    this.companies = CompanyHits.none,
   });
 
   static const failed = SearchPagePayload(
@@ -453,6 +464,7 @@ class SearchPagePayload {
             ? SearchBarSpec.fromMap(
                 Map<String, dynamic>.from(m['search_bar'] as Map))
             : SearchBarSpec.fallback,
+        companies: CompanyHits.fromEnvelope(m),
       );
 
   /// The same payload with another page's rows appended. Used by "Load more":
@@ -473,6 +485,10 @@ class SearchPagePayload {
         items: [...items, ...next.items],
         chipRowSurfaces: next.chipRowSurfaces,
         searchBar: next.searchBar,
+        // CMD #2165 — the block belongs to page 0, and page 0 is the payload
+        // this one was appended to. A later page sends no companies, so
+        // taking `next`'s would make the block vanish on Load more.
+        companies: next.companies.has ? next.companies : companies,
       );
 
 }

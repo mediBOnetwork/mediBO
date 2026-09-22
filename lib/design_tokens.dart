@@ -489,7 +489,7 @@ class DsTouch {
 /// have no general token. Backend key `design.header`; every field is one
 /// `ui_design_set` away.
 class DsHeader {
-  final Color tile, wordMedi, wordBo, line, searchBorder, placeholder;
+  final Color tile, wordMedi, wordBo, line, placeholder;
   final double wordNarrow, narrowBelow, wordSpacing, markWeight, wordWeight;
   final double pillRadius, search, searchRadius, searchCompactRadius;
   final double searchBorderWidth, searchText, searchIcon, searchPad, iconGap;
@@ -500,7 +500,6 @@ class DsHeader {
     required this.wordMedi,
     required this.wordBo,
     required this.line,
-    required this.searchBorder,
     required this.placeholder,
     required this.wordNarrow,
     required this.narrowBelow,
@@ -526,7 +525,6 @@ class DsHeader {
         wordMedi: Color(0xFF1B7A43),
         wordBo: Color(0xFF2FA24F),
         line: Color(0xFFEEF0EE),
-        searchBorder: Color(0xFFE5E7EB),
         placeholder: Color(0xFF6B7280),
         wordNarrow: 22,
         narrowBelow: 360,
@@ -552,7 +550,6 @@ class DsHeader {
         wordMedi: Ds.hex(m['wordMedi'], f.wordMedi),
         wordBo: Ds.hex(m['wordBo'], f.wordBo),
         line: Ds.hex(m['line'], f.line),
-        searchBorder: Ds.hex(m['searchBorder'], f.searchBorder),
         placeholder: Ds.hex(m['placeholder'], f.placeholder),
         wordNarrow: Ds._num(m['wordNarrow'], f.wordNarrow),
         narrowBelow: Ds._num(m['narrowBelow'], f.narrowBelow),

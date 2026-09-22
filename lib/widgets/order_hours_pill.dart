@@ -24,6 +24,13 @@ import 'customer_order_item_card.dart' show hexColor;
 class OrderHoursHeaderPill extends StatelessWidget {
   const OrderHoursHeaderPill({super.key});
 
+  /// The label the header pill is showing right now ('' before the backend
+  /// has sent one) — the header measures it so nothing in the row scales.
+  static String labelOf(BuildContext context) {
+    final st = context.dependOnInheritedWidgetOfExactType<OrderHoursState>();
+    return (st?.notifier?.pill['label'] ?? '').toString();
+  }
+
   @override
   Widget build(BuildContext context) {
     final st = context.dependOnInheritedWidgetOfExactType<OrderHoursState>();

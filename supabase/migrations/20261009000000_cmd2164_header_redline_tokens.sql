@@ -12,7 +12,7 @@ UPDATE dev_runner_config
          '{header}',
          coalesce(value->'header','{}'::jsonb) || jsonb_build_object(
            'tile', '#1B8A3E', 'wordMedi', '#1B7A43', 'wordBo', '#2FA24F',
-           'line', '#EEF0EE', 'searchBorder', '#E5E7EB', 'placeholder', '#6B7280',
+           'line', '#EEF0EE', 'placeholder', '#6B7280',
            'wordNarrow', 22, 'narrowBelow', 360, 'wordSpacing', -0.4,
            'markWeight', 900, 'wordWeight', 800, 'pillRadius', 16,
            'search', 48, 'searchRadius', 24, 'searchCompactRadius', 20,

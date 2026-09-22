@@ -198,9 +198,7 @@ class _CustomerHeaderRow extends StatelessWidget {
           // wordmark is 22; on a phone too narrow even for that (≈320) the
           // wordmark steps aside and the tile alone carries the brand, so the
           // pill keeps its 14 sp label and nothing overflows.
-          final st = context.dependOnInheritedWidgetOfExactType<OrderHoursState>();
-          final label = (st?.notifier?.pill['label'] ?? '').toString();
-          final pillW = OrderHoursPill.widthFor(label);
+          final pillW = OrderHoursPill.widthFor(OrderHoursHeaderPill.labelOf(context));
           final need = t.headerTile * 2 +
               t.headerWordGap +
               _BrandLockup.wordWidth(context) +

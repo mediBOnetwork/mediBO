@@ -375,7 +375,8 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
               // drew a second block under the header; on one white ground the
               // header and the field read as one piece of chrome and the thin
               // border is all that says "this is a box you can type in".
-              // CMD #2164 redline: radius 24 (20 scrolled), 1.5 dp #E5E7EB,
+              // CMD #2164 redline: radius 24 (20 scrolled), 1.5 dp hairline
+              // (the divider token — the one every card's hairline uses),
               // 16 inner padding, a 22 dp search icon.
               decoration: BoxDecoration(
                 color: Ds.c.surface,
@@ -383,7 +384,7 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
                     ? h.searchCompactRadius
                     : h.searchRadius),
                 border: Border.all(
-                    color: h.searchBorder, width: h.searchBorderWidth),
+                    color: Ds.c.divider, width: h.searchBorderWidth),
               ),
               child: Row(
                 children: [

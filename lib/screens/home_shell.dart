@@ -22,6 +22,7 @@ import '../util.dart';
 import '../view_as_state.dart';
 import 'shell_routes.dart'; // #1892 — the path ↔ tab table
 import '../utils/render_log.dart';
+import '../order_hours_state.dart'; // CMD #2164
 import '../utils/responsive.dart';
 import '../widgets/animations.dart';
 import '../widgets/search_surface.dart';

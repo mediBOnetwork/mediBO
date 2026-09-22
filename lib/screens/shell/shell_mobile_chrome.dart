@@ -193,21 +193,35 @@ class _CustomerHeaderRow extends StatelessWidget {
         alignment: Alignment.topLeft,
         child: SizedBox(
           height: t.headerTile,
-          child: Row(
+          child: LayoutBuilder(builder: (context, box) {
+          // CMD #2164 — nothing in this row ever scales. Below 360 the
+          // wordmark is 22; on a phone too narrow even for that (≈320) the
+          // wordmark steps aside and the tile alone carries the brand, so the
+          // pill keeps its 14 sp label and nothing overflows.
+          final st = context.dependOnInheritedWidgetOfExactType<OrderHoursState>();
+          final label = (st?.notifier?.pill['label'] ?? '').toString();
+          final pillW = OrderHoursPill.widthFor(label);
+          final need = t.headerTile * 2 +
+              t.headerWordGap +
+              _BrandLockup.wordWidth(context) +
+              (pillW > 0 ? t.headerGap + pillW : 0);
+          final showWord = need <= box.maxWidth;
+          RenderLog.write('c2164_header', showWord ? 'word' : 'tile');
+          return Row(
             children: [
               Semantics(
                 identifier: 'c2147_logo',
                 button: true,
                 child: GestureDetector(
                   onTap: onLogoTap,
-                  child: const _BrandLockup(),
+                  child: _BrandLockup(markOnly: !showWord),
                 ),
               ),
               SizedBox(width: t.headerGap),
               // The pill sits right after the wordmark (Om); the free room goes
-              // between it and the bell. It only scales down when a phone is
-              // too narrow for its label.
-              const Flexible(child: OrderHoursHeaderPill()),
+              // between it and the bell. CMD #2164: its text is never shrunk —
+              // below 360 only the wordmark steps down.
+              const _HeaderFade(child: OrderHoursHeaderPill()),
               const Spacer(),
               Semantics(
                 identifier: 'c2147_bell',
@@ -217,7 +231,8 @@ class _CustomerHeaderRow extends StatelessWidget {
                 ),
               ),
             ],
-          ),
+          );
+          }),
         ),
       ),
     );
@@ -231,24 +246,51 @@ class _BrandLockup extends StatelessWidget {
   const _BrandLockup({this.markOnly = false});
   final bool markOnly;
 
+  static TextSpan _word(BuildContext context) {
+    final h = Ds.header;
+    return TextSpan(
+      style: Ds.t.title.copyWith(
+        fontSize: h.wordFor(MediaQuery.sizeOf(context).width),
+        height: 1,
+        letterSpacing: h.wordSpacing,
+        fontWeight: DsHeader.weight(h.wordWeight),
+      ),
+      children: [
+        TextSpan(text: 'medi', style: TextStyle(color: h.wordMedi)),
+        TextSpan(text: 'BO', style: TextStyle(color: h.wordBo)),
+      ],
+    );
+  }
+
+  /// The wordmark's laid-out width at this viewport's size.
+  static double wordWidth(BuildContext context) => (TextPainter(
+        text: _word(context),
+        maxLines: 1,
+        textDirection: TextDirection.ltr,
+        textScaler: TextScaler.noScaling,
+      )..layout())
+          .width;
+
   @override
   Widget build(BuildContext context) {
     final t = Ds.touch;
+    final h = Ds.header;
     final mark = Container(
       width: t.headerTile,
       height: t.headerTile,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: Ds.c.brand,
+        color: h.tile,
         borderRadius: BorderRadius.all(Radius.circular(t.headerTileRadius)),
       ),
       child: Text(
         'm',
+        textScaler: TextScaler.noScaling,
         style: Ds.t.title.copyWith(
           fontSize: t.headerTileMark,
           height: 1,
           color: Ds.c.surface,
-          fontWeight: FontWeight.w800,
+          fontWeight: DsHeader.weight(h.markWeight),
         ),
       ),
     );
@@ -258,28 +300,36 @@ class _BrandLockup extends StatelessWidget {
       children: [
         mark,
         SizedBox(width: t.headerWordGap),
+        _HeaderFade(child: 
+        // CMD #2164 — 26 on every phone, 22 only below [DsHeader.narrowBelow];
+        // never scaled by the OS text size or a FittedBox.
         Text.rich(
-          TextSpan(
-            style: Ds.t.title.copyWith(
-              fontSize: t.headerWord,
-              height: 1,
-              fontWeight: FontWeight.w700,
-            ),
-            children: [
-              TextSpan(
-                text: 'medi',
-                style: TextStyle(color: Ds.c.brandDark),
-              ),
-              TextSpan(
-                text: 'BO',
-                style: TextStyle(color: Ds.c.brand),
-              ),
-            ],
-          ),
-        ),
+          _word(context),
+          maxLines: 1,
+          softWrap: false,
+          textScaler: TextScaler.noScaling,
+        )),
       ],
     );
   }
+}
+
+/// CMD #2164 — the wordmark and the pill fade out as the logo row scrolls
+/// away (and back in as it returns), tied to the same collapse value the band
+/// moves on, so the fade is exactly as long as the band's own settle.
+class _HeaderFade extends StatelessWidget {
+  const _HeaderFade({required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<double>(
+        valueListenable: shellHeaderCollapse,
+        child: child,
+        builder: (_, v, c) => Opacity(
+          opacity: (1 - v / Ds.touch.headerBand).clamp(0.0, 1.0),
+          child: c,
+        ),
+      );
 }
 
 /// Half the centred logo lock-up plus its breathing room, in logical pixels.

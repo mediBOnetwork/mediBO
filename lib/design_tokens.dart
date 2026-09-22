@@ -49,6 +49,7 @@ class Ds {
   static DsElevation elevation = DsElevation._defaults();
   static DsMotion motion = DsMotion._defaults();
   static DsTouch touch = DsTouch._defaults();
+  static DsHeader header = DsHeader._defaults();
 
   /// The brand hex currently in force — mirrored to the render-log so a
   /// headless verifier can PROVE the app consumed a recolour token.
@@ -67,6 +68,7 @@ class Ds {
     elevation = DsElevation._from(_asMap(design['elevation']), elevation);
     motion = DsMotion._from(_asMap(design['motion']), motion);
     touch = DsTouch._from(_asMap(design['touch']), touch);
+    header = DsHeader._from(_asMap(design['header']), header);
     brandHex = _hexStr(_asMap(design['colors'])['brand']) ?? brandHex;
     revision.value++;
   }
@@ -456,10 +458,10 @@ class DsTouch {
       headerTileRadius: 11, // the logo tile corner
       headerTileMark: 28, // the tile's "m"
       headerTop: 12, // header row inset from the top
-      headerWord: 29, // the mediBO wordmark
-      headerWordGap: 6, // tile → wordmark
+      headerWord: 26, // the mediBO wordmark (CMD #2164: never bigger than 26)
+      headerWordGap: 8, // tile → wordmark
       headerGap: 10, // wordmark → pill, and tile → sticky search
-      headerPill: 36, // the order-hours pill height
+      headerPill: 32, // the order-hours pill height
       headerPillText: 14); // the order-hours pill label
   factory DsTouch._from(Map m, DsTouch f) => DsTouch(
         minTarget: Ds._num(m['minTarget'], f.minTarget),
@@ -481,4 +483,103 @@ class DsTouch {
         headerPill: Ds._num(m['headerPill'], f.headerPill),
         headerPillText: Ds._num(m['headerPillText'], f.headerPillText),
       );
+}
+
+/// CMD #2164 — the customer header's redline, the numbers and colours that
+/// have no general token. Backend key `design.header`; every field is one
+/// `ui_design_set` away.
+class DsHeader {
+  final Color tile, wordMedi, wordBo, line, searchBorder, placeholder;
+  final double wordNarrow, narrowBelow, wordSpacing, markWeight, wordWeight;
+  final double pillRadius, search, searchRadius, searchCompactRadius;
+  final double searchBorderWidth, searchText, searchIcon, searchPad, iconGap;
+  final double bellIcon, lineWidth, fadeMs;
+
+  const DsHeader({
+    required this.tile,
+    required this.wordMedi,
+    required this.wordBo,
+    required this.line,
+    required this.searchBorder,
+    required this.placeholder,
+    required this.wordNarrow,
+    required this.narrowBelow,
+    required this.wordSpacing,
+    required this.markWeight,
+    required this.wordWeight,
+    required this.pillRadius,
+    required this.search,
+    required this.searchRadius,
+    required this.searchCompactRadius,
+    required this.searchBorderWidth,
+    required this.searchText,
+    required this.searchIcon,
+    required this.searchPad,
+    required this.iconGap,
+    required this.bellIcon,
+    required this.lineWidth,
+    required this.fadeMs,
+  });
+
+  factory DsHeader._defaults() => const DsHeader(
+        tile: Color(0xFF1B8A3E),
+        wordMedi: Color(0xFF1B7A43),
+        wordBo: Color(0xFF2FA24F),
+        line: Color(0xFFEEF0EE),
+        searchBorder: Color(0xFFE5E7EB),
+        placeholder: Color(0xFF6B7280),
+        wordNarrow: 22,
+        narrowBelow: 360,
+        wordSpacing: -0.4,
+        markWeight: 900,
+        wordWeight: 800,
+        pillRadius: 16,
+        search: 48,
+        searchRadius: 24,
+        searchCompactRadius: 20,
+        searchBorderWidth: 1.5,
+        searchText: 16,
+        searchIcon: 22,
+        searchPad: 16,
+        iconGap: 12,
+        bellIcon: 24,
+        lineWidth: 1,
+        fadeMs: 200,
+      );
+
+  factory DsHeader._from(Map m, DsHeader f) => DsHeader(
+        tile: Ds.hex(m['tile'], f.tile),
+        wordMedi: Ds.hex(m['wordMedi'], f.wordMedi),
+        wordBo: Ds.hex(m['wordBo'], f.wordBo),
+        line: Ds.hex(m['line'], f.line),
+        searchBorder: Ds.hex(m['searchBorder'], f.searchBorder),
+        placeholder: Ds.hex(m['placeholder'], f.placeholder),
+        wordNarrow: Ds._num(m['wordNarrow'], f.wordNarrow),
+        narrowBelow: Ds._num(m['narrowBelow'], f.narrowBelow),
+        wordSpacing: Ds._num(m['wordSpacing'], f.wordSpacing),
+        markWeight: Ds._num(m['markWeight'], f.markWeight),
+        wordWeight: Ds._num(m['wordWeight'], f.wordWeight),
+        pillRadius: Ds._num(m['pillRadius'], f.pillRadius),
+        search: Ds._num(m['search'], f.search),
+        searchRadius: Ds._num(m['searchRadius'], f.searchRadius),
+        searchCompactRadius:
+            Ds._num(m['searchCompactRadius'], f.searchCompactRadius),
+        searchBorderWidth:
+            Ds._num(m['searchBorderWidth'], f.searchBorderWidth),
+        searchText: Ds._num(m['searchText'], f.searchText),
+        searchIcon: Ds._num(m['searchIcon'], f.searchIcon),
+        searchPad: Ds._num(m['searchPad'], f.searchPad),
+        iconGap: Ds._num(m['iconGap'], f.iconGap),
+        bellIcon: Ds._num(m['bellIcon'], f.bellIcon),
+        lineWidth: Ds._num(m['lineWidth'], f.lineWidth),
+        fadeMs: Ds._num(m['fadeMs'], f.fadeMs),
+      );
+
+  /// A 100..900 weight token as a [FontWeight].
+  static FontWeight weight(double w) =>
+      FontWeight.values[((w / 100).round() - 1).clamp(0, 8)];
+
+  /// The wordmark size for a viewport: [wordNarrow] only below [narrowBelow].
+  double wordFor(double width) =>
+      width < narrowBelow ? wordNarrow : Ds.touch.headerWord;
 }

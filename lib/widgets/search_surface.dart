@@ -246,7 +246,7 @@ class SearchHeaderBar extends StatefulWidget {
   // CMD #2156 (Om) — 48 in the header's top state; the sticky row shrinks it
   // to the logo tile's 40 ([compactFieldHeight]) so tile, field and bell are
   // one line.
-  static double get fieldHeight => Ds.space.x48;
+  static double get fieldHeight => Ds.header.search;
   static double get compactFieldHeight => Ds.touch.headerTile;
 
   /// CMD #2117 — the semantics address of the field itself, so a browser
@@ -349,17 +349,25 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
     final double field = stuck == true
         ? SearchHeaderBar.compactFieldHeight
         : SearchHeaderBar.fieldHeight;
+    final h = Ds.header;
+    final fade = Duration(milliseconds: h.fadeMs.round());
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
+      duration: fade,
       curve: Curves.easeOut,
-      color: Ds.c.surface,
+      // CMD #2164 — the shared header ends in a 1 dp line.
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        border: stuck == null
+            ? null
+            : Border(bottom: BorderSide(color: h.line, width: h.lineWidth)),
+      ),
       padding: pad,
       child: Row(
         children: [
           if (widget.leading != null) widget.leading!,
           Expanded(
             child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
+              duration: fade,
               curve: Curves.easeOut,
               height: field,
               // CMD #2037 — the field is the HEADER's white, not the page's
@@ -367,17 +375,23 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
               // drew a second block under the header; on one white ground the
               // header and the field read as one piece of chrome and the thin
               // border is all that says "this is a box you can type in".
+              // CMD #2164 redline: radius 24 (20 scrolled), 1.5 dp #E5E7EB,
+              // 16 inner padding, a 22 dp search icon.
               decoration: BoxDecoration(
                 color: Ds.c.surface,
-                borderRadius: Ds.r.rButton,
-                border: Border.all(color: Ds.c.divider),
+                borderRadius: BorderRadius.circular(stuck == true
+                    ? h.searchCompactRadius
+                    : h.searchRadius),
+                border: Border.all(
+                    color: h.searchBorder, width: h.searchBorderWidth),
               ),
               child: Row(
                 children: [
                   Padding(
-                    padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
+                    padding: EdgeInsets.only(
+                        left: h.searchPad, right: h.iconGap),
                     child: Icon(Icons.search,
-                        color: Ds.c.textSecondary, size: Ds.space.x16 + 4),
+                        color: h.placeholder, size: h.searchIcon),
                   ),
                   Expanded(
                     child: Semantics(
@@ -410,12 +424,13 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
                                 prefix: widget.bar.placeholderPrefix,
                                 words: widget.bar.placeholderWords,
                                 rotate: widget.bar.placeholderRotate,
-                                style: Ds.t.body
-                                    .copyWith(color: Ds.c.textSecondary),
+                                style: Ds.t.body.copyWith(
+                                    color: h.placeholder,
+                                    fontSize: h.searchText),
                               )
                             : null,
-                        hintStyle: Ds.t.body
-                            .copyWith(color: Ds.c.textSecondary),
+                        hintStyle: Ds.t.body.copyWith(
+                            color: h.placeholder, fontSize: h.searchText),
                       ),
                     ),
                     ),

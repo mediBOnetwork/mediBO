@@ -154,6 +154,9 @@ class CardV5 {
   final Object? border;
   final Object? nameFg;
 
+  /// CMD #2160 — Product card v6 (`card.v6`). Null = a v5 payload.
+  final CardV6? v6;
+
   const CardV5({
     required this.hasPackChip,
     required this.packChip,
@@ -172,6 +175,7 @@ class CardV5 {
     required this.textBg,
     required this.border,
     required this.nameFg,
+    this.v6,
   });
 
   static Map _m(Object? v) => v is Map ? v : const {};
@@ -204,6 +208,7 @@ class CardV5 {
       textBg: st['text_bg'],
       border: st['border'],
       nameFg: st['name_fg'],
+      v6: CardV6.of(c['v6']),
     );
   }
 
@@ -212,6 +217,62 @@ class CardV5 {
   int subLinesFor(int nameLines) {
     final n = textLines - nameLines;
     return n < 0 ? 0 : n;
+  }
+}
+
+/// CMD #2160 — Product card v6's own block, read verbatim from
+/// `_product_card()->'v6'`: the short scheme badge ("10+1"), the
+/// "Unavailable" chip that replaces the pack chip, the red Notify pill's
+/// colours and the photo's contain box as a percentage of the square plate.
+class CardV6 {
+  final int imagePct;
+  final bool hasScheme;
+  final String schemeLabel;
+  final Object? schemeBg;
+  final Object? schemeFg;
+  final bool hasUnavailChip;
+  final String unavailLabel;
+  final Object? unavailBg;
+  final Object? unavailFg;
+  final Object? notifyBg;
+  final Object? notifyFg;
+
+  const CardV6({
+    required this.imagePct,
+    required this.hasScheme,
+    required this.schemeLabel,
+    this.schemeBg,
+    this.schemeFg,
+    required this.hasUnavailChip,
+    required this.unavailLabel,
+    this.unavailBg,
+    this.unavailFg,
+    this.notifyBg,
+    this.notifyFg,
+  });
+
+  static Map _m(Object? v) => v is Map ? v : const {};
+  static String _s(Object? v) => (v ?? '').toString();
+
+  static CardV6? of(Object? raw) {
+    if (raw is! Map) return null;
+    final sc = _m(raw['scheme']);
+    final un = _m(raw['unavail_chip']);
+    final np = _m(raw['notify_pill']);
+    final pct = raw['image_pct'];
+    return CardV6(
+      imagePct: pct is num ? pct.toInt().clamp(1, 100) : 92,
+      hasScheme: sc['has'] == true && _s(sc['label']).isNotEmpty,
+      schemeLabel: _s(sc['label']),
+      schemeBg: sc['bg'],
+      schemeFg: sc['fg'],
+      hasUnavailChip: un['has'] == true && _s(un['label']).isNotEmpty,
+      unavailLabel: _s(un['label']),
+      unavailBg: un['bg'],
+      unavailFg: un['fg'],
+      notifyBg: np['bg'],
+      notifyFg: np['fg'],
+    );
   }
 }
 
@@ -227,6 +288,9 @@ class CardAction {
   final String pickerRpc;
   final String packType;
   final String qtyTpl;
+  final String qtyTplOne;
+  final String qtyTplMany;
+  final String qtyLabel;
   final String qtyFootTpl;
   final String notifyLabel;
   final String notifiedLabel;
@@ -241,6 +305,9 @@ class CardAction {
     required this.pickerRpc,
     required this.packType,
     required this.qtyTpl,
+    this.qtyTplOne = '',
+    this.qtyTplMany = '',
+    this.qtyLabel = '',
     required this.qtyFootTpl,
     required this.notifyLabel,
     required this.notifiedLabel,
@@ -265,6 +332,9 @@ class CardAction {
       pickerRpc: _s(picker['rpc']),
       packType: _s(picker['pack_type']),
       qtyTpl: _s(a['qty_tpl']),
+      qtyTplOne: _s(a['qty_tpl_one']),
+      qtyTplMany: _s(a['qty_tpl_many']),
+      qtyLabel: _s(a['qty_label']),
       qtyFootTpl: _s(a['qty_foot_tpl']),
       notifyLabel: _s(notify['label']),
       notifiedLabel: _s(notify['done_label']),
@@ -279,6 +349,16 @@ class CardAction {
 
   /// "5 strip" — the pill, the backend's template with the cart's number.
   String pillLabel(int qty) => qtyTpl.replaceAll('{qty}', '$qty');
+
+  /// CMD #2160 — the v6 qty pill: the backend's own `qty_label` while the
+  /// cart still holds the quantity the payload was built for, otherwise
+  /// `qty_tpl_one` at 1 and `qty_tpl_many` above ("4 strips"). A payload
+  /// without the pair falls back to [pillLabel].
+  String pillLabelV6(int qty) {
+    if (qty == payloadQty && qtyLabel.isNotEmpty) return qtyLabel;
+    final tpl = qty == 1 ? qtyTplOne : qtyTplMany;
+    return tpl.isEmpty ? pillLabel(qty) : tpl.replaceAll('{qty}', '$qty');
+  }
 
   /// The ONE line under the price for the state the card is in right now.
   /// Returns (label, tone name); an empty label means print nothing.

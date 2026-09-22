@@ -43,6 +43,11 @@ class ProductImage extends StatelessWidget {
   /// three states occupy an identical shape.
   final BorderRadius? radius;
 
+  /// CMD #2160 — drawn instead of the generic fallback when the URL is dead,
+  /// so the product card keeps its pack-type placeholder rather than a
+  /// broken image. Null = the fallback below.
+  final Widget? errorChild;
+
   const ProductImage({
     super.key,
     required this.url,
@@ -50,6 +55,7 @@ class ProductImage extends StatelessWidget {
     required this.height,
     this.fit = BoxFit.contain,
     this.radius,
+    this.errorChild,
   });
 
   @override
@@ -84,7 +90,9 @@ class ProductImage extends StatelessWidget {
           gaplessPlayback: true,
         ),
         placeholder: (_, __) => _box(r, const Color(0xFFF6F7F9)),
-        errorWidget: (_, __, ___) => _fallback(r),
+        errorWidget: (_, __, ___) => errorChild == null
+            ? _fallback(r)
+            : SizedBox(width: width, height: height, child: errorChild),
       ),
     );
   }

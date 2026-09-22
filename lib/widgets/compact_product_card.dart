@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
@@ -155,6 +157,23 @@ class CompactProductCard extends StatelessWidget {
   static const double chipH = 28;
   static const double plusDotV5 = 38;
 
+  /// CMD #2160 — v6: every chip on the plate (pack, Unavailable, scheme) is
+  /// 26 tall; the action spot (+, qty pill, Notify) is always 36.
+  static const double chipV6 = 26;
+  static const double actionV6 = 36;
+
+  /// v6 text block: name max 2 × 18 + composition 16 — three lines, fixed.
+  static const double nameLineV6 = 18;
+  static const double subLineV6 = 16;
+  static const double textV6 = nameLineV6 * 2 + subLineV6; // 52
+
+  /// Everything under the plate on v6: 8 · text · 8 · price · bottom pad.
+  static const double bodyV6 = _gapL + textV6 + _gapL + _priceH + _padBottom;
+
+  /// The tallest the v6 plate may be inside [extent]; below this width the
+  /// plate is exactly square (the card's own width).
+  static const double plateMaxV6 = extent - _frameBorderW * 2 - bodyV6; // 174
+
   /// Hero tag shared with the product page's first carousel image.
   static String heroTag(String id) => 'pd-img-$id';
 
@@ -171,7 +190,21 @@ class CompactProductCard extends StatelessWidget {
     // `style` block (photo_bg / text_bg / border), never typed here.
     final v5 = view.v5;
 
-    final card = Container(
+    // CMD #2160 — Product card v6: a square plate, the fixed 3-line text
+    // block, the price row at one height on every card.
+    final v6 = v5?.v6;
+    final Widget card = v5 != null && v6 != null
+        ? _V6Card(
+            product: product,
+            view: view,
+            v5: v5,
+            v6: v6,
+            soldOut: soldOut,
+            onTap: onTap,
+            onPeek: onPeek,
+            wishlistToggle: wishlistToggle,
+          )
+        : Container(
       height: extent,
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
@@ -311,12 +344,17 @@ class CardPriceRow extends StatelessWidget {
   final Color? mrpColor;
   final bool forceStrike;
 
+  /// CMD #2160 — v6 strikes the MRP with ONE slanted line (−8°, 1.5 grey)
+  /// instead of the font's flat line-through.
+  final bool slantStrike;
+
   const CardPriceRow({
     super.key,
     required this.price,
     required this.height,
     this.mrpColor,
     this.forceStrike = false,
+    this.slantStrike = false,
   });
 
   @override
@@ -332,15 +370,30 @@ class CardPriceRow extends StatelessWidget {
             style: AppType.t2.copyWith(color: Brand.inkFaint),
           )
         : null;
-    final mrp = !p.hasMrp
+    final struck = p.strikeMrp || forceStrike;
+    final Widget? mrp = !p.hasMrp
         ? null
+        : slantStrike
+        ? SlantStrike(
+            struck: struck,
+            color: Ds.c.textSecondary,
+            child: Text(
+              p.mrpDisplay,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppType.l5.copyWith(
+                color: mrpColor ?? Brand.inkFaint,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          )
         : Text(
             p.mrpDisplay,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: AppType.t1.copyWith(
               color: mrpColor ?? Brand.inkFaint,
-              decoration: (p.strikeMrp || forceStrike)
+              decoration: struck
                   ? TextDecoration.lineThrough
                   : TextDecoration.none,
               decorationColor: mrpColor ?? Brand.inkFaint,
@@ -844,8 +897,17 @@ class CompactCartControl extends StatelessWidget {
       }
 
       final v5 = product.card?['style'] is Map;
+      final v6 = v5 && product.card?['v6'] is Map;
       if (qty > 0) {
-        return v5
+        return v6
+            ? _QtyChip(
+                key: const ValueKey('qty-chip'),
+                label: action.pillLabelV6(qty),
+                onTap: pick,
+                height: CompactProductCard.actionV6,
+                radius: CompactProductCard.actionV6 / 2,
+              )
+            : v5
             ? _QtyChip(
                 key: const ValueKey('qty-chip'),
                 label: action.pillLabel(qty),
@@ -862,7 +924,11 @@ class CompactCartControl extends StatelessWidget {
         key: const ValueKey('add'),
         label: a?.ctaShort.isNotEmpty == true ? a!.ctaShort : (a?.ctaLabel ?? ''),
         onTap: pick,
-        dot: v5 ? CompactProductCard.plusDotV5 : CompactProductCard.plusDot,
+        dot: v6
+            ? CompactProductCard.actionV6
+            : v5
+            ? CompactProductCard.plusDotV5
+            : CompactProductCard.plusDot,
       );
     }
 
@@ -1839,11 +1905,21 @@ class _V5PackChip extends StatelessWidget {
 class _QtyChip extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
-  const _QtyChip({super.key, required this.label, required this.onTap});
+
+  /// CMD #2160 — v6 draws the pill at the 36 action height, fully rounded.
+  final double height;
+  final double? radius;
+  const _QtyChip({
+    super.key,
+    required this.label,
+    required this.onTap,
+    this.height = CompactProductCard.chipH,
+    this.radius,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final r = BorderRadius.circular(Ds.space.x8);
+    final r = BorderRadius.circular(radius ?? Ds.space.x8);
     return Semantics(
       identifier: 'card_qty_pill',
       button: true,
@@ -1862,10 +1938,11 @@ class _QtyChip extends StatelessWidget {
                 borderRadius: r,
                 onTap: onTap,
                 child: SizedBox(
-                  height: CompactProductCard.chipH,
+                  height: height,
                   child: Padding(
                     padding: EdgeInsets.only(
-                        left: Ds.space.x8, right: Ds.space.x4),
+                        left: radius == null ? Ds.space.x8 : Ds.space.x12,
+                        right: radius == null ? Ds.space.x4 : Ds.space.x8),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -1875,7 +1952,7 @@ class _QtyChip extends StatelessWidget {
                             child: Text(
                               label,
                               maxLines: 1,
-                              style: AppType.t2.copyWith(
+                              style: (radius == null ? AppType.t2 : AppType.l5).copyWith(
                                 color: Ds.c.surface,
                                 fontWeight: FontWeight.w700,
                               ),
@@ -2092,4 +2169,502 @@ class _V5Body extends StatelessWidget {
       ],
     );
   }
+}
+
+
+// ── CMD #2160 — Product card v6 ────────────────────────────────────────────
+
+/// The v6 card: a square white plate the full card width (capped at
+/// [CompactProductCard.plateMaxV6] so the card still fits [extent]), then
+/// the fixed 3-line text block 8 below it and the price row 8 under that —
+/// the same height on every card, so PTR and MRP never move.
+class _V6Card extends StatelessWidget {
+  final Product product;
+  final ProductCardView view;
+  final CardV5 v5;
+  final CardV6 v6;
+  final bool soldOut;
+  final VoidCallback onTap;
+  final VoidCallback? onPeek;
+  final Future<WishlistResult> Function(String productId)? wishlistToggle;
+
+  const _V6Card({
+    required this.product,
+    required this.view,
+    required this.v5,
+    required this.v6,
+    required this.soldOut,
+    required this.onTap,
+    required this.onPeek,
+    required this.wishlistToggle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    try {
+      RenderLog.write('c2160_card_v6', soldOut ? 'unavailable' : 'live');
+    } catch (_) {}
+    return Container(
+      height: CompactProductCard.extent,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: Ds.hex(v5.textBg, Ds.c.surface),
+        borderRadius: Ds.r.rCard,
+        border: Border.all(
+          color: Ds.hex(v5.border, Ds.c.divider),
+          width: CompactProductCard._frameBorderW,
+        ),
+        boxShadow: Ds.elevation.e1,
+      ),
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          onTap: onTap,
+          onLongPress: onPeek,
+          child: LayoutBuilder(
+            builder: (context, c) {
+              final w = c.maxWidth.isFinite
+                  ? c.maxWidth
+                  : CompactProductCard.railWidth;
+              final plate = w < CompactProductCard.plateMaxV6
+                  ? w
+                  : CompactProductCard.plateMaxV6;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    height: plate,
+                    width: double.infinity,
+                    color: Ds.hex(v5.photoBg, Ds.c.surface),
+                    child: _V6Artwork(
+                      product: product,
+                      v5: v5,
+                      v6: v6,
+                      soldOut: soldOut,
+                      plate: plate,
+                      wishlistToggle: wishlistToggle,
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(
+                      left: CompactProductCard._padX,
+                      top: CompactProductCard._gapL,
+                      right: CompactProductCard._padX,
+                    ),
+                    child: _V6Body(product: product, view: view, v5: v5),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The square plate: the photo contained in a centred square [CardV6.imagePct]
+/// of the plate (never cropped, no border) — or, with no photo or a dead URL,
+/// the pack-type placeholder from `placeholder.kind`. Pack chip (or the
+/// backend's "Unavailable" chip) top-left, heart top-right, scheme badge
+/// bottom-left, the 36 action bottom-right.
+class _V6Artwork extends StatelessWidget {
+  final Product product;
+  final CardV5 v5;
+  final CardV6 v6;
+  final bool soldOut;
+  final double plate;
+  final Future<WishlistResult> Function(String productId)? wishlistToggle;
+
+  const _V6Artwork({
+    required this.product,
+    required this.v5,
+    required this.v6,
+    required this.soldOut,
+    required this.plate,
+    required this.wishlistToggle,
+  });
+
+  static const double _edge = CompactProductCard._gapL;
+
+  @override
+  Widget build(BuildContext context) {
+    final action = CardAction.of(product.card);
+    final side = plate * v6.imagePct / 100;
+    final placeholder = Center(
+      child: CardPackIcon(
+        kind: v5.placeholderKind,
+        size: Ds.space.x48 + Ds.space.x16,
+      ),
+    );
+    final art = v5.imagePlaceholder || product.imageUrl.isEmpty
+        ? placeholder
+        : Hero(
+            tag: CompactProductCard.heroTag(product.id),
+            child: ProductImage(
+              url: product.imageUrl,
+              width: side,
+              height: side,
+              errorChild: placeholder,
+            ),
+          );
+    final unavail = soldOut && v6.hasUnavailChip;
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: Opacity(
+            opacity: soldOut ? 0.45 : 1.0,
+            child: Center(
+              child: SizedBox(width: side, height: side, child: art),
+            ),
+          ),
+        ),
+        if (unavail || v5.hasPackChip)
+          Positioned(
+            left: _edge,
+            top: _edge,
+            right: CompactProductCard.wishTapSize,
+            child: Row(
+              children: [
+                Flexible(
+                  child: unavail
+                      ? _V6Chip(
+                          id: 'card_unavailable_chip',
+                          label: v6.unavailLabel,
+                          bg: Ds.hex(v6.unavailBg, Ds.c.dangerSoft),
+                          fg: Ds.hex(v6.unavailFg, Ds.c.danger),
+                        )
+                      : _V6Chip(
+                          id: 'card_pack_chip',
+                          label: v5.packChip,
+                          bg: Ds.c.surface,
+                          fg: Ds.c.text,
+                          border: Ds.c.divider,
+                        ),
+                ),
+              ],
+            ),
+          ),
+        if (product.hasWish)
+          Positioned(
+            right: 0,
+            top: 0,
+            child: _WishHeart(product: product, toggle: wishlistToggle),
+          ),
+        if (v6.hasScheme)
+          Positioned(
+            left: _edge,
+            bottom: _edge + (CompactProductCard.actionV6 - CompactProductCard.chipV6) / 2,
+            right: CompactProductCard.pillH + _edge,
+            child: Row(
+              children: [
+                Flexible(
+                  child: _V6Chip(
+                    id: 'card_scheme_badge',
+                    label: v6.schemeLabel,
+                    bg: Ds.hex(v6.schemeBg, Ds.c.warningSoft),
+                    fg: Ds.hex(v6.schemeFg, Ds.c.warning),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        Positioned(
+          right: CompactProductCard._gapS,
+          bottom: CompactProductCard._gapS,
+          left: soldOut ? CompactProductCard._gapS : null,
+          child: soldOut && action != null
+              ? SizedBox(
+                  height: CompactProductCard.pillH,
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: _V6NotifyPill(
+                      productId: product.id,
+                      action: action,
+                      bg: Ds.hex(v6.notifyBg, Ds.c.danger),
+                      fg: Ds.hex(v6.notifyFg, Ds.c.surface),
+                    ),
+                  ),
+                )
+              : soldOut
+              ? const SizedBox.shrink()
+              : CompactCartControl(product: product),
+        ),
+      ],
+    );
+  }
+}
+
+/// One 26-tall chip on the plate — pack, Unavailable or scheme — hugging its
+/// backend label.
+class _V6Chip extends StatelessWidget {
+  final String id;
+  final String label;
+  final Color bg;
+  final Color fg;
+  final Color? border;
+  const _V6Chip({
+    required this.id,
+    required this.label,
+    required this.bg,
+    required this.fg,
+    this.border,
+  });
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    identifier: id,
+    label: label,
+    child: Container(
+      height: CompactProductCard.chipV6,
+      padding: EdgeInsets.symmetric(horizontal: Ds.space.x8),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(Ds.space.x8),
+        border: border == null ? null : Border.all(color: border!),
+      ),
+      child: Center(
+        widthFactor: 1,
+        child: Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: AppType.t2.copyWith(color: fg, fontWeight: FontWeight.w700),
+        ),
+      ),
+    ),
+  );
+}
+
+/// Out of stock on v6: the red 36 pill "Notify me" that becomes the SAME red
+/// "We'll notify ✓" — both words `card.action.notify`'s, colours
+/// `v6.notify_pill`'s, the toast the RPC's own.
+class _V6NotifyPill extends StatefulWidget {
+  final String productId;
+  final CardAction action;
+  final Color bg;
+  final Color fg;
+  const _V6NotifyPill({
+    required this.productId,
+    required this.action,
+    required this.bg,
+    required this.fg,
+  });
+
+  @override
+  State<_V6NotifyPill> createState() => _V6NotifyPillState();
+}
+
+class _V6NotifyPillState extends State<_V6NotifyPill> {
+  bool _busy = false;
+
+  Future<void> _tap() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    NotifyResult? r;
+    try {
+      r = await MedicineRepository().stockNotifyRequest(widget.productId);
+    } catch (_) {
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    if (!mounted || r == null) return;
+    if (r.loginRequired) {
+      Navigator.of(context).pushNamed('/login');
+      return;
+    }
+    if (r.toast.isNotEmpty) showToast(context, r.toast, isError: !r.ok);
+    if (r.ok && r.subscribed) CardNotifyLedger.mark(widget.productId);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<Set<String>>(
+      valueListenable: CardNotifyLedger.notified,
+      builder: (context, ids, _) {
+        final done = widget.action.notified || ids.contains(widget.productId);
+        final label =
+            done ? widget.action.notifiedLabel : widget.action.notifyLabel;
+        if (label.isEmpty) return const SizedBox.shrink();
+        final r = BorderRadius.circular(CompactProductCard.actionV6 / 2);
+        return Semantics(
+          identifier: done ? 'card_notified' : 'card_notify',
+          button: !done,
+          label: label,
+          child: SizedBox(
+            height: CompactProductCard.pillH,
+            child: Center(
+              child: Material(
+                color: widget.bg,
+                borderRadius: r,
+                child: InkWell(
+                  key: const ValueKey('card-notify'),
+                  borderRadius: r,
+                  onTap: done ? null : _tap,
+                  child: SizedBox(
+                    height: CompactProductCard.actionV6,
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            done
+                                ? Icons.check_rounded
+                                : Icons.notifications_none_rounded,
+                            size: Ds.space.x16,
+                            color: widget.fg,
+                          ),
+                          SizedBox(width: Ds.space.x4),
+                          Flexible(
+                            child: Text(
+                              label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppType.l5.copyWith(
+                                color: widget.fg,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// The fixed 3-line text block and the price row. Name max 2 lines, the
+/// composition directly under it: a 2-line name leaves it 1 line, a 1-line
+/// name leaves it 2 (`layout.text_lines`), "…" when cut; the spare line is
+/// empty only when both fit on one. Nothing sits under the price row.
+class _V6Body extends StatelessWidget {
+  final Product product;
+  final ProductCardView view;
+  final CardV5 v5;
+  const _V6Body({required this.product, required this.view, required this.v5});
+
+  @override
+  Widget build(BuildContext context) {
+    final nameStyle = AppType.l4.copyWith(
+      fontWeight: FontWeight.w700,
+      color: Ds.hex(v5.nameFg, Ds.c.text),
+    );
+    final subStyle = AppType.l5.copyWith(
+      fontWeight: FontWeight.w400,
+      color: Ds.hex(v5.subFg, Ds.c.text),
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          height: CompactProductCard.textV6,
+          child: LayoutBuilder(
+            builder: (context, c) {
+              final tp = TextPainter(
+                text: TextSpan(text: product.name, style: nameStyle),
+                maxLines: v5.nameMaxLines,
+                textDirection: Directionality.of(context),
+                textScaler: MediaQuery.textScalerOf(context),
+              )..layout(maxWidth: c.maxWidth);
+              final nameLines =
+                  tp.computeLineMetrics().length.clamp(1, v5.nameMaxLines);
+              final subLines = v5.hasSubLine ? v5.subLinesFor(nameLines) : 0;
+              return ClipRect(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      product.name,
+                      maxLines: nameLines,
+                      overflow: TextOverflow.ellipsis,
+                      style: nameStyle,
+                    ),
+                    if (subLines > 0)
+                      Semantics(
+                        identifier: 'card_sub_line',
+                        child: Text(
+                          v5.subLine,
+                          maxLines: subLines,
+                          overflow: TextOverflow.ellipsis,
+                          style: subStyle,
+                        ),
+                      ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: CompactProductCard._gapL),
+        SizedBox(
+          height: CompactProductCard._priceH,
+          child: CardPriceRow(
+            price: view.price,
+            height: CompactProductCard._priceH,
+            mrpColor: Ds.hex(v5.mrpFg, Ds.c.text),
+            forceStrike: v5.mrpStruck,
+            slantStrike: true,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// CMD #2160 — the MRP's slanted strike: one straight line across the text,
+/// rising left to right at [angleDeg], [stroke] thick.
+class SlantStrike extends StatelessWidget {
+  final Widget child;
+  final bool struck;
+  final Color color;
+  const SlantStrike({
+    super.key,
+    required this.child,
+    required this.struck,
+    required this.color,
+  });
+
+  static const double angleDeg = 8;
+  static const double stroke = 1.5;
+
+  @override
+  Widget build(BuildContext context) => !struck
+      ? child
+      : Semantics(
+          identifier: 'card_mrp_slant',
+          child: CustomPaint(
+            foregroundPainter: _SlantPainter(color),
+            child: child,
+          ),
+        );
+}
+
+class _SlantPainter extends CustomPainter {
+  final Color color;
+  _SlantPainter(this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rise = size.width / 2 * math.tan(SlantStrike.angleDeg * math.pi / 180);
+    final mid = size.height / 2;
+    canvas.drawLine(
+      Offset(0, mid + rise),
+      Offset(size.width, mid - rise),
+      Paint()
+        ..color = color
+        ..strokeWidth = SlantStrike.stroke
+        ..strokeCap = StrokeCap.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_SlantPainter old) => old.color != color;
 }

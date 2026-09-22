@@ -9,21 +9,43 @@ import 'package:flutter/material.dart';
 import '../design_tokens.dart';
 import '../services/resilient_http.dart';
 import '../services/ui_copy.dart';
+import '../user_state.dart';
 import '../utils/render_log.dart';
 
 class ReconnectingBanner extends StatelessWidget {
-  const ReconnectingBanner({super.key, this.flag});
+  const ReconnectingBanner({super.key, this.flag, this.staffOverride});
 
   /// Injected in tests; the app uses the singleton.
   final Reconnecting? flag;
 
+  /// Injected in tests; the app reads the session's own role flags.
+  final bool? staffOverride;
+
+  /// Staff = an admin, partner or supplier session. Everyone else — a guest
+  /// or a pharmacy — is on the customer app.
+  static bool isStaff(BuildContext context) {
+    final u = context.dependOnInheritedWidgetOfExactType<UserState>()?.notifier;
+    if (u == null) return false;
+    return u.isAdmin || u.isPartner || u.isSupplier || u.isPendingSupplier;
+  }
+
   @override
   Widget build(BuildContext context) {
     final f = flag ?? Reconnecting.instance;
+    final staff = staffOverride ?? isStaff(context);
     return AnimatedBuilder(
       animation: f,
       builder: (context, _) {
         if (!f.down) return const SizedBox.shrink();
+        // CMD #2156 (Om) — the customer app never draws this strip above its
+        // header. A shopper already has ONE quiet pill under the search bar
+        // (PayloadStatusLine) saying the same thing, and the page under it
+        // keeps its last content; two warnings for one slow connection read
+        // as a broken app. Staff and supplier screens keep the strip.
+        if (!staff) {
+          RenderLog.write('c2156_reconnect_bar', 'hidden');
+          return const SizedBox.shrink();
+        }
         RenderLog.write('c1149_reconnecting', f.reason);
         return Material(
           color: Ds.c.warningSoft,

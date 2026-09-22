@@ -234,7 +234,9 @@ class SearchHeaderBar extends StatefulWidget {
   final Future<ScanResult> Function(String code)? scanResolver;
 
   /// One height for both screens, so the two headers cannot drift apart.
-  static const double fieldHeight = 46;
+  // CMD #2147 (Om) — the field is the header row's height, so the sticky
+  // row's tile, field and bell are one line.
+  static double get fieldHeight => Ds.touch.headerTile;
 
   /// CMD #2117 — the semantics address of the field itself, so a browser
   /// journey taps the search box rather than a rounded rectangle.

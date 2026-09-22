@@ -20,8 +20,10 @@ class _LocationHeader extends StatelessWidget {
   final ValueChanged<String>? onAdminNav;
   final bool isSuperAdmin;
   final int deletionCount;
+
   /// CHANGE #306 — unactioned unpaid orders, for the nav badge.
   final int alertCount;
+
   /// CHANGE #298 — the shell owns the bell's state so a foreground push can
   /// refresh the badge that is currently mounted.
   final GlobalKey<NotificationBellState>? bellKey;
@@ -43,7 +45,8 @@ class _LocationHeader extends StatelessWidget {
     RenderLog.write('c2125_header', isAdmin ? 'staff' : 'v2');
     // CMD #2147 — the customer header v2: ONE row, logo left with the
     // order-hours pill beside it, the bell right. No WhatsApp, profile or cart.
-    if (!isAdmin) return _CustomerHeaderRow(onLogoTap: onLogoTap, bellKey: bellKey);
+    if (!isAdmin)
+      return _CustomerHeaderRow(onLogoTap: onLogoTap, bellKey: bellKey);
     return SafeArea(
       bottom: false,
       child: Container(
@@ -66,99 +69,112 @@ class _LocationHeader extends StatelessWidget {
         // is capped at half the row less the logo's own half and truncates
         // inside that cap ("12 Sep · Rai…"), so the logo can never be pushed
         // off centre at any width.
-        child: LayoutBuilder(builder: (context, box) {
-          final sideMax =
-              (box.maxWidth / 2 - _kLogoHalfReserve).clamp(Ds.touch.minTarget, box.maxWidth);
-          return Stack(
-            alignment: Alignment.center,
-            children: [
-              Center(
-                child: Tooltip(
-                  message: logoTooltip,
-                  child: MouseRegion(
-                    cursor: SystemMouseCursors.click,
-                    child: GestureDetector(
-                      onTap: onLogoTap,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Image.asset('assets/images/medibo_logo.png', width: 28, height: 28),
-                          const SizedBox(width: 7),
-                          RichText(
-                            text: const TextSpan(
-                              children: [
-                                TextSpan(
-                                  text: 'medi',
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w700,
-                                    color: Color(0xFF1B5E20),
-                                    letterSpacing: -0.3,
-                                  ),
-                                ),
-                                TextSpan(
-                                  text: 'BO',
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w800,
-                                    color: Color(0xFF4CAF50),
-                                    letterSpacing: -0.3,
-                                  ),
-                                ),
-                              ],
+        child: LayoutBuilder(
+          builder: (context, box) {
+            final sideMax = (box.maxWidth / 2 - _kLogoHalfReserve).clamp(
+              Ds.touch.minTarget,
+              box.maxWidth,
+            );
+            return Stack(
+              alignment: Alignment.center,
+              children: [
+                Center(
+                  child: Tooltip(
+                    message: logoTooltip,
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.click,
+                      child: GestureDetector(
+                        onTap: onLogoTap,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Image.asset(
+                              'assets/images/medibo_logo.png',
+                              width: 28,
+                              height: 28,
                             ),
-                          ),
-                        ],
+                            const SizedBox(width: 7),
+                            RichText(
+                              text: const TextSpan(
+                                children: [
+                                  TextSpan(
+                                    text: 'medi',
+                                    style: TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.w700,
+                                      color: Color(0xFF1B5E20),
+                                      letterSpacing: -0.3,
+                                    ),
+                                  ),
+                                  TextSpan(
+                                    text: 'BO',
+                                    style: TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.w800,
+                                      color: Color(0xFF4CAF50),
+                                      letterSpacing: -0.3,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-              // CMD #1914 (Om) — the wishlist heart and the inbox bell used
-              // to stand on the right too, so that edge was three icons wide
-              // against a single 40px avatar. Both moved into the profile
-              // dropdown, which is a `customer_feature_placement` row rather
-              // than anything this file decides. The unread count did not go
-              // with the bell: it rides the avatar (ProfileUnreadDot).
-              Row(
-                children: [
-                  // LEFT: staff keep the profile avatar. CMD #2125 — a customer's
-                  // header is the logo alone; the avatar's doors live on the
-                  // Profile tab (the fifth bottom tab) now.
-                  if (isAdmin) _MobileProfileAvatar(
-                      onAdminNav: onAdminNav,
-                      isSuperAdmin: isSuperAdmin,
-                      deletionCount: deletionCount,
-                      alertCount: alertCount),
-                  // CMD #1964 — the TEST badge stands with the avatar, inside
-                  // the SAME half-width reserve the date·zone chip obeys on the
-                  // other side, so switching a session on can never push the
-                  // centred logo off centre or collide with it. Flexible +
-                  // loose fit means it takes its natural width when there is
-                  // room and clips when there is not; it is absent entirely
-                  // (SizedBox.shrink, gap included) while the banner says
-                  // on:false, which is every real session.
-                  Flexible(
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: ConstrainedBox(
-                        constraints: BoxConstraints(
-                            maxWidth: (sideMax - Ds.touch.minTarget)
-                                .clamp(0.0, box.maxWidth)),
-                        child: const TestModeBadge(),
+                // CMD #1914 (Om) — the wishlist heart and the inbox bell used
+                // to stand on the right too, so that edge was three icons wide
+                // against a single 40px avatar. Both moved into the profile
+                // dropdown, which is a `customer_feature_placement` row rather
+                // than anything this file decides. The unread count did not go
+                // with the bell: it rides the avatar (ProfileUnreadDot).
+                Row(
+                  children: [
+                    // LEFT: staff keep the profile avatar. CMD #2125 — a customer's
+                    // header is the logo alone; the avatar's doors live on the
+                    // Profile tab (the fifth bottom tab) now.
+                    if (isAdmin)
+                      _MobileProfileAvatar(
+                        onAdminNav: onAdminNav,
+                        isSuperAdmin: isSuperAdmin,
+                        deletionCount: deletionCount,
+                        alertCount: alertCount,
+                      ),
+                    // CMD #1964 — the TEST badge stands with the avatar, inside
+                    // the SAME half-width reserve the date·zone chip obeys on the
+                    // other side, so switching a session on can never push the
+                    // centred logo off centre or collide with it. Flexible +
+                    // loose fit means it takes its natural width when there is
+                    // room and clips when there is not; it is absent entirely
+                    // (SizedBox.shrink, gap included) while the banner says
+                    // on:false, which is every real session.
+                    Flexible(
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth: (sideMax - Ds.touch.minTarget).clamp(
+                              0.0,
+                              box.maxWidth,
+                            ),
+                          ),
+                          child: const TestModeBadge(),
+                        ),
                       ),
                     ),
-                  ),
-                  const Spacer(),
-                  // RIGHT: staff get the date·zone chip that replaced the old
-                  // second row of filters. CMD #2125 — a customer gets nothing:
-                  // the floating "View cart" pill is the cart's one door.
-                  if (isAdmin) ScopeChip(maxWidth: sideMax),
-                ],
-              ),
-            ],
-          );
-        }),
+                    const Spacer(),
+                    // RIGHT: staff get the date·zone chip that replaced the old
+                    // second row of filters. CMD #2125 — a customer gets nothing:
+                    // the floating "View cart" pill is the cart's one door.
+                    if (isAdmin) ScopeChip(maxWidth: sideMax),
+                  ],
+                ),
+              ],
+            );
+          },
+        ),
       ),
     );
   }
@@ -174,63 +190,111 @@ class _CustomerHeaderRow extends StatelessWidget {
   final GlobalKey<NotificationBellState>? bellKey;
 
   @override
-  Widget build(BuildContext context) => SafeArea(
-        bottom: false,
-        child: Container(
-          width: double.infinity,
-          height: Ds.touch.headerBand,
-          color: Ds.c.surface,
-          padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-          child: Row(children: [
-            Semantics(
-              identifier: 'c2147_logo',
-              button: true,
-              child: GestureDetector(
-                onTap: onLogoTap,
-                child: const _BrandLockup(),
-              ),
-            ),
-            SizedBox(width: Ds.space.x8 + Ds.space.x4 / 2),
-            // The pill takes ALL the room between the logo and the bell (a
-            // Spacer beside it would take half, truncating "Open till 12 pm"
-            // at 360 px), and only ellipsizes when there truly is none left.
-            const Expanded(
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: OrderHoursHeaderPill(),
-              ),
-            ),
-            Semantics(
-              identifier: 'c2147_bell',
-              child: NotificationBell(key: bellKey),
-            ),
-          ]),
+  Widget build(BuildContext context) {
+    final t = Ds.touch;
+    return SafeArea(
+      bottom: false,
+      child: Container(
+        width: double.infinity,
+        height: Ds.touch.headerBand,
+        color: Ds.c.surface,
+        // Om: one [t.headerTile] row, [t.headerTop] from the top, 16 at the
+        // sides — the same box the sticky search row puts its tile in, so the
+        // tile never moves between the two states.
+        padding: EdgeInsets.only(
+          left: Ds.space.x16,
+          right: Ds.space.x16,
+          top: t.headerTop,
         ),
-      );
+        alignment: Alignment.topLeft,
+        child: SizedBox(
+          height: t.headerTile,
+          child: Row(
+            children: [
+              Semantics(
+                identifier: 'c2147_logo',
+                button: true,
+                child: GestureDetector(
+                  onTap: onLogoTap,
+                  child: const _BrandLockup(),
+                ),
+              ),
+              SizedBox(width: t.headerGap),
+              // The pill sits right after the wordmark (Om); the free room goes
+              // between it and the bell. It only scales down when a phone is
+              // too narrow for its label.
+              const Flexible(child: OrderHoursHeaderPill()),
+              const Spacer(),
+              Semantics(
+                identifier: 'c2147_bell',
+                child: SizedBox.square(
+                  dimension: t.headerTile,
+                  child: NotificationBell(key: bellKey),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
-/// The mediBO lock-up: the m mark + wordmark. [markOnly] draws the m alone —
-/// the sticky bar's left edge once the logo row has scrolled away.
+/// The mediBO lock-up: the m tile + wordmark. [markOnly] draws the tile alone
+/// — the sticky bar's left edge once the logo row has scrolled away. The tile
+/// is ONE constant size in both states (Om): it never grows or shrinks.
 class _BrandLockup extends StatelessWidget {
   const _BrandLockup({this.markOnly = false});
   final bool markOnly;
 
   @override
   Widget build(BuildContext context) {
-    final mark = Image.asset('assets/images/medibo_logo.png',
-        width: Ds.space.x24 + Ds.space.x4, height: Ds.space.x24 + Ds.space.x4);
+    final t = Ds.touch;
+    final mark = Container(
+      width: t.headerTile,
+      height: t.headerTile,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Ds.c.brand,
+        borderRadius: BorderRadius.all(Radius.circular(t.headerTileRadius)),
+      ),
+      child: Text(
+        'm',
+        style: Ds.t.title.copyWith(
+          fontSize: t.headerTileMark,
+          height: 1,
+          color: Ds.c.surface,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
     if (markOnly) return mark;
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      mark,
-      SizedBox(width: Ds.space.x8),
-      Text.rich(TextSpan(
-        style: Ds.t.title.copyWith(fontWeight: FontWeight.w800),
-        children: [
-          TextSpan(text: 'medi', style: TextStyle(color: Ds.c.brandDark)),
-          TextSpan(text: 'BO', style: TextStyle(color: Ds.c.brand)),
-        ],
-      )),
-    ]);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        mark,
+        SizedBox(width: t.headerWordGap),
+        Text.rich(
+          TextSpan(
+            style: Ds.t.title.copyWith(
+              fontSize: t.headerWord,
+              height: 1,
+              fontWeight: FontWeight.w700,
+            ),
+            children: [
+              TextSpan(
+                text: 'medi',
+                style: TextStyle(color: Ds.c.brandDark),
+              ),
+              TextSpan(
+                text: 'BO',
+                style: TextStyle(color: Ds.c.brand),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 }
 
@@ -245,9 +309,15 @@ class _MobileProfileAvatar extends StatefulWidget {
   final ValueChanged<String>? onAdminNav;
   final bool isSuperAdmin;
   final int deletionCount;
+
   /// CHANGE #306 — unactioned unpaid orders, for the nav badge.
   final int alertCount;
-  const _MobileProfileAvatar({this.onAdminNav, this.isSuperAdmin = false, this.deletionCount = 0, this.alertCount = 0});
+  const _MobileProfileAvatar({
+    this.onAdminNav,
+    this.isSuperAdmin = false,
+    this.deletionCount = 0,
+    this.alertCount = 0,
+  });
 
   @override
   State<_MobileProfileAvatar> createState() => _MobileProfileAvatarState();
@@ -274,11 +344,13 @@ class _MobileProfileAvatarState extends State<_MobileProfileAvatar> {
     final auth = UserState.of(context);
     // #571 — display_name comes from my_session(); no local profile row.
     final sessionName = auth.displayName;
-    final initial =
-        sessionName.isNotEmpty ? sessionName[0].toUpperCase() : null;
+    final initial = sessionName.isNotEmpty
+        ? sessionName[0].toUpperCase()
+        : null;
 
     final viewAs = ViewAsState.of(context);
-    final isCustomerViewAs = viewAs.isActive && viewAs.role == ViewAsRole.customer;
+    final isCustomerViewAs =
+        viewAs.isActive && viewAs.role == ViewAsRole.customer;
 
     return PressEffect(
       scale: 0.92,
@@ -288,12 +360,19 @@ class _MobileProfileAvatarState extends State<_MobileProfileAvatar> {
         child: GestureDetector(
           onTap: () {
             if (!auth.isAuthenticated) {
-              Navigator.push(context,
-                  MaterialPageRoute(builder: (_) => const LoginScreen()));
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginScreen()),
+              );
             } else if (isCustomerViewAs) {
               // In customer ViewAs mode, show the impersonated customer's profile
-              Navigator.push(context,
-                  MaterialPageRoute(builder: (_) => ProfileScreen(viewAsUserId: viewAs.identity!.userId)));
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) =>
+                      ProfileScreen(viewAsUserId: viewAs.identity!.userId),
+                ),
+              );
             } else if (onAdminNav != null) {
               _showAdminSheet(context, auth);
             } else {
@@ -309,45 +388,47 @@ class _MobileProfileAvatarState extends State<_MobileProfileAvatar> {
           child: Stack(
             clipBehavior: Clip.none,
             children: [
-          Container(
-            // CMD #2030 — the tap target is the token minimum (44), and its edge
-            // is the header's own 16 px margin, so it lands on the search bar's
-            // left edge exactly.
-            width: Ds.touch.minTarget,
-            height: Ds.touch.minTarget,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [Color(0xFF1D9E75), Color(0xFF0F4C35)],
-              ),
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFF1D9E75).withValues(alpha: 0.35),
-                  blurRadius: 8,
-                  offset: const Offset(0, 3),
+              Container(
+                // CMD #2030 — the tap target is the token minimum (44), and its edge
+                // is the header's own 16 px margin, so it lands on the search bar's
+                // left edge exactly.
+                width: Ds.touch.minTarget,
+                height: Ds.touch.minTarget,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFF1D9E75), Color(0xFF0F4C35)],
+                  ),
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF1D9E75).withValues(alpha: 0.35),
+                      blurRadius: 8,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-            child: Center(
-              child: initial != null
-                  ? Text(
-                      initial,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                        color: Colors.white,
-                        height: 1,
-                      ),
-                    )
-                  : const Icon(Icons.person_rounded,
-                      color: Colors.white, size: 20),
-            ),
-          ),
+                child: Center(
+                  child: initial != null
+                      ? Text(
+                          initial,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.white,
+                            height: 1,
+                          ),
+                        )
+                      : const Icon(
+                          Icons.person_rounded,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                ),
+              ),
               if (auth.isAuthenticated)
-                const Positioned(
-                    top: -2, right: -2, child: ProfileUnreadDot()),
+                const Positioned(top: -2, right: -2, child: ProfileUnreadDot()),
             ],
           ),
         ),
@@ -388,19 +469,38 @@ class _MobileProfileAvatarState extends State<_MobileProfileAvatar> {
             const SizedBox(height: 16),
             Text(
               auth.headerTitle,
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF111827),
+              ),
             ),
             const SizedBox(height: 4),
-            Text(c('home_shell.administrator'), style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+            Text(
+              c('home_shell.administrator'),
+              style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
+            ),
             const SizedBox(height: 4),
-            Builder(builder: (_) {
-              RenderLog.write('c209_debug_banner_shown', 1);
-              return Text('super: $isSuperAdmin',
-                  style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)));
-            }),
+            Builder(
+              builder: (_) {
+                RenderLog.write('c209_debug_banner_shown', 1);
+                return Text(
+                  'super: $isSuperAdmin',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF9CA3AF),
+                  ),
+                );
+              },
+            ),
             const SizedBox(height: 16),
             const Divider(),
-            Builder(builder: (_) { RenderLog.write('c473_profile_menu_built', 1); return const SizedBox.shrink(); }),
+            Builder(
+              builder: (_) {
+                RenderLog.write('c473_profile_menu_built', 1);
+                return const SizedBox.shrink();
+              },
+            ),
             // CHANGE #325 — View Profile and Logout, and nothing else. The
             // rows are nav_registry().profile_menu, and the backend admits
             // only identity onto that surface, so a feature cannot come back

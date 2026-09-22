@@ -750,7 +750,7 @@ class _StickyLeadState extends State<_StickyLead> {
               : _shellStuck()
                   ? Padding(
                       key: const ValueKey('mark'),
-                      padding: EdgeInsets.only(right: Ds.space.x8),
+                      padding: EdgeInsets.only(right: Ds.touch.headerGap),
                       child: GestureDetector(
                         onTap: widget.state._goHome,
                         child: const _BrandLockup(markOnly: true),
@@ -788,10 +788,12 @@ class _StickyBell extends StatelessWidget {
               child: show
                   ? Padding(
                       key: const ValueKey('bell'),
-                      padding: EdgeInsets.only(left: Ds.space.x8),
+                      padding: EdgeInsets.only(left: Ds.touch.headerGap),
                       child: Semantics(
                         identifier: 'c2147_sticky_bell',
-                        child: const NotificationBell(),
+                        child: SizedBox.square(
+                            dimension: Ds.touch.headerTile,
+                            child: const NotificationBell()),
                       ),
                     )
                   : const SizedBox.shrink(key: ValueKey('none')),

@@ -113,7 +113,8 @@ class _MobileBottomBar extends StatelessWidget {
     return ListenableBuilder(
       // CMD #2147 (Om) — the login / registration ask rides INSIDE the dock
       // card now, so the dock listens to it as well as to the shop badge.
-      listenable: Listenable.merge([ShopBadge.value, appRegistrationBar]),
+      listenable: Listenable.merge(
+          [ShopBadge.value, appRegistrationBar, appUpdateBar]),
       builder: (context, _) => FloatingDock(
         bar: _joinedBar(context),
         activeIndex: bottomNavIndex,
@@ -132,6 +133,22 @@ class _MobileBottomBar extends StatelessWidget {
   /// there is nothing to ask (signed in and approved) — the card then shrinks
   /// back to the dock alone. Every word is the payload's.
   static Widget? _joinedBar(BuildContext context) {
+    // ONE bar at a time (CMD #2114): update > login > registration.
+    if (appUpdateBar.visible) {
+      RenderLog.write('c2147_dock_bar', 'update');
+      final busy = appUpdateBar.updating || appUpdateBar.downloaded;
+      return DockBarRow(
+        key: const ValueKey('c2147_dock_update'),
+        icon: Icons.settings_outlined,
+        label: appUpdateBar.label,
+        action: appUpdateBar.downloaded
+            ? appUpdateBar.downloadedLabel
+            : appUpdateBar.updating
+                ? appUpdateBar.updatingLabel
+                : appUpdateBar.actionLabel,
+        onAction: busy ? () {} : (appUpdateBar.onUpdate ?? () {}),
+      );
+    }
     if (!appRegistrationBar.visible) return null;
     final login = appRegistrationBar.kind == 'login';
     RenderLog.write('c2147_dock_bar', appRegistrationBar.kind);

@@ -66,13 +66,16 @@ class FloatingDock extends StatelessWidget {
   final ValueChanged<int> onTap;
 
   /// The dock's own height, its float above the screen edges, and the pill.
-  static double get dockHeight => Ds.space.x48 + Ds.space.x16 + Ds.space.x4 + 2;
+  static double get dockHeight => Ds.space.x48 + Ds.space.x16;
   static double get edge => Ds.space.x12 + 2;
-  static double get pillHeight => Ds.touch.minTarget;
+  static double get pillHeight => Ds.space.x48;
   static double get radius => Ds.space.x24 + Ds.space.x4;
 
-  /// The joined bar row: 60 tall, and the 1 px hairline under it.
-  static double get barHeight => Ds.space.x48 + Ds.space.x12;
+  /// CMD #2156 (Om) — the joined bar row is EXACTLY the nav row's height
+  /// (64 + 64, the 1 px hairline between), and its button is the 44 touch
+  /// minimum while the active pill is 48 — both centred in their rows.
+  static double get barHeight => dockHeight;
+  static double get barButtonHeight => Ds.touch.minTarget;
   static const double hairline = 1;
 
   /// One shadow for the whole card: 0 6 20 rgba(0,0,0,.12).
@@ -422,7 +425,7 @@ class DockBarRow extends StatelessWidget {
             identifier: actionIdentifier,
             button: true,
             child: SizedBox(
-              height: Ds.space.x32 + Ds.space.x8 + 2,
+              height: FloatingDock.barButtonHeight,
               child: FilledButton(
                 onPressed: onAction,
                 style: FilledButton.styleFrom(

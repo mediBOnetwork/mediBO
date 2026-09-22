@@ -71,6 +71,8 @@ import '../services/registration_bar.dart';
 import '../services/search_chrome_focus.dart';
 import 'cart_pill.dart';
 import 'update_bar.dart';
+// CMD #2147 — the shell's dock draws the update ask in its top row.
+export 'update_bar.dart' show appUpdateBar;
 
 /// The two reserved boxes, by name, so the protected suite can measure the
 /// SLOTS rather than whatever the pill inside one happens to have scaled to.
@@ -233,14 +235,14 @@ BottomStackLiveMetrics bottomStackLiveOf(
   // route or from an auth flag read here: one RPC answers signed-out with the
   // login bar and a shop that owes its papers with the registration bar, and
   // this only draws whichever came back.
-  final kind = !hasNav
+  // CMD #2147 (Om) — on the customer phone shell the ONE bar (update, else
+  // login, else registration) is the TOP ROW of the floating dock card, so
+  // the stack draws none of them there: never two bars stacked.
+  final kind = !hasNav || bottomBarJoinsDock(context)
       ? BottomBarKind.none
       : appUpdateBar.visible
           ? BottomBarKind.update
-          // CMD #2147 — on the customer phone shell the login /
-          // registration ask is the TOP ROW of the floating dock card, so the
-          // stack leaves it out (the update bar still rides here).
-          : appRegistrationBar.visible && !bottomBarJoinsDock(context)
+          : appRegistrationBar.visible
               ? (appRegistrationBar.kind == 'login'
                   ? BottomBarKind.login
                   : BottomBarKind.registration)

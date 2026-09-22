@@ -19,6 +19,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -121,6 +122,7 @@ class LoginView extends StatefulWidget {
     this.onOverlay,
     this.pollInterval = const Duration(seconds: 2),
     this.pollTimeout = const Duration(seconds: 15),
+    this.autoSendOnFill = kIsWeb,
   });
 
   final LoginApi api;
@@ -135,6 +137,10 @@ class LoginView extends StatefulWidget {
 
   final Duration pollInterval;
   final Duration pollTimeout;
+
+  /// CMD #2159 — web only: an autofill/paste of the whole number sends the
+  /// code with no tap. Android's number picker is its own path (#2131).
+  final bool autoSendOnFill;
 
   @override
   State<LoginView> createState() => _LoginViewState();
@@ -170,6 +176,10 @@ class _LoginViewState extends State<LoginView> {
   /// Raw digits of the number that was actually sent, so polling and verify
   /// address the same identity even if the field is edited afterwards.
   String _sentDigits = '';
+
+  /// CMD #2159 — numbers already auto-sent after an autofill/paste this visit.
+  /// One auto-send per number per visit; after that the user taps Get OTP.
+  final Set<String> _autoSent = {};
 
   /// CMD #1904 — the backend's own sentence for a number it has never seen.
   /// Empty for an existing account, and NEVER written here: it is the `note`
@@ -336,6 +346,37 @@ class _LoginViewState extends State<LoginView> {
       _numCtrl.selection =
           TextSelection.collapsed(offset: _numCtrl.text.length);
     });
+    // CMD #2159 — proof the number box (autocomplete="tel") painted.
+    RenderLog.write('c2159_number_box', 'tel');
+  }
+
+  /// CMD #2159 — the code step's back arrow returns to the number box with the
+  /// number still filled and editable; sending again is the user's tap.
+  void _backToNumber() {
+    _pollTimer?.cancel();
+    _resendTimer?.cancel();
+    setState(() {
+      _step = LoginStep.number;
+      _message = null;
+      _newNote = '';
+      _codeError = false;
+      _sending = false;
+      _numCtrl.selection =
+          TextSelection.collapsed(offset: _numCtrl.text.length);
+    });
+  }
+
+  /// CMD #2159 — a browser autofill suggestion or a paste landed the whole
+  /// number in one change: send at once with the RAW value (the backend's
+  /// identity_norm cleans +91 / 91 / 0) and open the code step with no tap.
+  void _onBulkNumber(String raw, String clean) {
+    if (!widget.autoSendOnFill) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _step != LoginStep.number || _sending) return;
+      if (!_autoSent.add(clean)) return;
+      RenderLog.write('c2159_autofill_send', clean.length);
+      _send(raw: raw);
+    });
   }
 
   void _backToActions() {
@@ -401,14 +442,14 @@ class _LoginViewState extends State<LoginView> {
 
   // ── Send ───────────────────────────────────────────────────────────────────
 
-  Future<void> _send() async {
+  Future<void> _send({String? raw}) async {
     if (_sending) return;
-    final digits = _digits;
+    var digits = _digits;
     setState(() => _sending = true);
 
     Map<String, dynamic> r;
     try {
-      r = await widget.api.requestOtp(digits);
+      r = await widget.api.requestOtp(raw ?? digits);
     } catch (_) {
       if (mounted) setState(() => _sending = false);
       return;
@@ -416,7 +457,17 @@ class _LoginViewState extends State<LoginView> {
     if (!mounted) return;
 
     final ok = r['ok'] == true;
+    // CMD #2159 — the backend names the clean 10 digits it addressed; the box
+    // shows that, and polling/verify use it.
+    final n = r['number'];
+    if (n is String && n.isNotEmpty) digits = n;
     setState(() {
+      if (n is String && n.isNotEmpty) {
+        _numCtrl.value = TextEditingValue(
+          text: _format5x5(n),
+          selection: TextSelection.collapsed(offset: _format5x5(n).length),
+        );
+      }
       _setMessage(r['message']);
       _newNote = _noteOf(r);
       if (!ok) _sending = false;
@@ -711,10 +762,14 @@ class _LoginViewState extends State<LoginView> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _primaryButton(
-            label: _s('whatsapp_label'),
-            onPressed: _openNumber,
-            busy: false,
+          Semantics(
+            identifier: 'login_whatsapp',
+            button: true,
+            child: _primaryButton(
+              label: _s('whatsapp_label'),
+              onPressed: _openNumber,
+              busy: false,
+            ),
           ),
           const SizedBox(height: 12),
           _secondaryButton(
@@ -817,7 +872,8 @@ class _LoginViewState extends State<LoginView> {
           padding: EdgeInsets.zero,
           constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
           icon: const Icon(Icons.arrow_back_ios_new, size: 16, color: _muted),
-          onPressed: _backToActions,
+          onPressed:
+              _step == LoginStep.code ? _backToNumber : _backToActions,
         ),
       );
 
@@ -867,8 +923,11 @@ class _LoginViewState extends State<LoginView> {
                 focusNode: _numFocus,
                 keyboardType: TextInputType.number,
                 textInputAction: TextInputAction.done,
+                // CMD #2159 — autocomplete="tel" so the browser offers the
+                // saved number; the formatter cleans it and auto-sends.
+                autofillHints: const [AutofillHints.telephoneNumber],
                 onSubmitted: (_) => _send(),
-                inputFormatters: [_NumberFormatter()],
+                inputFormatters: [LoginNumberFormatter(onBulk: _onBulkNumber)],
                 style: const TextStyle(
                   fontSize: 17,
                   letterSpacing: 1.5,
@@ -1127,12 +1186,38 @@ class _LoginViewState extends State<LoginView> {
 
 /// Digits only, max 10, rendered as 5+5 while typing. The RPC always receives
 /// the raw digits, never this formatted form.
-class _NumberFormatter extends TextInputFormatter {
+///
+/// CMD #2159 — cleaning happens BEFORE the 10-digit cap: an autofill or paste
+/// (two or more characters inserted in one change) keeps the LAST 10 digits,
+/// so 08357881874 / +91 83578 81874 / 918357881874 all land as 8357881874 and
+/// fire [onBulk] with the raw value. Typing by hand keeps the old cap.
+class LoginNumberFormatter extends TextInputFormatter {
+  LoginNumberFormatter({this.onBulk});
+
+  final void Function(String raw, String clean)? onBulk;
+
+  static int insertedLength(String a, String b) {
+    var p = 0;
+    while (p < a.length && p < b.length && a[p] == b[p]) {
+      p++;
+    }
+    var s = 0;
+    while (s < a.length - p && s < b.length - p &&
+        a[a.length - 1 - s] == b[b.length - 1 - s]) {
+      s++;
+    }
+    return b.length - p - s;
+  }
+
   @override
   TextEditingValue formatEditUpdate(
       TextEditingValue oldValue, TextEditingValue newValue) {
     var d = newValue.text.replaceAll(RegExp(r'\D'), '');
-    if (d.length > 10) d = d.substring(0, 10);
+    final bulk = insertedLength(oldValue.text, newValue.text) >= 2;
+    if (d.length > 10) {
+      d = bulk ? d.substring(d.length - 10) : d.substring(0, 10);
+    }
+    if (bulk && d.length == 10) onBulk?.call(newValue.text, d);
     final out = d.length > 5 ? '${d.substring(0, 5)} ${d.substring(5)}' : d;
     return TextEditingValue(
       text: out,

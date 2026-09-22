@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pharma_b2b/screens/auth/login_view.dart';
+import 'package:pharma_b2b/utils/render_log.dart';
 
 /// Mirrors the live login_screen_config() payload.
 const _config = <String, dynamic>{
@@ -82,6 +83,8 @@ class _StubApi implements LoginApi {
 }
 
 void main() {
+  setUpAll(() => RenderLog.flushEnabled = false);
+
   testWidgets(
       'first paint: both buttons from config, no password/forgot UI, no number field, no code boxes',
       (tester) async {

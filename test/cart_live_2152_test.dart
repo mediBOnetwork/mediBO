@@ -151,28 +151,6 @@ void main() {
     expect(find.text('Got it'), findsNothing, reason: 'hidden in the tap frame');
     expect(calls, ['cart_swipe_tip_seen']);
   });
-
-  testWidgets('4. the CD burst plays ~900 ms and never resizes the badge',
-      (tester) async {
-    final c = AnimationController(
-        vsync: const TestVSync(),
-        duration: const Duration(milliseconds: kCdBurstMs));
-    await tester.pumpWidget(MaterialApp(
-      home: Scaffold(
-        body: Center(
-          child: CdBurstBadge(progress: c, label: '5% CD', ink: Colors.orange),
-        ),
-      ),
-    ));
-    final rest = tester.getSize(find.byType(CdBurstBadge));
-    expect(find.text('5% CD'), findsNothing, reason: 'at rest: the % tile only');
-    c.forward(from: 0);
-    await tester.pump(); // the ticker's first frame
-    await tester.pump(const Duration(milliseconds: 250));
-    expect(find.text('5% CD'), findsOneWidget, reason: 'risen');
-    expect(tester.getSize(find.byType(CdBurstBadge)), rest);
-    await tester.pump(const Duration(milliseconds: 700));
-    expect(find.text('5% CD'), findsNothing, reason: 'floated up and faded');
-    c.dispose();
-  });
+  // 4. (the CD burst) was replaced by the CMD #2162 roll — see
+  // test/cmd2162_cd_roll_test.dart.
 }

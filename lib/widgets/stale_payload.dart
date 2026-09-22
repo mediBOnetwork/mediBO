@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import '../design_tokens.dart';
 import '../services/payload_cache.dart';
 import '../services/ui_copy.dart';
-import '../utils/render_log.dart';
 
 /// CMD #1813 — the two widgets that make "no blank screen, ever" structural
 /// rather than a promise each screen has to keep on its own.
@@ -85,21 +84,25 @@ class _PayloadStatusLineState extends State<PayloadStatusLine> {
         ? Ds.c.successSoft
         : failing
             ? Ds.c.warningSoft
-            : Ds.c.surface;
-    RenderLog.write('c2156_net_pill', back ? 'back' : (failing ? 'slow' : 'quiet'));
+            : Ds.c.bg;
     return Semantics(
       identifier: 'c2156_net_pill',
       liveRegion: true,
-      child: Container(
-        padding: EdgeInsets.symmetric(
-          horizontal: Ds.space.x12,
-          vertical: Ds.space.x4 + Ds.space.x4 / 2,
-        ),
+      // The pill's ground is the Container's own colour (a token), clipped
+      // round; the hairline and the soft shadow ride the box around it.
+      child: DecoratedBox(
         decoration: BoxDecoration(
-          color: bg,
           borderRadius: Ds.r.rChip,
           border: Border.all(color: Ds.c.divider),
           boxShadow: Ds.elevation.e1,
+        ),
+        child: ClipRRect(
+        borderRadius: Ds.r.rChip,
+        child: Container(
+        color: bg,
+        padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x12,
+          vertical: Ds.space.x4 + Ds.space.x4 / 2,
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -122,6 +125,8 @@ class _PayloadStatusLineState extends State<PayloadStatusLine> {
             ),
           ],
         ),
+      ),
+      ),
       ),
     );
   }

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -195,10 +196,18 @@ class SearchHeaderBar extends StatefulWidget {
     this.scanResolver,
     this.leading,
     this.trailingBare,
+    this.compact,
   });
 
   final TextEditingController controller;
   final FocusNode? focusNode;
+
+  /// CMD #2156 (Om) — set by the customer phone header, where this bar is the
+  /// SECOND row of the one shared header: 0 above (the logo row's own 12 is
+  /// the gap), a 48 field, 12 below — 124 in all with the 64 logo row. When
+  /// the logo row has scrolled away (true) the bar IS the header: 12 · 40 ·
+  /// 12 = 64, the field the same 40 as the logo tile and the bell beside it.
+  final ValueListenable<bool>? compact;
 
   /// CMD #2147 — a control LEFT of the field (the sticky bar's m mark, or ←
   /// on the search screen). It sizes itself, gap included, so an empty one
@@ -234,9 +243,11 @@ class SearchHeaderBar extends StatefulWidget {
   final Future<ScanResult> Function(String code)? scanResolver;
 
   /// One height for both screens, so the two headers cannot drift apart.
-  // CMD #2147 (Om) — the field is the header row's height, so the sticky
-  // row's tile, field and bell are one line.
-  static double get fieldHeight => Ds.touch.headerTile;
+  // CMD #2156 (Om) — 48 in the header's top state; the sticky row shrinks it
+  // to the logo tile's 40 ([compactFieldHeight]) so tile, field and bell are
+  // one line.
+  static double get fieldHeight => Ds.space.x48;
+  static double get compactFieldHeight => Ds.touch.headerTile;
 
   /// CMD #2117 — the semantics address of the field itself, so a browser
   /// journey taps the search box rather than a rounded rectangle.
@@ -321,16 +332,36 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final compact = widget.compact;
+    if (compact == null) return _row(context, null);
+    return ValueListenableBuilder<bool>(
+      valueListenable: compact,
+      builder: (context, stuck, _) => _row(context, stuck),
+    );
+  }
+
+  /// [stuck] null = a plain search screen; false/true = the shared customer
+  /// header's top / scrolled state (see [SearchHeaderBar.compact]).
+  Widget _row(BuildContext context, bool? stuck) {
+    final EdgeInsets pad = stuck == null
+        ? EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x8)
+        : EdgeInsets.fromLTRB(Ds.space.x16, stuck ? Ds.space.x12 : 0, Ds.space.x16, Ds.space.x12);
+    final double field = stuck == true
+        ? SearchHeaderBar.compactFieldHeight
+        : SearchHeaderBar.fieldHeight;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOut,
       color: Ds.c.surface,
-      padding: EdgeInsets.fromLTRB(
-          Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x8),
+      padding: pad,
       child: Row(
         children: [
           if (widget.leading != null) widget.leading!,
           Expanded(
-            child: Container(
-              height: SearchHeaderBar.fieldHeight,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOut,
+              height: field,
               // CMD #2037 — the field is the HEADER's white, not the page's
               // grey, with the same hairline every card uses. The grey fill
               // drew a second block under the header; on one white ground the
@@ -1148,10 +1179,14 @@ class SearchChrome extends StatefulWidget {
     this.minChars = 2,
     this.idleInBody = false,
     this.leading,
+    this.compact,
     this.trailingBare,
   });
 
   /// CMD #2147 — see [SearchHeaderBar.leading] / [SearchHeaderBar.trailingBare].
+  /// CMD #2156 — see [SearchHeaderBar.compact].
+  final ValueListenable<bool>? compact;
+
   final Widget? leading;
   final Widget? trailingBare;
 
@@ -1351,6 +1386,7 @@ class _SearchChromeState extends State<SearchChrome> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         SearchHeaderBar(
+          compact: widget.compact,
           controller: widget.controller,
           focusNode: widget.focusNode,
           placeholder: p?.placeholder ?? '',

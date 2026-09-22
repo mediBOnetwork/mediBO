@@ -642,6 +642,7 @@ Widget _shellSearchHeader(_HomeShellState s, {Widget? trailing, bool sticky = fa
       trailing: trailing,
       trailingBare: sticky ? _StickyBell(focusNode: s._searchFocus) : null,
       leading: sticky ? _StickyLead(state: s) : null,
+      compact: sticky ? _shellStuckFlag : null,
       onSubmit: s._handleSearchSubmit,
       onFilterPick: (g, o) => _shellFilterPick(s, g, o),
       onClear: () => s._applySearch(SearchQueryState.blank),
@@ -669,6 +670,14 @@ const Duration _kStickyMotion = Duration(milliseconds: 200);
 /// and the bell. Read from the one band notifier — never a second scroll
 /// listener.
 bool _shellStuck() => shellHeaderCollapse.value >= Ds.touch.headerBand - 0.5;
+
+/// CMD #2156 — [_shellStuck] as a listenable, for the search row's own
+/// 48 → 40 field and 0 → 12 top inset. Derived from the ONE band notifier.
+final ValueNotifier<bool> _shellStuckFlag = () {
+  final v = ValueNotifier<bool>(false);
+  shellHeaderCollapse.addListener(() => v.value = _shellStuck());
+  return v;
+}();
 
 /// The sticky bar's left edge: nothing at the top of the page, the m mark
 /// once the logo row has gone, and ← while the search box is focused (the
@@ -801,6 +810,49 @@ class _StickyBell extends StatelessWidget {
           );
         },
       );
+}
+
+/// CMD #2156 (Om) — ONE shared header on every customer tab: the tabs that
+/// have no search box of their own (Bulk, Profile …) still show the same
+/// search row, same size and place. It is the storefront's search: a tap goes
+/// to Home and opens the box there. Home, the Catalogue and Orders draw their
+/// own (Orders keeps its "order code or medicine" placeholder).
+final TextEditingController _jumpCtrl = TextEditingController();
+final ValueNotifier<bool> _jumpTopState = ValueNotifier<bool>(false);
+Future<SearchPagePayload?>? _jumpChrome;
+
+bool _shellWantsSearchJump(_HomeShellState s, bool isAdmin) =>
+    !isAdmin && s._index != 0 && s._index != 1 && s._index != 12;
+
+Widget _shellSearchJump(_HomeShellState s) {
+  RenderLog.write('c2156_search_jump', s._index);
+  return Semantics(
+    identifier: 'c2156_search_jump',
+    button: true,
+    child: GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        s._setIndex(0);
+        WidgetsBinding.instance
+            .addPostFrameCallback((_) => s._searchFocus.requestFocus());
+      },
+      child: AbsorbPointer(
+        // The same words the storefront box shows: search_page()'s own,
+        // from the device copy SearchChrome keeps.
+        child: FutureBuilder<SearchPagePayload?>(
+          future: _jumpChrome ??= s._repo.cachedSearchChrome(),
+          builder: (_, snap) => SearchHeaderBar(
+            controller: _jumpCtrl,
+            placeholder: snap.data?.placeholder ?? '',
+            bar: snap.data?.searchBar ?? SearchBarSpec.fallback,
+            onChanged: (_) {},
+            onSubmit: (_) {},
+            compact: _jumpTopState,
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 /// CMD #2044 — the focused, empty search box FILLS the screen instead of

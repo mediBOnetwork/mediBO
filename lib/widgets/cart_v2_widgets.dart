@@ -751,7 +751,9 @@ class CartReceiveBox extends StatelessWidget {
       selected: on,
       child: InkWell(
         borderRadius: Ds.r.rButton,
-        onTap: enabled && !on ? () => onSelect(k) : null,
+        // CMD #2152 — every enabled option takes the tap, including the one
+        // already selected (the save is idempotent), so the tap always lands.
+        onTap: enabled ? () => onSelect(k) : null,
         child: Opacity(
           opacity: o['enabled'] == true ? 1 : 0.5,
           child: Container(

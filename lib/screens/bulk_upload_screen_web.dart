@@ -2543,6 +2543,9 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     return LayoutBuilder(
       builder: (context, viewport) => SingleChildScrollView(
         controller: _scrollCtrl,
+        // CMD #2147 — the page runs behind the floating pill and dock; this
+        // is the room the shell hands down so the last card scrolls clear.
+        padding: EdgeInsets.only(bottom: MediaQuery.paddingOf(context).bottom),
         child: ConstrainedBox(
           constraints: BoxConstraints(minHeight: viewport.maxHeight),
           child: Container(

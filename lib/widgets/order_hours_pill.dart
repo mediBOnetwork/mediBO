@@ -68,7 +68,11 @@ class OrderHoursPill extends StatelessWidget {
         // The pill is ~28 px tall; the hit box is the full 44 px row.
         child: ConstrainedBox(
           constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
-          child: Center(
+          // Left-aligned (Om): the pill sits right after the logo; the free
+          // room goes between it and the bell, never around it.
+          child: Align(
+            alignment: Alignment.centerLeft,
+            widthFactor: 1,
             child: AnimatedSize(
               duration: colorMs,
               curve: Curves.easeOut,
@@ -88,13 +92,19 @@ class OrderHoursPill extends StatelessWidget {
                     Flexible(
                       child: AnimatedSwitcher(
                         duration: Duration(milliseconds: still ? 0 : 150),
-                        child: Text(
-                          label,
+                        // Om: never ellipsize — the full label on one
+                        // line; only a phone too narrow for it scales it down.
+                        child: FittedBox(
                           key: ValueKey(label),
+                          fit: BoxFit.scaleDown,
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                          label,
                           maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                          softWrap: false,
                           style: Ds.t.caption
                               .copyWith(color: fg, fontWeight: FontWeight.w600),
+                        ),
                         ),
                       ),
                     ),

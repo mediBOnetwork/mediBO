@@ -110,9 +110,12 @@ class _MobileBottomBar extends StatelessWidget {
     // own, so the dock listens to it rather than reading it once.
     final found = slots.indexWhere((s) => pageOf(s) == index);
     final bottomNavIndex = found < 0 ? 0 : found;
-    return ValueListenableBuilder(
-      valueListenable: ShopBadge.value,
-      builder: (context, _, _) => FloatingDock(
+    return ListenableBuilder(
+      // CMD #2147 (Om) — the login / registration ask rides INSIDE the dock
+      // card now, so the dock listens to it as well as to the shop badge.
+      listenable: Listenable.merge([ShopBadge.value, appRegistrationBar]),
+      builder: (context, _) => FloatingDock(
+        bar: _joinedBar(context),
         activeIndex: bottomNavIndex,
         // The one map, read once, used for both halves of the question: which
         // slots exist (the tabs) and where each one goes (here).
@@ -121,6 +124,24 @@ class _MobileBottomBar extends StatelessWidget {
         },
         tabs: [for (final s in slots) _dockTab(s, cart)],
       ),
+    );
+  }
+
+  /// CMD #2147 (Om) — the guest "… · Login" / "Registration pending ·
+  /// Continue" ask as the dock card's top row, or null once the backend says
+  /// there is nothing to ask (signed in and approved) — the card then shrinks
+  /// back to the dock alone. Every word is the payload's.
+  static Widget? _joinedBar(BuildContext context) {
+    if (!appRegistrationBar.visible) return null;
+    final login = appRegistrationBar.kind == 'login';
+    RenderLog.write('c2147_dock_bar', appRegistrationBar.kind);
+    return DockBarRow(
+      key: login ? kLoginBarKey : kRegistrationBarKey,
+      icon: login ? Icons.person_outline : Icons.assignment_outlined,
+      label: appRegistrationBar.label,
+      action: appRegistrationBar.actionLabel,
+      actionIdentifier: login ? kLoginBarActionId : null,
+      onAction: () => openRegistrationBar(context),
     );
   }
 
@@ -708,9 +729,10 @@ Widget shellBottomStack(VoidCallback onTap, int page, {bool staff = false}) =>
       ),
     );
 
-/// CMD #2147 — Home, Catalogue and Profile: their scroll views pad by
-/// `MediaQuery` / [BottomStackSpacer], so the page can run behind the chrome.
-const Set<int> _kFloatingPages = {0, 12, 15};
+/// CMD #2147 — every customer tab (Home, Orders, Bulk, Catalogue, Profile):
+/// their scroll views pad by `MediaQuery` / [BottomStackSpacer], so the page
+/// runs behind the View cart pill and the dock with no band anywhere.
+const Set<int> _kFloatingPages = {0, 1, 2, 12, 15};
 
 /// CMD #2140 — the page host for every shell tab: staff pages clear the bar,
 /// customer tabs clear the bar AND, on a tab that floats it, the View cart

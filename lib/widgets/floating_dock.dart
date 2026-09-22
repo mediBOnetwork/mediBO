@@ -49,7 +49,13 @@ class FloatingDock extends StatelessWidget {
     required this.tabs,
     required this.activeIndex,
     required this.onTap,
+    this.bar,
   });
+
+  /// CMD #2147 (Om) — the login / registration ask, joined INTO the dock as
+  /// the card's top row ([DockBarRow]). Null = the card is the dock alone; the
+  /// change animates (200 ms).
+  final Widget? bar;
 
   final List<DockTab> tabs;
 
@@ -60,10 +66,22 @@ class FloatingDock extends StatelessWidget {
   final ValueChanged<int> onTap;
 
   /// The dock's own height, its float above the screen edges, and the pill.
-  static double get dockHeight => Ds.space.x48 + Ds.space.x12;
-  static double get edge => Ds.space.x12;
+  static double get dockHeight => Ds.space.x48 + Ds.space.x16 + Ds.space.x4 + 2;
+  static double get edge => Ds.space.x12 + 2;
   static double get pillHeight => Ds.touch.minTarget;
-  static double get radius => Ds.space.x24 - 2;
+  static double get radius => Ds.space.x24 + Ds.space.x4;
+
+  /// The joined bar row: 60 tall, and the 1 px hairline under it.
+  static double get barHeight => Ds.space.x48 + Ds.space.x12;
+  static const double hairline = 1;
+
+  /// One shadow for the whole card: 0 6 20 rgba(0,0,0,.12).
+  static List<BoxShadow> get cardShadow => [
+        BoxShadow(color: Ds.c.text.withValues(alpha: 0.12), blurRadius: Ds.space.x16 + Ds.space.x4, offset: Offset(0, Ds.space.x4 + 2)),
+      ];
+
+  /// The bar row's light-green ground.
+  static Color get barGround => Color.alphaBlend(Ds.c.brand.withValues(alpha: 0.05), Ds.c.surface);
 
   /// The motion: 220 ms on a gentle spring.
   static const Duration motion = Duration(milliseconds: 220);
@@ -81,19 +99,42 @@ class FloatingDock extends StatelessWidget {
     final active = activeIndex.clamp(0, tabs.length - 1);
     RenderLog.write('c2147_dock', '${tabs.length}:${tabs[active].key}');
     final safe = MediaQuery.viewPaddingOf(context).bottom;
+    final bar = this.bar;
     return Padding(
       padding: EdgeInsets.only(left: edge, right: edge, bottom: edge + safe),
-      child: Container(
-        height: dockHeight,
+      // ONE white card: the bar row on top, the dock row below, no gap.
+      child: DecoratedBox(
         decoration: BoxDecoration(
           color: Ds.c.surface,
           borderRadius: BorderRadius.circular(radius),
-          boxShadow: Ds.elevation.e2,
+          boxShadow: cardShadow,
         ),
-        padding: EdgeInsets.symmetric(horizontal: Ds.space.x8),
-        child: LayoutBuilder(
-          builder: (context, box) =>
-              _track(context, box.maxWidth, active, still),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(radius),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              AnimatedSize(
+                duration: Duration(milliseconds: still ? 0 : 200),
+                curve: Curves.easeOut,
+                alignment: Alignment.bottomCenter,
+                child: bar == null
+                    ? const SizedBox(width: double.infinity)
+                    : Column(mainAxisSize: MainAxisSize.min, children: [
+                        SizedBox(height: barHeight, child: bar),
+                        Container(height: hairline, color: Ds.c.divider),
+                      ]),
+              ),
+              Container(
+                height: dockHeight,
+                padding: EdgeInsets.symmetric(horizontal: Ds.space.x8),
+                child: LayoutBuilder(
+                  builder: (context, box) =>
+                      _track(context, box.maxWidth, active, still),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -335,5 +376,66 @@ class _Pop extends StatelessWidget {
         curve: Curves.easeOutBack,
         builder: (_, v, c) => Transform.scale(scale: v, child: c),
         child: child,
+      );
+}
+
+/// CMD #2147 (Om) — the login / registration ask as the dock card's top row:
+/// light-green ground, a 40 px round white icon, the backend's label in bold on
+/// one line (ellipsis), and a green pill button 10 px from the right edge.
+/// Every string is `customer_registration_bar()`'s; this widget only draws.
+class DockBarRow extends StatelessWidget {
+  const DockBarRow({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.action,
+    required this.onAction,
+    this.actionIdentifier,
+  });
+
+  final IconData icon;
+  final String label, action;
+  final VoidCallback onAction;
+  final String? actionIdentifier;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        color: FloatingDock.barGround,
+        padding: EdgeInsets.only(left: Ds.space.x12, right: Ds.space.x8 + 2),
+        child: Row(children: [
+          Container(
+            width: Ds.space.x32 + Ds.space.x8,
+            height: Ds.space.x32 + Ds.space.x8,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(color: Ds.c.surface, shape: BoxShape.circle),
+            child: Icon(icon, size: Ds.space.x24 - 4, color: Ds.c.textSecondary),
+          ),
+          SizedBox(width: Ds.space.x12),
+          Expanded(
+            child: Text(label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Ds.t.bodyStrong.copyWith(fontWeight: FontWeight.w800)),
+          ),
+          SizedBox(width: Ds.space.x8),
+          Semantics(
+            identifier: actionIdentifier,
+            button: true,
+            child: SizedBox(
+              height: Ds.space.x32 + Ds.space.x8 + 2,
+              child: FilledButton(
+                onPressed: onAction,
+                style: FilledButton.styleFrom(
+                  backgroundColor: Ds.c.brand,
+                  foregroundColor: Ds.c.surface,
+                  shape: const StadiumBorder(),
+                  padding: EdgeInsets.symmetric(horizontal: Ds.space.x16 + Ds.space.x4),
+                  textStyle: Ds.t.bodyStrong.copyWith(fontWeight: FontWeight.w700),
+                ),
+                child: Text(action, maxLines: 1),
+              ),
+            ),
+          ),
+        ]),
       );
 }

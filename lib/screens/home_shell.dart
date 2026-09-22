@@ -27,7 +27,7 @@ import '../widgets/animations.dart';
 import '../widgets/search_surface.dart';
 import '../widgets/bottom_stack.dart'; // CMD #2051 — the one bottom stack
 import '../widgets/cart_pill.dart'; // C636
-import '../widgets/notification_bell.dart'; import '../widgets/order_hours_pill.dart'; import '../widgets/floating_dock.dart'; // CHANGE #298 · CMD #2147
+import '../widgets/notification_bell.dart'; import '../widgets/order_hours_pill.dart'; import '../widgets/floating_dock.dart'; import '../services/registration_bar.dart'; // CHANGE #298 · CMD #2147
 import '../widgets/scope_chip.dart'; // CMD #1947 — the header date·zone chip
 import '../widgets/test_mode_badge.dart'; // CMD #1964 — the header TEST badge
 import '../services/push_service.dart'; // CHANGE #298

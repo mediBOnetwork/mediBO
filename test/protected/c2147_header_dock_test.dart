@@ -136,13 +136,39 @@ void main() {
       expect(find.text('2'), findsNothing);
     });
 
-    testWidgets('the dock floats 12 px off the sides and is 60 tall',
+    testWidgets('the card floats 14 px off the edges; the dock row is 70',
         (t) async {
       await t.pumpWidget(_app(FloatingDock(
           tabs: _tabs(), activeIndex: 0, onTap: (_) {})));
       await t.pumpAndSettle();
-      expect(FloatingDock.dockHeight, 60);
-      expect(FloatingDock.edge, 12);
+      expect(FloatingDock.dockHeight, 70);
+      expect(FloatingDock.edge, 14);
+      expect(FloatingDock.radius, 28);
+      expect(FloatingDock.barHeight, 60);
+    });
+
+    testWidgets('the login ask joins the card as its top row, verbatim',
+        (t) async {
+      var tapped = 0;
+      await t.pumpWidget(_app(FloatingDock(
+          tabs: _tabs(),
+          activeIndex: 0,
+          onTap: (_) {},
+          bar: DockBarRow(
+              icon: Icons.person_outline,
+              label: 'Backend login line',
+              action: 'Backend CTA',
+              actionIdentifier: 'c2114_login_bar_action',
+              onAction: () => tapped++))));
+      await t.pumpAndSettle();
+      expect(find.text('Backend login line'), findsOneWidget);
+      final bar = t.getRect(find.byType(DockBarRow));
+      final home = t.getRect(find.bySemanticsIdentifier('nav_slot_home'));
+      expect(bar.bottom, lessThanOrEqualTo(home.top + 0.5),
+          reason: 'bar row on top, dock row below');
+      expect(bar.height, 60);
+      await t.tap(find.text('Backend CTA'));
+      expect(tapped, 1);
     });
   });
 

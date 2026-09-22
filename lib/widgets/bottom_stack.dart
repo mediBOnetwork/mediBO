@@ -237,7 +237,10 @@ BottomStackLiveMetrics bottomStackLiveOf(
       ? BottomBarKind.none
       : appUpdateBar.visible
           ? BottomBarKind.update
-          : appRegistrationBar.visible
+          // CMD #2147 — on the customer phone shell the login /
+          // registration ask is the TOP ROW of the floating dock card, so the
+          // stack leaves it out (the update bar still rides here).
+          : appRegistrationBar.visible && !bottomBarJoinsDock(context)
               ? (appRegistrationBar.kind == 'login'
                   ? BottomBarKind.login
                   : BottomBarKind.registration)
@@ -254,6 +257,24 @@ BottomStackLiveMetrics bottomStackLiveOf(
 ///
 /// One place, so the chrome and every box holding room for it are reading the
 /// same frame's answer rather than two that drifted apart.
+/// CMD #2147 — is the login / registration bar drawn INSIDE the floating
+/// dock here? True exactly on the customer phone shell, which is the one
+/// Scaffold that floats its dock over the page (`extendBody`).
+bool bottomBarJoinsDock(BuildContext context) =>
+    Scaffold.maybeOf(context)?.widget.extendBody ?? false;
+
+/// CMD #2147 — the login / registration bar's button, wherever it is drawn:
+/// the address and the section are the payload's; no route, no push.
+void openRegistrationBar(BuildContext context) {
+  final route = appRegistrationBar.route;
+  if (route.isEmpty) return;
+  final anchor = appRegistrationBar.anchor;
+  Navigator.of(context).pushNamed(
+    route,
+    arguments: anchor.isEmpty ? null : {'anchor': anchor},
+  );
+}
+
 class BottomStackLive extends StatelessWidget {
   const BottomStackLive({
     super.key,

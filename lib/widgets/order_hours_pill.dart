@@ -88,13 +88,19 @@ class OrderHoursPill extends StatelessWidget {
                     Flexible(
                       child: AnimatedSwitcher(
                         duration: Duration(milliseconds: still ? 0 : 150),
-                        child: Text(
-                          label,
+                        // Om: never ellipsize — the full label on one
+                        // line; only a phone too narrow for it scales it down.
+                        child: FittedBox(
                           key: ValueKey(label),
+                          fit: BoxFit.scaleDown,
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                          label,
                           maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                          softWrap: false,
                           style: Ds.t.caption
                               .copyWith(color: fg, fontWeight: FontWeight.w600),
+                        ),
                         ),
                       ),
                     ),

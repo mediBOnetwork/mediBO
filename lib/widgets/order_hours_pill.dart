@@ -68,7 +68,11 @@ class OrderHoursPill extends StatelessWidget {
         // The pill is ~28 px tall; the hit box is the full 44 px row.
         child: ConstrainedBox(
           constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
-          child: Center(
+          // Left-aligned (Om): the pill sits right after the logo; the free
+          // room goes between it and the bell, never around it.
+          child: Align(
+            alignment: Alignment.centerLeft,
+            widthFactor: 1,
             child: AnimatedSize(
               duration: colorMs,
               curve: Curves.easeOut,

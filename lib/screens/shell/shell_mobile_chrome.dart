@@ -190,7 +190,7 @@ class _CustomerHeaderRow extends StatelessWidget {
                 child: const _BrandLockup(),
               ),
             ),
-            SizedBox(width: Ds.space.x8),
+            SizedBox(width: Ds.space.x8 + Ds.space.x4 / 2),
             // The pill takes ALL the room between the logo and the bell (a
             // Spacer beside it would take half, truncating "Open till 12 pm"
             // at 360 px), and only ellipsizes when there truly is none left.

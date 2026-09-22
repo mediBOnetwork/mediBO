@@ -411,8 +411,12 @@ class AdminCustomerScreen extends StatefulWidget {
       : super(key: key ?? _screenKey);
 
   /// Called by the shell when this screen becomes the active page.
-  static void triggerFocus() =>
-      _screenKey.currentState?._onScreenFocus();
+  /// CMD #2154 — [subject] is a pending registration's id (an alert's View):
+  /// the screen opens Pending Approval with that one open.
+  static void triggerFocus([String? subject]) {
+    _screenKey.currentState?._onScreenFocus();
+    if ((subject ?? '').isNotEmpty) openRegistration(subject!);
+  }
 
   /// Called by the Supplier Shop tab's map dropdown "Optimize route" badge —
   /// same action the Route sub-tab's own optimize-all button triggers, not a
@@ -483,6 +487,21 @@ class AdminCustomerScreen extends StatefulWidget {
     // never. 60 × 250 ms covers a slow boot and still gives up.
     Timer(const Duration(milliseconds: 250),
         () => openTab(filterName, tries: tries - 1));
+  }
+
+  /// CMD #2154 — an alert's View: Pending Approval, with THAT shop's detail
+  /// open. Same timer retry as [openTab]: on a cold start this screen's state
+  /// does not exist yet.
+  static void openRegistration(String id, {int tries = 60}) {
+    if (id.isEmpty) return;
+    final st = _screenKey.currentState;
+    if (st != null) {
+      st._openRegistration(id);
+      return;
+    }
+    if (tries <= 0) return;
+    Timer(const Duration(milliseconds: 250),
+        () => openRegistration(id, tries: tries - 1));
   }
 
   @override
@@ -785,6 +804,20 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   }
 
   /// CHANGE #1867 — see [AdminCustomerScreen.openTab].
+  void _openRegistration(String id) {
+    if (!mounted) return;
+    setState(() {
+      _filter = _CustFilter.pendingRegistrations;
+      _expanded
+        ..clear()
+        ..add(id);
+      _payOpen.clear();
+      _waOpen.clear();
+    });
+    _autoLoad(key: _CustFilter.pendingRegistrations.name, force: true);
+    RenderLog.write('c2154_alert_view_opened', 'customer');
+  }
+
   void _openTabByName(String filterName) {
     for (final f in _CustFilter.values) {
       if (f.name != filterName) continue;
@@ -2540,7 +2573,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     // CHANGE #653 — View on + Write off is a real state, and the tab says so
     // in the backend's own word. The refusal itself is server-side.
     final readOnly = !Access.instance.tabCanWrite('customer', _tabKeys[f] ?? '');
-    return MouseRegion(
+    return Semantics(
+      identifier: 'cust_tab_${f.name}', // CMD #2154
+      button: true,
+      child: MouseRegion(
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
         onTap: () {
@@ -2549,8 +2585,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             _filter = f;
             _expanded.clear();
           });
-          // Auto-load fresh data on every tab open (debounced).
-          _autoLoad(key: f.name);
+          // Auto-load fresh data on every tab open (debounced). CMD #2154 —
+          // tapping the tab you are already on is a refresh, never debounced.
+          _autoLoad(key: f.name, force: active);
         },
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
@@ -2576,6 +2613,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           ]),
         ),
       ),
+    ),
     );
   }
 

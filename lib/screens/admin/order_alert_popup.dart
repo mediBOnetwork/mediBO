@@ -245,6 +245,10 @@ class OrderAlertPopup extends StatelessWidget {
               overflow: TextOverflow.ellipsis),
         ),
       ),
+      // CMD #2154 — every staff alert popup has ONE button, View. The second
+      // word is the backend's; an empty one draws no second button (a tap
+      // outside still puts the popup aside, which is what Later was).
+      if (secondary.isNotEmpty) ...[
       SizedBox(height: Ds.space.x8),
       SizedBox(
         width: double.infinity,
@@ -260,6 +264,7 @@ class OrderAlertPopup extends StatelessWidget {
               style: Ds.t.body, maxLines: 1, overflow: TextOverflow.ellipsis),
         ),
       ),
+      ],
     ];
   }
 }

@@ -1785,7 +1785,14 @@ class _V5Artwork extends StatelessWidget {
   Widget build(BuildContext context) {
     final action = CardAction.of(product.card);
     final art = v5.imagePlaceholder || product.imageUrl.isEmpty
-        ? Center(child: CardPackIcon(kind: v5.placeholderKind, size: Ds.space.x48 + Ds.space.x16))
+        ? Center(
+            child: CardPackIcon(
+              kind: v5.placeholderKind,
+              size: Ds.space.x48 + Ds.space.x16,
+              iconUrl: v5.placeholderIconUrl,
+              color: Ds.hex(v5.placeholderFg, Ds.c.textSecondary),
+            ),
+          )
         : Hero(
             tag: CompactProductCard.heroTag(product.id),
             child: ProductImage(
@@ -2295,6 +2302,8 @@ class _V6Artwork extends StatelessWidget {
       child: CardPackIcon(
         kind: v5.placeholderKind,
         size: Ds.space.x48 + Ds.space.x16,
+        iconUrl: v5.placeholderIconUrl,
+        color: Ds.hex(v5.placeholderFg, Ds.c.textSecondary),
       ),
     );
     final art = v5.imagePlaceholder || product.imageUrl.isEmpty

@@ -142,6 +142,12 @@ class CardV5 {
   final String subLine;
   final Object? subFg;
   final String placeholderKind;
+
+  /// CMD #2166 — the no-photo artwork, straight from `placeholder`: the
+  /// backend's SVG (`icon_url`, '' when it has none for this kind) and its
+  /// tint (`fg`, a hex string resolved by the widget through `Ds.hex`).
+  final String placeholderIconUrl;
+  final Object? placeholderFg;
   final bool imagePlaceholder;
   final bool mrpStruck;
   final Object? mrpFg;
@@ -164,6 +170,8 @@ class CardV5 {
     required this.subLine,
     required this.subFg,
     required this.placeholderKind,
+    required this.placeholderIconUrl,
+    required this.placeholderFg,
     required this.imagePlaceholder,
     required this.mrpStruck,
     required this.mrpFg,
@@ -197,6 +205,8 @@ class CardV5 {
       subLine: _s(sub['label']),
       subFg: sub['fg'] ?? st['sub_fg'],
       placeholderKind: _s(_m(c['placeholder'])['kind']),
+      placeholderIconUrl: _s(_m(c['placeholder'])['icon_url']),
+      placeholderFg: _m(c['placeholder'])['fg'],
       imagePlaceholder: _m(c['image'])['placeholder'] == true,
       mrpStruck: price['mrp_struck'] == true,
       mrpFg: price['mrp_fg'] ?? st['mrp_fg'],

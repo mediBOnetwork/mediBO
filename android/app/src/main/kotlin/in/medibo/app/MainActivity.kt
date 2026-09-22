@@ -11,6 +11,40 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
+    // CMD #2131 (per #2147) — header + dock motion at the screen's highest
+    // refresh rate. Android runs apps at 60 Hz unless the window asks, so ask
+    // for the fastest mode at the CURRENT resolution (120 Hz where the phone
+    // has it). Mechanics only; a phone with one mode keeps it.
+    override fun onResume() {
+        super.onResume()
+        requestHighestRefreshRate()
+    }
+
+    private fun requestHighestRefreshRate() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        try {
+            @Suppress("DEPRECATION")
+            val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                this.display
+            } else {
+                windowManager.defaultDisplay
+            } ?: return
+            val cur = display.mode
+            val best = display.supportedModes
+                .filter {
+                    it.physicalWidth == cur.physicalWidth &&
+                        it.physicalHeight == cur.physicalHeight
+                }
+                .maxByOrNull { it.refreshRate } ?: return
+            val attrs = window.attributes
+            if (attrs.preferredDisplayModeId == best.modeId) return
+            attrs.preferredDisplayModeId = best.modeId
+            window.attributes = attrs
+        } catch (_: Throwable) {
+            // Never let a display quirk stop the app opening.
+        }
+    }
+
     // CMD #2151 — Phone Number Hint returns through the activity result.
     @Deprecated("FlutterActivity still routes results through onActivityResult")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {

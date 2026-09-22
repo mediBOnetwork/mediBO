@@ -26,6 +26,9 @@ const _kConfig = <String, dynamic>{
   'footer_note': 'By continuing you agree to our terms',
   'code_digits': 6,
   'resend_seconds': 30,
+  // CMD #2181 — the backend's sentence for an unusable picked number.
+  'number_hint_unusable':
+      "That number can't be used here. Pick another or type your 10-digit WhatsApp number.",
 };
 
 class _FakeApi implements LoginApi {
@@ -150,5 +153,27 @@ void main() {
     await tester.tap(find.byType(TextField).first);
     await tester.pumpAndSettle();
     expect(calls.length, 1);
+  });
+
+  // CMD #2181 (debug pass on #2131, QA 569) — a pick the login cannot use is
+  // not the same as a picker the user closed. It says so, in the BACKEND's
+  // words, and the attempt is given back so the next tap reopens the picker.
+  testWidgets('an unusable picked number speaks and keeps the attempt',
+      (tester) async {
+    final calls = <int>[];
+    final api = await _open(tester, () async => '12345', calls);
+    await tester.tap(find.byType(TextField).first);
+    await tester.pumpAndSettle();
+
+    expect(calls.length, 1);
+    // Nothing was sent and the box is still empty and typeable.
+    expect(api.sent, isEmpty);
+    expect(_box(tester), '');
+    // The backend's sentence is on screen, verbatim — no Dart copy.
+    expect(find.text(_kConfig['number_hint_unusable'] as String), findsOneWidget);
+    // The attempt came back: tapping again reopens the picker.
+    await tester.tap(find.byType(TextField).first);
+    await tester.pumpAndSettle();
+    expect(calls.length, 2);
   });
 }

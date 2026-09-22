@@ -403,7 +403,18 @@ class _LoginViewState extends State<LoginView> {
     final raw = await pick();
     if (!mounted || raw == null || _step != LoginStep.number) return;
     final clean = LoginNumberFormatter.clean(raw);
-    if (clean.length != 10) return;
+    if (clean.length != 10) {
+      // CMD #2181 (debug pass on #2131, QA 569) — the picker answered with a
+      // number this login cannot use. Before, that returned silently: an empty
+      // box, no explanation, and the one attempt per visit already spent. Say
+      // it in the backend's words and give the attempt back, so the next tap
+      // reopens the picker instead of a dead box. A picker the user CLOSED
+      // (raw == null) still spends the attempt — that is a deliberate answer.
+      _hintTried = false;
+      RenderLog.write('c2181_number_hint_unusable', clean.length);
+      setState(() => _setMessage(_s('number_hint_unusable')));
+      return;
+    }
     _numCtrl.value = TextEditingValue(
       text: _format5x5(clean),
       selection: TextSelection.collapsed(offset: _format5x5(clean).length),

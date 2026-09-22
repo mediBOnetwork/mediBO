@@ -17,6 +17,7 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../app_state.dart';
+import '../../services/contact_pickers.dart';
 import '../../services/ui_copy.dart';
 import '../../models/cart_model.dart';
 import '../../services/gis_auth.dart';
@@ -562,6 +563,7 @@ class _LoginScreenState extends State<LoginScreen> {
               api: _api,
               onHome: (r) => _goTo(r),
               onOverlay: (r) => _pendingOverlay = r,
+              pickNumber: ContactPickers.phone,
             )),
             Positioned(
               top: 8,
@@ -707,6 +709,7 @@ class _LoginPanelViewState extends State<LoginPanelView> {
       api: _api,
       onHome: (route) => _land(route),
       onOverlay: (route) => _pendingOverlay = route,
+      pickNumber: ContactPickers.phone,
     );
   }
 }

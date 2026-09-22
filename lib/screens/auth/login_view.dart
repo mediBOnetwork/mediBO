@@ -123,6 +123,7 @@ class LoginView extends StatefulWidget {
     this.pollInterval = const Duration(seconds: 2),
     this.pollTimeout = const Duration(seconds: 15),
     this.autoSendOnFill = kIsWeb,
+    this.pickNumber,
   });
 
   final LoginApi api;
@@ -141,6 +142,12 @@ class LoginView extends StatefulWidget {
   /// CMD #2159 — web only: an autofill/paste of the whole number sends the
   /// code with no tap. Android's number picker is its own path (#2131).
   final bool autoSendOnFill;
+
+  /// CMD #2131 — Android: the phone's own number list (Google Phone Number
+  /// Hint). Tapping the EMPTY number box opens it once per visit; a picked
+  /// number is cleaned like an autofill and sent with no tap. Null (web,
+  /// tests) or a null answer leaves the box an ordinary box.
+  final Future<String?> Function()? pickNumber;
 
   @override
   State<LoginView> createState() => _LoginViewState();
@@ -180,6 +187,9 @@ class _LoginViewState extends State<LoginView> {
   /// CMD #2159 — numbers already auto-sent after an autofill/paste this visit.
   /// One auto-send per number per visit; after that the user taps Get OTP.
   final Set<String> _autoSent = {};
+
+  /// CMD #2131 — the number picker opens at most once per visit.
+  bool _hintTried = false;
 
   /// CMD #1904 — the backend's own sentence for a number it has never seen.
   /// Empty for an existing account, and NEVER written here: it is the `note`
@@ -377,6 +387,30 @@ class _LoginViewState extends State<LoginView> {
       RenderLog.write('c2159_autofill_send', clean.length);
       _send(raw: raw);
     });
+  }
+
+  /// CMD #2131 — tap on the empty number box → the phone's number list. The
+  /// pick is cleaned exactly like a paste (last 10 digits, so 918357881874 is
+  /// 8357881874, never 9183578818) and sent RAW at once; the backend's
+  /// `number` then fills the box. Back from the code step finds the box
+  /// filled, so a tap there edits and Get OTP is the user's tap.
+  Future<void> _onNumberTap() async {
+    final pick = widget.pickNumber;
+    if (pick == null || _hintTried || _sending) return;
+    if (_numCtrl.text.replaceAll(RegExp(r'\D'), '').isNotEmpty) return;
+    _hintTried = true;
+    final raw = await pick();
+    if (!mounted || raw == null || _step != LoginStep.number) return;
+    final clean = LoginNumberFormatter.clean(raw);
+    if (clean.length != 10) return;
+    _numCtrl.value = TextEditingValue(
+      text: _format5x5(clean),
+      selection: TextSelection.collapsed(offset: _format5x5(clean).length),
+    );
+    _numFocus.unfocus();
+    RenderLog.write('c2131_number_hint_send', clean.length);
+    _autoSent.add(clean);
+    _send(raw: raw);
   }
 
   void _backToActions() {
@@ -927,6 +961,7 @@ class _LoginViewState extends State<LoginView> {
                 // saved number; the formatter cleans it and auto-sends.
                 autofillHints: const [AutofillHints.telephoneNumber],
                 onSubmitted: (_) => _send(),
+                onTap: _onNumberTap,
                 inputFormatters: [LoginNumberFormatter(onBulk: _onBulkNumber)],
                 style: const TextStyle(
                   fontSize: 17,
@@ -1195,6 +1230,14 @@ class LoginNumberFormatter extends TextInputFormatter {
   LoginNumberFormatter({this.onBulk});
 
   final void Function(String raw, String clean)? onBulk;
+
+  /// CMD #2131 — a whole number from anywhere (picker, autofill, paste) →
+  /// its last 10 digits: +91 / 91 / 0 prefixes fall away, the number never
+  /// gets cut from the front.
+  static String clean(String raw) {
+    final d = raw.replaceAll(RegExp(r'\D'), '');
+    return d.length > 10 ? d.substring(d.length - 10) : d;
+  }
 
   static int insertedLength(String a, String b) {
     var p = 0;

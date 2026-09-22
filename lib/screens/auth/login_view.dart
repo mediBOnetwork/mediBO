@@ -186,8 +186,29 @@ class _LoginViewState extends State<LoginView> {
   @override
   void initState() {
     super.initState();
-    _loadConfig();
-    _loadLastNumber();
+    _boot();
+  }
+
+  /// CMD #2151 — "Login" on registration's "already registered" card leaves
+  /// an intent (ContactPickers.kLoginIntentKey): 'otp' sends the code to the
+  /// number at once — no second tap — and 'google' opens the account list.
+  static const _kIntentKey = 'medibo_login_intent';
+
+  Future<void> _boot() async {
+    await Future.wait([_loadConfig(), _loadLastNumber()]);
+    String intent = '';
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      intent = prefs.getString(_kIntentKey) ?? '';
+      if (intent.isNotEmpty) await prefs.remove(_kIntentKey);
+    } catch (_) {}
+    if (!mounted || intent.isEmpty || _cfg == null) return;
+    RenderLog.write('c2151_login_intent', intent);
+    if (intent == 'otp' && _digits.isNotEmpty) {
+      await _send();
+    } else if (intent == 'google') {
+      await _google();
+    }
   }
 
   // Prefill the number used in the last WhatsApp login (blank on the first

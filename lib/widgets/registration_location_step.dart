@@ -41,6 +41,7 @@ class RegistrationLocationStep extends StatefulWidget {
     required this.rpc,
     required this.onValues,
     this.height = 220,
+    this.touchLock,
   });
 
   /// wizard.steps[location].map — the geo block plus this step's own copy.
@@ -56,6 +57,11 @@ class RegistrationLocationStep extends StatefulWidget {
   final void Function(Map<String, dynamic> values) onValues;
 
   final double height;
+
+  /// CMD #2151 — "the map takes every touch": true while a finger is on the
+  /// map, so the page's scroll view can stop scrolling (the screen turns its
+  /// physics off). Outside the map the page scrolls as normal.
+  final ValueNotifier<bool>? touchLock;
 
   @override
   State<RegistrationLocationStep> createState() =>
@@ -522,6 +528,7 @@ class _RegistrationLocationStepState extends State<RegistrationLocationStep> {
             centerCounts: true,
             cameraSignature: _signature,
             logKey: 'c2127_loc_map',
+            touchLock: widget.touchLock,
             borderRadius: Ds.r.rCard,
             onCenterChanged: _onCentre,
             requireProvider:

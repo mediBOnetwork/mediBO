@@ -11,6 +11,14 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
+    // CMD #2151 — Phone Number Hint returns through the activity result.
+    @Deprecated("FlutterActivity still routes results through onActivityResult")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (PhoneHint.onResult(this, requestCode, resultCode, data)) return
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         // CHANGE #225 — readiness gate for the on-demand ML Kit document-scanner
@@ -24,6 +32,8 @@ class MainActivity : FlutterActivity() {
         // Needs the ACTIVITY (Play's flow is launched for a result), which is
         // why it is registered here and not from applicationContext.
         PlayUpdate.register(flutterEngine.dartExecutor.binaryMessenger, this)
+        // CMD #2151 — registration's WhatsApp box: the phone's own number list.
+        PhoneHint.register(flutterEngine.dartExecutor.binaryMessenger, this)
         // CHANGE #306 — the channels must exist before the first alert lands,
         // and the app must be able to stop the ringing and clear the sticky
         // line the moment an order is actioned inside the app. Every word the

@@ -19,6 +19,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../design_tokens.dart';
+import '../services/contact_pickers.dart';
 import '../services/registration_payload.dart';
 import '../utils/render_log.dart';
 import 'store_pin_picker.dart';
@@ -333,6 +334,7 @@ class CustomerRegistrationForm extends StatefulWidget {
     this.v4 = const {},
     this.checkRpc,
     this.customerId,
+    this.pickers = false,
   });
 
   final CustomerFormController controller;
@@ -351,12 +353,19 @@ class CustomerRegistrationForm extends StatefulWidget {
 
   /// CMD #2141 — "Login" on an already-registered card: remember the number
   /// the login screen pre-fills, sign out of this session and open login.
-  static Future<void> openLogin(BuildContext context, String number) async {
+  ///
+  /// CMD #2151 — [mode] is the backend's `login_mode`: 'otp' makes the login
+  /// screen send the code at once, 'google' opens the Google account list.
+  static Future<void> openLogin(BuildContext context, String number,
+      {String mode = ''}) async {
     final nav = Navigator.of(context);
     try {
+      final prefs = await SharedPreferences.getInstance();
       if (number.isNotEmpty) {
-        final prefs = await SharedPreferences.getInstance();
         await prefs.setString('medibo_last_login_number', number);
+      }
+      if (mode.isNotEmpty) {
+        await prefs.setString(kLoginIntentKey, mode);
       }
     } catch (_) {}
     try {
@@ -364,6 +373,11 @@ class CustomerRegistrationForm extends StatefulWidget {
     } catch (_) {}
     nav.pushNamedAndRemoveUntil('/login', (r) => false);
   }
+
+  /// CMD #2151 — the customer's own General step: tapping an empty WhatsApp
+  /// box opens the phone's number list, an empty Email box the Google
+  /// account list (web: browser autofill). Staff screens leave this off.
+  final bool pickers;
 
   /// CMD #2126 — one STEP of the registration flow: exactly these field keys,
   /// in this order (the backend's `wizard.steps[].fields`), with no section
@@ -464,6 +478,15 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
         if (!mounted || _checkedFor[key] != v) return;
         final m = _mm(res);
         ctrl.setVerdict(key, m['ok'] == true ? m : null);
+        // CMD #2151 — a picked, pasted or autofilled number comes back
+        // cleaned (+91 / leading 0 dropped) as the backend's `value`; the box
+        // takes it, and the verdict (with its "from → to" note) stays.
+        final cleaned = (m['value'] ?? '').toString();
+        if (m['ok'] == true && cleaned.isNotEmpty && cleaned != v &&
+            _checks[key] == 'phone') {
+          _checkedFor[key] = cleaned;
+          ctrl.controllerFor(key).text = cleaned;
+        }
         RenderLog.write('c2141_check', '$key=${m['state'] ?? ''}');
       } catch (_) {
         if (mounted && _checkedFor[key] == v) ctrl.setVerdict(key, null);
@@ -622,13 +645,16 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
         else if (type == 'select' && options.isNotEmpty)
           _dropdown(key, options, flagged)
         else if (prefix.isNotEmpty)
-          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            _prefixPicker(prefix),
-            SizedBox(width: Ds.space.x8),
-            Expanded(
-                child: _input(key, type, hint, f['max_lines'], flagged,
-                    missing: missing)),
-          ])
+          // CMD #2151 — the Mr / Ms box is exactly the name box's height.
+          IntrinsicHeight(
+            child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              _prefixPicker(prefix),
+              SizedBox(width: Ds.space.x8),
+              Expanded(
+                  child: _input(key, type, hint, f['max_lines'], flagged,
+                      missing: missing)),
+            ]),
+          )
         else
           _input(key, type, hint, f['max_lines'], flagged, missing: missing),
         if (missing && _s4('required_label').isNotEmpty) ...[
@@ -636,6 +662,15 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
           Text(_s4('required_label'),
               style: Ds.t.caption.copyWith(
                   color: Ds.c.danger, fontWeight: FontWeight.w600)),
+        ],
+        if ((verdictNote(ctrl.verdicts[key])).isNotEmpty) ...[
+          SizedBox(height: Ds.space.x4),
+          Semantics(
+            identifier: 'reg_cleaned_$key',
+            child: Text(verdictNote(ctrl.verdicts[key]),
+                style: Ds.t.caption.copyWith(
+                    color: Ds.c.brand, fontWeight: FontWeight.w600)),
+          ),
         ],
         if (card.isNotEmpty) ...[
           SizedBox(height: Ds.space.x8),
@@ -745,7 +780,11 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
       );
     }
     final hint4 = (hints[key] ?? '').toString();
+    final pickKind = widget.pickers ? (_checks[key] ?? '').toString() : '';
     return TextField(
+      onTap: pickKind == 'phone' || pickKind == 'email'
+          ? () => _pick(key, pickKind)
+          : null,
       controller: widget.controller.controllerFor(key),
       maxLines: lines,
       style: Ds.t.body,
@@ -763,6 +802,25 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
           : null,
       decoration: deco,
     );
+  }
+
+  /// CMD #2151 — an EMPTY box opens the platform's own list once; a filled
+  /// box is just edited. Nothing picked leaves the keyboard up as usual.
+  bool _picking = false;
+  Future<void> _pick(String key, String kind) async {
+    final ctl = widget.controller.controllerFor(key);
+    if (_picking || ctl.text.trim().isNotEmpty) return;
+    _picking = true;
+    try {
+      final v = await (kind == 'phone' ? ContactPickers.phone() : ContactPickers.email());
+      if (v != null && mounted && ctl.text.trim().isEmpty) {
+        // Raw, as picked: custreg_contact_check cleans and judges it.
+        ctl.text = kind == 'phone' ? v.replaceAll(RegExp(r'[^0-9+]'), '') : v;
+        RenderLog.write('c2151_pick', kind);
+      }
+    } finally {
+      _picking = false;
+    }
   }
 
   /// CMD #2141 — Mr / Ms before the owner's name: a compact box with the
@@ -830,7 +888,8 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
                 height: Ds.touch.minTarget,
                 child: FilledButton(
                   onPressed: () => CustomerRegistrationForm.openLogin(
-                      context, (card['login_number'] ?? '').toString()),
+                      context, (card['login_number'] ?? '').toString(),
+                      mode: (card['login_mode'] ?? '').toString()),
                   child: Text(login),
                 ),
               ),
@@ -922,6 +981,10 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
 
 /// CMD #2059 — the form's own outline while the schema is on its way.
 ///
+/// CMD #2151 — the backend's "from → to · checked" line of a verdict.
+String verdictNote(Map<String, dynamic>? verdict) =>
+    (verdict?['note'] ?? '').toString();
+
 /// Four labelled bars at field height. It is not a loading message and it is
 /// not a spinner: it is what the fields will look like, so the change when
 /// they arrive is a fill, not a redraw.

@@ -10,6 +10,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../design_tokens.dart';
+import '../utils/render_log.dart';
 
 Map<String, dynamic> v2Map(Object? v) =>
     v is Map ? v.cast<String, dynamic>() : const <String, dynamic>{};
@@ -78,22 +79,45 @@ class CartCdStrip extends StatefulWidget {
   State<CartCdStrip> createState() => _CartCdStripState();
 }
 
-class _CartCdStripState extends State<CartCdStrip> {
+class _CartCdStripState extends State<CartCdStrip>
+    with SingleTickerProviderStateMixin {
   Timer? _t;
   int _i = 0;
 
+  /// CMD #2152 — the cash-discount burst: the badge rises from below, a ring
+  /// bursts around it, then it floats up and fades out at the top. One
+  /// controller, [kCdBurstMs] long, restarted each time the discount shown
+  /// appears or changes. It runs on the display's own vsync (120 Hz panels
+  /// get 120 frames a second).
+  late final AnimationController _burst = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: kCdBurstMs));
+
   List<Map<String, dynamic>> get _slides => v2List(widget.block['slides']);
+
+  bool get _showing => widget.block['has'] == true && _slides.isNotEmpty;
 
   @override
   void initState() {
     super.initState();
     _arm();
+    if (_showing) _fire();
   }
 
   @override
   void didUpdateWidget(CartCdStrip old) {
     super.didUpdateWidget(old);
+    final was = old.block['has'] == true && v2List(old.block['slides']).isNotEmpty;
     if (_i >= _slides.length) _i = 0;
+    // Appeared, or the backend sent a different discount list.
+    if (_showing &&
+        (!was || '${old.block['slides']}' != '${widget.block['slides']}')) {
+      _fire();
+    }
+  }
+
+  void _fire() {
+    RenderLog.write('c2152_cd_burst', '${_i % (_slides.isEmpty ? 1 : _slides.length)}');
+    _burst.forward(from: 0);
   }
 
   void _arm() {
@@ -103,20 +127,24 @@ class _CartCdStripState extends State<CartCdStrip> {
     _t = Timer.periodic(Duration(milliseconds: ms), (_) {
       if (!mounted) return;
       final n = _slides.length;
-      if (n > 1) setState(() => _i = (_i + 1) % n);
+      if (n > 1) {
+        setState(() => _i = (_i + 1) % n);
+        _fire();
+      }
     });
   }
 
   @override
   void dispose() {
     _t?.cancel();
+    _burst.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final slides = _slides;
-    if (widget.block['has'] != true || slides.isEmpty) {
+    if (!_showing) {
       return const SizedBox.shrink();
     }
     final s = slides[_i % slides.length];
@@ -134,12 +162,10 @@ class _CartCdStripState extends State<CartCdStrip> {
           border: Border.all(color: ink.withValues(alpha: 0.35)),
         ),
         child: Row(children: [
-          Container(
-            width: Ds.space.x24,
-            height: Ds.space.x24,
-            decoration: BoxDecoration(color: ink, borderRadius: Ds.r.rButton),
-            alignment: Alignment.center,
-            child: Icon(Icons.percent, size: Ds.space.x16, color: Ds.c.surface),
+          CdBurstBadge(
+            progress: _burst,
+            label: v2s(s, 'lead'),
+            ink: ink,
           ),
           SizedBox(width: Ds.space.x12),
           Expanded(
@@ -189,6 +215,128 @@ class _CartCdStripState extends State<CartCdStrip> {
       ),
     );
   }
+}
+
+/// CMD #2152 — how long one cash-discount burst lasts.
+const int kCdBurstMs = 900;
+
+/// The CD strip's badge and its burst. At rest it is the % tile. When
+/// [progress] runs (0→1 over [kCdBurstMs]) a pill carrying the backend's
+/// [label] rises from below (0–0.28), a ring bursts around it (0.18–0.62),
+/// then it floats up and fades out at the top (0.62–1). Nothing here is
+/// laid out differently while it plays — the pill and ring are painted over
+/// the tile, so the strip never changes height.
+class CdBurstBadge extends StatelessWidget {
+  final Animation<double> progress;
+  final String label;
+  final Color ink;
+  const CdBurstBadge(
+      {super.key, required this.progress, required this.label, required this.ink});
+
+  /// Phase edges, as fractions of the burst.
+  static const double riseEnd = 0.28;
+  static const double ringStart = 0.18;
+  static const double ringEnd = 0.62;
+  static const double floatStart = 0.62;
+
+  static double _seg(double t, double a, double b) =>
+      ((t - a) / (b - a)).clamp(0.0, 1.0);
+
+  @override
+  Widget build(BuildContext context) {
+    final tile = Ds.space.x24;
+    return SizedBox(
+      width: tile,
+      height: tile,
+      child: AnimatedBuilder(
+        animation: progress,
+        builder: (context, _) {
+          final t = progress.value;
+          final playing = progress.isAnimating || (t > 0 && t < 1);
+          final rise = Curves.easeOutBack.transform(_seg(t, 0, riseEnd));
+          final ring = Curves.easeOut.transform(_seg(t, ringStart, ringEnd));
+          final fl = Curves.easeIn.transform(_seg(t, floatStart, 1));
+          final travel = Ds.space.x24;
+          final dy = (1 - rise) * travel - fl * travel;
+          final pillOpacity = (_seg(t, 0, riseEnd * 0.6) * (1 - fl)).clamp(0.0, 1.0);
+          return Stack(
+            clipBehavior: Clip.none,
+            alignment: Alignment.center,
+            children: [
+              Container(
+                width: tile,
+                height: tile,
+                decoration:
+                    BoxDecoration(color: ink, borderRadius: Ds.r.rButton),
+                alignment: Alignment.center,
+                child: Icon(Icons.percent,
+                    size: Ds.space.x16, color: Ds.c.surface),
+              ),
+              if (playing && ring > 0 && ring < 1)
+                IgnorePointer(
+                  child: CustomPaint(
+                    size: Size.square(tile),
+                    painter: _CdRingPainter(
+                        progress: ring, color: ink, base: tile / 2),
+                  ),
+                ),
+              if (playing && label.isNotEmpty && pillOpacity > 0)
+                Positioned(
+                  left: 0,
+                  top: dy - Ds.space.x4,
+                  child: IgnorePointer(
+                    child: Opacity(
+                      opacity: pillOpacity,
+                      child: Transform.scale(
+                        scale: 0.8 + 0.2 * rise,
+                        alignment: Alignment.centerLeft,
+                        child: Container(
+                          padding: EdgeInsets.symmetric(
+                              horizontal: Ds.space.x8,
+                              vertical: Ds.space.x4),
+                          decoration: BoxDecoration(
+                            color: ink,
+                            borderRadius: Ds.r.rChip,
+                            boxShadow: Ds.elevation.e2,
+                          ),
+                          child: Text(label,
+                              maxLines: 1,
+                              softWrap: false,
+                              style: Ds.t.caption.copyWith(
+                                  color: Ds.c.surface,
+                                  fontWeight: FontWeight.w700)),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _CdRingPainter extends CustomPainter {
+  final double progress;
+  final Color color;
+  final double base;
+  _CdRingPainter({required this.progress, required this.color, required this.base});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final r = base * (1 + 1.6 * progress);
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = (1 - progress) * base * 0.35 + 1
+      ..color = color.withValues(alpha: (1 - progress) * 0.8);
+    canvas.drawCircle(size.center(Offset.zero), r, paint);
+  }
+
+  @override
+  bool shouldRepaint(_CdRingPainter old) =>
+      old.progress != progress || old.color != color || old.base != base;
 }
 
 // ── Swipe-to-reveal Remove ──────────────────────────────────────────────────
@@ -328,16 +476,34 @@ class CartSwipeTip extends StatelessWidget {
             style: Ds.t.caption.copyWith(color: Ds.c.surface),
           ),
         ),
+        // CMD #2152 — the tap target is its own opaque Material/InkWell, the
+        // top-most thing under the finger: no Dismissible, drag recogniser or
+        // overlay sits above it, and the hide happens in the tap's own frame
+        // (CartModel.swipeTipSeen) before the server write.
         Semantics(
           identifier: 'cart_swipe_tip_ok',
           button: true,
-          child: TextButton(
-            onPressed: onOk,
-            style: TextButton.styleFrom(
-                minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget)),
-            child: Text(v2s(block, 'ok'),
-                style: Ds.t.caption.copyWith(
-                    color: Ds.c.brandSoft, fontWeight: FontWeight.w700)),
+          child: Material(
+            type: MaterialType.transparency,
+            child: InkWell(
+              onTap: onOk,
+              borderRadius: Ds.r.rButton,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                    minWidth: Ds.touch.minTarget,
+                    minHeight: Ds.touch.minTarget),
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+                  child: Center(
+                    widthFactor: 1,
+                    child: Text(v2s(block, 'ok'),
+                        style: Ds.t.caption.copyWith(
+                            color: Ds.c.brandSoft,
+                            fontWeight: FontWeight.w700)),
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
       ]),

@@ -14,8 +14,10 @@
 
 import 'package:flutter/material.dart';
 
+import '../data/medicine_repository.dart';
 import '../design_tokens.dart';
 import '../models/product.dart';
+import '../models/storefront_p3.dart' show WishlistResult;
 import 'compact_product_card.dart';
 
 class CartWishlistRail extends StatelessWidget {
@@ -26,18 +28,30 @@ class CartWishlistRail extends StatelessWidget {
   /// where a card goes, exactly as the home feed's rails do.
   final void Function(Product product) onOpen;
 
+  /// CMD #2152 — called after a heart tap on a rail card lands, so the cart
+  /// re-reads its payload and the rail shows the backend's new wishlist.
+  final VoidCallback? onWishChanged;
+
   const CartWishlistRail({
     super.key,
     required this.title,
     required this.items,
     required this.onOpen,
+    this.onWishChanged,
   });
+
+  Future<WishlistResult> _toggle(String productId) async {
+    final res = await MedicineRepository().wishlistToggle(productId);
+    if (res.ok) onWishChanged?.call();
+    return res;
+  }
 
   /// Builds the rail from the `rail` object of cart_render(). Returns null
   /// when the backend says there is nothing to suggest, so the cart omits the
   /// block rather than drawing an empty band.
   static CartWishlistRail? fromPayload(
-      Object? raw, void Function(Product product) onOpen) {
+      Object? raw, void Function(Product product) onOpen,
+      {VoidCallback? onWishChanged}) {
     if (raw is! Map) return null;
     final m = Map<String, dynamic>.from(raw);
     if (m['has'] != true) return null;
@@ -51,6 +65,7 @@ class CartWishlistRail extends StatelessWidget {
       title: (m['title'] ?? '').toString(),
       items: items,
       onOpen: onOpen,
+      onWishChanged: onWishChanged,
     );
   }
 
@@ -115,6 +130,7 @@ class CartWishlistRail extends StatelessWidget {
                   child: CompactProductCard(
                     product: p,
                     onTap: () => onOpen(p),
+                    wishlistToggle: onWishChanged == null ? null : _toggle,
                   ),
                 ),
               );

@@ -136,15 +136,19 @@ void main() {
       expect(find.text('2'), findsNothing);
     });
 
-    testWidgets('the card floats 14 px off the edges; the dock row is 70',
+    // CMD #2156 (Om) — the bar row and the nav row are the SAME 64, the bar
+    // button is the 44 touch minimum and the active pill is 48.
+    testWidgets('the card floats 14 px off the edges; both rows are 64',
         (t) async {
       await t.pumpWidget(_app(FloatingDock(
           tabs: _tabs(), activeIndex: 0, onTap: (_) {})));
       await t.pumpAndSettle();
-      expect(FloatingDock.dockHeight, 70);
+      expect(FloatingDock.dockHeight, 64);
       expect(FloatingDock.edge, 14);
       expect(FloatingDock.radius, 28);
-      expect(FloatingDock.barHeight, 60);
+      expect(FloatingDock.barHeight, 64);
+      expect(FloatingDock.barButtonHeight, 44);
+      expect(FloatingDock.pillHeight, 48);
     });
 
     testWidgets('the login ask joins the card as its top row, verbatim',
@@ -166,7 +170,7 @@ void main() {
       final home = t.getRect(find.bySemanticsIdentifier('nav_slot_home'));
       expect(bar.bottom, lessThanOrEqualTo(home.top + 0.5),
           reason: 'bar row on top, dock row below');
-      expect(bar.height, 60);
+      expect(bar.height, 64);
       await t.tap(find.text('Backend CTA'));
       expect(tapped, 1);
     });

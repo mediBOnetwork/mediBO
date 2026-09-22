@@ -55,7 +55,8 @@ class CustomerError {
   /// or a pharmacy — is on the customer app, where this class applies.
   static bool isStaff(BuildContext context) {
     final u = context.getInheritedWidgetOfExactType<UserState>()?.notifier;
-    if (u == null) return false;
+    // No session scope at all (a bare test harness): keep the old behaviour.
+    if (u == null) return true;
     return u.isAdmin || u.isPartner || u.isSupplier || u.isPendingSupplier;
   }
 

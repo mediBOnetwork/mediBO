@@ -92,6 +92,19 @@
             </intent-filter>
         </receiver>
 
+        <!-- CMD #2185 — the Google Maps Android SDK key. google_maps_flutter
+             reads it from HERE and nowhere else: without it every native map
+             threw "API key not found" and the Location step printed the
+             backend's "The map cannot open on this device" instead of tiles.
+             The same key lives in map_config.native_key_android, which is what
+             decides (per platform) whether a map is drawn by Google at all —
+             this entry only lets the SDK start. It is restricted to
+             in.medibo.app with the Play app-signing and upload SHA-1s. No
+             other key belongs in this repo. -->
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="AIzaSyBHQ8p5PnMb4_PjWPVsIsb7_nI8A3LrHn8"/>
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

@@ -270,10 +270,26 @@ class _AdaptiveMapState extends State<AdaptiveMap> {
 
         // CMD #2112 — a surface that REQUIRES Google gets Google or gets the
         // backend's sentence. It never gets tiles.
+        //
+        // CMD #2185 — the requirement is the BACKEND's, and after #2185 the
+        // shop-pin surfaces send an empty one: they take whichever renderer
+        // map_config_get(<platform>) named, exactly like the route builder,
+        // all plans and today's visit. Pinned to 'google' this branch printed
+        // "The map cannot open on this device" on any platform without a
+        // Google key instead of falling back to tile_url.
         if (widget.requireProvider == 'google' && !cfg.usesGoogleJs) {
           RenderLog.write('c2112_map_google_required', 'unavailable');
           final alt = widget.unavailableState;
           return _shell(child: alt ?? (_configEmpty(cfg) ?? const SizedBox.shrink()));
+        }
+
+        // CMD #2185 — the shared path can still answer "nothing to draw with":
+        // a platform with neither a Google key nor a tile_url. A caller that
+        // brought its screen's own backend sentence gets to print it rather
+        // than a grey rectangle. Config in its normal state never reaches here.
+        if (!cfg.usesGoogleJs && !cfg.hasTiles && widget.unavailableState != null) {
+          RenderLog.write('c2185_map_unrenderable', 1);
+          return _shell(child: widget.unavailableState!);
         }
 
         final map = cfg.usesGoogleJs

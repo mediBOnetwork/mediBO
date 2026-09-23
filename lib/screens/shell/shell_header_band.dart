@@ -427,13 +427,31 @@ class _ShellHeaderSettle {
   }
 }
 
-/// CMD #2052(8) — the shell tabs the band belongs to: the storefront Home (0)
-/// and the Catalogue (12). Both are pages of the SAME shell, drawn under the
-/// SAME header, so both are driven by the one controller above rather than by a
-/// second one that would have to be kept in step with it. Every other tab —
-/// Orders, Bulk upload, My Shop, and every staff page — keeps its header at all
-/// times, which is what `shellHeaderScroll(n, false)` restores.
-bool shellHeaderBandTab(int index) => index == 0 || index == 12;
+/// CMD #2052(8) — the shell tabs the band belongs to. #2052 named two of them
+/// (Home and the Catalogue) because they were the two pages drawn under the
+/// shared header; the rest kept their header at all times.
+///
+/// CMD #2175 (Om) — "every tab". The header row now hides on the way down and
+/// returns on the way up on ORDERS, BULK and PROFILE too, because since this
+/// command all of them are drawn under the same header row with the same
+/// search row pinned beneath it: a tab that kept its logo row while its
+/// neighbour gave it away was the one thing in the shell that moved
+/// differently depending on which tab you were standing on.
+///
+/// It is still ONE driver and one notifier — a tab is not a second controller,
+/// it is the same accumulator answering for a different page — and it is still
+/// the shell's own verdict (`!isAdmin && …`) that decides whether the customer
+/// chrome collapses at all, so every staff page is untouched.
+///
+/// The index is Flutter's; the RULE is the backend's
+/// (`shell_style().band.every_tab`), read through [shellHeaderBandEveryTab].
+bool shellHeaderBandTab(int index) =>
+    shellHeaderBandEveryTab.value || index == 0 || index == 12;
+
+/// `shell_style().band.every_tab`, latched at boot by [shellStyleLoad]. It is
+/// a notifier rather than a read of the payload so the verdict costs nothing
+/// on the scroll path, where it is asked on every notification.
+final ValueNotifier<bool> shellHeaderBandEveryTab = ValueNotifier<bool>(true);
 
 /// The header band, wrapped so it can ride the scroll. [enabled] is the shell's
 /// own verdict — only the customer phone chrome collapses.

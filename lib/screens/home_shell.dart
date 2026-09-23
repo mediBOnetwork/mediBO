@@ -6,6 +6,7 @@ import 'package:flutter/rendering.dart'; // CMD #2038 — the header band is a r
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart'; // CHANGE #298 — absolute deep links
+import '../shell_search_scope.dart'; // CMD #2175 — the per-tab search seam
 import '../app_state.dart';
 import '../data/medicine_repository.dart';
 import '../models/app_session.dart';
@@ -1834,9 +1835,8 @@ class _HomeShellState extends State<HomeShell> {
         // controller to keep in step. Its own chrome — the search field, the
         // breadcrumb, the A–Z rail and the list toolbar — sits outside its
         // scroll view as Home's does. CMD #2080 — so does the bottom bar.
-        onNotification: (n) => shellHeaderScroll(
-            n, !isAdmin && shellHeaderBandTab(_index),
-            nav: !isAdmin && shellNavHideEnabled),
+        onNotification: (n) => shellHeaderScroll(n,
+            !isAdmin && shellHeaderBandTab(_index), nav: !isAdmin && shellNavHideEnabled),
         child: Stack(
         children: [
           SizedBox.expand(
@@ -1868,7 +1868,7 @@ class _HomeShellState extends State<HomeShell> {
                 // both screens. The brand band that used to sit behind the
                 // field and the chips is gone with the two widgets that drew
                 // it; this is the Catalogue's header, verbatim.
-                if (_index == 0) _shellSearchHeader(this, sticky: !isAdmin) else if (_shellWantsSearchJump(this, isAdmin)) _shellSearchJump(this), // CMD #2147 · #2156
+                _shellTabSearch(this, isAdmin), // CMD #2175 — one row, every tab
                 Expanded(
                   // CMD #2070 — a staff page ends ABOVE the update bar; the
                   // reasoning lives with the stack, not twice in the shell.
@@ -1952,7 +1952,7 @@ class _HomeShellState extends State<HomeShell> {
                 ),
               // ── Search + chips: storefront only (index 0) ─────────────────
               shellStaffChrome(isAdmin), // CHANGE #1017
-              if (_index == 0) _shellSearchHeader(this),
+              _shellTabSearch(this, isAdmin),
               Expanded(
                 // CMD #2070 — same clearance on the wide layout, same reason.
                 child: shellHost(

@@ -143,10 +143,20 @@ class _LocationHeader extends StatelessWidget {
   }
 }
 
-/// CMD #2147 — the customer header row, [Ds.touch.headerBand] tall (52 from
-/// the backend token): logo + [OrderHoursHeaderPill] on the left, the inbox
-/// bell on the right. The pill is Flexible so a long backend label truncates
-/// before it can push the bell off the row at 320 px.
+/// CMD #2175 — the customer header row: logo · status pill · bell, and
+/// nothing else.
+///
+/// Om's redline deletes the wordmark from the header. #2164 measured the row
+/// to decide whether the word fitted beside the pill; there is no word to fit
+/// any more, so the measuring, the two-state render-log and the 320 px
+/// step-down all go with it — the row is a Row again. The brand still opens
+/// home: the mark is the door.
+///
+/// Every number is the shell's ONE geometry ([Ds.shell]): [Ds.shell.height]
+/// tall, [Ds.shell.inset] in from each edge, [Ds.shell.gap] between the mark
+/// and the pill. The tile is centred in the row rather than hung from a
+/// separate top inset, so the height is the only number that decides where
+/// the row's contents sit.
 class _CustomerHeaderRow extends StatelessWidget {
   const _CustomerHeaderRow({required this.onLogoTap, this.bellKey});
   final VoidCallback onLogoTap;
@@ -159,45 +169,26 @@ class _CustomerHeaderRow extends StatelessWidget {
       bottom: false,
       child: Container(
         width: double.infinity,
-        height: Ds.touch.headerBand,
+        height: Ds.shell.height,
         color: Ds.c.surface,
-        // Om: one [t.headerTile] row, [t.headerTop] from the top, 16 at the
-        // sides — the same box the sticky search row puts its tile in, so the
-        // tile never moves between the two states.
-        padding: EdgeInsets.only(
-          left: Ds.space.x16,
-          right: Ds.space.x16,
-          top: t.headerTop,
-        ),
-        alignment: Alignment.topLeft,
+        padding: EdgeInsets.symmetric(horizontal: Ds.shell.inset),
+        alignment: Alignment.center,
         child: SizedBox(
           height: t.headerTile,
-          child: LayoutBuilder(builder: (context, box) {
-          // CMD #2164 — nothing in this row ever scales. Below 360 the
-          // wordmark is 22; on a phone too narrow even for that (≈320) the
-          // wordmark steps aside and the tile alone carries the brand, so the
-          // pill keeps its 14 sp label and nothing overflows.
-          final pillW = OrderHoursPill.widthFor(OrderHoursHeaderPill.labelOf(context));
-          final need = t.headerTile * 2 +
-              t.headerWordGap +
-              BrandLockup.wordWidth(context) +
-              (pillW > 0 ? t.headerGap + pillW : 0);
-          final showWord = need <= box.maxWidth;
-          RenderLog.write('c2164_header', showWord ? 'word' : 'tile');
-          return Row(
+          child: Row(
             children: [
               Semantics(
                 identifier: 'c2147_logo',
                 button: true,
                 child: GestureDetector(
                   onTap: onLogoTap,
-                  child: BrandLockup(markOnly: !showWord, wordWrapper: _fadeWord),
+                  child: const BrandLockup(markOnly: true),
                 ),
               ),
-              SizedBox(width: t.headerGap),
-              // The pill sits right after the wordmark (Om); the free room goes
+              SizedBox(width: Ds.shell.gap),
+              // The pill sits right after the mark (Om); the free room goes
               // between it and the bell. CMD #2164: its text is never shrunk —
-              // below 360 only the wordmark steps down.
+              // it is one line at its own size, whatever the width.
               const _HeaderFade(child: OrderHoursHeaderPill()),
               const Spacer(),
               Semantics(
@@ -208,21 +199,17 @@ class _CustomerHeaderRow extends StatelessWidget {
                 ),
               ),
             ],
-          );
-          }),
+          ),
         ),
       ),
     );
   }
 }
 
-/// CMD #2173 — the wordmark's fade, handed to the shared [BrandLockup] so
-/// the lock-up itself stays a pure render of `design.header.logo`.
-Widget _fadeWord(Widget child) => _HeaderFade(child: child);
-
-/// CMD #2164 — the wordmark and the pill fade out as the logo row scrolls
-/// away (and back in as it returns), tied to the same collapse value the band
-/// moves on, so the fade is exactly as long as the band's own settle.
+/// CMD #2164 — the pill fades out as the logo row scrolls away (and back in
+/// as it returns), tied to the same collapse value the band moves on, so the
+/// fade is exactly as long as the band's own settle. CMD #2175 — the wordmark
+/// it used to fade with it is gone from the header.
 class _HeaderFade extends StatelessWidget {
   const _HeaderFade({required this.child});
   final Widget child;

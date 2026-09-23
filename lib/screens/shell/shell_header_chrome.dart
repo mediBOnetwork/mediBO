@@ -658,14 +658,25 @@ final ValueNotifier<bool> _shellStuckFlag = () {
 /// far as it was before the tap — so the page is at the same scroll spot, in
 /// the same header state.
 class _StickyLead extends StatefulWidget {
-  const _StickyLead({required this.state});
+  const _StickyLead({required this.state, this.focus, this.onBack});
+
   final _HomeShellState state;
+
+  /// CMD #2175 — the box this lead belongs to. The storefront's own bar leaves
+  /// it null and gets the shell's search focus node; a tab bar passes its own,
+  /// so focusing the box on Orders or Profile collapses the SAME header row
+  /// and offers the SAME ← as it does on Home. One search screen, five tabs.
+  final FocusNode? focus;
+
+  /// What ← clears, when it is not the storefront's query.
+  final VoidCallback? onBack;
+
   @override
   State<_StickyLead> createState() => _StickyLeadState();
 }
 
 class _StickyLeadState extends State<_StickyLead> {
-  FocusNode get _focus => widget.state._searchFocus;
+  FocusNode get _focus => widget.focus ?? widget.state._searchFocus;
   double? _before;
 
   @override
@@ -694,10 +705,15 @@ class _StickyLeadState extends State<_StickyLead> {
   }
 
   void _back() {
-    final s = widget.state;
-    if (s._search.hasQuery || s._searchCtrl.text.isNotEmpty) {
-      s._searchCtrl.clear();
-      s._applySearch(SearchQueryState.blank);
+    final onBack = widget.onBack;
+    if (onBack != null) {
+      onBack();
+    } else {
+      final s = widget.state;
+      if (s._search.hasQuery || s._searchCtrl.text.isNotEmpty) {
+        s._searchCtrl.clear();
+        s._applySearch(SearchQueryState.blank);
+      }
     }
     _focus.unfocus();
     RenderLog.write('c2147_search_back', 1);
@@ -784,47 +800,173 @@ class _StickyBell extends StatelessWidget {
       );
 }
 
-/// CMD #2156 (Om) — ONE shared header on every customer tab: the tabs that
-/// have no search box of their own (Bulk, Profile …) still show the same
-/// search row, same size and place. It is the storefront's search: a tap goes
-/// to Home and opens the box there. Home, the Catalogue and Orders draw their
-/// own (Orders keeps its "order code or medicine" placeholder).
-final TextEditingController _jumpCtrl = TextEditingController();
-final ValueNotifier<bool> _jumpTopState = ValueNotifier<bool>(false);
-Future<SearchPagePayload?>? _jumpChrome;
+// CMD #2175 · shard — the search row EVERY customer tab wears, and the one
+// place that knows which surface answers a typed query.
+//
+// Om: "Search per tab — Home, Catalogue, Bulk → products + companies. Orders →
+// orders, items, any date. Profile → settings and features." Before this the
+// tabs without a box of their own showed a DEAD bar ([_shellSearchJump]) that
+// could not be typed into: tapping it left the tab and reopened the box on
+// Home. A bar that answers a different question on every tab is not five bars
+// — it is one bar and a backend row that says what the tab's question is.
+//
+// The scope and the placeholder are `shell_style().search.tabs.<key>`, so
+// adding a tab or rewording a placeholder is an UPDATE, never a deploy. This
+// file decides nothing about what the words are; it decides only WHERE the
+// query goes, and that is a switch on the backend's own `scope` string.
+//
+// It is a `part` for the shell's usual reason: every widget it touches is
+// library-private, and it gives the concern its own leasable path.
 
-bool _shellWantsSearchJump(_HomeShellState s, bool isAdmin) =>
-    !isAdmin && s._index != 0 && s._index != 1 && s._index != 12;
+/// `shell_style()`, fetched once per session and shared by every consumer.
+/// A shell-wide payload, so a tab switch never re-asks for it.
+Future<Map<String, dynamic>>? _shellStyleFuture;
 
-Widget _shellSearchJump(_HomeShellState s) {
-  RenderLog.write('c2156_search_jump', s._index);
-  return Semantics(
-    identifier: 'c2156_search_jump',
-    button: true,
-    child: GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () {
-        s._setIndex(0);
-        WidgetsBinding.instance
-            .addPostFrameCallback((_) => s._searchFocus.requestFocus());
-      },
-      child: AbsorbPointer(
-        // The same words the storefront box shows: search_page()'s own,
-        // from the device copy SearchChrome keeps.
-        child: FutureBuilder<SearchPagePayload?>(
-          future: _jumpChrome ??= s._repo.cachedSearchChrome(),
-          builder: (_, snap) => SearchHeaderBar(
-            controller: _jumpCtrl,
-            placeholder: snap.data?.placeholder ?? '',
-            bar: snap.data?.searchBar ?? SearchBarSpec.fallback,
-            onChanged: (_) {},
-            onSubmit: (_) {},
-            compact: _jumpTopState,
+Future<Map<String, dynamic>> shellStyleLoad() => _shellStyleFuture ??=
+    Supabase.instance.client.rpc('shell_style').then((v) {
+      final m = v is Map ? Map<String, dynamic>.from(v) : <String, dynamic>{};
+      final band = (m['band'] as Map?) ?? const {};
+      if (band['every_tab'] is bool) {
+        shellHeaderBandEveryTab.value = band['every_tab'] as bool;
+      }
+      RenderLog.write('c2175_shell_style', m.isEmpty ? 0 : 1);
+      return m;
+    }).catchError((_) => <String, dynamic>{});
+
+/// The shell page → the backend's own tab key. The NUMBERS are Flutter's
+/// ([ShellPage] and the shell's own page list); the key is what the backend
+/// rows are addressed by, so the backend never learns an index.
+String shellTabKey(int index) {
+  switch (index) {
+    case 0:
+      return 'home';
+    case 1:
+      return 'orders';
+    case 2:
+      return 'bulk';
+    case 12:
+      return 'catalogue';
+    case 15:
+      return 'profile';
+    default:
+      return 'home';
+  }
+}
+
+/// One controller per scope, so leaving Orders and coming back finds the
+/// words still in the box — the same promise the storefront's box keeps.
+final Map<String, TextEditingController> _shellScopeCtrl =
+    <String, TextEditingController>{};
+
+TextEditingController _shellScopeController(String scope) =>
+    _shellScopeCtrl[scope] ??= TextEditingController();
+
+/// THE search row of the customer shell, for any tab.
+///
+/// Home keeps [_shellSearchHeader] — the full storefront chrome (filter chips,
+/// the idle rail, the result count), which is a search SURFACE and not just a
+/// box. The Catalogue keeps its own copy of that same chrome inside its page,
+/// pinned above its grid exactly as this row is. Every other tab gets this
+/// bar, wired to the scope the backend named for it.
+Widget _shellTabSearch(_HomeShellState s, bool isAdmin) {
+  if (isAdmin) {
+    return s._index == 0 ? _shellSearchHeader(s) : const SizedBox.shrink();
+  }
+  if (s._index == 0) return _shellSearchHeader(s, sticky: true);
+  // The Catalogue's own SearchChrome is this row on that tab: same widget,
+  // same geometry, already outside its scroll view. Two boxes would be two
+  // answers to one question.
+  if (s._index == ShellPage.catalogue) return const SizedBox.shrink();
+  return _ShellTabSearchBar(state: s, tabKey: shellTabKey(s._index));
+}
+
+class _ShellTabSearchBar extends StatefulWidget {
+  const _ShellTabSearchBar({required this.state, required this.tabKey});
+  final _HomeShellState state;
+  final String tabKey;
+
+  @override
+  State<_ShellTabSearchBar> createState() => _ShellTabSearchBarState();
+}
+
+class _ShellTabSearchBarState extends State<_ShellTabSearchBar> {
+  final FocusNode _focus = FocusNode();
+  Timer? _debounce;
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  void _push(String scope, String q) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 300), () {
+      shellScopeQuery(scope).value = q.trim();
+      RenderLog.write('c2175_tab_search', scope);
+    });
+  }
+
+  /// A `catalog` scope has no list on this tab to narrow, so the query is the
+  /// storefront's: the shopper lands on Home with it already run. Om's rule —
+  /// "Home, Catalogue, Bulk → products + companies" — is one search, reached
+  /// from three places.
+  void _catalog(String q) {
+    final t = q.trim();
+    if (t.isEmpty) return;
+    final s = widget.state;
+    s._setIndex(0);
+    s._searchCtrl.text = t;
+    s._handleSearchSubmit(t);
+    RenderLog.write('c2175_tab_search', 'catalog');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Map<String, dynamic>>(
+      future: shellStyleLoad(),
+      builder: (context, snap) {
+        final tabs = (snap.data?['search'] as Map?)?['tabs'] as Map?;
+        final row = (tabs?[widget.tabKey] as Map?) ?? const {};
+        final scope = (row['scope'] ?? 'catalog').toString();
+        final placeholder = (row['placeholder'] ?? '').toString();
+        final ctrl = _shellScopeController(scope);
+        return Semantics(
+          identifier: 'c2175_tab_search',
+          child: SearchHeaderBar(
+            controller: ctrl,
+            focusNode: _focus,
+            placeholder: placeholder,
+            compact: _shellStuckFlag,
+            leading: _StickyLead(
+                state: widget.state,
+                focus: _focus,
+                onBack: () {
+                  ctrl.clear();
+                  if (scope != 'catalog') shellScopeQuery(scope).value = '';
+                }),
+            onChanged: (q) {
+              if (scope == 'catalog') return;
+              _push(scope, q);
+            },
+            onSubmit: (q) {
+              if (scope == 'catalog') {
+                _catalog(q);
+                return;
+              }
+              _debounce?.cancel();
+              shellScopeQuery(scope).value = q.trim();
+            },
+            onClear: () {
+              ctrl.clear();
+              if (scope != 'catalog') shellScopeQuery(scope).value = '';
+            },
           ),
-        ),
-      ),
-    ),
-  );
+        );
+      },
+    );
+  }
 }
 
 /// CMD #2044 — the focused, empty search box FILLS the screen instead of

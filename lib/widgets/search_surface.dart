@@ -344,12 +344,18 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
   /// [stuck] null = a plain search screen; false/true = the shared customer
   /// header's top / scrolled state (see [SearchHeaderBar.compact]).
   Widget _row(BuildContext context, bool? stuck) {
+    // CMD #2175 — the search bar is one of the five pieces of chrome on the
+    // shell's ONE geometry: [Ds.shell.inset] in from each edge, the field
+    // [Ds.shell.height] tall wearing [Ds.shell.radius], [Ds.shell.gap] of air
+    // under it. The 48 → 40 step-down #2156 gave the scrolled state is gone
+    // with it: "one height" means the field does not change size when the
+    // header row above it leaves, so nothing below the bar ever moves.
     final EdgeInsets pad = stuck == null
-        ? EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x8)
-        : EdgeInsets.fromLTRB(Ds.space.x16, stuck ? Ds.space.x12 : 0, Ds.space.x16, Ds.space.x12);
-    final double field = stuck == true
-        ? SearchHeaderBar.compactFieldHeight
-        : SearchHeaderBar.fieldHeight;
+        ? EdgeInsets.fromLTRB(
+            Ds.shell.inset, Ds.shell.gap, Ds.shell.inset, Ds.shell.gap)
+        : EdgeInsets.fromLTRB(Ds.shell.inset, stuck ? Ds.shell.gap : 0,
+            Ds.shell.inset, Ds.shell.gap);
+    final double field = Ds.shell.height;
     final h = Ds.header;
     final fade = Duration(milliseconds: h.fadeMs.round());
     return AnimatedContainer(
@@ -381,9 +387,8 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
               // 16 inner padding, a 22 dp search icon.
               decoration: BoxDecoration(
                 color: Ds.c.surface,
-                borderRadius: BorderRadius.circular(stuck == true
-                    ? h.searchCompactRadius
-                    : h.searchRadius),
+                // CMD #2175 — one corner, and it is the shell's.
+                borderRadius: BorderRadius.circular(Ds.shell.radius),
                 border: Border.all(
                     color: Ds.c.divider, width: h.searchBorderWidth),
               ),

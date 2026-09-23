@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../shell_search_scope.dart'; // CMD #2175 — the shell owns this tab's box
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -98,6 +100,33 @@ class _ProfileTabScreenState extends State<ProfileTabScreen> {
   bool _failed = false;
   String? _loadedFor;
 
+  /// CMD #2175 — "Profile → settings and features". The words are typed into
+  /// the shell's pinned search bar (scope 'profile'); the FILTERING is
+  /// `customer_profile_search(q)`, which narrows this tab's own payload, so
+  /// the search can never offer a row the tab itself would not show.
+  late final ValueNotifier<String> _shellQuery = shellScopeQuery('profile');
+  String _query = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _shellQuery.addListener(_onShellQuery);
+  }
+
+  @override
+  void dispose() {
+    _shellQuery.removeListener(_onShellQuery);
+    super.dispose();
+  }
+
+  void _onShellQuery() {
+    final q = _shellQuery.value;
+    if (q == _query) return;
+    _query = q;
+    _loadedFor = null;
+    _maybeLoad();
+  }
+
   bool get _signedIn =>
       widget.signedIn ?? UserState.of(context).isAuthenticated;
 
@@ -138,8 +167,10 @@ class _ProfileTabScreenState extends State<ProfileTabScreen> {
       if (widget.loader != null) {
         m = await widget.loader!();
       } else {
-        final raw =
-            await Supabase.instance.client.rpc('customer_profile_tab');
+        final raw = _query.isEmpty
+            ? await Supabase.instance.client.rpc('customer_profile_tab')
+            : await Supabase.instance.client
+                .rpc('customer_profile_search', params: {'p_query': _query});
         m = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
       }
       if (!mounted) return;

@@ -72,7 +72,22 @@ class OrderHoursModel extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> refresh() async {
     try {
-      final res = await Supabase.instance.client.rpc('order_hours_state');
+      // CMD #2187 — TWO doors, asked together, because the pill has exactly
+      // one AUTHOR. `order_hours_state()` reports a copy of the pill, and a
+      // deployment where it has not been migrated alongside
+      // `header_status_pill()` reports the old one-line shape with a clock in
+      // it — which is what live did on CHANGE #1527. Asking the author itself
+      // is what makes the three lines true wherever this build runs. Neither
+      // call is given a zone: the backend resolves it, always.
+      final both = await Future.wait<dynamic>(<Future<dynamic>>[
+        Supabase.instance.client.rpc('order_hours_state'),
+        Supabase.instance.client
+            .rpc('header_status_pill')
+            .then<dynamic>((v) => v)
+            .catchError((_) => null),
+      ]);
+      final res = both[0];
+      final authored = both[1];
       final map = Map<String, dynamic>.from(res as Map);
       isOpen = map['is_open'] as bool? ?? false;
       autoCloseTime = map['auto_close_time'] as String?;
@@ -98,7 +113,8 @@ class OrderHoursModel extends ChangeNotifier with WidgetsBindingObserver {
       autoOpenLabel = map['auto_open_label'] as String?;
       autoCloseLabel = map['auto_close_label'] as String?;
       nowLabel = map['now_label'] as String?;
-      pill = Map<String, dynamic>.from((map['pill'] as Map?) ?? const {});
+      pill = Map<String, dynamic>.from(
+          (authored is Map ? authored : (map['pill'] as Map?)) ?? const {});
       sheet = Map<String, dynamic>.from((map['sheet'] as Map?) ?? const {});
       _schedulePillTick();
       loaded = true;
@@ -113,6 +129,7 @@ class OrderHoursModel extends ChangeNotifier with WidgetsBindingObserver {
       RenderLog.write('c456_close_label', autoCloseLabel ?? '');
       RenderLog.write('c456_schedule', scheduleLabel ?? '');
       RenderLog.write('c2147_pill_state', (pill['state'] ?? '').toString());
+      RenderLog.write('c2187_pill_author', authored is Map ? 'rpc' : 'state');
       notifyListeners();
     } catch (_) {
       // D3 FAIL OPEN on the fetch — never invent a "closed" message on a

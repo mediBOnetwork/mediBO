@@ -253,6 +253,21 @@ void main() {
           reason: 'a pill that left the screen still held the motion');
     });
 
+    test('the pill reads its one AUTHOR, and names no zone doing it', () {
+      // CHANGE #1527 shipped with the three lines correct in
+      // header_status_pill() and WRONG on screen, because the live
+      // order_hours_state() still reported #2147's one-line copy of the pill.
+      // The model now asks the author itself, in parallel, and prefers it.
+      final model = _src('lib/models/order_hours_model.dart');
+      expect(model.contains("rpc('header_status_pill')"), isTrue,
+          reason: 'the pill stopped asking its author');
+      expect(model.contains("rpc('order_hours_state')"), isTrue,
+          reason: 'the hours state lost its own door');
+      expect(
+          RegExp(r"rpc\('header_status_pill',\s*params").hasMatch(model), isFalse,
+          reason: 'Dart started choosing the zone it is shown');
+    });
+
     test('the band publishes the travel the gate reads', () {
       final src = _src('lib/screens/shell/shell_header_band.dart');
       expect(src.contains('shellHeaderShown.value'), isTrue,

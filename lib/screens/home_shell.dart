@@ -6,7 +6,7 @@ import 'package:flutter/rendering.dart'; // CMD #2038 — the header band is a r
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart'; // CHANGE #298 — absolute deep links
-import '../shell_search_scope.dart'; // CMD #2175 — the per-tab search seam
+import '../shell_search_scope.dart'; import '../shell_motion.dart'; // CMD #2175 — the per-tab search seam · CMD #2187 — the one-motion gate
 import '../app_state.dart';
 import '../data/medicine_repository.dart';
 import '../models/app_session.dart';

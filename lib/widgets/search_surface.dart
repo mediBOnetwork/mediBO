@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../data/medicine_repository.dart';
 import '../design_tokens.dart';
+import '../shell_motion.dart'; // CMD #2187 — one thing animates at a time
 import '../models/search_page.dart';
 import '../utils/toast.dart';
 import '../utils/render_log.dart';
@@ -48,6 +49,13 @@ import 'scan_mic_search_controls.dart';
 /// interval all arrive in `search_page().search_bar`; a payload with fewer than
 /// two words animates nothing and the box shows a still hint, which is also
 /// what an app running from an old cache gets.
+///
+/// CMD #2187 — AND IT ONLY ROTATES WHEN IT OWNS THE MOTION. The header pill
+/// rolls on a 3 s clock ten pixels above this one; two clocks drift into each
+/// other and read as broken. `shell_style().search.placeholder_rotate_when`
+/// says `header_hidden`, so this word holds still for exactly as long as the
+/// header row is on screen and starts only once the row is entirely gone
+/// ([placeholderMayRotate]). Nothing moves during the handover slide.
 class AnimatedSearchPlaceholder extends StatefulWidget {
   const AnimatedSearchPlaceholder({
     super.key,
@@ -85,9 +93,15 @@ class _AnimatedSearchPlaceholderState extends State<AnimatedSearchPlaceholder>
   @override
   void initState() {
     super.initState();
+    shellMotion.addListener(_onMotion);
     _start();
     RenderLog.write('c2117_placeholder_words', widget.words.length);
   }
+
+  /// The gate moved — the header row arrived or finished leaving. Only the
+  /// clock starts or stops; nothing is rebuilt, because the word on screen is
+  /// the word that was already there.
+  void _onMotion() => _start();
 
   @override
   void didUpdateWidget(covariant AnimatedSearchPlaceholder old) {
@@ -105,8 +119,14 @@ class _AnimatedSearchPlaceholderState extends State<AnimatedSearchPlaceholder>
   void _start() {
     _timer?.cancel();
     if (widget.words.length < 2) return;
+    // CMD #2187 — the pill owns the motion while the header row is showing.
+    if (!placeholderMayRotate) {
+      RenderLog.write('c2187_placeholder_frozen', 1);
+      return;
+    }
+    RenderLog.write('c2187_placeholder_frozen', 0);
     _timer = Timer.periodic(widget.rotate, (_) {
-      if (!mounted) return;
+      if (!mounted || !placeholderMayRotate) return;
       setState(() {
         _prev = _i;
         _i = (_i + 1) % widget.words.length;
@@ -117,6 +137,7 @@ class _AnimatedSearchPlaceholderState extends State<AnimatedSearchPlaceholder>
 
   @override
   void dispose() {
+    shellMotion.removeListener(_onMotion);
     _timer?.cancel();
     _c.dispose();
     super.dispose();

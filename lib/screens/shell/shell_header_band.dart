@@ -105,6 +105,13 @@ bool _navOn = false;
 /// every frame and on every enable flip.
 void _publishChrome() {
   shellHeaderCollapse.value = _bandOn ? _hide : 0;
+  // CMD #2187 — the SAME travel, as the one-motion gate reads it: 1 = the
+  // header row is fully on screen (the pill owns the motion), 0 = it is
+  // entirely gone (the search placeholder does). Everything between is the
+  // handover, and during it neither of them moves.
+  final double band = Ds.touch.headerBand;
+  shellHeaderShown.value =
+      band <= 0 ? 1 : (1 - shellHeaderCollapse.value / band).clamp(0.0, 1.0);
   final double trav = Ds.touch.navHideTravel;
   if (!_navOn || trav <= 0) {
     shellNavHide.value = 0;

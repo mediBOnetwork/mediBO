@@ -1,21 +1,38 @@
 // CMD #2147 — the header's order-hours pill.
+// CMD #2187 — …which now always carries THREE lines and rolls them.
 //
-// Everything it says and how it looks is `order_hours_state().pill`:
-// {state, label, tone{bg, fg, dot}, pulse, pulse_ms, refresh_s}. The backend
-// picks which of the six states the zone is in and words it; this file holds
-// no clock and no rule. It prints `label`, paints `tone`, pulses on `pulse`
-// (a solid dot plus a ring that grows and fades — the YouTube live dot) and,
-// when tapped, opens `order_hours_state().sheet` {title, hours, note}.
+// Everything it says and how it looks is `header_status_pill()` (reported as
+// `order_hours_state().pill`):
 //
-// Motion is transform/opacity only for the pulse, so nothing beside the pill
-// moves while it breathes; a state change cross-fades the label (150 ms) and
-// animates width and colours (300 ms). Reduce-motion: a still dot, instant
-// switches.
+//   {state, scope, lines[3]{kind,text}, hold_ms, roll_ms, pulse, pulse_ms,
+//    style{bg, fg, dot, height, radius, text, pad_x, dot_size, min_w, max_w}}
+//
+// The backend picks the state, words all three lines (status · relative time ·
+// action), resolves the scope (universal → the CTA, zone → the zone's stage,
+// order → their own order) and merges the state's own geometry into `style`.
+// This file holds no clock, no rule, no threshold and no English: it prints
+// `lines[]` one at a time, paints `style` and pulses on `pulse`.
+//
+// THE ROLL. Each line holds for `hold_ms`, then the outgoing line slides UP
+// and fades while the incoming line rises FROM BELOW — one movement, not a
+// swap — over `roll_ms` on an ease-in-out, clipped inside the pill. The same
+// motion the cash-discount strip and the search placeholder use.
+//
+// ONE MOTION (CMD #2187). The pill rolls only while the header row is fully on
+// screen; the search placeholder is frozen for exactly as long. The verdict is
+// `pillMayRoll` in `shell_motion.dart`, which is the BACKEND's
+// `shell_style().motion.one_at_a_time` — not a rule invented here.
+//
+// A single-line payload (an old cache, a backend that sent only `label`) is a
+// still pill, and reduce-motion is a cross-fade with a still dot.
+
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 
 import '../design_tokens.dart';
 import '../order_hours_state.dart';
+import '../shell_motion.dart';
 import '../utils/render_log.dart';
 import 'customer_order_item_card.dart' show hexColor;
 
@@ -41,102 +58,289 @@ class OrderHoursHeaderPill extends StatelessWidget {
 }
 
 /// The pill itself, pure: a payload in, a pill out. Tested on the VM.
-class OrderHoursPill extends StatelessWidget {
-  const OrderHoursPill({super.key, required this.pill, required this.sheet});
+class OrderHoursPill extends StatefulWidget {
+  const OrderHoursPill({
+    super.key,
+    required this.pill,
+    required this.sheet,
+    this.rolls,
+  });
 
   final Map<String, dynamic> pill;
   final Map<String, dynamic> sheet;
 
+  /// Overrides the one-motion gate. `null` asks [pillMayRoll], which is the
+  /// BACKEND's `shell_style().motion` policy; a test passes true/false to hold
+  /// the gate still while it looks at the roll.
+  final bool? rolls;
+
   static const String semanticsId = 'c2147_hours_pill';
 
-  /// The label's style — one place, so the header can measure the pill.
-  static TextStyle labelStyle(Color fg) => Ds.t.caption.copyWith(
+  /// A line's style — one place, so every line of the roll is one size and the
+  /// pill's width never depends on which line is showing.
+  static TextStyle labelStyle(Color fg, {double? size}) => Ds.t.caption.copyWith(
         color: fg,
-        fontSize: Ds.touch.headerPillText,
+        fontSize: size ?? Ds.touch.headerPillText,
         fontWeight: FontWeight.w600,
         height: 1,
       );
 
-  /// The pill's full width for [label]: 12 + dot + 6 + text + 12.
-  static double widthFor(String label) {
-    if (label.isEmpty) return 0;
-    final tp = TextPainter(
-      text: TextSpan(text: label, style: labelStyle(Ds.c.text)),
-      maxLines: 1,
-      textDirection: TextDirection.ltr,
-      textScaler: TextScaler.noScaling,
-    )..layout();
-    return Ds.space.x12 * 2 + Ds.space.x8 + Ds.space.x4 + Ds.space.x4 / 2 + tp.width;
+  /// The lines the backend sent, in ITS order, empties dropped. CMD #2187
+  /// always sends three; a payload carrying only `label` (an old cache, or a
+  /// backend that has not been migrated) is one line and never rolls.
+  static List<String> linesOf(Map<String, dynamic> pill) {
+    final raw = pill['lines'];
+    if (raw is List) {
+      final out = <String>[];
+      for (final e in raw) {
+        final t = (e is Map ? (e['text'] ?? '') : (e ?? '')).toString();
+        if (t.isNotEmpty) out.add(t);
+      }
+      if (out.isNotEmpty) return out;
+    }
+    final label = (pill['label'] ?? pill['text'] ?? '').toString();
+    return label.isEmpty ? const <String>[] : <String>[label];
   }
 
-  Map<String, dynamic> get _tone =>
-      Map<String, dynamic>.from((pill['tone'] as Map?) ?? const {});
+  @override
+  State<OrderHoursPill> createState() => _OrderHoursPillState();
+}
+
+class _OrderHoursPillState extends State<OrderHoursPill>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: _rollDur,
+    value: 1,
+  );
+  Timer? _timer;
+  int _i = 0;
+  int _prev = 0;
+
+  /// A finger on the pill holds the line it is reading (Om: pause on touch).
+  bool _held = false;
+
+  List<String> get _lines => OrderHoursPill.linesOf(widget.pill);
+
+  Duration get _rollDur => Duration(milliseconds: _ms('roll_ms', 400));
+  Duration get _holdDur => Duration(milliseconds: _ms('hold_ms', 3000));
+  int _ms(String key, int fallback) =>
+      (widget.pill[key] as num?)?.toInt() ?? fallback;
+
+  /// The one-motion verdict for this frame.
+  bool get _mayRoll => widget.rolls ?? pillMayRoll;
+
+  @override
+  void initState() {
+    super.initState();
+    _publish();
+    shellMotion.addListener(_onMotion);
+    _restart();
+  }
+
+  @override
+  void didUpdateWidget(covariant OrderHoursPill old) {
+    super.didUpdateWidget(old);
+    final n = _lines.length;
+    if (_i >= n) _i = 0;
+    if (_prev >= n) _prev = 0;
+    _publish();
+    if (OrderHoursPill.linesOf(old.pill).length != n ||
+        old.pill['hold_ms'] != widget.pill['hold_ms'] ||
+        old.rolls != widget.rolls) {
+      _restart();
+    }
+  }
+
+  @override
+  void dispose() {
+    shellMotion.removeListener(_onMotion);
+    _timer?.cancel();
+    _c.dispose();
+    // The pill is leaving the screen, so it owns no motion any more and the
+    // search placeholder is free to rotate again.
+    shellPillCanRoll.value = false;
+    super.dispose();
+  }
+
+  /// Tells the gate whether there is anything here to collide with.
+  void _publish() => shellPillCanRoll.value = _lines.length > 1;
+
+  /// The gate moved (the header row started or finished travelling). Nothing
+  /// is rebuilt — only the clock starts or stops, which is the whole rule.
+  void _onMotion() => _restart();
+
+  void _restart() {
+    _timer?.cancel();
+    if (_lines.length < 2 || !_mayRoll) return;
+    _timer = Timer.periodic(_holdDur, (_) {
+      if (!mounted || _held || !_mayRoll) return;
+      final n = _lines.length;
+      if (n < 2) return;
+      setState(() {
+        _prev = _i;
+        _i = (_i + 1) % n;
+      });
+      _c.duration = _rollDur;
+      _c.forward(from: 0);
+    });
+  }
+
+  void _hold(bool held) {
+    if (_held == held) return;
+    _held = held;
+  }
+
+  /// `style` is CMD #2187's merged block (colours + geometry). `tone` is what
+  /// #2147 sent and is still read, so an app on an old payload paints.
+  Map<String, dynamic> get _style {
+    final s = widget.pill['style'];
+    if (s is Map && s.isNotEmpty) return Map<String, dynamic>.from(s);
+    final t = widget.pill['tone'];
+    return t is Map
+        ? Map<String, dynamic>.from(t)
+        : const <String, dynamic>{};
+  }
+
+  double? _dim(String key) => (_style[key] as num?)?.toDouble();
+
+  /// One line of the roll, at the size every other line is drawn at.
+  Widget _line(String text, TextStyle style) => Text(
+        text,
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.ellipsis,
+        textScaler: TextScaler.noScaling,
+        style: style,
+      );
+
+  /// The roll. Every line is in the Stack at all times, so the pill is as wide
+  /// as its WIDEST line and never changes width mid-cycle; only opacity and a
+  /// fractional translation move. The outgoing line carries on UP and out of
+  /// the middle while the incoming one rises FROM BELOW — one movement, not a
+  /// swap — and the whole thing is clipped inside the pill.
+  Widget _roll(List<String> lines, TextStyle style, bool still) {
+    if (lines.length < 2) return _line(lines.first, style);
+    return ClipRect(
+      child: AnimatedBuilder(
+        animation: _c,
+        builder: (context, _) {
+          final double t =
+              still ? 1 : Curves.easeInOut.transform(_c.value.clamp(0.0, 1.0));
+          return Stack(
+            alignment: Alignment.centerLeft,
+            children: <Widget>[
+              for (int k = 0; k < lines.length; k++)
+                _slot(k, t, lines[k], style, still),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _slot(int k, double t, String text, TextStyle style, bool still) {
+    final Widget child = _line(text, style);
+    if (k == _i) {
+      return FractionalTranslation(
+        translation: Offset(0, still ? 0 : 1 - t),
+        child: Opacity(opacity: t, child: child),
+      );
+    }
+    if (k == _prev && t < 1) {
+      return FractionalTranslation(
+        translation: Offset(0, still ? 0 : -t),
+        child: Opacity(opacity: 1 - t, child: child),
+      );
+    }
+    // Present, invisible, and still measured — this is what keeps the width of
+    // the pill the same on every line of the cycle.
+    return Opacity(opacity: 0, child: child);
+  }
 
   @override
   Widget build(BuildContext context) {
-    final label = (pill['label'] ?? '').toString();
-    if (label.isEmpty) return const SizedBox.shrink();
+    final lines = _lines;
+    if (lines.isEmpty) return const SizedBox.shrink();
     final still = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
-    final bg = hexColor((_tone['bg'] ?? '').toString(), fallback: Ds.c.bg);
+    final st = _style;
+    final bg = hexColor((st['bg'] ?? '').toString(), fallback: Ds.c.bg);
     final fg = hexColor(
-      (_tone['fg'] ?? '').toString(),
+      (st['fg'] ?? '').toString(),
       fallback: Ds.c.textSecondary,
     );
-    final dot = hexColor((_tone['dot'] ?? '').toString(), fallback: fg);
-    final pulse = pill['pulse'] == true && !still;
-    final ms = (pill['pulse_ms'] as num?)?.toInt() ?? 1600;
-    RenderLog.write('c2147_pill', (pill['state'] ?? '').toString());
+    final dot = hexColor((st['dot'] ?? '').toString(), fallback: fg);
+    final pulse = widget.pill['pulse'] == true && !still;
+    final ms = (widget.pill['pulse_ms'] as num?)?.toInt() ?? 1600;
+    final rolling = _mayRoll && lines.length > 1;
+    RenderLog.write('c2147_pill', (widget.pill['state'] ?? '').toString());
+    RenderLog.write('c2187_pill_lines', lines.length);
+    RenderLog.write('c2187_pill_roll', rolling ? 1 : 0);
+    RenderLog.write('c2187_pill_scope', (widget.pill['scope'] ?? '').toString());
     final colorMs = Duration(milliseconds: still ? 0 : 300);
+
+    // The state's own geometry, with the shell's tokens for whatever it leaves
+    // out. CMD #2175 holds all three at the logo tile's size; CMD #2187 lets a
+    // state override them, so the pill can change colour AND size mid-cycle
+    // with no deploy.
+    final double pillH = _dim('height') ?? Ds.touch.headerPill;
+    final double textSize = _dim('text') ?? Ds.touch.headerPillText;
+    final double padX = _dim('pad_x') ?? Ds.space.x12;
+    final double dotGap = Ds.space.x4 + Ds.space.x4 / 2;
+    final double minW = _dim('min_w') ?? 0;
+    final double maxW = _dim('max_w') ?? double.infinity;
+    final BorderRadius corner = _dim('radius') == null
+        ? BorderRadius.circular(Ds.header.pillRadius)
+        : BorderRadius.circular(_dim('radius')!);
+    final textStyle = OrderHoursPill.labelStyle(fg, size: textSize);
+
     return Semantics(
-      identifier: semanticsId,
+      identifier: OrderHoursPill.semanticsId,
       button: true,
-      label: label,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => showOrderHoursSheet(context, sheet),
-        // The pill is [Ds.touch.headerPill] tall; the hit box is the whole
-        // header row ([Ds.touch.headerTile]).
-        child: ConstrainedBox(
-          constraints: BoxConstraints(minHeight: Ds.touch.headerTile),
-          // Left-aligned (Om): the pill sits right after the logo; the free
-          // room goes between it and the bell, never around it.
-          child: Align(
-            alignment: Alignment.centerLeft,
-            widthFactor: 1,
-            child: AnimatedSize(
-              duration: colorMs,
-              curve: Curves.easeOut,
+      // The whole pill in one string, joined by the BACKEND's own separator —
+      // a screen reader is never handed a third of a sentence.
+      label: (widget.pill['label'] ?? lines.first).toString(),
+      child: Listener(
+        onPointerDown: (_) => _hold(true),
+        onPointerUp: (_) => _hold(false),
+        onPointerCancel: (_) => _hold(false),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => showOrderHoursSheet(context, widget.sheet),
+          // The pill is `style.height` tall; the hit box is the whole header
+          // row ([Ds.touch.headerTile]).
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: Ds.touch.headerTile),
+            // Left-aligned (Om): the pill sits right after the logo; the free
+            // room goes between it and the bell, never around it.
+            child: Align(
               alignment: Alignment.centerLeft,
-              child: AnimatedContainer(
+              widthFactor: 1,
+              child: AnimatedSize(
                 duration: colorMs,
                 curve: Curves.easeOut,
-                height: Ds.touch.headerPill,
                 alignment: Alignment.centerLeft,
-                padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
-                decoration: BoxDecoration(
-                  color: bg,
-                  borderRadius: BorderRadius.circular(Ds.header.pillRadius),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    LiveDot(color: dot, pulse: pulse, periodMs: ms),
-                    SizedBox(width: Ds.space.x4 + Ds.space.x4 / 2),
-                    // CMD #2164 — the label at its own size, always: no
-                    // FittedBox, no Flexible, no OS text scaling. The pill
-                    // is as wide as its text.
-                    AnimatedSwitcher(
-                      duration: Duration(milliseconds: still ? 0 : 150),
-                      child: Text(
-                        label,
-                        key: ValueKey(label),
-                        maxLines: 1,
-                        softWrap: false,
-                        textScaler: TextScaler.noScaling,
-                        style: labelStyle(fg),
-                      ),
+                child: AnimatedContainer(
+                  duration: colorMs,
+                  curve: Curves.easeOut,
+                  height: pillH,
+                  alignment: Alignment.centerLeft,
+                  padding: EdgeInsets.symmetric(horizontal: padX),
+                  decoration: BoxDecoration(color: bg, borderRadius: corner),
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(minWidth: minW, maxWidth: maxW),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        LiveDot(color: dot, pulse: pulse, periodMs: ms),
+                        SizedBox(width: dotGap),
+                        // CMD #2164 — the lines at their own size, always: no
+                        // FittedBox, no OS text scaling. CMD #2187 — and one
+                        // at a time, rolling.
+                        Flexible(child: _roll(lines, textStyle, still)),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               ),
             ),

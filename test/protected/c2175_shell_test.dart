@@ -142,8 +142,14 @@ void main() {
       expect(Ds.header.pillRadius * 2, Ds.touch.headerPill,
           reason: 'the pill stopped being a full-radius pill');
       expect(Ds.header.pillRadius, Ds.shell.boxRadius);
+      // CMD #2187 changed this protected behaviour on purpose: a state may now
+      // carry its own height and radius in `style{}`, so the pill can change
+      // colour AND size mid-cycle with no deploy. The tokens above are still
+      // the truth of the shell — they are now the FALLBACK the pill uses for
+      // whatever the payload leaves out, and that is what is held down here.
       final src = _src('lib/widgets/order_hours_pill.dart');
-      expect(src.contains('height: Ds.touch.headerPill'), isTrue);
+      expect(src.contains("_dim('height') ?? Ds.touch.headerPill"), isTrue,
+          reason: 'the pill stopped falling back to the shell token');
       expect(src.contains('BorderRadius.circular(Ds.header.pillRadius)'), isTrue);
     });
 

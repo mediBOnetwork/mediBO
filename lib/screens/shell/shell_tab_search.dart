@@ -29,6 +29,14 @@ Future<Map<String, dynamic>> shellStyleLoad() => _shellStyleFuture ??=
       if (band['every_tab'] is bool) {
         shellHeaderBandEveryTab.value = band['every_tab'] as bool;
       }
+      // CMD #2187 — one thing animates at a time, and the BACKEND says which.
+      // `motion.one_at_a_time` and `search.placeholder_rotate_when` are handed
+      // to the gate the pill and the placeholder both read; flipping either
+      // key is an UPDATE, never a deploy.
+      shellMotionPublish(
+        Map<String, dynamic>.from((m['motion'] as Map?) ?? const {}),
+        Map<String, dynamic>.from((m['search'] as Map?) ?? const {}),
+      );
       RenderLog.write('c2175_shell_style', m.isEmpty ? 0 : 1);
       return m;
     }).catchError((_) => <String, dynamic>{});

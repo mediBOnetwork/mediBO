@@ -74,6 +74,13 @@ bash scripts/mobile_first_check.sh || true
 # condition, prompt line, devcmd door, preview + live hooks, runner). Writes the
 # verdict rg_check's feature_journey_rule_present asserts.
 bash scripts/feature_journey_check.sh || true
+
+# CMD #2018 — the rule that decides what the sweep is allowed to call a failure
+# had a test (CMD #2012) that nothing ever ran. It needs no browser and no
+# network; run it where the sweep runs, so a broken rule is loud instead of
+# silently turning the guard red on the next unreadable screen.
+node scripts/test_responsive_verdict.js \
+  || echo "⚠️   responsive verdict rule is broken — scripts/lib/responsive_verdict.js"
 if [ "${MEDIBO_SKIP_RESPONSIVE_SWEEP:-0}" != "1" ]; then
   timeout 900 node scripts/responsive_sweep.js --quiet \
     || echo "⚠️   responsive sweep reported a phone-layout problem — see rg_runner_verdict"

@@ -165,7 +165,26 @@ class _CustomerHeaderRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = Ds.touch;
-    return SafeArea(
+    // CMD #2187 (Om, live on #1527) — "nothing is aligned". The logo PNG is
+    // 65.2% artwork, so a 40 dp tile showed 26 dp of green beside a 40 dp
+    // pill. The row's own numbers are `shell_style().header`: the tile is 49
+    // (49 × 0.652 = 32 of VISIBLE green), the bell glyph is 32 in a 40 tap
+    // box, and the pill is 32 from its own `style`. All three cross ONE
+    // centre line through the middle of the 56 dp row — centred, never top,
+    // never baseline — so the row is laid out at the tallest of them and each
+    // piece is centred inside it. Every number is a fallback away from the
+    // design tokens until the payload lands.
+    return ValueListenableBuilder<Map<String, dynamic>>(
+      valueListenable: shellHeaderStyle,
+      builder: (context, _, _) {
+        final double logoSize = shellHeaderNum('logo_size', t.headerTile);
+        final double logoRadius =
+            shellHeaderNum('logo_radius', t.headerTileRadius);
+        final double bellIcon = shellHeaderNum('bell_icon', Ds.header.bellIcon);
+        final double bellTap = shellHeaderNum('bell_tap', t.headerTile);
+        final double gap = shellHeaderNum('gap_logo_pill', Ds.shell.gap);
+        final double rowH = logoSize > bellTap ? logoSize : bellTap;
+        return SafeArea(
       bottom: false,
       child: Container(
         width: double.infinity,
@@ -174,18 +193,24 @@ class _CustomerHeaderRow extends StatelessWidget {
         padding: EdgeInsets.symmetric(horizontal: Ds.shell.inset),
         alignment: Alignment.center,
         child: SizedBox(
-          height: t.headerTile,
+          height: rowH,
           child: Row(
+            crossAxisAlignment: shellHeaderCentred
+                ? CrossAxisAlignment.center
+                : CrossAxisAlignment.start,
             children: [
               Semantics(
                 identifier: 'c2147_logo',
                 button: true,
                 child: GestureDetector(
                   onTap: onLogoTap,
-                  child: const BrandLockup(markOnly: true),
+                  child: BrandLockup(
+                      markOnly: true,
+                      tileSize: logoSize,
+                      tileRadius: logoRadius),
                 ),
               ),
-              SizedBox(width: Ds.shell.gap),
+              SizedBox(width: gap),
               // The pill sits right after the mark (Om); the free room goes
               // between it and the bell. CMD #2164: its text is never shrunk —
               // it is one line at its own size, whatever the width.
@@ -205,14 +230,16 @@ class _CustomerHeaderRow extends StatelessWidget {
               Semantics(
                 identifier: 'c2147_bell',
                 child: SizedBox.square(
-                  dimension: t.headerTile,
-                  child: NotificationBell(key: bellKey),
+                  dimension: bellTap,
+                  child: NotificationBell(key: bellKey, iconSize: bellIcon),
                 ),
               ),
             ],
           ),
         ),
       ),
+        );
+      },
     );
   }
 }

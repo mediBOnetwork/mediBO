@@ -52,7 +52,11 @@ void main() {
 
     test('the customer row draws the MARK only — no wordmark text', () {
       final row = _classSrc(chrome, 'class _CustomerHeaderRow');
-      expect(row.contains('BrandLockup(markOnly: true)'), isTrue,
+      // CMD #2187 (Om) — the lock-up now also carries the row's own tile size
+      // (`shell_style().header.logo_size` = 49, so the VISIBLE green is 32),
+      // so it is no longer a bare one-argument call. What this test holds down
+      // is unchanged: the MARK alone, and no wordmark anywhere near the row.
+      expect(row.contains('markOnly: true'), isTrue,
           reason: 'the header lock-up must be the mark alone');
       expect(row.contains('BrandLockup.wordWidth'), isFalse,
           reason: 'nothing in the row measures a wordmark any more');

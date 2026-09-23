@@ -53,7 +53,13 @@ class NotifUnread {
 }
 
 class NotificationBell extends StatefulWidget {
-  const NotificationBell({super.key, this.onOpened});
+  const NotificationBell({super.key, this.onOpened, this.iconSize});
+
+  /// CMD #2187 (Om) — `shell_style().header.bell_icon` (32), so the glyph
+  /// matches the logo's visible green and the pill on one centre line. The
+  /// TAP box stays [DsTouch.minTarget]; only the glyph grew. null keeps
+  /// [DsHeader.bellIcon] until the payload lands.
+  final double? iconSize;
 
   /// Fired after the inbox closes, so a shell can refresh anything else.
   final VoidCallback? onOpened;
@@ -95,7 +101,8 @@ class NotificationBellState extends State<NotificationBell> {
         children: [
           IconButton(
             tooltip: tooltip.isEmpty ? null : tooltip,
-            icon: const Icon(Icons.notifications_none_rounded),
+            icon: Icon(Icons.notifications_none_rounded,
+                size: widget.iconSize ?? Ds.header.bellIcon),
             onPressed: () async {
               await Navigator.of(context).push(MaterialPageRoute(
                 builder: (_) => const NotificationsInboxScreen(),

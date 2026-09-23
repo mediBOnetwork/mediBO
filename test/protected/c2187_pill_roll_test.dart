@@ -23,6 +23,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pharma_b2b/design_tokens.dart';
 import 'package:pharma_b2b/shell_motion.dart';
+import 'package:pharma_b2b/shell_header_style.dart';
 import 'package:pharma_b2b/widgets/order_hours_pill.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 
@@ -253,6 +254,21 @@ void main() {
           reason: 'a pill that left the screen still held the motion');
     });
 
+    test('the pill reads its one AUTHOR, and names no zone doing it', () {
+      // CHANGE #1527 shipped with the three lines correct in
+      // header_status_pill() and WRONG on screen, because the live
+      // order_hours_state() still reported #2147's one-line copy of the pill.
+      // The model now asks the author itself, in parallel, and prefers it.
+      final model = _src('lib/models/order_hours_model.dart');
+      expect(model.contains("rpc('header_status_pill')"), isTrue,
+          reason: 'the pill stopped asking its author');
+      expect(model.contains("rpc('order_hours_state')"), isTrue,
+          reason: 'the hours state lost its own door');
+      expect(
+          RegExp(r"rpc\('header_status_pill',\s*params").hasMatch(model), isFalse,
+          reason: 'Dart started choosing the zone it is shown');
+    });
+
     test('the band publishes the travel the gate reads', () {
       final src = _src('lib/screens/shell/shell_header_band.dart');
       expect(src.contains('shellHeaderShown.value'), isTrue,
@@ -263,6 +279,79 @@ void main() {
       final load = _src('lib/screens/shell/shell_tab_search.dart');
       expect(load.contains('shellMotionPublish('), isTrue,
           reason: 'the backend policy never reaches the gate');
+    });
+  });
+
+  // Om, live on CHANGE #1527: "nothing is aligned. The logo green, the pill
+  // and the bell icon are three different heights." The logo PNG is 65.2%
+  // artwork, so a 40 dp tile shows 26 dp of green. The row is aligned on the
+  // GREEN: tile 49 (× 0.652 = 32), bell glyph 32 in a 40 tap box, pill 32/16 —
+  // and 270 wide, because a 210 cap ellipsised "Opens tonig…" with 281 px of
+  // the 412 px row unused.
+  group('6 — the row is the backend\'s numbers, on one centre line', () {
+    tearDown(() => shellHeaderStyle.value = const {});
+
+    test('the header block is read, not guessed', () {
+      shellHeaderStyle.value = const {
+        'logo_size': 49,
+        'logo_radius': 11,
+        'bell_icon': 32,
+        'bell_tap': 40,
+        'gap_logo_pill': 10,
+        'align': 'center',
+      };
+      expect(shellHeaderNum('logo_size', 40), 49,
+          reason: 'the tile went back to 40 — that is 26 dp of green');
+      expect(shellHeaderNum('bell_icon', 24), 32);
+      expect(shellHeaderNum('bell_tap', 40), 40,
+          reason: 'the TAP box is a touch target, not the glyph');
+      expect(shellHeaderCentred, isTrue,
+          reason: 'never top-aligned, never baseline-aligned');
+      // 49 × 0.652 = 31.9 — the visible green, which is what the pill and the
+      // bell glyph are matched to.
+      expect((shellHeaderNum('logo_size', 40) * 0.652).round(), 32);
+    });
+
+    test('an empty payload falls back to the tokens, never to nothing', () {
+      expect(shellHeaderNum('logo_size', Ds.touch.headerTile), 40);
+      expect(shellHeaderCentred, isTrue);
+    });
+
+    testWidgets('the pill wears the payload\'s 32/16 and its own max_w',
+        (t) async {
+      await _mount(
+          t,
+          _pill(style: const {
+            'bg': '#F5F6F8',
+            'fg': '#6B7280',
+            'dot': '#6B7280',
+            'height': 32,
+            'radius': 16,
+            'max_w': 270,
+          }));
+      await t.pump();
+      final box = t.widget<AnimatedContainer>(find.descendant(
+              of: find.byType(OrderHoursPill),
+              matching: find.byType(AnimatedContainer)).first);
+      expect(box.constraints?.maxHeight, 32,
+          reason: 'the pill is the visible green\'s height');
+      expect(
+          (box.decoration as BoxDecoration).borderRadius,
+          BorderRadius.circular(16));
+      await t.pumpWidget(const SizedBox.shrink());
+    });
+
+    test('the row threads those numbers into the tile and the bell', () {
+      final row = _src('lib/screens/shell/shell_mobile_chrome.dart');
+      expect(row.contains("shellHeaderNum('logo_size'"), isTrue);
+      expect(row.contains("shellHeaderNum('bell_icon'"), isTrue);
+      expect(row.contains('tileSize: logoSize'), isTrue);
+      expect(row.contains('iconSize: bellIcon'), isTrue);
+      expect(row.contains('CrossAxisAlignment.center'), isTrue,
+          reason: 'the row stopped centring its three pieces');
+      final load = _src('lib/screens/shell/shell_tab_search.dart');
+      expect(load.contains('shellHeaderStylePublish('), isTrue,
+          reason: 'the header block never reaches the row');
     });
   });
 

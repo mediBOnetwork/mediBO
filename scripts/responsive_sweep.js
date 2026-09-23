@@ -261,6 +261,22 @@ async function probe(browser, label, route, width, minTouch, budgetMs) {
   const dead  = {};                 // label -> combinations that answered nothing
   const browser = await chromium.launch({ args: ['--no-sandbox', '--disable-gpu'] });
 
+  // CMD #2186 — one warm-up load before the clock matters. The sweep runs
+  // seconds after an upload, against a cold edge node and a 7.8 MB bundle that
+  // nothing has fetched yet: the first combinations pay for everyone and time
+  // out at 60 s having written no render log, which is how five reads were lost
+  // and 29 combinations never started. The warm-up is never measured and never
+  // fails the sweep.
+  try {
+    const warm = await browser.newContext({ viewport: { width: widths[0], height: 900 } });
+    const wp = await warm.newPage();
+    await wp.goto(`${TARGET}/?responsive_audit=1&min_touch=${minTouch}`,
+                  { waitUntil: 'domcontentloaded', timeout: 45000 });
+    await measure(wp, { at: Date.now(), count: 0 }, 45000);
+    await warm.close();
+    say(`  warm-up done · ${Math.round((BUDGET_MS - (deadline - Date.now())) / 1000)}s`);
+  } catch (e) { say(`  warm-up skipped (${String(e && e.message).slice(0, 60)})`); }
+
   try {
     for (const width of widths) {
       for (const [label, route] of SCREENS) {
@@ -333,7 +349,11 @@ async function probe(browser, label, route, width, minTouch, budgetMs) {
         await rpc('rg_runner_verdict_read', { p_name: 'responsive_no_overflow' }));
     } catch (e) { say(`  (previous verdict unreadable: ${e.message})`); }
   }
-  for (const f of classifyUnmeasured(unmeasured, tried, dead, prevUnmeasured)) failures.push(f);
+  // CMD #2186 — the SHAPE of this run decides how much its unread combinations
+  // are worth. A run that stopped early measured a biased sample.
+  for (const f of classifyUnmeasured(unmeasured, tried, dead, prevUnmeasured,
+                                     { plannedWidths: widths.length, skipped: skipped.length }))
+    failures.push(f);
 
   const ok = failures.length === 0;
   const tails = [];

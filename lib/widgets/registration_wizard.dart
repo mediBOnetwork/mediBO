@@ -21,25 +21,44 @@ bool wizardStepReachable(List<Map<String, dynamic>> steps, int i, int current) =
     i < current || (i != current && steps[i]['complete'] == true);
 
 /// The approved design (Registration v3): three bars, and under each its own
-/// label, centred. The current step is bold brand; a finished step reads
-/// "✓ General" (the backend's done_label), tappable; a step not reached yet is
-/// grey. No numbers — the words are the backend's.
+/// label, centred. No numbers — the words are the backend's.
+///
+/// CMD #2188 — ONE signal. The bar used to say two things at once: green for
+/// "complete" and bold for "you are here", so standing on General with
+/// Location already done made Location read as the current step. Now the only
+/// coloured bar is the one the person is standing on; a step already done is
+/// grey with a small tick beside its label; an untouched step is plain grey.
+/// Which colour, which weight and whether a tick is drawn are all the
+/// backend's (`wizard.step_bar`), so the rule can be changed without a deploy.
 class RegistrationProgressBar extends StatelessWidget {
   const RegistrationProgressBar({
     super.key,
     required this.steps,
     required this.current,
     required this.onJump,
-    this.currentComplete,
+    this.bar = const {},
   });
 
   final List<Map<String, dynamic>> steps;
   final int current;
   final ValueChanged<int> onJump;
 
-  /// CMD #2141 — the current step's own "done" as its surface knows it live
-  /// (the Documents block's `required_complete`). Null → the backend's flag.
-  final bool? currentComplete;
+  /// CMD #2188 — `wizard.step_bar`: a `current` / `done` / `todo` block each
+  /// naming its bar tone, label tone, weight and whether the tick is drawn,
+  /// plus the tick mark itself. Absent → nothing is coloured or marked.
+  final Map<String, dynamic> bar;
+
+  /// The tone names the payload uses, resolved to the app's own tokens.
+  Color _tone(Object? name, Color fallback) => switch ((name ?? '').toString()) {
+        'brand' => Ds.c.brand,
+        'text' => Ds.c.text,
+        'secondary' => Ds.c.textSecondary,
+        'divider' => Ds.c.divider,
+        'success' => Ds.c.success,
+        'warning' => Ds.c.warning,
+        'danger' => Ds.c.danger,
+        _ => fallback,
+      };
 
   @override
   Widget build(BuildContext context) {
@@ -54,29 +73,29 @@ class RegistrationProgressBar extends StatelessWidget {
     );
   }
 
-  /// CMD #2141 — v4: a bar is green ONLY when its step is complete — the
-  /// backend's `complete` (the host marks a step the backend just accepted
-  /// with Continue); the current step is grey until it is done. Being BEHIND
-  /// the current step is not "complete": a resumed draft parked past an
-  /// unfinished step keeps that step grey (QA round). Labels never carry a
-  /// ✓ — the current one is bold, a done one green, the rest grey.
+  /// CMD #2188 — the state is read once and everything else follows from it:
+  /// standing here ('current'), been here and the backend calls it complete
+  /// ('done'), or not reached yet ('todo'). Being merely BEHIND the current
+  /// step is not "done" — a resumed draft parked past an unfinished step
+  /// keeps that step untouched (the QA round #2141 held down).
   Widget _segment(int i) {
     final active = i == current;
-    final done = active
-        ? (currentComplete ?? false)
-        : steps[i]['complete'] == true;
+    final done = !active && steps[i]['complete'] == true;
+    final state = active ? 'current' : (done ? 'done' : 'todo');
+    final cfg = _m(bar[state]);
+    final tick = (bar['tick'] ?? '').toString();
+    final showTick = cfg['tick'] == true && tick.isNotEmpty;
     final reachable = wizardStepReachable(steps, i, current);
-    final label = ((done && !active ? steps[i]['done_label'] : null) ??
+    final label = ((done ? steps[i]['done_label'] : null) ??
             steps[i]['label'] ??
             '')
         .toString();
     // CMD #2135 — every label sits centred under its own bar.
     const align = TextAlign.center;
-    final style = active
-        ? Ds.t.caption.copyWith(color: Ds.c.text, fontWeight: FontWeight.w700)
-        : done
-            ? Ds.t.caption.copyWith(color: Ds.c.brand)
-            : Ds.t.caption;
+    final style = Ds.t.caption.copyWith(
+      color: _tone(cfg['label'], Ds.c.textSecondary),
+      fontWeight: cfg['bold'] == true ? FontWeight.w700 : null,
+    );
     return Semantics(
       identifier: 'reg_step_$i',
       button: reachable,
@@ -92,16 +111,27 @@ class RegistrationProgressBar extends StatelessWidget {
               Container(
                 height: Ds.space.x4,
                 decoration: BoxDecoration(
-                  color: done ? Ds.c.brand : Ds.c.divider,
+                  color: _tone(cfg['bar'], Ds.c.divider),
                   borderRadius: Ds.r.rChip,
                 ),
               ),
               SizedBox(height: Ds.space.x8),
-              Text(label,
-                  textAlign: align,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: style),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  if (showTick) ...[
+                    Text(tick, textAlign: align, style: style),
+                    SizedBox(width: Ds.space.x4),
+                  ],
+                  Flexible(
+                    child: Text(label,
+                        textAlign: align,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: style),
+                  ),
+                ],
+              ),
             ],
           ),
         ),

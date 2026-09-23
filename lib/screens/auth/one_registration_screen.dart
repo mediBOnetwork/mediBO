@@ -1089,9 +1089,8 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
                 ],
                 current: _step,
                 onJump: _goTo,
-                currentComplete: step['docs'] == true && _lic['show'] == true
-                    ? _lic['required_complete'] == true
-                    : null)),
+                // CMD #2188 — the one signal, drawn from the backend's block.
+                bar: _map(_wiz['step_bar']))),
           ),
           Expanded(
             child: SingleChildScrollView(

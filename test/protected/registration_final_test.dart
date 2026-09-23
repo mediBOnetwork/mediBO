@@ -10,6 +10,7 @@
 //  • the taken card's Login carries the backend's login_mode through.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pharma_b2b/design_tokens.dart';
 import 'package:pharma_b2b/services/contact_pickers.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/widgets/customer_registration_form.dart';
@@ -35,6 +36,8 @@ final _v4 = <String, dynamic>{
     'customer_name': {
       'key': 'owner_salutation',
       'default': 'Mr',
+      // CMD #2188 — the backend asks for ONE box, Mr/Ms inside it.
+      'inline': true,
       'options': [
         {'label': 'Mr', 'value': 'Mr'},
         {'label': 'Ms', 'value': 'Ms'},
@@ -79,11 +82,39 @@ void main() {
     await t.pump();
   }
 
-  testWidgets('the Mr / Ms box is exactly the owner-name box height', (t) async {
+  // CMD #2188 — there is no separate Mr/Ms box any more: the picker sits
+  // INSIDE the name box, and that one box is the height of every other field.
+  testWidgets('the name box holds Mr/Ms and is a normal field height', (t) async {
     await pump(t);
-    final pfx = t.getSize(find.bySemanticsIdentifier('reg_prefix_owner_salutation'));
-    final name = t.getSize(find.widgetWithText(TextField, 'Full name'));
-    expect(pfx.height, name.height);
+    final box = t.getSize(find.bySemanticsIdentifier('reg_name_box_customer_name'));
+    final other = t.getSize(find.widgetWithText(TextField, 'MAIL HINT'));
+    expect(box.height, other.height);
+    // The picker is inside that box, not beside it.
+    final pfx = t.getTopLeft(find.bySemanticsIdentifier('reg_prefix_owner_salutation'));
+    final boxLeft = t.getTopLeft(find.bySemanticsIdentifier('reg_name_box_customer_name'));
+    final boxRight = t.getBottomRight(find.bySemanticsIdentifier('reg_name_box_customer_name'));
+    expect(pfx.dx >= boxLeft.dx && pfx.dx < boxRight.dx, isTrue);
+  });
+
+  // CMD #2188 — ONE focus ring, around the whole box. Focusing the name used
+  // to light a border that stopped at the divider, which is how the picker
+  // read as a second field in the first place.
+  testWidgets('the focus ring belongs to the whole box, not the input', (t) async {
+    await pump(t);
+    final box = find.bySemanticsIdentifier('reg_name_box_customer_name');
+    Border ring() => (t.widget<Container>(find.descendant(
+            of: box, matching: find.byType(Container)).first)
+        .foregroundDecoration as BoxDecoration).border as Border;
+    expect(ring().top.color, Ds.c.divider);
+    await t.tap(find.widgetWithText(TextField, 'Full name'));
+    await t.pump();
+    expect(ring().top.color, Ds.c.brand);
+    expect(ring().left.color, Ds.c.brand, reason: 'one ring, all four sides');
+    // The input inside draws no border of its own — one box, one edge.
+    final inner = t.widget<TextField>(find.descendant(
+        of: box, matching: find.widgetWithText(TextField, 'Full name')));
+    expect(inner.decoration?.enabledBorder, InputBorder.none);
+    expect(inner.decoration?.focusedBorder, InputBorder.none);
   });
 
   testWidgets('a pasted +91 number takes the backend\'s cleaned value and note', (t) async {

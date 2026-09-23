@@ -906,6 +906,12 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
           decoration: BoxDecoration(
             color: Ds.c.surface,
             borderRadius: Ds.r.rButton,
+          ),
+          // The border is PAINTED, not laid out: an outline box draws its
+          // edge over the content, so borrowing the layout for a border here
+          // would make this the one field two pixels taller than the rest.
+          foregroundDecoration: BoxDecoration(
+            borderRadius: Ds.r.rButton,
             border: Border.all(color: edge),
           ),
           child: IntrinsicHeight(
@@ -946,7 +952,11 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
       button: true,
       child: Container(
         constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
-        padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
+        // Inside the shared box it is a prefix, so it gives the name back the
+        // width a second field used to take.
+        padding: bare
+            ? EdgeInsets.only(left: Ds.space.x12, right: Ds.space.x8)
+            : EdgeInsets.symmetric(horizontal: Ds.space.x12),
         decoration: bare
             ? null
             : BoxDecoration(

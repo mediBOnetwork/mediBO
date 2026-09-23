@@ -1,5 +1,6 @@
 // CMD #2147 — the header's order-hours pill.
 // CMD #2187 — …which now always carries THREE lines and rolls them.
+// CMD #2191 — …and whose WIDTH is the line it is showing, never a number.
 //
 // Everything it says and how it looks is `header_status_pill()` (reported as
 // `order_hours_state().pill`):
@@ -25,6 +26,16 @@
 //
 // A single-line payload (an old cache, a backend that sent only `label`) is a
 // still pill, and reduce-motion is a cross-fade with a still dot.
+//
+// THE WIDTH (CMD #2191). The pill HUGS the line it is showing: the roll keeps
+// only the incoming and the outgoing line in the Stack, so the pill's width is
+// that line's width and it grows and shrinks with the words. `style.min_w` and
+// `style.max_w` wrap the WHOLE pill — padding included — so `max_w` is the
+// ceiling a reader actually sees, and a line only ellipsises once it has taken
+// every pixel the ceiling (or the header row) allows. There is no fixed width
+// anywhere in this file: height, radius, pad_x, text size, the dot and its gap
+// are all `style` values, and the WORDS that fit a narrow phone are the
+// backend's own narrow tier (`tier`), picked from the width the app reports.
 
 import 'dart:async';
 
@@ -53,6 +64,13 @@ class OrderHoursHeaderPill extends StatelessWidget {
     final st = context.dependOnInheritedWidgetOfExactType<OrderHoursState>();
     final m = st?.notifier;
     if (m == null) return const SizedBox.shrink();
+    // CMD #2191 — the app reports the width it has; the BACKEND decides what
+    // that width means (which wording tier fits it). Reported after the frame,
+    // because it can start a fetch and a fetch notifies listeners.
+    final double w = MediaQuery.sizeOf(context).width;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      m.reportViewportWidth(w);
+    });
     return OrderHoursPill(pill: m.pill, sheet: m.sheet);
   }
 }
@@ -214,11 +232,14 @@ class _OrderHoursPillState extends State<OrderHoursPill>
         style: style,
       );
 
-  /// The roll. Every line is in the Stack at all times, so the pill is as wide
-  /// as its WIDEST line and never changes width mid-cycle; only opacity and a
-  /// fractional translation move. The outgoing line carries on UP and out of
-  /// the middle while the incoming one rises FROM BELOW — one movement, not a
-  /// swap — and the whole thing is clipped inside the pill.
+  /// The roll. CMD #2187 kept every line in the Stack at all times, which made
+  /// the pill as wide as its WIDEST line — a pill sized for "We are packing
+  /// today's orders" while it showed "Order now", and an ellipsis on the line
+  /// that was actually too long. CMD #2191: only the line coming IN and, while
+  /// it is still moving, the line going OUT are in the Stack, so the pill is
+  /// the width of what is on screen and changes with it. The outgoing line
+  /// carries on UP and out of the middle while the incoming one rises FROM
+  /// BELOW — one movement, not a swap — clipped inside the pill.
   Widget _roll(List<String> lines, TextStyle style, bool still) {
     if (lines.length < 2) return _line(lines.first, style);
     return ClipRect(
@@ -227,11 +248,12 @@ class _OrderHoursPillState extends State<OrderHoursPill>
         builder: (context, _) {
           final double t =
               still ? 1 : Curves.easeInOut.transform(_c.value.clamp(0.0, 1.0));
+          final bool rolling = !still && t < 1 && _prev != _i;
           return Stack(
             alignment: Alignment.centerLeft,
             children: <Widget>[
-              for (int k = 0; k < lines.length; k++)
-                _slot(k, t, lines[k], style, still),
+              if (rolling) _slot(_prev, t, lines[_prev], style, still),
+              _slot(_i, t, lines[_i], style, still),
             ],
           );
         },
@@ -247,15 +269,10 @@ class _OrderHoursPillState extends State<OrderHoursPill>
         child: Opacity(opacity: t, child: child),
       );
     }
-    if (k == _prev && t < 1) {
-      return FractionalTranslation(
-        translation: Offset(0, still ? 0 : -t),
-        child: Opacity(opacity: 1 - t, child: child),
-      );
-    }
-    // Present, invisible, and still measured — this is what keeps the width of
-    // the pill the same on every line of the cycle.
-    return Opacity(opacity: 0, child: child);
+    return FractionalTranslation(
+      translation: Offset(0, still ? 0 : -t),
+      child: Opacity(opacity: 1 - t, child: child),
+    );
   }
 
   @override
@@ -277,6 +294,9 @@ class _OrderHoursPillState extends State<OrderHoursPill>
     RenderLog.write('c2187_pill_lines', lines.length);
     RenderLog.write('c2187_pill_roll', rolling ? 1 : 0);
     RenderLog.write('c2187_pill_scope', (widget.pill['scope'] ?? '').toString());
+    // CMD #2191 — which wording tier the backend picked for the width this app
+    // reported. 'narrow' on a 320/360 dp phone, 'full' from 369 dp up.
+    RenderLog.write('c2191_pill_tier', (widget.pill['tier'] ?? '').toString());
     final colorMs = Duration(milliseconds: still ? 0 : 300);
 
     // The state's own geometry, with the shell's tokens for whatever it leaves
@@ -286,7 +306,10 @@ class _OrderHoursPillState extends State<OrderHoursPill>
     final double pillH = _dim('height') ?? Ds.touch.headerPill;
     final double textSize = _dim('text') ?? Ds.touch.headerPillText;
     final double padX = _dim('pad_x') ?? Ds.space.x12;
-    final double dotGap = Ds.space.x4 + Ds.space.x4 / 2;
+    final double dotSize = _dim('dot_size') ?? Ds.space.x8;
+    final double dotGap = _dim('dot_gap') ?? Ds.space.x4 + Ds.space.x4 / 2;
+    // CMD #2191 — min_w and max_w wrap the WHOLE pill below, padding included,
+    // so `max_w` is the width a reader can measure on the screen.
     final double minW = _dim('min_w') ?? 0;
     final double maxW = _dim('max_w') ?? double.infinity;
     final BorderRadius corner = _dim('radius') == null
@@ -316,27 +339,45 @@ class _OrderHoursPillState extends State<OrderHoursPill>
             child: Align(
               alignment: Alignment.centerLeft,
               widthFactor: 1,
+              // The width follows the words: AnimatedSize carries the pill
+              // from one line's width to the next over the roll's own
+              // duration, so growing and shrinking is part of the same
+              // movement rather than a jump at the end of it.
               child: AnimatedSize(
-                duration: colorMs,
-                curve: Curves.easeOut,
+                duration: still ? Duration.zero : _rollDur,
+                curve: Curves.easeInOut,
                 alignment: Alignment.centerLeft,
-                child: AnimatedContainer(
-                  duration: colorMs,
-                  curve: Curves.easeOut,
-                  height: pillH,
-                  alignment: Alignment.centerLeft,
-                  padding: EdgeInsets.symmetric(horizontal: padX),
-                  decoration: BoxDecoration(color: bg, borderRadius: corner),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(minWidth: minW, maxWidth: maxW),
+                // CMD #2191 — the ceiling and the floor are OUTSIDE the
+                // padding, so `max_w` is the pill's own width and a line
+                // ellipsises only after the pill has taken all of it (or all
+                // the header row had left, whichever is less).
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minWidth: minW, maxWidth: maxW),
+                  child: AnimatedContainer(
+                    duration: colorMs,
+                    curve: Curves.easeOut,
+                    height: pillH,
+                    // NO `alignment:` here — a Container that is given one
+                    // EXPANDS to fill whatever width it is offered, which is
+                    // how the pill came to be a wide box with a clipped
+                    // sentence in it. Without it the box is exactly its Row,
+                    // and the Row is `MainAxisSize.min`: the pill is its
+                    // words, plus pad_x, inside min_w..max_w.
+                    padding: EdgeInsets.symmetric(horizontal: padX),
+                    decoration: BoxDecoration(color: bg, borderRadius: corner),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        LiveDot(color: dot, pulse: pulse, periodMs: ms),
+                        LiveDot(
+                            color: dot,
+                            pulse: pulse,
+                            periodMs: ms,
+                            size: dotSize),
                         SizedBox(width: dotGap),
                         // CMD #2164 — the lines at their own size, always: no
                         // FittedBox, no OS text scaling. CMD #2187 — and one
-                        // at a time, rolling.
+                        // at a time, rolling. CMD #2191 — and the pill is as
+                        // wide as the one that is showing.
                         Flexible(child: _roll(lines, textStyle, still)),
                       ],
                     ),
@@ -360,11 +401,15 @@ class LiveDot extends StatefulWidget {
     required this.color,
     required this.pulse,
     this.periodMs = 1600,
+    this.size,
   });
 
   final Color color;
   final bool pulse;
   final int periodMs;
+
+  /// `style.dot_size`, in logical pixels. Null falls back to the shell token.
+  final double? size;
 
   @override
   State<LiveDot> createState() => _LiveDotState();
@@ -404,7 +449,7 @@ class _LiveDotState extends State<LiveDot> with SingleTickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    final d = Ds.space.x8;
+    final d = widget.size ?? Ds.space.x8;
     final dotBox = Container(
       width: d,
       height: d,

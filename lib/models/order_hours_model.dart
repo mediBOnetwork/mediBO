@@ -53,6 +53,27 @@ class OrderHoursModel extends ChangeNotifier with WidgetsBindingObserver {
   Timer? _debounce;
   Timer? _pillTick;
 
+  /// CMD #2191 — the viewport width, in logical pixels, as the shell last saw
+  /// it. It is reported to the backend on every pill fetch; the backend alone
+  /// decides what that width means.
+  int? _viewportW;
+
+  Timer? _widthDebounce;
+
+  /// The shell calls this with `MediaQuery.sizeOf(context).width`. A width
+  /// that lands in the same whole pixel changes nothing; a real change asks
+  /// the backend again — including the FIRST one, because the boot fetch went
+  /// out before any widget had a MediaQuery to read. A window being dragged
+  /// reports on every frame, so the ask is debounced; the number itself is
+  /// stored at once, so a fetch from any other cause already carries it.
+  void reportViewportWidth(double width) {
+    final int w = width.round();
+    if (w <= 0 || w == _viewportW) return;
+    _viewportW = w;
+    _widthDebounce?.cancel();
+    _widthDebounce = Timer(const Duration(milliseconds: 250), refresh);
+  }
+
   OrderHoursModel() {
     _init();
     WidgetsBinding.instance.addObserver(this);
@@ -79,10 +100,18 @@ class OrderHoursModel extends ChangeNotifier with WidgetsBindingObserver {
       // it — which is what live did on CHANGE #1527. Asking the author itself
       // is what makes the three lines true wherever this build runs. Neither
       // call is given a zone: the backend resolves it, always.
+      // CMD #2191 — the ONE thing the app tells the backend about itself: how
+      // wide it is. The backend answers with the wording tier that fits that
+      // width (`pill.tier`), because on a 320/360 dp phone the long sentence
+      // cannot be shown at all — and shortening the WORDS is the backend's
+      // decision, never a Dart one. A null width keeps the full wording.
+      final int? w = _viewportW;
       final both = await Future.wait<dynamic>(<Future<dynamic>>[
-        Supabase.instance.client.rpc('order_hours_state'),
+        Supabase.instance.client.rpc('order_hours_state',
+            params: w == null ? null : <String, dynamic>{'p_w': w}),
         Supabase.instance.client
-            .rpc('header_status_pill')
+            .rpc('header_status_pill',
+                params: w == null ? null : <String, dynamic>{'p_w': w})
             .then<dynamic>((v) => v)
             .catchError((_) => null),
       ]);
@@ -130,6 +159,8 @@ class OrderHoursModel extends ChangeNotifier with WidgetsBindingObserver {
       RenderLog.write('c456_schedule', scheduleLabel ?? '');
       RenderLog.write('c2147_pill_state', (pill['state'] ?? '').toString());
       RenderLog.write('c2187_pill_author', authored is Map ? 'rpc' : 'state');
+      RenderLog.write('c2191_pill_w', w ?? 0);
+      RenderLog.write('c2191_pill_tier', (pill['tier'] ?? '').toString());
       notifyListeners();
     } catch (_) {
       // D3 FAIL OPEN on the fetch — never invent a "closed" message on a
@@ -189,6 +220,7 @@ class OrderHoursModel extends ChangeNotifier with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _debounce?.cancel();
+    _widthDebounce?.cancel();
     _pillTick?.cancel();
     _channel?.unsubscribe();
     super.dispose();

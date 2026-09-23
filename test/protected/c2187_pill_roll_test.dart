@@ -107,20 +107,35 @@ void main() {
       expect(OrderHoursPill.linesOf(p), ['Closed', 'Tomorrow']);
     });
 
-    testWidgets('every line is mounted, so the pill never changes width',
+    // CMD #2191 changed this protected behaviour ON PURPOSE. #2187 kept all
+    // three lines mounted so the pill was always as wide as its WIDEST line;
+    // Om read the result as "Ordering clo…" — a pill sized for a sentence it
+    // was not showing, ellipsising the one it was. The pill now HUGS the line
+    // on screen: only the incoming line, and the outgoing one while it is
+    // still moving, are mounted, and the width travels between them.
+    testWidgets('only the line on screen is mounted, and the pill is its width',
         (t) async {
-      await _mount(t, _pill());
+      // Short enough that `max_w` is not what decides the width here: this
+      // test is about the pill following its words, and #6 below is the one
+      // that holds the ceiling down.
+      await _mount(t, _pill(lines: const ['Open', 'Open now', 'Go']));
       await t.pump();
-      // All three are in the tree at all times: that is what makes the width
-      // the widest line's, on every frame of the cycle.
-      for (final s in const ['Open', '40 minutes left', 'Order fast']) {
-        expect(find.text(s), findsOneWidget, reason: '$s left the pill');
+      expect(find.text('Open'), findsOneWidget,
+          reason: 'line 1 is what the pill opens on');
+      for (final s in const ['Open now', 'Go']) {
+        expect(find.text(s), findsNothing,
+            reason: '$s was measured while it was not on screen');
       }
       final w1 = t.getSize(find.byType(OrderHoursPill)).width;
-      await t.pump(const Duration(milliseconds: 3000));
-      await t.pump(const Duration(milliseconds: 400));
-      expect(t.getSize(find.byType(OrderHoursPill)).width, w1,
-          reason: 'the pill shrank mid-roll');
+      await t.pump(const Duration(milliseconds: 3000)); // the hold elapses
+      await t.pump(const Duration(milliseconds: 400)); // the roll completes
+      await t.pump(const Duration(milliseconds: 400)); // the width settles
+      final w2 = t.getSize(find.byType(OrderHoursPill)).width;
+      expect(w2, greaterThan(w1),
+          reason: 'the pill did not grow into the longer line');
+      expect(find.text('Open now'), findsOneWidget);
+      expect(find.text('Open'), findsNothing,
+          reason: 'the line that left is still being measured');
       await t.pumpWidget(const SizedBox.shrink());
     });
   });
@@ -130,10 +145,15 @@ void main() {
         (t) async {
       await _mount(t, _pill(holdMs: 3000, rollMs: 400));
       await t.pump();
-      double op(String s) => t
-          .widget<Opacity>(find.ancestor(
-              of: find.text(s), matching: find.byType(Opacity)).first)
-          .opacity;
+      // CMD #2191 — a line that is neither coming in nor going out is not in
+      // the tree at all (that is what makes the pill hug its text), so "not
+      // mounted" reads as fully transparent here.
+      double op(String s) => find.text(s).evaluate().isEmpty
+          ? 0
+          : t
+              .widget<Opacity>(find.ancestor(
+                  of: find.text(s), matching: find.byType(Opacity)).first)
+              .opacity;
       expect(op('Open'), 1, reason: 'line 1 is what the pill opens on');
       expect(op('40 minutes left'), 0);
       await t.pump(const Duration(milliseconds: 3000)); // the hold elapses
@@ -260,13 +280,26 @@ void main() {
       // order_hours_state() still reported #2147's one-line copy of the pill.
       // The model now asks the author itself, in parallel, and prefers it.
       final model = _src('lib/models/order_hours_model.dart');
-      expect(model.contains("rpc('header_status_pill')"), isTrue,
+      expect(model.contains("rpc('header_status_pill'"), isTrue,
           reason: 'the pill stopped asking its author');
-      expect(model.contains("rpc('order_hours_state')"), isTrue,
+      expect(model.contains("rpc('order_hours_state'"), isTrue,
           reason: 'the hours state lost its own door');
-      expect(
-          RegExp(r"rpc\('header_status_pill',\s*params").hasMatch(model), isFalse,
+      // CMD #2191 changed this protected behaviour on purpose: the app may now
+      // tell the backend ONE thing about itself — `p_w`, the width it has —
+      // and the backend answers with the wording tier that fits. The zone is
+      // still never named here, which is what this line has always been for.
+      expect(model.contains('p_zone'), isFalse,
           reason: 'Dart started choosing the zone it is shown');
+      expect(model.contains("'p_w'"), isTrue,
+          reason: 'the app stopped reporting the width it has');
+      for (final call in const ['order_hours_state', 'header_status_pill']) {
+        final i = model.indexOf("rpc('$call'");
+        final args = model.substring(i, model.indexOf(')', model.indexOf('params', i)) + 1);
+        for (final m in RegExp(r"'p_[a-z_]+'").allMatches(args)) {
+          expect(m.group(0), "'p_w'",
+              reason: '$call started carrying ${m.group(0)} from Dart');
+        }
+      }
     });
 
     test('the band publishes the travel the gate reads', () {

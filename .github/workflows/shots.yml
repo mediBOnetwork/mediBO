@@ -1,0 +1,47 @@
+name: Shots
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: Page to open
+        default: https://medibo.in/
+      wait_ms:
+        description: Wait after load
+        default: "6000"
+
+concurrency:
+  group: medibo-shots
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  shoot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tools
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm init -y && npm i -D playwright && npx playwright install --with-deps chromium
+      - name: Shoot
+        env:
+          TARGET: ${{ github.event.inputs.url }}
+          WAITMS: ${{ github.event.inputs.wait_ms }}
+        run: |
+          mkdir -p shots
+          node shoot.js
+      - name: Version
+        run: curl -s https://medibo.in/version.json -o shots/version.json || true
+      - name: Commit
+        run: |
+          git config user.name medibo-bot
+          git config user.email bot@medibo.in
+          git add -A shots
+          git commit -m "shots $(date -u +%H:%M:%SZ)" || echo none
+          git push origin HEAD:tools

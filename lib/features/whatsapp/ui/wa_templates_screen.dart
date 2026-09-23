@@ -38,9 +38,19 @@ class _WaTemplatesScreenState extends State<WaTemplatesScreen> {
     _load();
   }
 
+  /// `/admin/wa-templates?focus=<template name>` (CMD #2180). `Uri.base` is the
+  /// browser's own address on web and an empty URI elsewhere, so this needs no
+  /// dart:html import — the defensive-import rule forbids one in the widget
+  /// tree. The name is handed to the backend, which decides what "focus" means;
+  /// Dart does not filter or re-sort anything.
+  String? get _focus {
+    final v = Uri.base.queryParameters['focus'];
+    return (v == null || v.trim().isEmpty) ? null : v.trim();
+  }
+
   Future<void> _load() async {
     try {
-      final res = await WaTemplateApi.screen();
+      final res = await WaTemplateApi.screen(focus: _focus);
       if (!mounted) return;
       if (res['ok'] != true) {
         setState(() {

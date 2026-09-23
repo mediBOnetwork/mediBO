@@ -175,9 +175,20 @@ class CardLayout {
     final l = <String, Object?>{}
       ..addAll(_m(card['layout']).cast<String, Object?>())
       ..addAll(_m(ov['layout']).cast<String, Object?>());
+    // `v6` carries its colours in named blocks (scheme / unavail_chip /
+    // notify_pill); they are flattened next to `style`'s so a screen override
+    // can restyle any of them the same way.
+    final v6 = _m(card['v6']);
     final st = <String, Object?>{}
       ..addAll(_m(card['style']).cast<String, Object?>())
-      ..addAll(_m(card['v6']).cast<String, Object?>())
+      ..addAll({
+        'scheme_bg': _m(v6['scheme'])['bg'],
+        'scheme_fg': _m(v6['scheme'])['fg'],
+        'unavail_bg': _m(v6['unavail_chip'])['bg'],
+        'unavail_fg': _m(v6['unavail_chip'])['fg'],
+        'notify_bg': _m(v6['notify_pill'])['bg'],
+        'notify_fg': _m(v6['notify_pill'])['fg'],
+      })
       ..addAll(_m(ov['style']).cast<String, Object?>());
     final sh = <String, Object?>{}
       ..addAll(_m(card['show']).cast<String, Object?>())
@@ -193,7 +204,8 @@ class CardLayout {
       gapM: _d(l, 'gap_m', f.gapM),
       gapL: _d(l, 'gap_l', f.gapL),
       photoPad: _d(l, 'photo_pad', f.photoPad),
-      imagePct: _d(l, 'image_pct', f.imagePct).clamp(1, 100),
+      imagePct:
+          _d(l, 'image_pct', _d(v6, 'image_pct', f.imagePct)).clamp(1, 100),
       nameSize: _d(l, 'name_size', f.nameSize),
       nameLineH: _d(l, 'name_line_h', f.nameLineH),
       subSize: _d(l, 'sub_size', f.subSize),
@@ -239,6 +251,18 @@ class CardLayout {
     if (h.length != 8) return fallbackColor;
     final v = int.tryParse(h, radix: 16);
     return v == null ? fallbackColor : Color(v);
+  }
+
+  /// How tall this card is at [w] wide: the square plate (when the payload
+  /// draws one), its border, and the body under it — every part a backend
+  /// number. A rail asks for this instead of reserving a constant, so the
+  /// cards in one rail share one height that is still the payload's.
+  double cardHeight(double w, {int nameLines = 2, int textLines = 3}) {
+    final textH =
+        nameLineH * nameLines + subLineH * (textLines - nameLines).clamp(0, 4);
+    final body = gapL + textH + gapL + (priceSize + gapL) + padBottom;
+    final plate = show.photo ? w - borderW * 2 : 0.0;
+    return plate + borderW * 2 + body;
   }
 
   /// The photo's contain box on a [plate]-wide square plate.

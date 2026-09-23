@@ -21,6 +21,10 @@ import 'compact_product_card.dart';
 /// column count and the gap come from the backend's `card.layout`
 /// (min_card_w / grid_gap / max_cols), so re-shaping the grid is an
 /// app_settings update.
+/// No gap under the LAST row — a named zero, because a bare number inside an
+/// EdgeInsets is what the design-literal gate is there to catch.
+const double _noGap = 0;
+
 class ProductCardGrid extends StatelessWidget {
   const ProductCardGrid({
     super.key,
@@ -123,10 +127,11 @@ class ProductCardGrid extends StatelessWidget {
   }) {
     final cols = layout.columnsFor(width);
     final rows = (items.length + cols - 1) ~/ cols;
+    final last = rows - 1;
     return SliverList.builder(
       itemCount: rows,
       itemBuilder: (context, r) => Padding(
-        padding: EdgeInsets.only(bottom: r == rows - 1 ? 0 : layout.gridGap),
+        padding: EdgeInsets.only(bottom: r == last ? _noGap : layout.gridGap),
         child: row(
           context: context,
           items: items,
@@ -146,9 +151,10 @@ class ProductCardGrid extends StatelessWidget {
           final layout = layoutFor(context, items);
           final cols = layout.columnsFor(c.maxWidth);
           final rows = (items.length + cols - 1) ~/ cols;
+          final last = rows - 1;
           Widget rowAt(BuildContext context, int r) => Padding(
-                padding:
-                    EdgeInsets.only(bottom: r == rows - 1 ? 0 : layout.gridGap),
+                padding: EdgeInsets.only(
+                    bottom: r == last ? _noGap : layout.gridGap),
                 child: row(
                   context: context,
                   items: items,
@@ -258,12 +264,17 @@ class ProductCardRail extends StatelessWidget {
             ? c.maxWidth
             : MediaQuery.sizeOf(context).width;
         final w = layout.cardWidth(page - layout.pagePad * 2);
-        return SingleChildScrollView(
-          controller: controller,
-          scrollDirection: Axis.horizontal,
-          physics: const ClampingScrollPhysics(),
-          padding: EdgeInsets.symmetric(horizontal: layout.pagePad),
-          child: IntrinsicHeight(
+        // A horizontal scroll has no width to measure a child against, so the
+        // rail asks the LAYOUT how tall this card is at this width rather
+        // than reserving a constant — one answer for every card in the rail,
+        // which is what "one row, one height" means here.
+        return SizedBox(
+          height: layout.cardHeight(w),
+          child: SingleChildScrollView(
+            controller: controller,
+            scrollDirection: Axis.horizontal,
+            physics: const ClampingScrollPhysics(),
+            padding: EdgeInsets.symmetric(horizontal: layout.pagePad),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [

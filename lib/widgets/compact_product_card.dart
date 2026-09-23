@@ -2262,47 +2262,44 @@ class _V6Card extends StatelessWidget {
         child: InkWell(
           onTap: onTap,
           onLongPress: onPeek,
-          child: LayoutBuilder(
-            builder: (context, c) {
-              // The plate is a SQUARE of the card's own width, so a card is
-              // the same shape at every width the app lays it out at.
-              final w = c.maxWidth.isFinite
-                  ? c.maxWidth
-                  : CompactProductCard.railWidth;
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (cl.show.photo)
-                    SizedBox(
-                      height: w,
-                      width: double.infinity,
-                      child: ColoredBox(
-                        color: cl.color('photo_bg', Ds.c.surface),
-                        child: _V6Artwork(
-                          product: product,
-                          v5: v5,
-                          v6: v6,
-                          cl: cl,
-                          soldOut: soldOut,
-                          plate: w,
-                          wishlistToggle: wishlistToggle,
-                        ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // The plate is a SQUARE of the card's own width — an
+              // AspectRatio, not a measured number, so a row of cards can
+              // still ask this card how tall it wants to be.
+              if (cl.show.photo)
+                AspectRatio(
+                  aspectRatio: 1,
+                  child: ColoredBox(
+                    color: cl.color('photo_bg', Ds.c.surface),
+                    child: LayoutBuilder(
+                      builder: (context, c) => _V6Artwork(
+                        product: product,
+                        v5: v5,
+                        v6: v6,
+                        cl: cl,
+                        soldOut: soldOut,
+                        plate: c.maxWidth.isFinite
+                            ? c.maxWidth
+                            : CompactProductCard.railWidth,
+                        wishlistToggle: wishlistToggle,
                       ),
                     ),
-                  Padding(
-                    padding: EdgeInsets.only(
-                      left: cl.padX,
-                      top: cl.gapL,
-                      right: cl.padX,
-                      bottom: cl.padBottom,
-                    ),
-                    child: _V6Body(
-                        product: product, view: view, v5: v5, cl: cl),
                   ),
-                ],
-              );
-            },
+                ),
+              Padding(
+                padding: EdgeInsets.only(
+                  left: cl.padX,
+                  top: cl.gapL,
+                  right: cl.padX,
+                  bottom: cl.padBottom,
+                ),
+                child:
+                    _V6Body(product: product, view: view, v5: v5, cl: cl),
+              ),
+            ],
           ),
         ),
       ),

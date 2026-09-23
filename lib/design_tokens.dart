@@ -50,6 +50,7 @@ class Ds {
   static DsMotion motion = DsMotion._defaults();
   static DsTouch touch = DsTouch._defaults();
   static DsHeader header = DsHeader._defaults();
+  static DsPullClose pullClose = DsPullClose._defaults();
 
   /// The brand hex currently in force — mirrored to the render-log so a
   /// headless verifier can PROVE the app consumed a recolour token.
@@ -69,6 +70,7 @@ class Ds {
     motion = DsMotion._from(_asMap(design['motion']), motion);
     touch = DsTouch._from(_asMap(design['touch']), touch);
     header = DsHeader._from(_asMap(design['header']), header);
+    pullClose = DsPullClose._from(_asMap(design['pull_close']), pullClose);
     brandHex = _hexStr(_asMap(design['colors'])['brand']) ?? brandHex;
     revision.value++;
   }
@@ -596,4 +598,140 @@ class DsHeader {
   /// The wordmark size for a viewport: [wordNarrow] only below [narrowBelow].
   double wordFor(double width) =>
       width < narrowBelow ? wordNarrow : Ds.touch.headerWord;
+}
+
+/// CMD #2170 — the pull-down-to-close gesture, entirely as backend answers.
+///
+/// Nothing here is a taste the app holds: how far a pull must go, how fast a
+/// flick counts, how long the spring back and the close take, how round the
+/// top corners get on the way out, how dark the screen behind goes, which
+/// routes may be closed this way at all and which tab roots pull back to Home
+/// are all decided by `ui_boot().design.pull_close`. These values are only
+/// what the first frame uses before that payload lands — re-tuning the gesture
+/// is `ui_design_set({"pull_close":{...}})`, never a deploy.
+class DsPullClose {
+  /// Master switch — false and every route keeps the platform transition.
+  final bool enabled;
+
+  /// Past this much pull (logical px) the page closes.
+  final double thresholdDp;
+
+  /// …or at this downward speed (px/s), however short the pull was.
+  final double flingDps;
+
+  /// How far the finger must travel downward before the gesture is taken off
+  /// the list underneath. Below this, scrolling is untouched.
+  final double slopDp;
+
+  /// 1.0 = the page tracks the finger exactly.
+  final double follow;
+
+  /// The page's top corner radius at full pull.
+  final double cornerDp;
+
+  /// How small the page gets at full pull.
+  final double scaleMin;
+
+  /// The dim layer over the screen behind: colour and its opacity at rest.
+  final Color scrim;
+  final double scrimOpacity;
+
+  /// A short pull springs back in this; a committed close (and every push)
+  /// takes this.
+  final int springMs, closeMs;
+
+  /// The tab a tab-root pull lands on, and the tab indices that do it.
+  final int homeIndex;
+  final List<int> tabPages;
+
+  /// Route prefixes that keep the platform transition (staff/admin, auth).
+  final List<String> denyPrefixes;
+
+  /// The gesture's spoken hint, verbatim.
+  final String hint;
+
+  const DsPullClose({
+    required this.enabled,
+    required this.thresholdDp,
+    required this.flingDps,
+    required this.slopDp,
+    required this.follow,
+    required this.cornerDp,
+    required this.scaleMin,
+    required this.scrim,
+    required this.scrimOpacity,
+    required this.springMs,
+    required this.closeMs,
+    required this.homeIndex,
+    required this.tabPages,
+    required this.denyPrefixes,
+    required this.hint,
+  });
+
+  factory DsPullClose._defaults() => const DsPullClose(
+        enabled: true,
+        thresholdDp: 120,
+        flingDps: 700,
+        slopDp: 8,
+        follow: 1.0,
+        cornerDp: 24,
+        scaleMin: 0.92,
+        scrim: Color(0xFF000000),
+        scrimOpacity: 0.45,
+        springMs: 200,
+        closeMs: 250,
+        homeIndex: 0,
+        tabPages: <int>[1, 2, 12, 15],
+        denyPrefixes: <String>[
+          '/admin', '/partner', '/supplier', '/staff', '/dev',
+          '/login', '/register', '/signup',
+        ],
+        hint: 'Pull down to close',
+      );
+
+  factory DsPullClose._from(Map m, DsPullClose f) => DsPullClose(
+        enabled: m['enabled'] is bool ? m['enabled'] as bool : f.enabled,
+        thresholdDp: Ds._num(m['threshold_dp'], f.thresholdDp),
+        flingDps: Ds._num(m['fling_dps'], f.flingDps),
+        slopDp: Ds._num(m['slop_dp'], f.slopDp),
+        follow: Ds._num(m['follow'], f.follow),
+        cornerDp: Ds._num(m['corner_dp'], f.cornerDp),
+        scaleMin: Ds._num(m['scale_min'], f.scaleMin),
+        scrim: Ds.hex(m['scrim'], f.scrim),
+        scrimOpacity: Ds._num(m['scrim_opacity'], f.scrimOpacity),
+        springMs: Ds._num(m['spring_ms'], f.springMs.toDouble()).round(),
+        closeMs: Ds._num(m['close_ms'], f.closeMs.toDouble()).round(),
+        homeIndex: Ds._num(m['home_index'], f.homeIndex.toDouble()).round(),
+        tabPages: _ints(m['tab_pages'], f.tabPages),
+        denyPrefixes: _strings(m['deny_prefixes'], f.denyPrefixes),
+        hint: m['hint'] is String ? m['hint'] as String : f.hint,
+      );
+
+  static List<int> _ints(Object? v, List<int> f) {
+    if (v is! List) return f;
+    final out = <int>[for (final e in v) if (e is num) e.toInt()];
+    return out.isEmpty ? f : out;
+  }
+
+  static List<String> _strings(Object? v, List<String> f) {
+    if (v is! List) return f;
+    return <String>[for (final e in v) if (e is String && e.isNotEmpty) e];
+  }
+
+  Duration get spring => Duration(milliseconds: springMs);
+  Duration get close => Duration(milliseconds: closeMs);
+
+  /// Whether a pushed route named [name] takes the gesture. The backend's deny
+  /// list is the whole rule; the app adds no screens of its own.
+  bool allowsRoute(String? name) {
+    if (!enabled) return false;
+    final n = (name ?? '').split('?').first;
+    for (final p in denyPrefixes) {
+      if (n == p || n.startsWith(p)) return false;
+    }
+    return true;
+  }
+
+  /// Whether the shell tab at [index] pulls back to the Home tab.
+  bool pullsHome(int index) => enabled && index != homeIndex && tabPages.contains(index);
 }

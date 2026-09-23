@@ -13,6 +13,7 @@ import '../models/search_page.dart';
 import '../models/cart_model.dart';
 import '../models/notification_inbox.dart'; // CHANGE #298 — the deep-link parser
 import '../design_tokens.dart';
+import '../widgets/pull_to_close.dart';
 import '../theme.dart';
 import '../url_sync.dart';
 import '../user_state.dart';
@@ -165,8 +166,9 @@ class HomeShell extends StatefulWidget {
   static final live = LiveInstance<_HomeShellState>();
   HomeShell({super.key});
 
-  /// Switch to the Bulk Upload tab (index 2). Called by Convert-to-Order flow.
-  static void switchToBulkUpload() => live.current?._setIndex(2);
+  /// Switch tabs from anywhere — 2 = Bulk Upload (Convert-to-Order flow),
+  /// 0 = Home (CMD #2170, a tab root pulled down). One door, one definition.
+  static void switchToTab([int i = 2]) => live.current?._setIndex(i);
 
   /// Destinations that gate themselves on the CALLER's own account rather than
   /// on an admin role, so opening them from a link grants nothing: each one
@@ -1995,5 +1997,3 @@ class _HomeShellState extends State<HomeShell> {
     );
   }
 }
-
-// ─────────────────────── Location header ───────────────────────

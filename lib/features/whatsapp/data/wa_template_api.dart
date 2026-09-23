@@ -93,7 +93,16 @@ class WaTemplateApi {
 
   /// The whole screen in one payload: counts, chips, templates, starters,
   /// tokens, button_spec, categories, languages, alerts, copy, empty.
-  static Future<Map<String, dynamic>> screen() => _rpc('wa_templates_screen');
+  ///
+  /// [focus] is a template name (CMD #2180). The backend sorts that row to the
+  /// top of `templates`; the order of everything else is untouched. Dart never
+  /// re-sorts the payload — it only says which row was asked for.
+  static Future<Map<String, dynamic>> screen({String? focus}) => _rpc(
+        'wa_templates_screen',
+        (focus == null || focus.isEmpty)
+            ? const <String, dynamic>{}
+            : <String, dynamic>{'p_focus': focus},
+      );
 
   /// Called on a debounce as the admin types. Returns {ok, errors[], warnings[]}.
   static Future<Map<String, dynamic>> validate(

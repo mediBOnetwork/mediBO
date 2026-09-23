@@ -232,6 +232,10 @@ class _ProfileTabScreenState extends State<ProfileTabScreen> {
       rows += ProfileTabAction.itemsOf(s).length;
     }
     RenderLog.write('c2125_profile_tab', 'sections=${sections.length}|rows=$rows');
+    // CMD #2174 — the count Om could not see. A tab that draws a header over
+    // an empty list is an account with no way to log out, so the number of
+    // rows the backend actually sent is on the record for every build.
+    RenderLog.write('c2174_profile_rows', rows);
 
     return RefreshIndicator(
       color: Ds.c.brand,
@@ -242,12 +246,19 @@ class _ProfileTabScreenState extends State<ProfileTabScreen> {
             bottom: MediaQuery.paddingOf(context).bottom + Ds.space.x16),
         children: [
           _Header(header: header),
-          for (final s in sections)
-            Padding(
-              padding: EdgeInsets.fromLTRB(
-                  Ds.space.x16, Ds.space.x12, Ds.space.x16, 0),
-              child: _Section(section: s, onOpen: _open),
-            ),
+          // CMD #2174 — the list is whatever the backend sent, on every tab
+          // and for every viewer: `has_account` is read here by nobody. When
+          // it sends nothing at all the tab says so in the backend's own
+          // sentence rather than leaving a blank page under the name card.
+          if (rows == 0)
+            _EmptyRows(label: (p['empty_label'] ?? '').toString())
+          else
+            for (final s in sections)
+              Padding(
+                padding: EdgeInsets.fromLTRB(
+                    Ds.space.x16, Ds.space.x12, Ds.space.x16, 0),
+                child: _Section(section: s, onOpen: _open),
+              ),
         ],
       ),
     );
@@ -579,6 +590,29 @@ class _ProfileSkeleton extends StatelessWidget {
           ],
         ),
       );
+}
+
+/// CMD #2174 — every list has an empty state, and this one's is a sentence
+/// the backend wrote (`empty_label`). It is deliberately plain: the only way
+/// to reach it now is a payload with no rows at all, and the shopper's next
+/// move is the pull-to-refresh this whole tab already sits inside.
+class _EmptyRows extends StatelessWidget {
+  final String label;
+  const _EmptyRows({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    if (label.isEmpty) return const SizedBox.shrink();
+    RenderLog.write('c2174_profile_empty', 1);
+    return Semantics(
+      identifier: 'profile_rows_empty',
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+            Ds.space.x24, Ds.space.x32, Ds.space.x24, Ds.space.x24),
+        child: Text(label, textAlign: TextAlign.center, style: Ds.t.caption),
+      ),
+    );
+  }
 }
 
 class _ErrorState extends StatelessWidget {

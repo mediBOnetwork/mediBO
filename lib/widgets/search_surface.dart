@@ -416,14 +416,28 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
                       autocorrect: false,
                       enableSuggestions: false,
                       style: Ds.t.body,
+                      // CMD #2175 (Om) — the typed word and the placeholder sit
+                      // on the MIDDLE of the field, not near its top.
+                      //
+                      // A fixed vertical contentPadding decides where the text
+                      // sits by arithmetic, so the moment the field's own
+                      // height moved (48 → the shell's 56) the text stopped
+                      // being centred in it — visibly high, with the clear "×"
+                      // and the search glyph beside it still centred by the
+                      // Row. Nothing here should be doing that arithmetic:
+                      // textAlignVertical.center centres the input INSIDE
+                      // whatever height the field happens to be, so a backend
+                      // that retunes `shell.height` can never knock it off
+                      // again. The padding goes to zero for the same reason —
+                      // it was the only thing competing with the centring.
+                      textAlignVertical: TextAlignVertical.center,
                       decoration: InputDecoration(
                         border: InputBorder.none,
                         enabledBorder: InputBorder.none,
                         focusedBorder: InputBorder.none,
                         isDense: true,
                         filled: false,
-                        contentPadding:
-                            EdgeInsets.symmetric(vertical: Ds.space.x12),
+                        contentPadding: EdgeInsets.zero,
                         // CMD #2117 — the hint is a WIDGET when the backend
                         // sent a prefix and a word list, and the plain string
                         // it always was otherwise.

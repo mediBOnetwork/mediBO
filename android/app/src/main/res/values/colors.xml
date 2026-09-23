@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- CMD #2191 — the brand green Android tints a notification with. Sampled
+     from web/icons/Icon-512.v4.png by tool/c2191_android_icon.dart. -->
+<resources>
+    <color name="medibo_brand">#0C5A29</color>
+</resources>

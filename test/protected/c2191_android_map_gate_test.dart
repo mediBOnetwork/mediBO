@@ -110,6 +110,22 @@ void main() {
         expect(f.lengthSync(), greaterThan(200), reason: 'mipmap-$d/$n.png is empty');
       }
     }
+    // The status bar and the launch screen carry the same mark.
+    for (final d in const ['mdpi', 'hdpi', 'xhdpi', 'xxhdpi', 'xxxhdpi']) {
+      final f = File('android/app/src/main/res/drawable-$d/ic_stat_medibo.png');
+      expect(f.existsSync(), isTrue, reason: 'drawable-$d/ic_stat_medibo.png is missing');
+    }
+    final manifest = _src('android/app/src/main/AndroidManifest.xml');
+    expect(manifest.contains('default_notification_icon'), isTrue,
+        reason: 'Firebase is drawing a white square again');
+    expect(manifest.contains('@drawable/ic_stat_medibo'), isTrue);
+    expect(_src('android/app/src/main/res/values/colors.xml').contains('medibo_brand'),
+        isTrue, reason: 'the notification tint colour went missing');
+    for (final d in const ['drawable', 'drawable-v21']) {
+      expect(_src('android/app/src/main/res/$d/launch_background.xml')
+              .contains('@mipmap/ic_launcher'),
+          isTrue, reason: '$d/launch_background.xml opens on a blank sheet');
+    }
     // The generator names the one source, so the two can never drift.
     expect(_src('tool/c2191_android_icon.dart').contains('web/icons/Icon-512.v4.png'),
         isTrue, reason: 'the icon stopped being made from the website artwork');

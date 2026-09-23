@@ -27,7 +27,18 @@
     <application
         android:label="@string/app_name"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher">
+        <!-- CMD #2191 (Om) — the mark on the status bar too. Without this,
+             Firebase draws the app icon as a white square: Android tints a
+             notification icon, so it has to be a silhouette. Generated from
+             the website's own artwork by tool/c2191_android_icon.dart. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_medibo"/>
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/medibo_brand"/>
         <activity
             android:name=".MainActivity"
             android:exported="true"

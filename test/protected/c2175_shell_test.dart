@@ -192,6 +192,20 @@ void main() {
           reason: 'the search field');
     });
 
+    test('the typed word is centred in the field, not padded into place', () {
+      // Om, on the live build: the search text sat high in the pill. A fixed
+      // vertical contentPadding is what decided that, and it went wrong the
+      // moment the field's height moved. The input centres itself now, at any
+      // height the backend sends.
+      final src = _src('lib/widgets/search_surface.dart');
+      expect(src.contains('textAlignVertical: TextAlignVertical.center'), isTrue);
+      expect(
+          RegExp(r'contentPadding:\s*\n?\s*EdgeInsets\.symmetric\(vertical:')
+              .hasMatch(src),
+          isFalse,
+          reason: 'the search field went back to padding its text into place');
+    });
+
     test('the inset and the corner are shared too', () {
       expect(FloatingDock.edge, Ds.shell.inset);
       expect(FloatingDock.radius, Ds.shell.radius);

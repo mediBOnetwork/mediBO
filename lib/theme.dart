@@ -2,6 +2,7 @@ import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
 import 'package:flutter/material.dart';
 
 import 'design_tokens.dart';
+import 'widgets/pull_to_close.dart';
 
 /// CHANGE #673 — the storefront design system.
 ///
@@ -220,13 +221,21 @@ ThemeData buildTheme() {
     error: ds.danger,
   );
 
+  // CMD #2170 — the ONE place pull-down-to-close is attached. Flutter hands
+  // this builder every pushed MaterialPageRoute, so the gesture reaches every
+  // customer screen (and every screen added later) without a line in any of
+  // them. `PullClosePageTransitions` hands a route the backend's deny list
+  // names — the staff/admin surfaces and the auth pages — straight back to the
+  // Cupertino transition they have always had.
+  const pullClose =
+      PullClosePageTransitions(CupertinoPageTransitionsBuilder());
   const pageTransitions = PageTransitionsTheme(
     builders: {
-      TargetPlatform.android: CupertinoPageTransitionsBuilder(),
-      TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
-      TargetPlatform.linux: CupertinoPageTransitionsBuilder(),
-      TargetPlatform.macOS: CupertinoPageTransitionsBuilder(),
-      TargetPlatform.windows: CupertinoPageTransitionsBuilder(),
+      TargetPlatform.android: pullClose,
+      TargetPlatform.iOS: pullClose,
+      TargetPlatform.linux: pullClose,
+      TargetPlatform.macOS: pullClose,
+      TargetPlatform.windows: pullClose,
     },
   );
 

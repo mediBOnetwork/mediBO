@@ -1,6 +1,6 @@
 // CMD #2144 — "the one mounted X", without a GlobalKey.
 //
-// HomeShell used to carry a static GlobalKey so switchToBulkUpload() could
+// HomeShell used to carry a static GlobalKey so switchToTab() could
 // reach its State. A logout lands by replacing the whole stack with a FRESH
 // '/' route, and for the frame in which that happens the old shell and the
 // new one are both mounted: two widgets, one GlobalKey. Flutter answers with

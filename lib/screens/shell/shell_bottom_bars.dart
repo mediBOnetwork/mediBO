@@ -759,7 +759,16 @@ Widget shellHost(Widget child, {required bool staff, required int page}) =>
         ? shellPageHost(child, staff: true)
         : ValueListenableBuilder<List<Map<String, dynamic>>>(
             valueListenable: CustomerNav.value,
-            child: child,
+            // CMD #2170 — the tab roots pull down to the Home tab. This is the
+            // one host every customer tab already goes through, so the gesture
+            // arrives on Catalogue, Bulk, Orders and Profile from here and
+            // nowhere else. Home is not in the backend's `tab_pages`, because
+            // Home's pull is the refresh it already has.
+            child: PullToHomeTab(
+              page: page,
+              onHome: () => HomeShell.switchToTab(Ds.pullClose.homeIndex),
+              child: child,
+            ),
             builder: (_, slots, host) => shellPageHost(host!,
                 staff: false, pill: CartPill.floatsOnPage(slots, page),
                 // CMD #2147 — the tabs whose lists take their bottom room

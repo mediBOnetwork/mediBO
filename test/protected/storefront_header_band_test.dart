@@ -646,7 +646,7 @@ void main() {
               'the mark and the bell no longer line up with the field');
       expect(
           File('lib/widgets/search_surface.dart').readAsStringSync(),
-          contains('Ds.shell.inset, Ds.shell.gap, Ds.shell.inset, Ds.shell.gap'),
+          contains('Ds.shell.inset, Ds.shell.padY, Ds.shell.inset, Ds.shell.padY'),
           reason: 'the search bar changed its own side margin — the header is '
               'aligned to Ds.shell.inset and the two must agree');
     });

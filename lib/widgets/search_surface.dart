@@ -197,18 +197,20 @@ class SearchHeaderBar extends StatefulWidget {
     this.scanResolver,
     this.leading,
     this.trailingBare,
-    this.compact,
+    this.banded = false,
   });
 
   final TextEditingController controller;
   final FocusNode? focusNode;
 
-  /// CMD #2156 (Om) — set by the customer phone header, where this bar is the
-  /// SECOND row of the one shared header: 0 above (the logo row's own 12 is
-  /// the gap), a 48 field, 12 below — 124 in all with the 64 logo row. When
-  /// the logo row has scrolled away (true) the bar IS the header: 12 · 40 ·
-  /// 12 = 64, the field the same 40 as the logo tile and the bell beside it.
-  final ValueListenable<bool>? compact;
+  /// CMD #2175 (Om, on #1521) — is this row the shell's own band, the one
+  /// pinned under the header row on every customer tab? Then it ends in the
+  /// #2164 hairline that closes the white band; a plain search screen does
+  /// not. It replaces #2156's `compact` listenable, which said the same thing
+  /// ("the logo row has scrolled away") in order to RESIZE the row — and a
+  /// pinned row that resizes as the row above it leaves moves everything
+  /// under it, which is the one thing it must never do.
+  final bool banded;
 
   /// CMD #2147 — a control LEFT of the field (the sticky bar's m mark, or ←
   /// on the search screen). It sizes itself, gap included, so an empty one
@@ -245,13 +247,12 @@ class SearchHeaderBar extends StatefulWidget {
 
   /// One height for both screens, so the two headers cannot drift apart.
   ///
-  /// CMD #2175 (Om) — and one height with the REST of the shell: the field is
-  /// [Ds.shell.height], the same number the header row, the banner, the nav
-  /// rows and the "View cart" pill are. #2156's 48 → 40 step-down when the
-  /// logo row scrolled away is gone with it: a field that changes size as the
-  /// row above it leaves moves everything under it, which is the one thing a
-  /// pinned bar must never do.
-  static double get fieldHeight => Ds.shell.height;
+  /// CMD #2175 (Om) — the BOX inside the shell's one row: [Ds.shell.boxHeight]
+  /// (40, the logo tile's own size, so the two read as one optical line) with
+  /// [Ds.shell.padY] above and below it, which is the row's 56. #2156's
+  /// 48 → 40 step-down when the logo row scrolled away is gone: the box is one
+  /// size in every state.
+  static double get fieldHeight => Ds.shell.boxHeight;
 
   /// CMD #2117 — the semantics address of the field itself, so a browser
   /// journey taps the search box rather than a rounded rectangle.
@@ -297,6 +298,25 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
   /// backend sent; a name this build does not know is skipped rather than
   /// guessed, so the payload can never draw a blank square. Every label is the
   /// backend's, and every target is the token minimum.
+  /// CMD #2175 — the box is [Ds.shell.boxHeight] (40) now, and inside its
+  /// border that leaves 37 dp of row: every control in it came out UNDER the
+  /// 44 dp floor the phone rule sets, which the search-box gate caught. The
+  /// BOX does not grow — Om's redline is 40 beside the 40 logo tile — so the
+  /// TARGET grows out of it instead, 2 dp each way into the row's own
+  /// [Ds.shell.padY]. Nothing clips it and nothing below it moves: the row is
+  /// still the shell's one 56.
+  Widget _tapTarget(Widget child) => SizedBox(
+        width: Ds.touch.minTarget,
+        child: OverflowBox(
+          minWidth: Ds.touch.minTarget,
+          maxWidth: Ds.touch.minTarget,
+          minHeight: Ds.touch.minTarget,
+          maxHeight: Ds.touch.minTarget,
+          alignment: Alignment.center,
+          child: child,
+        ),
+      );
+
   Widget _barAction(SearchBarAction a) {
     switch (a.icon) {
       case 'close':
@@ -335,29 +355,25 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    final compact = widget.compact;
-    if (compact == null) return _row(context, null);
-    return ValueListenableBuilder<bool>(
-      valueListenable: compact,
-      builder: (context, stuck, _) => _row(context, stuck),
-    );
-  }
+  Widget build(BuildContext context) => _row(context);
 
-  /// [stuck] null = a plain search screen; false/true = the shared customer
-  /// header's top / scrolled state (see [SearchHeaderBar.compact]).
-  Widget _row(BuildContext context, bool? stuck) {
-    // CMD #2175 — the search bar is one of the five pieces of chrome on the
-    // shell's ONE geometry: [Ds.shell.inset] in from each edge, the field
-    // [Ds.shell.height] tall wearing [Ds.shell.radius], [Ds.shell.gap] of air
-    // under it. The 48 → 40 step-down #2156 gave the scrolled state is gone
-    // with it: "one height" means the field does not change size when the
-    // header row above it leaves, so nothing below the bar ever moves.
-    final EdgeInsets pad = stuck == null
-        ? EdgeInsets.fromLTRB(
-            Ds.shell.inset, Ds.shell.gap, Ds.shell.inset, Ds.shell.gap)
-        : EdgeInsets.fromLTRB(Ds.shell.inset, stuck ? Ds.shell.gap : 0,
-            Ds.shell.inset, Ds.shell.gap);
+  /// One row, one size, in every state — see [SearchHeaderBar.banded] for the
+  /// only thing that still tells the shell's band from a search screen.
+  Widget _row(BuildContext context) {
+    // CMD #2175 (Om, on #1521) — 56 dp is the TOTAL of the row, outside edge
+    // to outside edge, WITH ITS GAPS INSIDE IT. The first cut read it as "the
+    // box is 56" and added the gap outside, which made the search block 76
+    // and the box fat beside the 40 dp logo tile. So the row is
+    // [Ds.shell.padY] + [Ds.shell.boxHeight] + [Ds.shell.padY] = 56, and the
+    // box is the tile's own 40 at radius 20.
+    //
+    // There is no scrolled variant of it any more, at either end: the row does
+    // not change height, does not change its inset and grows nothing beside
+    // the field when the header row leaves. A pinned bar that resizes as the
+    // row above it goes moves everything under it, which is the one thing it
+    // must never do.
+    final EdgeInsets pad = EdgeInsets.fromLTRB(
+        Ds.shell.inset, Ds.shell.padY, Ds.shell.inset, Ds.shell.padY);
     final double field = SearchHeaderBar.fieldHeight;
     final h = Ds.header;
     final fade = Duration(milliseconds: h.fadeMs.round());
@@ -367,9 +383,9 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
       // CMD #2164 — the shared header ends in a 1 dp line.
       decoration: BoxDecoration(
         color: Ds.c.surface,
-        border: stuck == null
-            ? null
-            : Border(bottom: BorderSide(color: h.line, width: h.lineWidth)),
+        border: widget.banded
+            ? Border(bottom: BorderSide(color: h.line, width: h.lineWidth))
+            : null,
       ),
       padding: pad,
       child: Row(
@@ -390,8 +406,9 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
               // 16 inner padding, a 22 dp search icon.
               decoration: BoxDecoration(
                 color: Ds.c.surface,
-                // CMD #2175 — one corner, and it is the shell's.
-                borderRadius: BorderRadius.circular(Ds.shell.radius),
+                // CMD #2175 — the BOX's corner (20 = half its 40), not the
+                // row's 28. Both are the backend's.
+                borderRadius: BorderRadius.circular(Ds.shell.boxRadius),
                 border: Border.all(
                     color: Ds.c.divider, width: h.searchBorderWidth),
               ),
@@ -425,12 +442,14 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
                       // being centred in it — visibly high, with the clear "×"
                       // and the search glyph beside it still centred by the
                       // Row. Nothing here should be doing that arithmetic:
-                      // textAlignVertical.center centres the input INSIDE
-                      // whatever height the field happens to be, so a backend
-                      // that retunes `shell.height` can never knock it off
-                      // again. The padding goes to zero for the same reason —
-                      // it was the only thing competing with the centring.
-                      textAlignVertical: TextAlignVertical.center,
+                      // textAlignVertical centres the input INSIDE whatever
+                      // height the field happens to be, so a backend that
+                      // retunes `shell.height` can never knock it off again.
+                      // The padding goes to zero for the same reason — it was
+                      // the only thing competing with the centring. WHERE it
+                      // sits is the backend's own `search.text_align_v`, so
+                      // even this is an UPDATE and not a deploy.
+                      textAlignVertical: Ds.shell.textAlign,
                       decoration: InputDecoration(
                         border: InputBorder.none,
                         enabledBorder: InputBorder.none,
@@ -479,7 +498,7 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
                   // the edge behind two buttons that cannot help while typing.
                   for (final a in widget.bar.actionsForText(
                       _hasText ? widget.controller.text : ''))
-                    _barAction(a),
+                    _tapTarget(_barAction(a)),
                 ],
               ),
             ),
@@ -1237,13 +1256,13 @@ class SearchChrome extends StatefulWidget {
     this.minChars = 2,
     this.idleInBody = false,
     this.leading,
-    this.compact,
+    this.banded = false,
     this.trailingBare,
   });
 
   /// CMD #2147 — see [SearchHeaderBar.leading] / [SearchHeaderBar.trailingBare].
-  /// CMD #2156 — see [SearchHeaderBar.compact].
-  final ValueListenable<bool>? compact;
+  /// CMD #2175 — see [SearchHeaderBar.banded].
+  final bool banded;
 
   final Widget? leading;
   final Widget? trailingBare;
@@ -1444,7 +1463,7 @@ class _SearchChromeState extends State<SearchChrome> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         SearchHeaderBar(
-          compact: widget.compact,
+          banded: widget.banded,
           controller: widget.controller,
           focusNode: widget.focusNode,
           placeholder: p?.placeholder ?? '',

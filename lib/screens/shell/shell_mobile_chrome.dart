@@ -189,7 +189,18 @@ class _CustomerHeaderRow extends StatelessWidget {
               // The pill sits right after the mark (Om); the free room goes
               // between it and the bell. CMD #2164: its text is never shrunk —
               // it is one line at its own size, whatever the width.
-              const _HeaderFade(child: OrderHoursHeaderPill()),
+              //
+              // CMD #2187 — loose Flexible, not a bare child. The pill now
+              // carries its own min/max width from `style`, and on the
+              // narrowest phones (320 dp: 40 mark + 10 gap + 40 bell inside a
+              // 14 dp inset leaves 202) its 210 dp ceiling is wider than the
+              // row. Loose means it takes exactly what it asks for until the
+              // row runs out, and ellipsises inside whatever is left instead
+              // of overflowing.
+              const Flexible(
+                fit: FlexFit.loose,
+                child: _HeaderFade(child: OrderHoursHeaderPill()),
+              ),
               const Spacer(),
               Semantics(
                 identifier: 'c2147_bell',

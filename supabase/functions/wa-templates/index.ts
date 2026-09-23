@@ -276,7 +276,27 @@ Deno.serve(async (req) => {
     const r = await fetch(`${GRAPH}/${w.id}/message_templates?name=${encodeURIComponent(t.name)}&hsm_id=${encodeURIComponent(t.meta_id)}`,
       { method: 'DELETE', headers: { Authorization: `Bearer ${WA_TOKEN}` } });
     const j = await r.json();
-    if (!r.ok) return json({ error: 'delete_failed', meta: metaErr(j) }, 502);
+
+    // CMD #2182 — Meta refuses (#100) "Need permission on either WhatsApp
+    // Business Account or owner/shared business" for every delete this token
+    // asks for, which made Delete a dead button for any template that had ever
+    // reached Meta. Retiring is the rest of the action: the row goes and the
+    // name joins wa_template_retired, so no sync can put it back on the screen.
+    // Meta's own copy is left alone — this function has no way to remove it.
+    if (!r.ok) {
+      const refusal = metaErr(j);
+      const { data: ret, error: retErr } = await supabase.rpc('wa_template_retire', {
+        p_id: id,
+        p_reason: `Deleted from the Templates screen; Meta refused: ${refusal.message}`,
+      });
+      if (retErr || !ret?.ok) {
+        return json({ error: 'delete_failed', meta: refusal,
+                      retire_error: retErr?.message ?? ret?.message ?? ret?.error ?? null }, 502);
+      }
+      return json({ status: 'ok', deleted: 'retired', message: ret.message,
+                    meta_refusal: refusal.message });
+    }
+
     await supabase.from('wa_templates').delete().eq('id', id);
     return json({ status: 'ok', deleted: 'meta' });
   }

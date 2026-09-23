@@ -77,38 +77,17 @@ class _LocationHeader extends StatelessWidget {
                   message: logoTooltip,
                   child: MouseRegion(
                     cursor: SystemMouseCursors.click,
-                    child: GestureDetector(
-                      onTap: onLogoTap,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Image.asset('assets/images/medibo_logo.png', width: 28, height: 28),
-                          const SizedBox(width: 7),
-                          RichText(
-                            text: const TextSpan(
-                              children: [
-                                TextSpan(
-                                  text: 'medi',
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w700,
-                                    color: Color(0xFF1B5E20),
-                                    letterSpacing: -0.3,
-                                  ),
-                                ),
-                                TextSpan(
-                                  text: 'BO',
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w800,
-                                    color: Color(0xFF4CAF50),
-                                    letterSpacing: -0.3,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
+                    child: Semantics(
+                      identifier: 'c2147_logo',
+                      button: true,
+                      child: GestureDetector(
+                        onTap: onLogoTap,
+                        // CMD #2173 — the staff phone header draws the SAME
+                        // backend lock-up as the customer one: one payload,
+                        // one set of numbers, no app asset on either side.
+                        // Same handle as the customer header, so "the header
+                        // logo" is one door whichever shell is on screen.
+                        child: const BrandLockup(),
                       ),
                     ),
                   ),
@@ -201,7 +180,7 @@ class _CustomerHeaderRow extends StatelessWidget {
           final pillW = OrderHoursPill.widthFor(OrderHoursHeaderPill.labelOf(context));
           final need = t.headerTile * 2 +
               t.headerWordGap +
-              _BrandLockup.wordWidth(context) +
+              BrandLockup.wordWidth(context) +
               (pillW > 0 ? t.headerGap + pillW : 0);
           final showWord = need <= box.maxWidth;
           RenderLog.write('c2164_header', showWord ? 'word' : 'tile');
@@ -212,7 +191,7 @@ class _CustomerHeaderRow extends StatelessWidget {
                 button: true,
                 child: GestureDetector(
                   onTap: onLogoTap,
-                  child: _BrandLockup(markOnly: !showWord),
+                  child: BrandLockup(markOnly: !showWord, wordWrapper: _fadeWord),
                 ),
               ),
               SizedBox(width: t.headerGap),
@@ -237,80 +216,9 @@ class _CustomerHeaderRow extends StatelessWidget {
   }
 }
 
-/// The mediBO lock-up: the m tile + wordmark. [markOnly] draws the tile alone
-/// — the sticky bar's left edge once the logo row has scrolled away. The tile
-/// is ONE constant size in both states (Om): it never grows or shrinks.
-class _BrandLockup extends StatelessWidget {
-  const _BrandLockup({this.markOnly = false});
-  final bool markOnly;
-
-  static TextSpan _word(BuildContext context) {
-    final h = Ds.header;
-    return TextSpan(
-      style: Ds.t.title.copyWith(
-        fontSize: h.wordFor(MediaQuery.sizeOf(context).width),
-        height: 1,
-        letterSpacing: h.wordSpacing,
-        fontWeight: DsHeader.weight(h.wordWeight),
-      ),
-      children: [
-        TextSpan(text: 'medi', style: TextStyle(color: h.wordMedi)),
-        TextSpan(text: 'BO', style: TextStyle(color: h.wordBo)),
-      ],
-    );
-  }
-
-  /// The wordmark's laid-out width at this viewport's size.
-  static double wordWidth(BuildContext context) => (TextPainter(
-        text: _word(context),
-        maxLines: 1,
-        textDirection: TextDirection.ltr,
-        textScaler: TextScaler.noScaling,
-      )..layout())
-          .width;
-
-  @override
-  Widget build(BuildContext context) {
-    final t = Ds.touch;
-    final h = Ds.header;
-    final mark = Container(
-      width: t.headerTile,
-      height: t.headerTile,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: h.tile,
-        borderRadius: BorderRadius.all(Radius.circular(t.headerTileRadius)),
-      ),
-      child: Text(
-        'm',
-        textScaler: TextScaler.noScaling,
-        style: Ds.t.title.copyWith(
-          fontSize: t.headerTileMark,
-          height: 1,
-          color: Ds.c.surface,
-          fontWeight: DsHeader.weight(h.markWeight),
-        ),
-      ),
-    );
-    if (markOnly) return mark;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        mark,
-        SizedBox(width: t.headerWordGap),
-        _HeaderFade(child: 
-        // CMD #2164 — 26 on every phone, 22 only below [DsHeader.narrowBelow];
-        // never scaled by the OS text size or a FittedBox.
-        Text.rich(
-          _word(context),
-          maxLines: 1,
-          softWrap: false,
-          textScaler: TextScaler.noScaling,
-        )),
-      ],
-    );
-  }
-}
+/// CMD #2173 — the wordmark's fade, handed to the shared [BrandLockup] so
+/// the lock-up itself stays a pure render of `design.header.logo`.
+Widget _fadeWord(Widget child) => _HeaderFade(child: child);
 
 /// CMD #2164 — the wordmark and the pill fade out as the logo row scrolls
 /// away (and back in as it returns), tied to the same collapse value the band

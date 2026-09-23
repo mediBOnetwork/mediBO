@@ -78,37 +78,9 @@ class _DesktopHeader extends StatelessWidget {
                 cursor: SystemMouseCursors.click,
                 child: GestureDetector(
                   onTap: onHome,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Image.asset('assets/images/medibo_logo.png', width: 40, height: 40),
-                      const SizedBox(width: 10),
-                      RichText(
-                        text: const TextSpan(
-                          children: [
-                            TextSpan(
-                              text: 'medi',
-                              style: TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFF1B5E20),
-                                letterSpacing: -0.3,
-                              ),
-                            ),
-                            TextSpan(
-                              text: 'BO',
-                              style: TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.w800,
-                                color: Color(0xFF4CAF50),
-                                letterSpacing: -0.3,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
+                  // CMD #2173 — the same lock-up the phone header draws, from
+                  // the same `design.header.logo` payload. No app asset.
+                  child: const BrandLockup(),
                 ),
               ),
             ),
@@ -762,7 +734,7 @@ class _StickyLeadState extends State<_StickyLead> {
                       padding: EdgeInsets.only(right: Ds.touch.headerGap),
                       child: GestureDetector(
                         onTap: widget.state._goHome,
-                        child: const _BrandLockup(markOnly: true),
+                        child: const BrandLockup(markOnly: true),
                       ),
                     )
                   : const SizedBox.shrink(key: ValueKey('none'));

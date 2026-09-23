@@ -901,26 +901,17 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               if (name.startsWith('/product/')) {
                 final id = name.substring('/product/'.length).split('?').first;
                 if (id.isNotEmpty) {
-                  return PageRouteBuilder(
+                  // CMD #2170 — a MaterialPageRoute, not a PageRouteBuilder.
+                  // A PageRouteBuilder carries its OWN transition and never
+                  // consults `PageTransitionsTheme`, so the product page — the
+                  // one screen the pull-down spec is written about — was the
+                  // single screen the shared wrapper could not reach. The
+                  // butter rule it used to state in Dart is now
+                  // `pull_close.close_ms` (250), and the hero that flies the
+                  // card image in is unchanged; it just flies back out now too.
+                  return MaterialPageRoute<void>(
                     settings: settings,
-                    // Butter rule: under 300ms. Hero flies the card image in
-                    // over the top of this fade.
-                    transitionDuration: const Duration(milliseconds: 260),
-                    reverseTransitionDuration:
-                        const Duration(milliseconds: 220),
-                    pageBuilder: (_, __, ___) =>
-                        ProductDetailScreen(productId: id),
-                    transitionsBuilder: (_, anim, __, child) => FadeTransition(
-                      opacity: anim,
-                      child: SlideTransition(
-                        position: Tween<Offset>(
-                          begin: const Offset(0, 0.02),
-                          end: Offset.zero,
-                        ).animate(CurvedAnimation(
-                            parent: anim, curve: Curves.easeOutCubic)),
-                        child: child,
-                      ),
-                    ),
+                    builder: (_) => ProductDetailScreen(productId: id),
                   );
                 }
               }
@@ -934,23 +925,11 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                     name.substring('/company/'.length).split('?').first;
                 if (raw.isNotEmpty) {
                   final key = Uri.decodeComponent(raw);
-                  return PageRouteBuilder(
+                  // CMD #2170 — same as the product page above: one shared
+                  // transition, so the company page can be pulled shut too.
+                  return MaterialPageRoute<void>(
                     settings: settings,
-                    transitionDuration: const Duration(milliseconds: 260),
-                    reverseTransitionDuration:
-                        const Duration(milliseconds: 220),
-                    pageBuilder: (_, __, ___) => CompanyScreen(companyKey: key),
-                    transitionsBuilder: (_, anim, __, child) => FadeTransition(
-                      opacity: anim,
-                      child: SlideTransition(
-                        position: Tween<Offset>(
-                          begin: const Offset(0, 0.02),
-                          end: Offset.zero,
-                        ).animate(CurvedAnimation(
-                            parent: anim, curve: Curves.easeOutCubic)),
-                        child: child,
-                      ),
-                    ),
+                    builder: (_) => CompanyScreen(companyKey: key),
                   );
                 }
               }

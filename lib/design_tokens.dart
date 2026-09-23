@@ -529,6 +529,81 @@ class DsTouch {
       );
 }
 
+/// CMD #2173 — the brand lock-up, entirely as backend answers.
+///
+/// The header owns no logo. `app_settings 'brand.logo'` rides in on
+/// `ui_boot().design.header.logo` and says what the 40dp tile and the
+/// wordmark draw: an uploaded image when a URL is set, otherwise the letter
+/// and the two words in their own colours. Swapping the logo, recolouring the
+/// wordmark or renaming the app is an UPDATE to that row — the next reload
+/// carries it, with no deploy and no app asset.
+class DsBrandLogo {
+  /// The tile image. Empty = draw [letter] on [tileBg] instead.
+  final String tileUrl;
+
+  /// The wordmark image. Empty = draw [word1] + [word2] instead.
+  final String wordmarkUrl;
+
+  /// The mark inside the tile when there is no [tileUrl].
+  final String letter;
+
+  /// The tile's own fill and the letter's colour.
+  final Color tileBg, tileFg;
+
+  /// The two halves of the wordmark, and the colour of each.
+  final String word1, word2;
+  final Color word1Fg, word2Fg;
+
+  const DsBrandLogo({
+    required this.tileUrl,
+    required this.wordmarkUrl,
+    required this.letter,
+    required this.tileBg,
+    required this.tileFg,
+    required this.word1,
+    required this.word1Fg,
+    required this.word2,
+    required this.word2Fg,
+  });
+
+  /// What the very first frame draws, before the payload lands.
+  static const DsBrandLogo fallback = DsBrandLogo(
+    tileUrl: '',
+    wordmarkUrl: '',
+    letter: 'm',
+    tileBg: Color(0xFF1B8A3E),
+    tileFg: Color(0xFFFFFFFF),
+    word1: 'medi',
+    word1Fg: Color(0xFF1B7A43),
+    word2: 'BO',
+    word2Fg: Color(0xFF2FA24F),
+  );
+
+  /// True while the tile should draw [tileUrl] rather than [letter].
+  bool get hasTileImage => tileUrl.trim().isNotEmpty;
+
+  /// True while the wordmark should draw [wordmarkUrl] rather than the words.
+  bool get hasWordmarkImage => wordmarkUrl.trim().isNotEmpty;
+
+  static String _str(Object? v, String fallback) =>
+      v is String && v.trim().isNotEmpty ? v.trim() : fallback;
+
+  factory DsBrandLogo.from(Object? raw, DsBrandLogo f) {
+    if (raw is! Map) return f;
+    return DsBrandLogo(
+      tileUrl: _str(raw['tile_url'], ''),
+      wordmarkUrl: _str(raw['wordmark_url'], ''),
+      letter: _str(raw['letter'], f.letter),
+      tileBg: Ds.hex(raw['tile_bg'], f.tileBg),
+      tileFg: Ds.hex(raw['tile_fg'], f.tileFg),
+      word1: _str(raw['word_1'], f.word1),
+      word1Fg: Ds.hex(raw['word_1_fg'], f.word1Fg),
+      word2: _str(raw['word_2'], f.word2),
+      word2Fg: Ds.hex(raw['word_2_fg'], f.word2Fg),
+    );
+  }
+}
+
 /// CMD #2164 — the customer header's redline, the numbers and colours that
 /// have no general token. Backend key `design.header`; every field is one
 /// `ui_design_set` away.
@@ -539,7 +614,14 @@ class DsHeader {
   final double searchBorderWidth, searchText, searchIcon, searchPad, iconGap;
   final double bellIcon, lineWidth, fadeMs;
 
+  /// CMD #2173 — the brand lock-up itself: which image (if any) the tile and
+  /// the wordmark draw, and the letter/words/colours they fall back to.
+  /// Backend key `design.header.logo`, read live from app_settings
+  /// 'brand.logo' — a new logo is an UPDATE, never a deploy.
+  final DsBrandLogo logo;
+
   const DsHeader({
+    required this.logo,
     required this.tile,
     required this.wordMedi,
     required this.wordBo,
@@ -564,8 +646,9 @@ class DsHeader {
     required this.fadeMs,
   });
 
-  factory DsHeader._defaults() => const DsHeader(
-        tile: Color(0xFF1B8A3E),
+  factory DsHeader._defaults() => DsHeader(
+        logo: DsBrandLogo.fallback,
+        tile: const Color(0xFF1B8A3E),
         wordMedi: Color(0xFF1B7A43),
         wordBo: Color(0xFF2FA24F),
         line: Color(0xFFEEF0EE),
@@ -590,6 +673,7 @@ class DsHeader {
       );
 
   factory DsHeader._from(Map m, DsHeader f) => DsHeader(
+        logo: DsBrandLogo.from(m['logo'], f.logo),
         tile: Ds.hex(m['tile'], f.tile),
         wordMedi: Ds.hex(m['wordMedi'], f.wordMedi),
         wordBo: Ds.hex(m['wordBo'], f.wordBo),

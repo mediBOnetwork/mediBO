@@ -24,8 +24,16 @@
 // `pillMayRoll` in `shell_motion.dart`, which is the BACKEND's
 // `shell_style().motion.one_at_a_time` — not a rule invented here.
 //
-// A single-line payload (an old cache, a backend that sent only `label`) is a
-// still pill, and reduce-motion is a cross-fade with a still dot.
+// ONLY THE BACKEND (CMD #2191, Om). The pill prints `lines[]` and nothing
+// else. There is no English word for the pill in this file, no fallback
+// string, no default label and no null-coalesce to a literal; `label` and
+// `text` are the screen reader's one-string form of the same sentence and are
+// never drawn. Every dimension and colour is a `style` value and every
+// duration is a response value — no dp and no ms in Dart. A payload that is
+// missing its words, its geometry or its colours draws NOTHING rather than
+// something invented, which is what a single-line payload (an old cache, a
+// backend that sent only `label`) now does. Reduce-motion is a cross-fade
+// with a still dot.
 //
 // THE WIDTH (CMD #2191). The pill HUGS the line it is showing: the roll keeps
 // only the incoming and the outgoing line in the Stack, so the pill's width is
@@ -45,19 +53,11 @@ import '../design_tokens.dart';
 import '../order_hours_state.dart';
 import '../shell_motion.dart';
 import '../utils/render_log.dart';
-import 'customer_order_item_card.dart' show hexColor;
 
 /// The live pill: reads the app-wide [OrderHoursState] and draws nothing until
 /// the backend has sent one.
 class OrderHoursHeaderPill extends StatelessWidget {
   const OrderHoursHeaderPill({super.key});
-
-  /// The label the header pill is showing right now ('' before the backend
-  /// has sent one) — the header measures it so nothing in the row scales.
-  static String labelOf(BuildContext context) {
-    final st = context.dependOnInheritedWidgetOfExactType<OrderHoursState>();
-    return (st?.notifier?.pill['label'] ?? '').toString();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -95,29 +95,43 @@ class OrderHoursPill extends StatefulWidget {
   static const String semanticsId = 'c2147_hours_pill';
 
   /// A line's style — one place, so every line of the roll is one size and the
-  /// pill's width never depends on which line is showing.
-  static TextStyle labelStyle(Color fg, {double? size}) => Ds.t.caption.copyWith(
+  /// pill's width never depends on which line is showing. [size] is
+  /// `style.text` and is required: a text size chosen here would be a dp in
+  /// Dart.
+  static TextStyle labelStyle(Color fg, {required double size}) =>
+      Ds.t.caption.copyWith(
         color: fg,
-        fontSize: size ?? Ds.touch.headerPillText,
+        fontSize: size,
         fontWeight: FontWeight.w600,
         height: 1,
       );
 
-  /// The lines the backend sent, in ITS order, empties dropped. CMD #2187
-  /// always sends three; a payload carrying only `label` (an old cache, or a
-  /// backend that has not been migrated) is one line and never rolls.
+  /// A `style` colour, or null when the backend did not send a usable one.
+  /// Null is the whole point: there is no fallback colour in this file, so a
+  /// pill with no colours draws nothing instead of a grey guess.
+  static Color? colorOf(Object? hex) {
+    var h = (hex ?? '').toString().trim();
+    if (h.startsWith('#')) h = h.substring(1);
+    if (h.length == 6) h = 'FF$h';
+    if (h.length != 8) return null;
+    final v = int.tryParse(h, radix: 16);
+    return v == null ? null : Color(v);
+  }
+
+  /// The lines the backend sent, in ITS order, empties dropped — and NOTHING
+  /// else. CMD #2191 (Om): there is no fallback to `label` or `text`. Those
+  /// two carry the SAME sentence joined for a screen reader, and reading them
+  /// here is the one route by which a stale single-line payload could print a
+  /// word the backend had stopped saying. An empty `lines[]` is an empty pill.
   static List<String> linesOf(Map<String, dynamic> pill) {
     final raw = pill['lines'];
-    if (raw is List) {
-      final out = <String>[];
-      for (final e in raw) {
-        final t = (e is Map ? (e['text'] ?? '') : (e ?? '')).toString();
-        if (t.isNotEmpty) out.add(t);
-      }
-      if (out.isNotEmpty) return out;
+    if (raw is! List) return const <String>[];
+    final out = <String>[];
+    for (final e in raw) {
+      final t = (e is Map ? (e['text'] ?? '') : (e ?? '')).toString();
+      if (t.isNotEmpty) out.add(t);
     }
-    final label = (pill['label'] ?? pill['text'] ?? '').toString();
-    return label.isEmpty ? const <String>[] : <String>[label];
+    return out;
   }
 
   @override
@@ -128,7 +142,9 @@ class _OrderHoursPillState extends State<OrderHoursPill>
     with SingleTickerProviderStateMixin {
   late final AnimationController _c = AnimationController(
     vsync: this,
-    duration: _rollDur,
+    // No duration here: `roll_ms` is the backend's and arrives with the
+    // payload, so the controller is given it at the moment it is used.
+    duration: Duration.zero,
     value: 1,
   );
   Timer? _timer;
@@ -140,10 +156,15 @@ class _OrderHoursPillState extends State<OrderHoursPill>
 
   List<String> get _lines => OrderHoursPill.linesOf(widget.pill);
 
-  Duration get _rollDur => Duration(milliseconds: _ms('roll_ms', 400));
-  Duration get _holdDur => Duration(milliseconds: _ms('hold_ms', 3000));
-  int _ms(String key, int fallback) =>
-      (widget.pill[key] as num?)?.toInt() ?? fallback;
+  /// The roll's two durations, the BACKEND's own. Absent (or not positive)
+  /// means the backend is not asking for a roll — and there is no Dart number
+  /// to fall back to, so the pill simply stands still.
+  Duration? get _rollDur => _msOf('roll_ms');
+  Duration? get _holdDur => _msOf('hold_ms');
+  Duration? _msOf(String key) {
+    final n = (widget.pill[key] as num?)?.toInt();
+    return (n == null || n <= 0) ? null : Duration(milliseconds: n);
+  }
 
   /// The one-motion verdict for this frame.
   bool get _mayRoll => widget.rolls ?? pillMayRoll;
@@ -190,8 +211,9 @@ class _OrderHoursPillState extends State<OrderHoursPill>
 
   void _restart() {
     _timer?.cancel();
-    if (_lines.length < 2 || !_mayRoll) return;
-    _timer = Timer.periodic(_holdDur, (_) {
+    final hold = _holdDur;
+    if (_lines.length < 2 || !_mayRoll || hold == null) return;
+    _timer = Timer.periodic(hold, (_) {
       if (!mounted || _held || !_mayRoll) return;
       final n = _lines.length;
       if (n < 2) return;
@@ -199,7 +221,7 @@ class _OrderHoursPillState extends State<OrderHoursPill>
         _prev = _i;
         _i = (_i + 1) % n;
       });
-      _c.duration = _rollDur;
+      _c.duration = _rollDur ?? Duration.zero;
       _c.forward(from: 0);
     });
   }
@@ -241,7 +263,7 @@ class _OrderHoursPillState extends State<OrderHoursPill>
   /// carries on UP and out of the middle while the incoming one rises FROM
   /// BELOW — one movement, not a swap — clipped inside the pill.
   Widget _roll(List<String> lines, TextStyle style, bool still) {
-    if (lines.length < 2) return _line(lines.first, style);
+    if (lines.length < 2 || _holdDur == null) return _line(lines.first, style);
     return ClipRect(
       child: AnimatedBuilder(
         animation: _c,
@@ -281,15 +303,18 @@ class _OrderHoursPillState extends State<OrderHoursPill>
     if (lines.isEmpty) return const SizedBox.shrink();
     final still = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     final st = _style;
-    final bg = hexColor((st['bg'] ?? '').toString(), fallback: Ds.c.bg);
-    final fg = hexColor(
-      (st['fg'] ?? '').toString(),
-      fallback: Ds.c.textSecondary,
-    );
-    final dot = hexColor((st['dot'] ?? '').toString(), fallback: fg);
-    final pulse = widget.pill['pulse'] == true && !still;
-    final ms = (widget.pill['pulse_ms'] as num?)?.toInt() ?? 1600;
-    final rolling = _mayRoll && lines.length > 1;
+    // CMD #2191 (Om) — the three colours are `style`'s, with nothing to fall
+    // back to. A pill the backend has not coloured is not drawn.
+    final Color? bg = OrderHoursPill.colorOf(st['bg']);
+    final Color? fg = OrderHoursPill.colorOf(st['fg']);
+    final Color? dot = OrderHoursPill.colorOf(st['dot']);
+    // The dot pulses on the backend's own period. No period, no pulse.
+    final int? pulseMs = (widget.pill['pulse_ms'] as num?)?.toInt();
+    final pulse = widget.pill['pulse'] == true &&
+        !still &&
+        pulseMs != null &&
+        pulseMs > 0;
+    final rolling = _mayRoll && lines.length > 1 && _holdDur != null;
     RenderLog.write('c2147_pill', (widget.pill['state'] ?? '').toString());
     RenderLog.write('c2187_pill_lines', lines.length);
     RenderLog.write('c2187_pill_roll', rolling ? 1 : 0);
@@ -297,32 +322,51 @@ class _OrderHoursPillState extends State<OrderHoursPill>
     // CMD #2191 — which wording tier the backend picked for the width this app
     // reported. 'narrow' on a 320/360 dp phone, 'full' from 369 dp up.
     RenderLog.write('c2191_pill_tier', (widget.pill['tier'] ?? '').toString());
-    final colorMs = Duration(milliseconds: still ? 0 : 300);
+    // The colour cross-fade rides the backend's own roll duration; there is no
+    // Dart millisecond to pick here either.
+    final colorMs = still ? Duration.zero : (_rollDur ?? Duration.zero);
 
-    // The state's own geometry, with the shell's tokens for whatever it leaves
-    // out. CMD #2175 holds all three at the logo tile's size; CMD #2187 lets a
-    // state override them, so the pill can change colour AND size mid-cycle
-    // with no deploy.
-    final double pillH = _dim('height') ?? Ds.touch.headerPill;
-    final double textSize = _dim('text') ?? Ds.touch.headerPillText;
-    final double padX = _dim('pad_x') ?? Ds.space.x12;
-    final double dotSize = _dim('dot_size') ?? Ds.space.x8;
-    final double dotGap = _dim('dot_gap') ?? Ds.space.x4 + Ds.space.x4 / 2;
-    // CMD #2191 — min_w and max_w wrap the WHOLE pill below, padding included,
+    // CMD #2191 (Om) — EVERY dimension is a `style` value: height, radius,
+    // text, pad_x, dot_size, dot_gap and the two width bounds. None of them
+    // has a Dart default, because a dp written here is a dp the backend cannot
+    // change. `min_w` and `max_w` wrap the WHOLE pill below, padding included,
     // so `max_w` is the width a reader can measure on the screen.
-    final double minW = _dim('min_w') ?? 0;
-    final double maxW = _dim('max_w') ?? double.infinity;
-    final BorderRadius corner = _dim('radius') == null
-        ? BorderRadius.circular(Ds.header.pillRadius)
-        : BorderRadius.circular(_dim('radius')!);
+    final double? pillH = _dim('height');
+    final double? textSize = _dim('text');
+    final double? padX = _dim('pad_x');
+    final double? dotSize = _dim('dot_size');
+    final double? dotGap = _dim('dot_gap');
+    final double? radius = _dim('radius');
+    final double? minW = _dim('min_w');
+    final double? maxW = _dim('max_w');
+    // An incomplete payload draws NOTHING. That is the rule, not a defect:
+    // half a pill in invented sizes is worse than no pill, and it is how the
+    // backend stops being the only author.
+    if (bg == null ||
+        fg == null ||
+        dot == null ||
+        pillH == null ||
+        textSize == null ||
+        padX == null ||
+        dotSize == null ||
+        dotGap == null ||
+        radius == null ||
+        minW == null ||
+        maxW == null) {
+      RenderLog.write('c2191_pill_incomplete', 1);
+      return const SizedBox.shrink();
+    }
+    final BorderRadius corner = BorderRadius.circular(radius);
     final textStyle = OrderHoursPill.labelStyle(fg, size: textSize);
 
     return Semantics(
       identifier: OrderHoursPill.semanticsId,
       button: true,
       // The whole pill in one string, joined by the BACKEND's own separator —
-      // a screen reader is never handed a third of a sentence.
-      label: (widget.pill['label'] ?? lines.first).toString(),
+      // a screen reader is never handed a third of a sentence. CMD #2191: this
+      // is the ONLY use of `label` in the app, it is never drawn, and it falls
+      // back to nothing rather than to a line of the roll.
+      label: (widget.pill['label'] ?? '').toString(),
       child: Listener(
         onPointerDown: (_) => _hold(true),
         onPointerUp: (_) => _hold(false),
@@ -344,7 +388,7 @@ class _OrderHoursPillState extends State<OrderHoursPill>
               // duration, so growing and shrinking is part of the same
               // movement rather than a jump at the end of it.
               child: AnimatedSize(
-                duration: still ? Duration.zero : _rollDur,
+                duration: still ? Duration.zero : (_rollDur ?? Duration.zero),
                 curve: Curves.easeInOut,
                 alignment: Alignment.centerLeft,
                 // CMD #2191 — the ceiling and the floor are OUTSIDE the
@@ -371,7 +415,7 @@ class _OrderHoursPillState extends State<OrderHoursPill>
                         LiveDot(
                             color: dot,
                             pulse: pulse,
-                            periodMs: ms,
+                            periodMs: pulseMs ?? 0,
                             size: dotSize),
                         SizedBox(width: dotGap),
                         // CMD #2164 — the lines at their own size, always: no
@@ -400,16 +444,20 @@ class LiveDot extends StatefulWidget {
     super.key,
     required this.color,
     required this.pulse,
-    this.periodMs = 1600,
-    this.size,
+    required this.periodMs,
+    required this.size,
   });
 
   final Color color;
   final bool pulse;
+
+  /// `pulse_ms` from the payload. Required, because a pulse period invented
+  /// here would be a millisecond the backend cannot change; [pulse] is only
+  /// ever true when the backend sent a positive one.
   final int periodMs;
 
-  /// `style.dot_size`, in logical pixels. Null falls back to the shell token.
-  final double? size;
+  /// `style.dot_size`, in logical pixels — the backend's, always.
+  final double size;
 
   @override
   State<LiveDot> createState() => _LiveDotState();
@@ -449,7 +497,7 @@ class _LiveDotState extends State<LiveDot> with SingleTickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    final d = widget.size ?? Ds.space.x8;
+    final double d = widget.size;
     final dotBox = Container(
       width: d,
       height: d,

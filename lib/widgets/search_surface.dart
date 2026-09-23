@@ -244,11 +244,14 @@ class SearchHeaderBar extends StatefulWidget {
   final Future<ScanResult> Function(String code)? scanResolver;
 
   /// One height for both screens, so the two headers cannot drift apart.
-  // CMD #2156 (Om) — 48 in the header's top state; the sticky row shrinks it
-  // to the logo tile's 40 ([compactFieldHeight]) so tile, field and bell are
-  // one line.
-  static double get fieldHeight => Ds.header.search;
-  static double get compactFieldHeight => Ds.touch.headerTile;
+  ///
+  /// CMD #2175 (Om) — and one height with the REST of the shell: the field is
+  /// [Ds.shell.height], the same number the header row, the banner, the nav
+  /// rows and the "View cart" pill are. #2156's 48 → 40 step-down when the
+  /// logo row scrolled away is gone with it: a field that changes size as the
+  /// row above it leaves moves everything under it, which is the one thing a
+  /// pinned bar must never do.
+  static double get fieldHeight => Ds.shell.height;
 
   /// CMD #2117 — the semantics address of the field itself, so a browser
   /// journey taps the search box rather than a rounded rectangle.
@@ -355,7 +358,7 @@ class _SearchHeaderBarState extends State<SearchHeaderBar> {
             Ds.shell.inset, Ds.shell.gap, Ds.shell.inset, Ds.shell.gap)
         : EdgeInsets.fromLTRB(Ds.shell.inset, stuck ? Ds.shell.gap : 0,
             Ds.shell.inset, Ds.shell.gap);
-    final double field = Ds.shell.height;
+    final double field = SearchHeaderBar.fieldHeight;
     final h = Ds.header;
     final fade = Duration(milliseconds: h.fadeMs.round());
     return AnimatedContainer(

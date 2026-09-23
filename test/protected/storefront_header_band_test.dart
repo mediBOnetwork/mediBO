@@ -252,7 +252,10 @@ void main() {
 
     testWidgets('a wobble mid-scroll does not turn it around', (tester) async {
       final context = await _ctx(tester);
-      _scroll(_t + 20, context: context);
+      // CMD #2175 — the band is Ds.shell.height (56) now, so the travel this
+      // test asks for has to stay INSIDE it: a saturated band cannot show
+      // whether a held wobble was paid or lost.
+      _scroll(_t, context: context);
       final double at = shellHeaderCollapse.value;
       _scroll(-6, context: context);
       expect(shellHeaderCollapse.value, at,
@@ -520,7 +523,18 @@ void main() {
         File('lib/screens/shell/shell_header_band.dart').readAsStringSync();
     final catalogue = File('lib/screens/catalogue_screen.dart').readAsStringSync();
 
+    // CMD #2175 (Om) — "every tab". Home and the Catalogue are no longer the
+    // only two: Orders, Bulk and Profile are drawn under the same header row
+    // with the same search row pinned beneath it, so they collapse it too. The
+    // verdict is still the BACKEND's (`shell_style().band.every_tab`), so this
+    // test proves both answers rather than freezing one of them.
     test('the Catalogue tab owns the band, and so does Home', () {
+      shellHeaderBandEveryTab.value = true;
+      for (final int tab in const [0, 1, 2, 12, 15]) {
+        expect(shellHeaderBandTab(tab), isTrue,
+            reason: 'tab $tab kept a header row that should hide');
+      }
+      shellHeaderBandEveryTab.value = false;
       expect(shellHeaderBandTab(0), isTrue, reason: 'Home lost the band');
       expect(shellHeaderBandTab(12), isTrue,
           reason: 'the Catalogue header still never hides — #2052(8)');
@@ -528,6 +542,7 @@ void main() {
         expect(shellHeaderBandTab(other), isFalse,
             reason: 'tab $other started collapsing a header it should keep');
       }
+      shellHeaderBandEveryTab.value = true;
     });
 
     test('there is ONE driver and ONE notifier, not a second controller', () {
@@ -581,7 +596,9 @@ void main() {
 
     test('the search header is mounted as a Column child, never as a sliver',
         () {
-      expect(shell, contains('if (_index == 0) _shellSearchHeader(this)'),
+      // CMD #2175 — every customer tab mounts the SAME row now, so the shell
+      // names the row once instead of gating it on the storefront's index.
+      expect(shell, contains('_shellTabSearch(this, isAdmin)'),
           reason: 'the shell stopped mounting the one search header');
       expect(shell, isNot(contains('SliverPersistentHeader')),
           reason: 'the search chrome was moved into a scroll view — it can no '

@@ -255,3 +255,9 @@ select 'ui_design', jsonb_build_object(
                                      'headerGap', 10, 'headerPill', 32, 'headerPillText', 14,
                                      'headerSettleMs', 200, 'navHideTravel', 8))
  where not exists (select 1 from public.dev_runner_config where key = 'ui_design');
+
+-- ───────────────────────── 8. the "View cart" pill's height ─────────────────
+-- The pill is the fifth piece of chrome on Om's one height, and its shape is a
+-- `storefront_ui_label` row (CMD #2089), so this is where 56 goes for it.
+update public.storefront_ui_label set value = '56'
+ where key = 'cart_pill_ui_height' and value <> '56';

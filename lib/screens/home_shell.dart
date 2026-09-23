@@ -157,6 +157,7 @@ part 'shell/shell_login_panel.dart';
 part 'shell/shell_bottom_bars.dart';
 part 'shell/shell_nav_roots.dart'; // CMD #2021 — tab roots + system back
 part 'shell/shell_header_chrome.dart';
+part 'shell/shell_tab_search.dart'; // CMD #2175 — the per-tab search row
 part 'shell/shell_admin_chrome.dart';
 part 'shell/shell_sidebar.dart';
 part 'shell/shell_view_as.dart';
@@ -1903,8 +1904,7 @@ class _HomeShellState extends State<HomeShell> {
               ),
             ),
         ],
-        ),
-        ),
+        ), ),
       ),
     );
   }

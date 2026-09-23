@@ -148,8 +148,8 @@ void main() {
     });
 
     test('the placeholder and the scope are read, never written', () {
-      final chrome = _src('lib/screens/shell/shell_header_chrome.dart');
-      final bar = _classSrc(chrome, 'class _ShellTabSearchBarState');
+      final bar = _classSrc(_src('lib/screens/shell/shell_tab_search.dart'),
+          'class _ShellTabSearchBarState');
       expect(bar.contains("(row['placeholder'] ?? '').toString()"), isTrue);
       expect(bar.contains("(row['scope'] ?? 'catalog').toString()"), isTrue);
       expect(RegExp(r"placeholder:\s*'[A-Za-z]").hasMatch(bar), isFalse,
@@ -188,7 +188,7 @@ void main() {
       expect(FloatingDock.barHeight, Ds.shell.height, reason: 'the banner');
       expect(CartPill.kHeight, Ds.shell.height, reason: 'the View cart pill');
       expect(_src('lib/widgets/search_surface.dart')
-          .contains('final double field = Ds.shell.height;'), isTrue,
+          .contains('static double get fieldHeight => Ds.shell.height;'), isTrue,
           reason: 'the search field');
     });
 

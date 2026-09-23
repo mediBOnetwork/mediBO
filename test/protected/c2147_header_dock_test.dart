@@ -20,10 +20,29 @@ import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/widgets/floating_dock.dart';
 import 'package:pharma_b2b/widgets/order_hours_pill.dart';
 
+// CMD #2191 (Om): the pill prints `lines[]` and nothing else, out of a
+// COMPLETE `style` — a payload carrying only `label` is the stale shape that
+// now draws nothing, so the fixture is what header_status_pill() really sends.
 const _pill = <String, dynamic>{
   'state': 'last_hour',
+  'lines': [
+    {'kind': 'status', 'text': 'Closes in 40 min'},
+  ],
   'label': 'Closes in 40 min',
   'tone': {'bg': '#FEF3C7', 'fg': '#92400E', 'dot': '#D97706'},
+  'style': {
+    'bg': '#FEF3C7',
+    'fg': '#92400E',
+    'dot': '#D97706',
+    'height': 32,
+    'radius': 16,
+    'text': 14,
+    'pad_x': 12,
+    'dot_size': 8,
+    'dot_gap': 6,
+    'min_w': 120,
+    'max_w': 270,
+  },
   'pulse': true,
   'pulse_ms': 1600,
   'refresh_s': 30,

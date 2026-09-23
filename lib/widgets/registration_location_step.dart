@@ -214,7 +214,24 @@ class _RegistrationLocationStepState extends State<RegistrationLocationStep> {
       }
     });
     RenderLog.write('c2127_loc_device', fix == null ? 'denied' : 'ok');
-    if (fix != null) await _resolve(geocode: true);
+    if (fix != null) {
+      await _resolve(geocode: true);
+      return;
+    }
+    // CMD #2191 (Om): "'Use my location' must open the real Android
+    // permission dialog. It currently does nothing. If permanently denied,
+    // open app settings. Never a dead button."
+    //
+    // DeviceLocation.best() raises the real dialog whenever Android will
+    // still show it. When it will NOT — the grant is permanently denied —
+    // there is no dialog to wait for and the tap would end here, on an amber
+    // bar the person has to find and tap again. So the button finishes the
+    // errand itself and opens the one door that is left. The words on the bar
+    // stay the backend's; this only decides which door.
+    if (!await DeviceLocation.canAskAgain()) {
+      RenderLog.write('c2191_loc_settings', 1);
+      await DeviceLocation.openSettings();
+    }
   }
 
   /// CMD #2171 (Om, live bug on Android 1.3.33) — the amber bar's "Turn on".

@@ -15766,6 +15766,9 @@ class _RoutesTabState extends State<_RoutesTab> {
     final photoUrl = s['photo_url']?.toString();
     final size = widget.isDesktop ? 56.0 : 44.0;
     final openLabel = s['open_label']?.toString();
+    // CMD #2191 (Om) — the dot's colour is the BACKEND's `open_dot`, never a
+    // Dart comparison against the English in `open_label`.
+    final openDot = s['open_dot']?.toString();
     final todayHours = s['today_hours']?.toString();
     final branchLabel = s['branch_label']?.toString();
     final staleLabel = s['stale_label']?.toString();
@@ -15820,13 +15823,14 @@ class _RoutesTabState extends State<_RoutesTab> {
               const SizedBox(height: 3),
               Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 6, runSpacing: 2, children: [
                 if (openLabel != null) ...[
-                  Container(
-                    width: 7, height: 7,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: openLabel == 'Open now' ? const Color(0xFF16A34A) : const Color(0xFF9CA3AF),
+                  if (openDot != null)
+                    Container(
+                      width: 7, height: 7,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Ds.hex(openDot, Ds.c.textSecondary),
+                      ),
                     ),
-                  ),
                   const SizedBox(width: 3),
                   Text(openLabel, style: const TextStyle(fontSize: 11.5, color: Color(0xFF374151))),
                 ],

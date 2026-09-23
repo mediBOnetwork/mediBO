@@ -34,9 +34,21 @@ import 'package:pharma_b2b/utils/render_log.dart';
 
 String _src(String path) => File(path).readAsStringSync();
 
-/// The one migration that owns the narrow wording and the breakpoint.
+/// The migration that owns the narrow wording (retired, kept as data).
 const String _migration =
     'supabase/migrations/20261011120000_cmd2191_pill_dynamic_width.sql';
+
+/// The migration that seeds `pill.copy` — the wording the pill prints.
+const String _seedMigration =
+    'supabase/migrations/20261011090000_cmd2187_header_pill_three_lines.sql';
+
+/// The migration that switched the width breakpoint OFF (CMD #2191, Om).
+const String _tierOffMigration =
+    'supabase/migrations/20261011160000_cmd2191_pill_one_wording.sql';
+
+/// The migration that shortened the three lines that did not fit a phone.
+const String _rewordMigration =
+    'supabase/migrations/20261011170000_cmd2191_one_wording_fits_phone.sql';
 
 /// The live `pill.copy.style` geometry the pill is drawn with.
 const double _padX = 12, _dotSize = 8, _dotGap = 6, _maxW = 270, _minW = 120;
@@ -49,14 +61,18 @@ const double _furniture = 14 * 2 + 49 + 10 + 40;
 double _pillFor(double textWidth) => textWidth + _padX * 2 + _dotSize + _dotGap;
 
 Map<String, dynamic> _pill({
-  List<String> lines = const ['Open now', 'Opens in 45 min', 'Order now'],
+  List<String> lines = const [
+    'Ordering is open',
+    '45 minutes left to order',
+    'Order now'
+  ],
   Map<String, dynamic>? style,
 }) =>
     <String, dynamic>{
       'show': true,
       'state': 'open',
       'scope': 'zone',
-      'tier': 'narrow',
+      'tier': 'full',
       'lines': [
         for (int i = 0; i < lines.length; i++)
           {'kind': ['status', 'time', 'action'][i], 'text': lines[i]},
@@ -75,6 +91,7 @@ Map<String, dynamic> _pill({
             'text': 14,
             'pad_x': _padX,
             'dot_size': _dotSize,
+            'dot_gap': _dotGap,
             'min_w': _minW,
             'max_w': _maxW,
           },
@@ -157,6 +174,7 @@ void main() {
         'text': 14,
         'pad_x': _padX,
         'dot_size': _dotSize,
+        'dot_gap': _dotGap,
         'min_w': 40,
         'max_w': 180,
       });
@@ -242,12 +260,40 @@ void main() {
     });
   });
 
-  group('4 — every state fits, at 320 · 360 · 412 · 480', () {
-    // The wording the backend sends below the breakpoint, read from the
-    // migration that owns it — so a future edit to the copy is measured here
-    // rather than discovered on a phone.
-    late List<String> narrow;
+  group('4 — ONE wording, and it fits the phone', () {
+    // CMD #2191 (Om, mid-build): "pill should show exact what backend gives"
+    // — one set of words at every width. The narrow tier existed only because
+    // the pill had a FIXED width; now that it hugs its line, the FULL wording
+    // is the only wording, so the full wording is what has to fit a phone.
+    //
+    // Both halves are read from the migrations that own them, so a reworded
+    // line or a re-enabled tier is measured here rather than found on a phone.
+    late List<String> live; // every sentence the pill can still print
+    late List<String> narrow; // the retired tier's copy, kept as data
     late int breakpoint;
+
+    /// A sentence some later migration reworded away is no longer live copy.
+    /// `replace(v::text, 'OLD', 'NEW')` — OLD is what stopped being printed.
+    Set<String> _retired(Iterable<String> sources) {
+      final out = <String>{};
+      for (final src in sources) {
+        for (final m in RegExp(r"replace\(\s*[^,()]*(?:\([^)]*\))?[^,]*,\s*'((?:[^']|'')+)'\s*,")
+            .allMatches(src)) {
+          out.add(m.group(1)!.replaceAll("''", "'"));
+        }
+      }
+      return out;
+    }
+
+    List<String> _sentences(String block) => RegExp(r"'((?:[^']|'')+)'")
+        // `--` lines are the migration's prose, never the pill's copy.
+        .allMatches(block.split('\n').where((l) => !l.trimLeft().startsWith('--')).join('\n'))
+        .map((m) => m.group(1)!.replaceAll("''", "'"))
+        .where((s) => s.contains(' ') || s.length > 8)
+        .where((s) => !s.contains('_') && !s.startsWith('jsonb'))
+        .map((s) => s.replaceAll('{n}', '45'))
+        .toSet()
+        .toList();
 
     setUpAll(() async {
       final loader = FontLoader('DMSans');
@@ -256,20 +302,35 @@ void main() {
             ByteData.sublistView(File('assets/fonts/DMSans-$w.ttf').readAsBytesSync())));
       }
       await loader.load();
-      final sql = _src(_migration);
-      final block = sql.substring(sql.indexOf("'narrow', jsonb_build_object"),
-          sql.indexOf('-- ── 2.'));
-      narrow = RegExp(r"'([^']{3,})'")
-          .allMatches(block)
-          .map((m) => m.group(1)!)
-          // The keys and the SQL words around them are not sentences.
-          .where((s) => s.contains(' ') || s.length > 8)
-          .where((s) => !s.contains('_') && !s.startsWith('jsonb'))
-          .map((s) => s.replaceAll('{n}', '45'))
-          .toSet()
-          .toList();
-      breakpoint = int.parse(
-          RegExp(r"'max_screen_w',\s*(\d+)").firstMatch(sql)!.group(1)!);
+
+      final seed = _src(_seedMigration);
+      final dyn = _src(_migration);
+      final off = _src(_tierOffMigration);
+      final reword = _src(_rewordMigration);
+
+      // The seed's ONE statement: `insert … ('pill.copy', jsonb_build_object(`
+      // up to the `on conflict` that closes it. Anything after that belongs to
+      // another key or to a function body, and is not the pill's copy.
+      final copyFrom = seed.indexOf("'pill.copy', jsonb_build_object");
+      final copyBlock =
+          seed.substring(copyFrom, seed.indexOf('on conflict', copyFrom));
+
+      final gone = _retired([reword]);
+      live = _sentences(copyBlock)
+          .where((s) => !gone.contains(s.replaceAll('45', '{n}')) && !gone.contains(s))
+          .toList()
+        // …plus the wording those three were replaced BY, which is what the
+        // pill prints today.
+        ..addAll(RegExp(r"'(?:(?:[^']|'')+)'\s*,\s*'((?:[^']|'')+)'\s*\)")
+            .allMatches(reword)
+            .map((m) => m.group(1)!.replaceAll("''", "'").replaceAll('{n}', '45'))
+            .where((s) => s.contains(' ')));
+
+      narrow = _sentences(dyn.substring(dyn.indexOf("'narrow', jsonb_build_object"),
+          dyn.indexOf('-- ── 2.')));
+
+      breakpoint =
+          int.parse(RegExp(r"'\{narrow,max_screen_w\}',\s*'(\d+)'").firstMatch(off)!.group(1)!);
     });
 
     double _w(String t) {
@@ -287,47 +348,45 @@ void main() {
       return tp.width;
     }
 
-    test('the narrow wording is real wording, not stubs', () {
+    test('the narrow tier is retired — ONE wording at every width', () {
+      // v_narrow is `p_w < max_screen_w`, and no viewport is below 0.
+      expect(breakpoint, 0,
+          reason: 'a width breakpoint is back: the pill reworded itself again');
+    });
+
+    test('the retired tier keeps its copy, so re-enabling it is an UPDATE', () {
       expect(narrow.length, greaterThan(20),
-          reason: 'the narrow tier lost its copy');
-      for (final s in narrow) {
+          reason: 'the narrow copy was deleted instead of switched off');
+    });
+
+    test('the live wording is real wording, not stubs', () {
+      expect(live.length, greaterThan(20),
+          reason: 'the pill lost its copy');
+      for (final s in live) {
         expect(s.trim(), isNotEmpty);
       }
     });
 
-    test('every narrow line fits a 320 dp phone, whole', () {
-      for (final s in narrow) {
-        expect(_pillFor(_w(s)), lessThanOrEqualTo(320 - _furniture),
-            reason: '"$s" ellipsises at 320 dp');
-      }
-    });
-
-    test('every narrow line fits a 360 dp phone, whole', () {
-      for (final s in narrow) {
+    test('every line the pill can print fits a 360 dp phone, whole', () {
+      for (final s in live) {
         expect(_pillFor(_w(s)), lessThanOrEqualTo(360 - _furniture),
             reason: '"$s" ellipsises at 360 dp');
       }
     });
 
-    test('the breakpoint is where the FULL wording starts fitting', () {
-      // The longest line the full tier can send today, from pill.copy on live.
-      const longest = 'We are packing today’s orders';
-      expect(_pillFor(_w(longest)), lessThanOrEqualTo(breakpoint - _furniture),
-          reason: 'the full wording still ellipsises at the breakpoint');
-      expect(_pillFor(_w(longest)), greaterThan(360 - _furniture),
-          reason: 'the narrow tier is being used where the full one would fit');
-      expect(_pillFor(_w(longest)), lessThanOrEqualTo(_maxW),
-          reason: 'max_w clips the longest full line before the row does');
+    test('every line the pill can print fits 412 and 480, whole', () {
+      for (final width in const [412.0, 480.0]) {
+        for (final s in live) {
+          expect(_pillFor(_w(s)), lessThanOrEqualTo(width - _furniture),
+              reason: '"$s" ellipsises at $width dp');
+        }
+      }
     });
 
-    test('412 and 480 carry the full wording with room to spare', () {
-      const longest = 'We are packing today’s orders';
-      for (final width in const [412.0, 480.0]) {
-        expect(width, greaterThanOrEqualTo(breakpoint.toDouble()),
-            reason: '$width would be handed the narrow tier');
-        expect(_pillFor(_w(longest)),
-            lessThanOrEqualTo(width - _furniture),
-            reason: 'the full wording ellipsises at $width dp');
+    test('and no line is wider than the backend ceiling, max_w', () {
+      for (final s in live) {
+        expect(_pillFor(_w(s)), lessThanOrEqualTo(_maxW),
+            reason: '"$s" is clipped by max_w before the row clips it');
       }
     });
   });

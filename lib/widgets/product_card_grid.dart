@@ -268,35 +268,34 @@ class ProductCardRail extends StatelessWidget {
         // rail asks the LAYOUT how tall this card is at this width rather
         // than reserving a constant — one answer for every card in the rail,
         // which is what "one row, one height" means here.
+        // A payload that predates v6 still draws the older card, which has a
+        // height of its own; asking the layout for a v6 height would cut it.
+        final v6 = (items.first.card ?? const {})['v6'] is Map;
+        // ONE height for the whole rail — the layout's answer at this width,
+        // not a constant — and the cards stay LAZY: a rail carries up to the
+        // backend's ceiling, so building all of them to measure them would
+        // cost more than the reserved band ever did.
         return SizedBox(
-          height: layout.cardHeight(w),
-          child: SingleChildScrollView(
+          height: v6 ? layout.cardHeight(w) : CompactProductCard.extent,
+          child: ListView.builder(
             controller: controller,
             scrollDirection: Axis.horizontal,
             physics: const ClampingScrollPhysics(),
             padding: EdgeInsets.symmetric(horizontal: layout.pagePad),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                for (var i = 0; i < items.length; i++) ...[
-                  if (i > 0) SizedBox(width: layout.gridGap),
-                  SizedBox(
-                    width: w,
-                    child: CompactProductCard(
-                      key: ValueKey(items[i].id),
-                      product: items[i],
-                      onTap: () => onOpen(items[i]),
-                      wishlistToggle: wishlistToggle,
-                      onPeek:
-                          onPeek == null ? null : () => onPeek!(items[i]),
-                      compareLabel: onCompare == null ? '' : compareLabel,
-                      onCompare: onCompare == null
-                          ? null
-                          : () => onCompare!(items[i]),
-                    ),
-                  ),
-                ],
-              ],
+            itemExtent: w + layout.gridGap,
+            itemCount: items.length,
+            itemBuilder: (context, i) => Padding(
+              padding: EdgeInsets.only(right: layout.gridGap),
+              child: CompactProductCard(
+                key: ValueKey(items[i].id),
+                product: items[i],
+                onTap: () => onOpen(items[i]),
+                wishlistToggle: wishlistToggle,
+                onPeek: onPeek == null ? null : () => onPeek!(items[i]),
+                compareLabel: onCompare == null ? '' : compareLabel,
+                onCompare:
+                    onCompare == null ? null : () => onCompare!(items[i]),
+              ),
             ),
           ),
         );

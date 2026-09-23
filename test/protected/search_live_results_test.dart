@@ -326,7 +326,11 @@ void main() {
           .map((c) => c.product.name)
           .toList();
       expect(painted.isNotEmpty, isTrue);
-      expect(painted, ['Zinc Tablet', 'Amoxy Cap'].sublist(0, painted.length));
+      // CMD #2167 — how MANY cards a rail builds is the list's own cache
+      // extent (the card got shorter, so one more fits the cache); what is
+      // held down here is the ORDER, which is the payload's.
+      expect(painted,
+          ['Zinc Tablet', 'Amoxy Cap', 'Bcomplex'].take(painted.length));
     });
 
     testWidgets('top_sellers renders identically — the kind is not a layout switch',

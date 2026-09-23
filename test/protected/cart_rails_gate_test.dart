@@ -51,7 +51,8 @@ import 'package:pharma_b2b/screens/cart_screen.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/widgets/cart_rail_slot.dart';
 import 'package:pharma_b2b/widgets/cart_wishlist_rail.dart';
-import 'package:pharma_b2b/widgets/compact_product_card.dart';
+import 'package:pharma_b2b/widgets/card_layout.dart';
+import 'package:pharma_b2b/widgets/product_card_grid.dart';
 
 Map<String, dynamic> _railPayload({
   required bool has,
@@ -261,12 +262,19 @@ void main() {
   });
 
   group('4/5 — the rails', () {
-    test('a rail reserves a CONSTANT height, summed from the card', () {
-      expect(CartRailSlot.railExtent, CartWishlistRail.extent);
-      expect(CartWishlistRail.extent,
-          greaterThan(CompactProductCard.extent));
-      // The band is the card plus the rail's own gaps — nothing else.
-      expect(CartWishlistRail.extent - CompactProductCard.extent, 60);
+    test('CMD #2167 — a rail reserves NOTHING; it measures its cards', () {
+      // #2087 gave the rail a constant band and CLIPPED anything taller.
+      // The card is now measured, so the slot hands the rails through as they
+      // are and a card that grows is drawn, not cut.
+      final blocks = CartRailSlot.blocks([
+        CartWishlistRail.fromPayload(
+            _railPayload(has: true, title: 'You may also like', count: 3),
+            (_) {}),
+        null,
+      ]);
+      expect(blocks.length, 1);
+      expect(blocks.first, isA<CartWishlistRail>());
+      expect(blocks.first, isNot(isA<SizedBox>()));
     });
 
     test('has:false, no items and a missing block all draw NOTHING', () {
@@ -421,7 +429,11 @@ void main() {
   // own width. 156 was a second number that quietly disagreed with it.
   group('the rail card is the storefront card', () {
     test('the cart rail takes its width from the card, not from itself', () {
-      expect(CartWishlistRail.cardW, CompactProductCard.railWidth);
+      // CMD #2167 — and that width is the CATALOGUE's: one grid rule, read
+      // from the payload's own card.layout, with no number in this file.
+      final l = CardLayout.fallback;
+      expect(l.cardWidth(360 - l.pagePad * 2),
+          ProductCardGrid.cardWidth(360 - l.pagePad * 2, l));
     });
 
     test('the rails are PAGE blocks, in payload order', () {
@@ -435,15 +447,9 @@ void main() {
       // a client sort and never the bill sneaking between them.
       expect(blocks.length, 2);
       final titles = blocks
-          .map((b) => ((b as SizedBox).child as ClipRect).child
-              as CartWishlistRail)
-          .map((r) => r.title)
+          .map((b) => (b as CartWishlistRail).title)
           .toList();
       expect(titles, <String>['Your wishlist', 'You may also like']);
-      // Each still reserves the rail's ONE constant band.
-      for (final b in blocks) {
-        expect((b as SizedBox).height, CartRailSlot.railExtent);
-      }
     });
 
     test('a rail the backend had nothing for contributes no block', () {

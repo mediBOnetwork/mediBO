@@ -18,7 +18,7 @@ import '../data/medicine_repository.dart';
 import '../design_tokens.dart';
 import '../models/product.dart';
 import '../models/storefront_p3.dart' show WishlistResult;
-import 'compact_product_card.dart';
+import 'product_card_grid.dart';
 
 class CartWishlistRail extends StatelessWidget {
   final String title;
@@ -49,13 +49,17 @@ class CartWishlistRail extends StatelessWidget {
   /// Builds the rail from the `rail` object of cart_render(). Returns null
   /// when the backend says there is nothing to suggest, so the cart omits the
   /// block rather than drawing an empty band.
+  ///
+  /// CMD #2167 — `cards` first: "You may also like" now sends the SAME full
+  /// card block the storefront grid reads (wish heart, v6 layout and all),
+  /// and `items` is the same array under its older name.
   static CartWishlistRail? fromPayload(
       Object? raw, void Function(Product product) onOpen,
       {VoidCallback? onWishChanged}) {
     if (raw is! Map) return null;
     final m = Map<String, dynamic>.from(raw);
     if (m['has'] != true) return null;
-    final list = (m['items'] as List?) ?? const [];
+    final list = (m['cards'] as List?) ?? (m['items'] as List?) ?? const [];
     final items = list
         .whereType<Map>()
         .map((e) => Product.fromHomeCard(Map<String, dynamic>.from(e)))
@@ -69,25 +73,15 @@ class CartWishlistRail extends StatelessWidget {
     );
   }
 
-  /// CMD #2090 — the card width is the STOREFRONT's own number, not a second
-  /// one typed here. 156 was close to [CompactProductCard.railWidth] and not
-  /// equal to it, so a cart rail card was three per cent narrower than the
-  /// same card on the home feed.
-  static const double cardW = CompactProductCard.railWidth;
-
-  // CMD #2087 — the rail occupies a CONSTANT height. Every gap below is a
-  // named constant and [extent] is their sum, so the fixed slot this rail
-  // sits in (CartRailSlot) reserves exactly the band the rail draws: a rail
-  // with three cards cannot be a different height from one with ten, and the
-  // blocks beneath it never move when the payload changes.
+  // CMD #2087 — the rail's own gaps, as named constants.
+  // CMD #2167 — but NOT a height. The card is measured, not reserved: the
+  // rail is as tall as the tallest card it drew, at the same card width the
+  // catalogue uses. A band sized from a constant was how a taller card got
+  // clipped and a shorter one left a hole under the price.
   static const double _topGap = 8;
   static const double _titleH = 24;
   static const double _titleGap = 12;
   static const double _bottomGap = 16;
-
-  /// The height one rail always takes: gap, title line, gap, card, gap.
-  static const double extent =
-      _topGap + _titleH + _titleGap + CompactProductCard.extent + _bottomGap;
 
   @override
   Widget build(BuildContext context) {
@@ -113,29 +107,12 @@ class CartWishlistRail extends StatelessWidget {
           ),
         ),
         SizedBox(height: _titleGap),
-        SizedBox(
-          height: CompactProductCard.extent,
-          child: ListView.builder(
-            scrollDirection: Axis.horizontal,
-            physics: const ClampingScrollPhysics(),
-            padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-            itemExtent: cardW + Ds.space.x12,
-            itemCount: items.length,
-            itemBuilder: (context, i) {
-              final p = items[i];
-              return Padding(
-                padding: EdgeInsets.only(right: Ds.space.x12),
-                child: SizedBox(
-                  width: cardW,
-                  child: CompactProductCard(
-                    product: p,
-                    onTap: () => onOpen(p),
-                    wishlistToggle: onWishChanged == null ? null : _toggle,
-                  ),
-                ),
-              );
-            },
-          ),
+        // CMD #2167 — the ONE rail, drawn out of the ONE card. There is no
+        // second card design and no second width in this file.
+        ProductCardRail(
+          items: items,
+          onOpen: onOpen,
+          wishlistToggle: onWishChanged == null ? null : _toggle,
         ),
         SizedBox(height: _bottomGap),
       ],

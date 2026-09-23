@@ -10,6 +10,7 @@ import '../models/storefront_p3.dart';
 import '../utils/render_log.dart';
 import '../widgets/animations.dart';
 import '../widgets/compact_product_card.dart';
+import '../widgets/card_layout.dart';
 import '../widgets/product_card_grid.dart';
 import 'catalogue_screen.dart';
 
@@ -184,7 +185,10 @@ class _CompanyScreenState extends State<CompanyScreen> {
     // block under it. Expanded it is the company's identity: the logo box, the
     // name, the count and the salt cloud. Scrolled, it becomes a slim bar with
     // the name alone, so the products get the screen back.
-    return Scaffold(
+    // CMD #2167 — the 'company' surface, overridable on its own.
+    return CardSurface(
+      screen: 'company',
+      child: Scaffold(
       backgroundColor: Ds.c.bg,
       body: _loading
           ? const _CompanySkeleton()
@@ -199,6 +203,7 @@ class _CompanyScreenState extends State<CompanyScreen> {
                   query: _q,
                   onQuery: _onQuery,
                 ),
+    ),
     );
   }
 }
@@ -391,18 +396,14 @@ class _Body extends StatelessWidget {
             else
               SliverPadding(
                 padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-                sliver: SliverGrid(
-                  // CMD #2122 — the same card, and the same extent, as every
-                  // other grid.
-                  gridDelegate: ProductCardGrid.delegateFor(gridW),
-                  delegate: SliverChildBuilderDelegate(
-                    (context, i) => CompactProductCard(
-                      product: items[i],
-                      onTap: () => Navigator.of(context)
-                          .pushNamed('/product/${items[i].id}'),
-                    ),
-                    childCount: items.length,
-                  ),
+                // CMD #2122 — the same card as every other grid. CMD #2167 —
+                // and the same rows, each as tall as its tallest card.
+                sliver: ProductCardGrid.sliverRows(
+                  items: items,
+                  width: gridW,
+                  layout: ProductCardGrid.layoutFor(context, items),
+                  onOpen: (p) =>
+                      Navigator.of(context).pushNamed('/product/${p.id}'),
                 ),
               ),
             SliverToBoxAdapter(

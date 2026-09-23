@@ -19,6 +19,7 @@ import '../services/payload_cache.dart';
 import '../theme.dart';
 import '../util.dart';
 import '../utils/render_log.dart';
+import '../widgets/card_layout.dart';
 import '../widgets/bottom_stack.dart';
 import '../widgets/animations.dart';
 import '../widgets/company_hits_block.dart';
@@ -1644,9 +1645,13 @@ class _ProductsSection extends StatelessWidget {
     // column count for every surface. The only difference left between the
     // two is the order the payload arrives in.
     return Builder(
-      builder: (context) => ProductCardGrid(
-        items: items,
-        onOpen: (p) => Navigator.of(context).pushNamed('/product/${p.id}'),
+      // CMD #2167 — the category listing draws on the 'category' surface.
+      builder: (context) => CardSurface(
+        screen: 'category',
+        child: ProductCardGrid(
+          items: items,
+          onOpen: (p) => Navigator.of(context).pushNamed('/product/${p.id}'),
+        ),
       ),
     );
   }

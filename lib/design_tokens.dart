@@ -90,6 +90,13 @@ class Ds {
   static String? _hexStr(Object? raw) =>
       raw is String && raw.trim().isNotEmpty ? raw.trim() : null;
 
+  /// CMD #2167 — a backend font weight (400…900) as a [FontWeight].
+  static FontWeight weight(int w, [FontWeight fallback = FontWeight.w400]) {
+    final i = (w ~/ 100) - 1;
+    if (i < 0 || i >= FontWeight.values.length) return fallback;
+    return FontWeight.values[i];
+  }
+
   static double _num(Object? v, double fallback) =>
       v is num ? v.toDouble() : fallback;
 }
@@ -327,6 +334,16 @@ class DsElevation {
       ];
   List<BoxShadow> get e2 => [
         BoxShadow(color: const Color(0xFF000000).withValues(alpha: e2alpha), offset: Offset(e2x, e2y), blurRadius: e2blur),
+      ];
+
+  /// CMD #2167 — a shadow the BACKEND sizes. The card's `layout` block carries
+  /// blur / dy / alpha, so a flatter or deeper card is an app_settings update
+  /// rather than a deploy. Same shape as e1/e2, different numbers.
+  List<BoxShadow> shadow(double blur, double dy, double alpha) => [
+        BoxShadow(
+            color: const Color(0xFF000000).withValues(alpha: alpha),
+            offset: Offset(0, dy),
+            blurRadius: blur),
       ];
 
   /// A soft shadow cast UPWARDS out of the top edge.

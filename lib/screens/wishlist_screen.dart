@@ -7,6 +7,7 @@ import '../design_tokens.dart';
 import '../models/product.dart';
 import '../services/ui_copy.dart';
 import '../utils/render_log.dart';
+import '../widgets/card_layout.dart';
 import '../widgets/product_card_grid.dart';
 
 class WishlistScreen extends StatefulWidget {
@@ -93,7 +94,10 @@ class _WishlistScreenState extends State<WishlistScreen> {
     final p = _payload;
     final items = _items(p);
 
-    return Scaffold(
+    // CMD #2167 — the 'wishlist' surface, overridable on its own.
+    return CardSurface(
+      screen: 'wishlist',
+      child: Scaffold(
       backgroundColor: Ds.c.bg,
       appBar: AppBar(
         backgroundColor: Ds.c.surface,
@@ -114,6 +118,7 @@ class _WishlistScreenState extends State<WishlistScreen> {
         ),
       ),
       body: _buildBody(p, items),
+    ),
     );
   }
 

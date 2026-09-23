@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../design_tokens.dart';
 import '../models/product.dart';
+import '../models/storefront_p3.dart' show WishlistResult;
+import 'card_layout.dart';
 import 'compact_product_card.dart';
 
 /// CMD #2044 — THE product grid, and the only one in the app.
@@ -13,10 +15,12 @@ import 'compact_product_card.dart';
 /// [CompactProductCard] through this one widget, so a surface cannot pick its
 /// own card, its own column count or its own spacing.
 ///
-/// The ONLY thing decided here is geometry — how many columns fit — because
-/// that is the width of the device and not a business rule. Everything on the
-/// card (price, MRP, PTR, pack chip, ribbon, ADD label, Rx badge) is the
-/// backend's string, drawn by the card itself.
+/// CMD #2167 — and it no longer reserves a HEIGHT. A grid row is an
+/// [IntrinsicHeight] row of cards: every card in that row is as tall as the
+/// tallest one in it, and no card carries dead space under its price. The
+/// column count and the gap come from the backend's `card.layout`
+/// (min_card_w / grid_gap / max_cols), so re-shaping the grid is an
+/// app_settings update.
 class ProductCardGrid extends StatelessWidget {
   const ProductCardGrid({
     super.key,
@@ -41,56 +45,144 @@ class ProductCardGrid extends StatelessWidget {
   final ScrollPhysics? physics;
   final EdgeInsetsGeometry? padding;
 
-  /// The gaps between cards. Home's grid numbers, so the two cannot drift.
-  static const double crossGap = 12;
-  static const double mainGap = 12;
+  /// The layout the FIRST card in this list carries, for the screen it is
+  /// being drawn on. An empty list falls back to the last layout seen.
+  static CardLayout layoutFor(BuildContext context, List<Product> items) =>
+      CardLayout.of(items.isEmpty ? null : items.first.card,
+          screen: CardSurface.of(context));
 
-  /// 2 up on a phone, 3 on a tablet, 4–5 on a desktop — measured from the card
-  /// the grid is actually laying out (its rail width plus one gap) rather than
-  /// from breakpoints someone has to remember to keep in step.
-  ///
-  /// [width] is the grid's own maxWidth, i.e. AFTER the page padding. 360 px
-  /// phone → 2, 412 px → 2, 768 px tablet → 3, 1280 px+ → 5 or 6.
-  static int columnsFor(double width) {
-    const slot = CompactProductCard.railWidth + crossGap; // 162 + 12
-    final n = ((width + crossGap) / slot).floor();
-    return n.clamp(2, 6);
+  /// 2 up on a phone, 3 on a tablet, 4–6 on a desktop — measured from the
+  /// backend's minimum card width rather than from breakpoints someone has to
+  /// remember to keep in step. [width] is the grid's own maxWidth, i.e. AFTER
+  /// the page padding.
+  static int columnsFor(double width, [CardLayout? layout]) =>
+      (layout ?? CardLayout.latest('')).columnsFor(width);
+
+  /// The width of ONE card across [width]. THE number: a rail asks for the
+  /// same one, which is what makes a home card and a catalogue card identical.
+  static double cardWidth(double width, [CardLayout? layout]) =>
+      (layout ?? CardLayout.latest('')).cardWidth(width);
+
+  /// The delegate the SKELETONS use — a real grid no longer needs one, since
+  /// its rows measure themselves. The reserved height is the square plate plus
+  /// the body the card draws under it, so a skeleton is the size of the card
+  /// that replaces it.
+  static SliverGridDelegate delegateFor(double width, [CardLayout? layout]) {
+    final l = layout ?? CardLayout.latest('');
+    return SliverGridDelegateWithFixedCrossAxisCount(
+      crossAxisCount: l.columnsFor(width),
+      mainAxisExtent: l.cardWidth(width) + CompactProductCard.bodyV6,
+      crossAxisSpacing: l.gridGap,
+      mainAxisSpacing: l.gridGap,
+    );
   }
 
-  /// The delegate, in one place, so a sliver grid and a box grid cannot
-  /// disagree about the extent.
-  /// CMD #2122 — ONE card height on every surface: the extent comes from the
-  /// card, never from a number typed into a screen.
-  static SliverGridDelegate delegateFor(double width) =>
-      SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: columnsFor(width),
-        mainAxisExtent: CompactProductCard.extent,
-        crossAxisSpacing: crossGap,
-        mainAxisSpacing: mainGap,
+  /// One row of the grid, every card in it the height of the tallest.
+  static Widget row({
+    required BuildContext context,
+    required List<Product> items,
+    required int start,
+    required int columns,
+    required CardLayout layout,
+    required void Function(Product) onOpen,
+    void Function(Product)? onPeek,
+  }) {
+    final children = <Widget>[];
+    for (var i = 0; i < columns; i++) {
+      final idx = start + i;
+      if (i > 0) children.add(SizedBox(width: layout.gridGap));
+      children.add(
+        Expanded(
+          child: idx < items.length
+              ? CompactProductCard(
+                  key: ValueKey(items[idx].id),
+                  product: items[idx],
+                  onTap: () => onOpen(items[idx]),
+                  onPeek: onPeek == null ? null : () => onPeek(items[idx]),
+                )
+              : const SizedBox.shrink(),
+        ),
       );
+    }
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: children,
+      ),
+    );
+  }
+
+  /// The sliver form, for the screens that build their page as slivers. Same
+  /// rows, same shared height, lazily built.
+  static Widget sliverRows({
+    required List<Product> items,
+    required double width,
+    required CardLayout layout,
+    required void Function(Product) onOpen,
+    void Function(Product)? onPeek,
+  }) {
+    final cols = layout.columnsFor(width);
+    final rows = (items.length + cols - 1) ~/ cols;
+    return SliverList.builder(
+      itemCount: rows,
+      itemBuilder: (context, r) => Padding(
+        padding: EdgeInsets.only(bottom: r == rows - 1 ? 0 : layout.gridGap),
+        child: row(
+          context: context,
+          items: items,
+          start: r * cols,
+          columns: cols,
+          layout: layout,
+          onOpen: onOpen,
+          onPeek: onPeek,
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
-        builder: (context, c) => GridView.builder(
-          shrinkWrap: shrinkWrap,
-          physics: physics,
-          padding: padding ?? EdgeInsets.zero,
-          addAutomaticKeepAlives: false,
-          gridDelegate: delegateFor(c.maxWidth),
-          itemCount: items.length,
-          itemBuilder: (context, i) => CompactProductCard(
-            key: ValueKey(items[i].id),
-            product: items[i],
-            onTap: () => onOpen(items[i]),
-            onPeek: onPeek == null ? null : () => onPeek!(items[i]),
-          ),
-        ),
+        builder: (context, c) {
+          final layout = layoutFor(context, items);
+          final cols = layout.columnsFor(c.maxWidth);
+          final rows = (items.length + cols - 1) ~/ cols;
+          Widget rowAt(BuildContext context, int r) => Padding(
+                padding:
+                    EdgeInsets.only(bottom: r == rows - 1 ? 0 : layout.gridGap),
+                child: row(
+                  context: context,
+                  items: items,
+                  start: r * cols,
+                  columns: cols,
+                  layout: layout,
+                  onOpen: onOpen,
+                  onPeek: onPeek,
+                ),
+              );
+          if (shrinkWrap) {
+            return Padding(
+              padding: padding ?? EdgeInsets.zero,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (var r = 0; r < rows; r++) rowAt(context, r),
+                ],
+              ),
+            );
+          }
+          return ListView.builder(
+            physics: physics,
+            padding: padding ?? EdgeInsets.zero,
+            itemCount: rows,
+            itemBuilder: rowAt,
+          );
+        },
       );
 }
 
-/// The loading state for [ProductCardGrid]: the CARD's own footprint, at the
-/// card's own extent, in the same columns the real grid will use. A skeleton,
-/// never a bare spinner — the design QA gate's rule six.
+/// The loading state for [ProductCardGrid]: the CARD's own footprint, in the
+/// columns the real grid will use, at the height the last real card measured.
+/// A skeleton, never a bare spinner — the design QA gate's rule six.
 class ProductCardGridSkeleton extends StatelessWidget {
   const ProductCardGridSkeleton({super.key, this.tiles = 6, this.padding});
 
@@ -99,21 +191,105 @@ class ProductCardGridSkeleton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final layout = CardLayout.latest(CardSurface.of(context));
     return LayoutBuilder(
       builder: (context, c) => GridView.builder(
         shrinkWrap: true,
         physics: const NeverScrollableScrollPhysics(),
         padding: padding ?? EdgeInsets.zero,
-        gridDelegate: ProductCardGrid.delegateFor(c.maxWidth),
+        gridDelegate: ProductCardGrid.delegateFor(c.maxWidth, layout),
         itemCount: tiles,
         itemBuilder: (_, _) => DecoratedBox(
           decoration: BoxDecoration(
             color: Ds.c.surface,
-            borderRadius: Ds.r.rCard,
+            borderRadius: BorderRadius.circular(layout.radius),
             border: Border.all(color: Ds.c.divider),
           ),
         ),
       ),
+    );
+  }
+}
+
+/// CMD #2167 — the horizontal rail, and the only one in the app.
+///
+/// Its cards are the width [ProductCardGrid] would give them on the SAME page,
+/// so the home feed and the catalogue draw the same card at the same size, and
+/// the next card peeks past the right edge instead of a third fitting. Every
+/// card in the rail is as tall as the tallest one in it.
+class ProductCardRail extends StatelessWidget {
+  const ProductCardRail({
+    super.key,
+    required this.items,
+    required this.onOpen,
+    this.onPeek,
+    this.wishlistToggle,
+    this.controller,
+    this.compareLabel = '',
+    this.onCompare,
+  });
+
+  final List<Product> items;
+  final void Function(Product product) onOpen;
+  final void Function(Product product)? onPeek;
+  final Future<WishlistResult> Function(String productId)? wishlistToggle;
+  final ScrollController? controller;
+  final String compareLabel;
+  final void Function(Product product)? onCompare;
+
+  /// The width one rail card takes on a page [width] wide (the FULL page
+  /// width — the rail subtracts the backend's own page padding itself).
+  static double cardWidth(BuildContext context, double width,
+      [List<Product> items = const []]) {
+    final l = items.isEmpty
+        ? CardLayout.latest(CardSurface.of(context))
+        : CardLayout.of(items.first.card, screen: CardSurface.of(context));
+    return l.cardWidth(width - l.pagePad * 2);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (items.isEmpty) return const SizedBox.shrink();
+    final layout =
+        CardLayout.of(items.first.card, screen: CardSurface.of(context));
+    return LayoutBuilder(
+      builder: (context, c) {
+        final page = c.maxWidth.isFinite
+            ? c.maxWidth
+            : MediaQuery.sizeOf(context).width;
+        final w = layout.cardWidth(page - layout.pagePad * 2);
+        return SingleChildScrollView(
+          controller: controller,
+          scrollDirection: Axis.horizontal,
+          physics: const ClampingScrollPhysics(),
+          padding: EdgeInsets.symmetric(horizontal: layout.pagePad),
+          child: IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (var i = 0; i < items.length; i++) ...[
+                  if (i > 0) SizedBox(width: layout.gridGap),
+                  SizedBox(
+                    width: w,
+                    child: CompactProductCard(
+                      key: ValueKey(items[i].id),
+                      product: items[i],
+                      onTap: () => onOpen(items[i]),
+                      wishlistToggle: wishlistToggle,
+                      onPeek:
+                          onPeek == null ? null : () => onPeek!(items[i]),
+                      compareLabel: onCompare == null ? '' : compareLabel,
+                      onCompare: onCompare == null
+                          ? null
+                          : () => onCompare!(items[i]),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

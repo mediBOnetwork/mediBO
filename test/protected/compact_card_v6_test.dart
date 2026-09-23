@@ -1,7 +1,8 @@
 // CMD #2160 — Product card v6, held down (protected).
 //
-//   * the plate is SQUARE (the card's own width) wherever the card is no
-//     wider than plateMaxV6, and the extent the grids reserve is unchanged;
+//   * the plate is SQUARE (the card's own width) at EVERY width — CMD #2167
+//     removed the cap and the reserved extent: a card is its plate plus its
+//     body, and a row of cards shares the tallest one's height;
 //   * the photo box is image_pct of the plate — contained, never cropped;
 //   * the action spot is 36 tall: +, the qty pill (qty_tpl_one at 1,
 //     qty_tpl_many above), and the red Notify me → We'll notify pill;
@@ -18,8 +19,9 @@ import 'package:pharma_b2b/models/cart_model.dart';
 import 'package:pharma_b2b/models/product.dart';
 import 'package:pharma_b2b/models/product_card_view.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
-import 'package:pharma_b2b/widgets/card_pack_icon.dart';
+import 'package:pharma_b2b/widgets/card_layout.dart';
 import 'package:pharma_b2b/widgets/compact_product_card.dart';
+import 'package:pharma_b2b/widgets/product_card_grid.dart';
 
 Map<String, dynamic> _card({
   bool packChip = true,
@@ -78,7 +80,33 @@ Map<String, dynamic> _card({
     'qty_label': '',
     'qty_foot_tpl': '',
   },
-  'layout': {'text_lines': 3, 'name_max_lines': 2},
+  'layout': {
+    'text_lines': 3,
+    'name_max_lines': 2,
+    'radius': 16,
+    'chip_h': 26,
+    'action_h': 36,
+    'image_pct': 92,
+    'grid_gap': 12,
+    'min_card_w': 162,
+  },
+  'show': {
+    'pack_chip': true,
+    'sub_line': true,
+    'mrp': true,
+    'ptr_badge': true,
+    'scheme_badge': true,
+    'action': true,
+    'photo': true,
+    'wish': true,
+  },
+  'layout_screens': {
+    'home': {
+      'layout': {'radius': 20},
+      'show': {'mrp': false},
+    },
+    'catalogue': {},
+  },
   'foot': {'has': footHas, 'label': footHas ? 'Earn 18%' : ''},
   'foot_idle': {'has': false, 'label': ''},
   'pack_chip': {'has': packChip, 'label': packChip ? 'Strip of 10' : ''},
@@ -125,7 +153,6 @@ Future<CartModel> _pump(WidgetTester tester, Map<String, dynamic> row) async {
           body: Center(
             child: SizedBox(
               width: 170,
-              height: CompactProductCard.extent,
               child: CompactProductCard(
                 product: Product.fromMap(row),
                 onTap: () {},
@@ -149,7 +176,6 @@ Future<CartModel> _pumpW(WidgetTester tester, Map<String, dynamic> row, double w
           body: Center(
             child: SizedBox(
               width: w,
-              height: CompactProductCard.extent,
               child: CompactProductCard(
                 product: Product.fromMap(row),
                 onTap: () {},
@@ -187,20 +213,62 @@ void main() {
     expect(a.pillLabelV6(4), '4 strips');
   });
 
-  test('the v6 body fits the one extent every grid reserves', () {
-    expect(CompactProductCard.textV6, 52);
-    expect(CompactProductCard.plateMaxV6,
-        CompactProductCard.extent - 2 - CompactProductCard.bodyV6);
-    expect(CompactProductCard.actionV6, 36);
-    expect(CompactProductCard.chipV6, 26);
+  test('CMD #2167 — the geometry is the payload\'s, not a constant', () {
+    final l = CardLayout.of(_card());
+    expect(l.chipH, 26);
+    expect(l.actionH, 36);
+    expect(l.imagePct, 92);
+    expect(l.gridGap, 12);
+    // A per-screen override wins over the base block, and only where it says.
+    final over = CardLayout.of(_card(), screen: 'home');
+    expect(over.radius, 20, reason: 'layout_screens.home.layout.radius');
+    expect(over.chipH, 26, reason: 'untouched keys keep the base value');
+    expect(over.show.mrp, isFalse, reason: 'layout_screens.home.show.mrp');
   });
 
-  testWidgets('the plate is square at the card width', (tester) async {
+  testWidgets('the card reserves NO height: plate square + its own body',
+      (tester) async {
     await _pump(tester, _row(_card()));
     final plate = tester.getSize(find.byType(Opacity).first);
-    expect(plate.height, plate.width, reason: 'square below plateMaxV6');
+    expect(plate.height, plate.width, reason: 'the plate is square');
     final card = tester.getSize(find.byType(CompactProductCard));
-    expect(card.height, CompactProductCard.extent);
+    expect(card.width, 170);
+    expect(card.height, plate.height + 2 + CompactProductCard.bodyV6,
+        reason: 'plate + border + body — never the old 278 constant');
+    expect(card.height, lessThan(CompactProductCard.extent),
+        reason: 'the gap under PTR is gone');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a row of cards shares its tallest card\'s height',
+      (tester) async {
+    await tester.pumpWidget(
+      AppState(
+        cart: CartModel.forTest(),
+        child: MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 360,
+              child: ProductCardGrid(
+                items: [
+                  Product.fromMap(_row(_card(name: 'Crocin'))),
+                  Product.fromMap(_row(_card(
+                      name: 'Voglimac MF 0.3 Forte Tablet Extended Release SR',
+                      scheme: true))),
+                ],
+                onOpen: (_) {},
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    final cards = tester.widgetList(find.byType(CompactProductCard)).length;
+    expect(cards, 2);
+    final a = tester.getSize(find.byType(CompactProductCard).at(0));
+    final b = tester.getSize(find.byType(CompactProductCard).at(1));
+    expect(a.height, b.height);
+    expect(a.width, b.width);
     expect(tester.takeException(), isNull);
   });
 
@@ -305,10 +373,9 @@ void main() {
       await _pumpW(tester, _row(_card(scheme: true)), w);
       expect(tester.takeException(), isNull);
       final plate = tester.getSize(find.byType(Opacity).first);
-      expect(plate.height, lessThanOrEqualTo(CompactProductCard.plateMaxV6));
-      if (w - 2 <= CompactProductCard.plateMaxV6) {
-        expect(plate.height, plate.width);
-      }
+      // CMD #2167 — square at EVERY width, and the card grows with it.
+      expect(plate.height, plate.width);
+      expect(plate.width, w - 2);
     });
   }
 }

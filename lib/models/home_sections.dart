@@ -214,6 +214,11 @@ class HomeSection {
   /// leave a blank white circle on the pill.
   final List<String> seeAllThumbs;
 
+  /// CMD #2167 — `see_all_bg`: the background the "See all products" row is
+  /// drawn on, sent with the section (storefront_theme). Empty = the page
+  /// ground, which is what the app used to hardcode.
+  final String seeAllBg;
+
   /// Populated for the product layouts (rail, grid); empty otherwise.
   final List<Product> cards;
 
@@ -246,6 +251,7 @@ class HomeSection {
     this.accent = '',
     this.seeAllLabel = '',
     this.seeAllThumbs = const [],
+    this.seeAllBg = '',
     this.infinite = false,
     this.nextOffset = 0,
     this.pageSize = 0,
@@ -276,6 +282,7 @@ class HomeSection {
         accent: accent,
         seeAllLabel: seeAllLabel,
         seeAllThumbs: seeAllThumbs,
+        seeAllBg: seeAllBg,
         infinite: infinite,
         nextOffset: next,
         pageSize: pageSize,
@@ -335,6 +342,7 @@ class HomeSection {
       band: m['band']?.toString() ?? '',
       accent: m['accent']?.toString() ?? '',
       seeAllLabel: m['see_all_label']?.toString() ?? '',
+      seeAllBg: m['see_all_bg']?.toString() ?? '',
       seeAllThumbs: ((m['see_all_thumbs'] as List?) ?? const [])
           .map((e) => e?.toString() ?? '')
           .where((e) => e.isNotEmpty)

@@ -138,7 +138,7 @@ class _ShellTabSearchBarState extends State<_ShellTabSearchBar> {
             controller: ctrl,
             focusNode: _focus,
             placeholder: placeholder,
-            compact: _shellStuckFlag,
+            banded: true,
             leading: _StickyLead(
                 state: widget.state,
                 focus: _focus,

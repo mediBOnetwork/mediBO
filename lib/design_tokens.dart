@@ -515,7 +515,11 @@ class DsTouch {
       headerWord: 26, // the mediBO wordmark (CMD #2164: never bigger than 26)
       headerWordGap: 8, // tile → wordmark
       headerGap: 10, // wordmark → pill, and tile → sticky search
-      headerPill: 32, // the order-hours pill height
+      // CMD #2175 (Om, on #1523) — "Pill is 40 dp radius 20 — same as the logo
+      // tile and the search box." The three round things on the shell's one
+      // row are now one size, so the header reads as a single optical line
+      // instead of a 40 tile beside a 32 pill.
+      headerPill: 40, // the order-hours pill height
       headerPillText: 14); // the order-hours pill label
   factory DsTouch._from(Map m, DsTouch f) => DsTouch(
         minTarget: Ds._num(m['minTarget'], f.minTarget),
@@ -669,7 +673,9 @@ class DsHeader {
         wordSpacing: -0.4,
         markWeight: 900,
         wordWeight: 800,
-        pillRadius: 16,
+        // CMD #2175 (Om, on #1523) — half the pill's own 40, so it is the
+        // same full-radius shape as the search box's 20.
+        pillRadius: 20,
         search: 48,
         searchRadius: 24,
         searchCompactRadius: 20,
@@ -857,23 +863,66 @@ class DsPullClose {
 }
 
 /// CMD #2175 — the shell's common geometry, from `shell_style().common`.
+///
+/// Om, on #1521: "56 dp is the TOTAL of each row measured outside edge to
+/// outside edge, GAPS INCLUDED." So [height] is the ROW, not the box inside
+/// it: the search row is [padY] + [boxHeight] + [padY] = [height], which is
+/// why the search box is 40 (the logo tile's own size, so the two read as one
+/// optical line) rather than 56 (which looked fat beside it).
 class DsShell {
-  final double height, inset, radius, gap;
+  final double height, inset, radius, gap, boxHeight, padY, boxRadius;
+
+  /// Where the typed word and the hint sit inside the box, as the backend's
+  /// own word ('center' / 'top' / 'bottom'). Om, on #1521: "the hint and the
+  /// leading icon sit on the true vertical centre of the box". It is a TOKEN
+  /// rather than a constant in the field because the rule is the backend's —
+  /// retuning the box's height and where its text sits must stay one UPDATE.
+  final String textAlignV;
+
   const DsShell._({
     required this.height,
     required this.inset,
     required this.radius,
     required this.gap,
+    required this.boxHeight,
+    required this.padY,
+    required this.boxRadius,
+    required this.textAlignV,
   });
 
+  /// [textAlignV] as Flutter's own value. Anything the backend has not named
+  /// falls back to the centre, which is the redline.
+  TextAlignVertical get textAlign {
+    switch (textAlignV) {
+      case 'top':
+        return TextAlignVertical.top;
+      case 'bottom':
+        return TextAlignVertical.bottom;
+      default:
+        return TextAlignVertical.center;
+    }
+  }
+
   /// Om's redline, and the fallback if the payload never arrives.
-  factory DsShell._defaults() =>
-      const DsShell._(height: 56, inset: 14, radius: 28, gap: 10);
+  factory DsShell._defaults() => const DsShell._(
+        height: 56,
+        inset: 14,
+        radius: 28,
+        gap: 10,
+        boxHeight: 40,
+        padY: 8,
+        boxRadius: 20,
+        textAlignV: 'center',
+      );
 
   factory DsShell._from(Map m, DsShell f) => DsShell._(
         height: Ds._num(m['height'], f.height),
         inset: Ds._num(m['inset'], f.inset),
         radius: Ds._num(m['radius'], f.radius),
         gap: Ds._num(m['gap'], f.gap),
+        boxHeight: Ds._num(m['box_h'], f.boxHeight),
+        padY: Ds._num(m['pad_y'], f.padY),
+        boxRadius: Ds._num(m['box_radius'], f.boxRadius),
+        textAlignV: (m['text_align_v'] ?? f.textAlignV).toString(),
       );
 }

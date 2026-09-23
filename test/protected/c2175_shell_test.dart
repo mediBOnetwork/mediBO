@@ -29,6 +29,7 @@ import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/widgets/cart_pill.dart';
 import 'package:pharma_b2b/widgets/floating_dock.dart';
 import 'package:pharma_b2b/widgets/order_hours_pill.dart';
+import 'package:pharma_b2b/widgets/search_surface.dart';
 
 String _src(String p) => File(p).readAsStringSync();
 
@@ -126,8 +127,44 @@ void main() {
       expect(src.contains('textScaler: TextScaler.noScaling'), isTrue);
       expect(src.contains('FittedBox('), isFalse,
           reason: 'CMD #2164/#2175: one line, 14 sp, never shrinks');
-      expect(Ds.touch.headerPill, 32);
       expect(Ds.touch.headerPillText, 14);
+    });
+
+    // Om, on #1523: "Pill is 40 dp radius 20 — same as the logo tile and the
+    // search box." The three round things on the header's row are one size.
+    test('the pill is the logo tile\'s size, at the search box\'s corner', () {
+      expect(Ds.touch.headerPill, 40);
+      expect(Ds.touch.headerPill, Ds.touch.headerTile,
+          reason: 'the pill drifted off the logo tile again');
+      expect(Ds.touch.headerPill, Ds.shell.boxHeight,
+          reason: 'the pill drifted off the search box again');
+      expect(Ds.header.pillRadius, 20);
+      expect(Ds.header.pillRadius * 2, Ds.touch.headerPill,
+          reason: 'the pill stopped being a full-radius pill');
+      expect(Ds.header.pillRadius, Ds.shell.boxRadius);
+      final src = _src('lib/widgets/order_hours_pill.dart');
+      expect(src.contains('height: Ds.touch.headerPill'), isTrue);
+      expect(src.contains('BorderRadius.circular(Ds.header.pillRadius)'), isTrue);
+    });
+
+    // Om, on #1521: "Flutter must not pick a zone itself and must not default
+    // to Raipur." The backend resolves the zone AND says which scope it used
+    // ('zone' / 'universal'); this side asks order_hours_state() for it with
+    // no argument and prints what comes back.
+    test('the app names no zone — the backend resolves it', () {
+      final model = _src('lib/models/order_hours_model.dart');
+      expect(model.contains("rpc('order_hours_state')"), isTrue,
+          reason: 'the pill stopped asking the one door');
+      expect(RegExp(r"rpc\('order_hours_state',\s*params").hasMatch(model), isFalse,
+          reason: 'Dart started choosing the zone it is shown');
+      for (final f in const [
+        'lib/models/order_hours_model.dart',
+        'lib/widgets/order_hours_pill.dart',
+        'lib/screens/shell/shell_mobile_chrome.dart',
+      ]) {
+        expect(_src(f).contains('Raipur'), isFalse,
+            reason: '$f names a zone of its own');
+      }
     });
   });
 
@@ -181,15 +218,50 @@ void main() {
       expect(Ds.shell.gap, 10);
     });
 
+    // Om, on #1521: "56 dp is the TOTAL of each row, GAPS INCLUDED." The row
+    // is pad + box + pad, and the box is the logo tile's own 40 so the two
+    // read as one optical line.
+    test('the search row is its gaps plus its box, and that IS 56', () {
+      expect(Ds.shell.boxHeight, 40);
+      expect(Ds.shell.padY, 8);
+      expect(Ds.shell.boxRadius, 20);
+      expect(Ds.shell.padY * 2 + Ds.shell.boxHeight, Ds.shell.height,
+          reason: 'the gaps left the row again — the block is taller than 56');
+      expect(Ds.shell.boxRadius * 2, Ds.shell.boxHeight,
+          reason: 'the box stopped being a full-radius pill');
+      expect(SearchHeaderBar.fieldHeight, Ds.shell.boxHeight);
+    });
+
+    test('the search row has no scrolled variant', () {
+      final chrome = _src('lib/screens/shell/shell_header_chrome.dart');
+      final surface = _src('lib/widgets/search_surface.dart');
+      // Om: "There is no scrolled variant of the header row — it is either
+      // fully shown or fully hidden", and the search row under it never
+      // changes size, inset or contents.
+      expect(chrome.contains('_StickyBell'), isFalse,
+          reason: 'the bell came back onto the search row');
+      expect(chrome.contains('_shellStuckFlag'), isFalse,
+          reason: 'the search row grew a compact state again');
+      expect(chrome.contains("key: const ValueKey('mark')"), isFalse,
+          reason: 'the m mark came back onto the search row');
+      expect(surface.contains('compactFieldHeight'), isFalse);
+      expect(RegExp(r'final EdgeInsets pad = EdgeInsets\.fromLTRB\(\s*'
+              r'Ds\.shell\.inset, Ds\.shell\.padY, Ds\.shell\.inset, Ds\.shell\.padY\)')
+          .hasMatch(surface), isTrue,
+          reason: 'the search row stopped being one inset in every state');
+      expect(surface.contains('stuck ?'), isFalse,
+          reason: 'the search row grew a scrolled variant again');
+    });
+
     test('the five pieces of chrome are the one number', () {
       expect(Ds.touch.headerBand, Ds.shell.height,
           reason: 'the header row');
       expect(FloatingDock.dockHeight, Ds.shell.height, reason: 'the nav row');
       expect(FloatingDock.barHeight, Ds.shell.height, reason: 'the banner');
       expect(CartPill.kHeight, Ds.shell.height, reason: 'the View cart pill');
-      expect(_src('lib/widgets/search_surface.dart')
-          .contains('static double get fieldHeight => Ds.shell.height;'), isTrue,
-          reason: 'the search field');
+      // The search ROW is the shell height; its BOX is the 40 inside it.
+      expect(Ds.shell.padY * 2 + SearchHeaderBar.fieldHeight, Ds.shell.height,
+          reason: 'the search row');
     });
 
     test('the typed word is centred in the field, not padded into place', () {
@@ -198,7 +270,14 @@ void main() {
       // moment the field's height moved. The input centres itself now, at any
       // height the backend sends.
       final src = _src('lib/widgets/search_surface.dart');
-      expect(src.contains('textAlignVertical: TextAlignVertical.center'), isTrue);
+      // Om, on #1521: "Flutter reads them, nothing hardcoded." WHERE the text
+      // sits is `shell_style().search.text_align_v`, so the field asks the
+      // token rather than naming Flutter's constant itself.
+      expect(src.contains('textAlignVertical: Ds.shell.textAlign'), isTrue);
+      expect(src.contains('TextAlignVertical.center'), isFalse,
+          reason: 'the field named the constant again instead of the token');
+      expect(Ds.shell.textAlignV, 'center');
+      expect(Ds.shell.textAlign, TextAlignVertical.center);
       expect(
           RegExp(r'contentPadding:\s*\n?\s*EdgeInsets\.symmetric\(vertical:')
               .hasMatch(src),
@@ -209,8 +288,9 @@ void main() {
     test('the inset and the corner are shared too', () {
       expect(FloatingDock.edge, Ds.shell.inset);
       expect(FloatingDock.radius, Ds.shell.radius);
+      // The dock card wears the ROW's 28; the search BOX wears its own 20.
       expect(_src('lib/widgets/search_surface.dart')
-          .contains('BorderRadius.circular(Ds.shell.radius)'), isTrue);
+          .contains('BorderRadius.circular(Ds.shell.boxRadius)'), isTrue);
     });
 
     test('a backend patch moves all five, with no deploy', () {

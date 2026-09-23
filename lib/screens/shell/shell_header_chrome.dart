@@ -612,16 +612,28 @@ Widget _shellSearchHeader(_HomeShellState s, {Widget? trailing, bool sticky = fa
       isLoading: s._searchLoading,
       repo: s._repo,
       trailing: trailing,
-      trailingBare: sticky ? _StickyBell(focusNode: s._searchFocus) : null,
+      // CMD #2175 (Om, on #1521) — NOTHING of the header row is allowed onto
+      // the search row. #2147 moved the m mark and the bell down here once the
+      // logo row had scrolled away, so one row carried logo + search + bell
+      // and the header read as "shrunk" rather than gone. Om: "the WHOLE
+      // header row goes — logo, status pill AND bell slide up and out
+      // together. What stays pinned is the SEARCH BAR ALONE." So the mark and
+      // the bell are deleted from this row, and the row has no compact state
+      // to change size in. The one thing [leading] still carries is the ← of
+      // the SEARCH SCREEN, which is the focused state and not a scrolled one.
       leading: sticky ? _StickyLead(state: s) : null,
-      compact: sticky ? _shellStuckFlag : null,
+      // The shell's band ends in the #2164 hairline; the search screen does
+      // not. It is the ONLY thing that still differs between the two rows.
+      banded: sticky,
       onSubmit: s._handleSearchSubmit,
       onFilterPick: (g, o) => _shellFilterPick(s, g, o),
       onClear: () => s._applySearch(SearchQueryState.blank),
     );
   if (!sticky) return chrome;
   // CMD #2147 — once the logo row has scrolled away this bar IS the header:
-  // its shadow fades in with it, and nothing below it moves.
+  // its shadow fades in with it, and nothing below it moves. CMD #2175 — the
+  // shadow is ALL that changes; the row's height, inset and contents are the
+  // same in both states.
   return ValueListenableBuilder<double>(
     valueListenable: shellHeaderCollapse,
     child: chrome,
@@ -643,20 +655,13 @@ const Duration _kStickyMotion = Duration(milliseconds: 200);
 /// listener.
 bool _shellStuck() => shellHeaderCollapse.value >= Ds.touch.headerBand - 0.5;
 
-/// CMD #2156 — [_shellStuck] as a listenable, for the search row's own
-/// 48 → 40 field and 0 → 12 top inset. Derived from the ONE band notifier.
-final ValueNotifier<bool> _shellStuckFlag = () {
-  final v = ValueNotifier<bool>(false);
-  shellHeaderCollapse.addListener(() => v.value = _shellStuck());
-  return v;
-}();
-
-/// The sticky bar's left edge: nothing at the top of the page, the m mark
-/// once the logo row has gone, and ← while the search box is focused (the
-/// search screen). ← and the phone's back button both close it: the box
-/// unfocuses, a typed query is cleared, and the logo row comes back exactly as
-/// far as it was before the tap — so the page is at the same scroll spot, in
-/// the same header state.
+/// The search row's left edge: nothing at all, except ← while the box is
+/// focused (the search screen). CMD #2175 (Om) — #2147's m mark, shown here
+/// once the logo row had gone, is deleted; the scrolled state is the search
+/// bar ALONE. ← and the phone's back button both close the search screen: the
+/// box unfocuses, a typed query is cleared, and the header row comes back
+/// exactly as far as it was before the tap — so the page is at the same
+/// scroll spot, in the same header state.
 class _StickyLead extends StatefulWidget {
   const _StickyLead({required this.state, this.focus, this.onBack});
 
@@ -730,6 +735,10 @@ class _StickyLeadState extends State<_StickyLead> {
       child: ValueListenableBuilder<double>(
         valueListenable: shellHeaderCollapse,
         builder: (_, _, _) {
+          // CMD #2175 (Om) — ← on the search screen, and NOTHING otherwise.
+          // #2147's m mark, which appeared here the moment the logo row
+          // scrolled away, is deleted: a scrolled page shows the search bar
+          // alone, full width inside the 14 dp inset, with nothing beside it.
           final Widget lead = focused
               ? Semantics(
                   key: const ValueKey('back'),
@@ -744,16 +753,7 @@ class _StickyLeadState extends State<_StickyLead> {
                     ),
                   ),
                 )
-              : _shellStuck()
-                  ? Padding(
-                      key: const ValueKey('mark'),
-                      padding: EdgeInsets.only(right: Ds.touch.headerGap),
-                      child: GestureDetector(
-                        onTap: widget.state._goHome,
-                        child: const BrandLockup(markOnly: true),
-                      ),
-                    )
-                  : const SizedBox.shrink(key: ValueKey('none'));
+              : const SizedBox.shrink(key: ValueKey('none'));
           return AnimatedSize(
             duration: _kStickyMotion,
             curve: Curves.easeOut,
@@ -763,41 +763,6 @@ class _StickyLeadState extends State<_StickyLead> {
       ),
     );
   }
-}
-
-/// The sticky bar's right edge: the same inbox bell (same unread notifier),
-/// shown only while the logo row — which carries the bell at the top of the
-/// page — is scrolled away, and hidden on the search screen.
-class _StickyBell extends StatelessWidget {
-  const _StickyBell({required this.focusNode});
-  final FocusNode focusNode;
-
-  @override
-  Widget build(BuildContext context) => ListenableBuilder(
-        listenable: Listenable.merge([shellHeaderCollapse, focusNode]),
-        builder: (_, _) {
-          final show = _shellStuck() && !focusNode.hasFocus;
-          return AnimatedSize(
-            duration: _kStickyMotion,
-            curve: Curves.easeOut,
-            child: AnimatedSwitcher(
-              duration: _kStickyMotion,
-              child: show
-                  ? Padding(
-                      key: const ValueKey('bell'),
-                      padding: EdgeInsets.only(left: Ds.touch.headerGap),
-                      child: Semantics(
-                        identifier: 'c2147_sticky_bell',
-                        child: SizedBox.square(
-                            dimension: Ds.touch.headerTile,
-                            child: const NotificationBell()),
-                      ),
-                    )
-                  : const SizedBox.shrink(key: ValueKey('none')),
-            ),
-          );
-        },
-      );
 }
 
 /// CMD #2044 — the focused, empty search box FILLS the screen instead of

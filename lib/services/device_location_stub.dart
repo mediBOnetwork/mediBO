@@ -88,6 +88,17 @@ class DeviceLocation {
   static Future<bool> requestPermission() async =>
       (await _call<bool>('requestPermission')) ?? false;
 
+  /// CMD #2191 (Om) — can the system dialog still appear for this install?
+  ///
+  /// False means the grant is PERMANENTLY denied: Android will not show the
+  /// dialog again, so asking once more is a dead button and the only door
+  /// left is [openSettings]. True when the grant is already held, when we
+  /// have never asked, or when the platform says a rationale may be shown.
+  /// Anywhere without the bridge it is true, so no caller is ever sent to
+  /// Settings for a permission that was never refused.
+  static Future<bool> canAskAgain() async =>
+      (await _call<bool>('canAskAgain')) ?? true;
+
   /// The app's own page in system Settings, for a grant Android will no longer
   /// ask about. False when the platform could not open it.
   static Future<bool> openSettings() async =>

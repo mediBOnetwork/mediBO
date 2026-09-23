@@ -6,7 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 /// android/app/build.gradle.kts (`versionCode = …`). It is a FACT about the
 /// running binary, which is why it lives in Dart at all — the backend is told
 /// it, it is never decided here.
-const int kAndroidVersionCode = 55;
+const int kAndroidVersionCode = 56;
 
 /// CMD #2028 → CMD #2065 — the one answer the update bar renders, on all three
 /// platforms.

@@ -62,6 +62,7 @@ Map<String, dynamic> _pill({
             'text': 14,
             'pad_x': 12,
             'dot_size': 8,
+            'dot_gap': 6,
             'min_w': 120,
             'max_w': 210,
           },
@@ -95,10 +96,20 @@ void main() {
       );
     });
 
-    test('a payload with only label is ONE line — an old cache still paints',
+    // CMD #2191 (Om) changed this protected behaviour ON PURPOSE. #2187 let a
+    // payload carrying only `label` paint as one line, so an old cache kept
+    // the header populated. That is precisely the route by which the pill
+    // printed a word the backend had stopped saying — Om: "Never render the
+    // `text` or `label` field — those exist only for screen readers." No
+    // lines[], no pill.
+    test('a payload with only label prints NOTHING — label is never drawn',
         () {
-      expect(OrderHoursPill.linesOf({'label': 'Open till 9:30 pm'}),
-          ['Open till 9:30 pm']);
+      expect(OrderHoursPill.linesOf({'label': 'Open till 9:30 pm'}), isEmpty);
+      expect(OrderHoursPill.linesOf({'text': 'Open till 9:30 pm'}), isEmpty);
+      expect(
+          OrderHoursPill.linesOf(
+              {'label': 'Open till 9:30 pm', 'text': 'Open till 9:30 pm'}),
+          isEmpty);
       expect(OrderHoursPill.linesOf(const {'label': ''}), isEmpty);
     });
 
@@ -164,22 +175,38 @@ void main() {
     });
 
     testWidgets('a single-line pill never rolls at all', (t) async {
-      await _mount(t, {'label': 'Closed', 'style': const {}});
+      // CMD #2191 (Om): one line, but still a COMPLETE payload — a pill whose
+      // words or geometry are missing is not a still pill, it is no pill.
+      await _mount(t, _pill(lines: const ['Closed']));
       await t.pump(const Duration(seconds: 10));
       expect(find.text('Closed'), findsOneWidget);
       await t.pumpWidget(const SizedBox.shrink());
     });
 
+    testWidgets('and a payload missing its geometry is no pill at all',
+        (t) async {
+      await _mount(t, {'label': 'Closed', 'style': const {}});
+      await t.pump(const Duration(seconds: 10));
+      expect(find.text('Closed'), findsNothing,
+          reason: 'the pill invented its own size and printed `label`');
+      await t.pumpWidget(const SizedBox.shrink());
+    });
+
     test('no Duration of the roll is written in Dart', () {
       final src = _src('lib/widgets/order_hours_pill.dart');
-      expect(src.contains("_ms('hold_ms'"), isTrue);
-      expect(src.contains("_ms('roll_ms'"), isTrue);
+      expect(src.contains("_msOf('hold_ms')"), isTrue);
+      expect(src.contains("_msOf('roll_ms')"), isTrue);
+      // CMD #2191 (Om): "hold_ms and roll_ms come from the response." No
+      // number is left for them to fall back to — absent means the pill
+      // stands still rather than rolling on a Dart clock.
+      expect(RegExp(r"_msOf\('(hold|roll)_ms'\)\s*\?\?").hasMatch(src), isFalse,
+          reason: 'a roll duration grew a Dart default again');
       expect(RegExp(r'Duration\(milliseconds: 3000\)').hasMatch(src), isFalse,
           reason: 'the hold was hardcoded back into the pill');
     });
   });
 
-  group('3 — style is the state\'s, tokens are only the fallback', () {
+  group('3 — style is the state\'s, and there is no fallback', () {
     testWidgets('height and radius come from style{}', (t) async {
       await _mount(
           t,
@@ -190,6 +217,11 @@ void main() {
             'height': 52,
             'radius': 26,
             'text': 16,
+            'pad_x': 12,
+            'dot_size': 8,
+            'dot_gap': 6,
+            'min_w': 120,
+            'max_w': 210,
           }));
       await t.pump();
       final box = t.widget<AnimatedContainer>(
@@ -201,12 +233,24 @@ void main() {
       await t.pumpWidget(const SizedBox.shrink());
     });
 
-    test('the shell tokens are what the payload falls back to', () {
+    test('no style value has a Dart fallback left', () {
+      // CMD #2191 (Om): "Colours, height, radius, text size, max_w, min_w,
+      // pad_x, dot_size come from style{}. No hex, no dp in Dart." A token
+      // read when the payload is silent is still a dp the backend cannot
+      // change, so the fallbacks #2187 kept are gone and an incomplete payload
+      // draws nothing instead.
       final src = _src('lib/widgets/order_hours_pill.dart');
-      expect(src.contains("_dim('height') ?? Ds.touch.headerPill"), isTrue);
-      expect(src.contains('BorderRadius.circular(Ds.header.pillRadius)'), isTrue);
-      // Om, on #1523 — and still true: the pill, the logo tile and the search
-      // box are one size, at one corner.
+      expect(src.contains("_dim('height') ?? Ds.touch.headerPill"), isFalse);
+      expect(src.contains('BorderRadius.circular(Ds.header.pillRadius)'), isFalse);
+      expect(
+          RegExp(r"_dim\('(height|radius|text|pad_x|dot_size|dot_gap|min_w|max_w)'\)\s*\?\?")
+              .hasMatch(src),
+          isFalse,
+          reason: 'a style value grew a Dart default again');
+      expect(RegExp(r"Color\(0x").hasMatch(src), isFalse,
+          reason: 'a hex colour was written into the pill');
+      // Om, on #1523 — and still true of the shell's OWN boxes: the logo tile
+      // and the search box are one size, at one corner.
       expect(Ds.touch.headerPill, 40);
       expect(Ds.header.pillRadius, 20);
       expect(Ds.touch.headerPill, Ds.touch.headerTile);
@@ -360,6 +404,11 @@ void main() {
             'dot': '#6B7280',
             'height': 32,
             'radius': 16,
+            'text': 14,
+            'pad_x': 12,
+            'dot_size': 8,
+            'dot_gap': 6,
+            'min_w': 120,
             'max_w': 270,
           }));
       await t.pump();

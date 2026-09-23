@@ -51,8 +51,8 @@ android {
         // through this runner (android/app/src/androidTest). Debug/androidTest only;
         // the release AAB carries none of it.
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        versionCode = 55
-        versionName = "1.3.34"
+        versionCode = 56
+        versionName = "1.3.35"
     }
 
     signingConfigs {

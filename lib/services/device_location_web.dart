@@ -33,6 +33,10 @@ class DeviceLocation {
   static Future<bool> hasPermission() async => true;
 
   static Future<bool> requestPermission() async => true;
+  /// CMD #2191 — the browser has no "never ask again" the page can read, and
+  /// no app Settings page to send anyone to, so the ask is always available.
+  static Future<bool> canAskAgain() async => true;
+
 
   static Future<bool> openSettings() async => false;
 

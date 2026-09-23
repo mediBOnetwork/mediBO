@@ -236,6 +236,24 @@ class MainActivity : FlutterActivity() {
 
                     "hasPermission" -> result.success(hasFineLocation())
 
+                    // CMD #2191 (Om) — "If permanently denied, open app
+                    // settings. Never a dead button."
+                    //
+                    // requestPermission answers false for BOTH "they said no
+                    // just now" and "Android will never ask again", so a
+                    // caller could not tell a refusal from a dead end and the
+                    // button did nothing on a phone that had refused once.
+                    // shouldShowRequestPermissionRationale() is false in two
+                    // cases — never asked, and permanently denied — so it is
+                    // paired with a flag we set the first time we ask.
+                    "canAskAgain" -> result.success(
+                        hasFineLocation() ||
+                            !hasAskedLocation() ||
+                            ActivityCompat.shouldShowRequestPermissionRationale(
+                                this, Manifest.permission.ACCESS_FINE_LOCATION,
+                            ),
+                    )
+
                     // CMD #2171 — the answer now comes back when the PERSON has
                     // given it. The old handler raised the dialog and replied
                     // false in the same breath, which was fine for the rider
@@ -318,6 +336,21 @@ class MainActivity : FlutterActivity() {
      * onRequestPermissionsResult with what the person actually chose.
      */
     private var pendingLocationPermission: MethodChannel.Result? = null
+
+    /**
+     * CMD #2191 — whether this install has ever raised the location dialog.
+     * Without it, "Android will not show the dialog" is indistinguishable from
+     * "we have not asked yet", and a first-time visitor would be sent to
+     * Settings instead of being asked.
+     */
+    private fun hasAskedLocation(): Boolean =
+        getSharedPreferences("medibo_perms", android.content.Context.MODE_PRIVATE)
+            .getBoolean("asked_location", false)
+
+    private fun markAskedLocation() {
+        getSharedPreferences("medibo_perms", android.content.Context.MODE_PRIVATE)
+            .edit().putBoolean("asked_location", true).apply()
+    }
 
     override fun onRequestPermissionsResult(
         requestCode: Int,
@@ -444,6 +477,7 @@ class MainActivity : FlutterActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             perms.add(Manifest.permission.POST_NOTIFICATIONS)
         }
+        markAskedLocation()
         ActivityCompat.requestPermissions(this, perms.toTypedArray(), 7002)
     }
 

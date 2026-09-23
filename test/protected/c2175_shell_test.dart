@@ -97,15 +97,33 @@ void main() {
   });
 
   group('3 — the pill prints the backend, verbatim', () {
-    testWidgets('label and tone come from the payload and nothing else',
+    testWidgets('the words and the colours come from the payload, and nothing else',
         (t) async {
+      // CMD #2191 (Om): `lines[]` is the only source of the pill's words, and
+      // `style` is the only source of its colours and its geometry. `label` is
+      // the screen reader's one-string form and is NEVER drawn.
       await t.pumpWidget(MaterialApp(
         home: Scaffold(
           body: OrderHoursPill(
             pill: const {
               'state': 'open',
-              'label': 'Open till 9:30 pm',
-              'tone': {'bg': '#D1FAE5', 'fg': '#065F46', 'dot': '#065F46'},
+              'lines': [
+                {'kind': 'status', 'text': 'Open till 9:30 pm'},
+              ],
+              'label': 'A label the pill must never print',
+              'style': {
+                'bg': '#D1FAE5',
+                'fg': '#065F46',
+                'dot': '#065F46',
+                'height': 32,
+                'radius': 16,
+                'text': 14,
+                'pad_x': 12,
+                'dot_size': 8,
+                'dot_gap': 6,
+                'min_w': 120,
+                'max_w': 270,
+              },
               'pulse': false,
             },
             sheet: const {},
@@ -114,7 +132,9 @@ void main() {
       ));
       await t.pumpAndSettle();
       expect(find.text('Open till 9:30 pm'), findsOneWidget,
-          reason: 'the pill prints header_status_pill().text verbatim');
+          reason: 'the pill prints lines[] verbatim');
+      expect(find.text('A label the pill must never print'), findsNothing,
+          reason: 'the pill drew `label`, which is the screen reader\'s');
     });
 
     testWidgets('an empty label draws no pill at all', (t) async {
@@ -146,15 +166,22 @@ void main() {
       expect(Ds.header.pillRadius * 2, Ds.touch.headerPill,
           reason: 'the pill stopped being a full-radius pill');
       expect(Ds.header.pillRadius, Ds.shell.boxRadius);
-      // CMD #2187 changed this protected behaviour on purpose: a state may now
-      // carry its own height and radius in `style{}`, so the pill can change
-      // colour AND size mid-cycle with no deploy. The tokens above are still
-      // the truth of the shell — they are now the FALLBACK the pill uses for
-      // whatever the payload leaves out, and that is what is held down here.
+      // CMD #2187 let a state carry its own height and radius in `style{}`,
+      // with these tokens as the FALLBACK for whatever the payload left out.
+      // CMD #2191 (Om) removes the fallback: "Colours, height, radius, text
+      // size, max_w, min_w, pad_x, dot_size come from style{}. No hex, no dp
+      // in Dart." A token read when the payload is silent is still a dp the
+      // backend cannot change — so an incomplete payload draws NOTHING, and
+      // the tokens above stay the truth of the shell's OWN boxes only.
       final src = _src('lib/widgets/order_hours_pill.dart');
-      expect(src.contains("_dim('height') ?? Ds.touch.headerPill"), isTrue,
-          reason: 'the pill stopped falling back to the shell token');
-      expect(src.contains('BorderRadius.circular(Ds.header.pillRadius)'), isTrue);
+      expect(src.contains("_dim('height') ?? Ds.touch.headerPill"), isFalse,
+          reason: 'the pill went back to falling back to a Dart token');
+      expect(src.contains('BorderRadius.circular(Ds.header.pillRadius)'), isFalse,
+          reason: 'the radius stopped being style.radius');
+      expect(RegExp(r"_dim\('(height|radius|text|pad_x|dot_size|dot_gap|min_w|max_w)'\)\s*\?\?")
+              .hasMatch(src),
+          isFalse,
+          reason: 'a style value grew a Dart default again');
     });
 
     // Om, on #1521: "Flutter must not pick a zone itself and must not default

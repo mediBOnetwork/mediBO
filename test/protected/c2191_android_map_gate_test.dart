@@ -81,6 +81,40 @@ void main() {
         isTrue, reason: 'the gate stopped being visible in the render log');
   });
 
+  // Om, mid-build: "the new mediBO logo should show in the Android app, the
+  // one the website shows". Same artwork, different presentation: a LEGACY
+  // launcher icon is shrunk onto a white plate by Android 8+, so the phone
+  // looked a logo behind the site. The adaptive icon below is generated from
+  // the website's own file by tool/c2191_android_icon.dart.
+  test('the launcher icon is adaptive, and made from the site\'s own artwork',
+      () {
+    for (final f in const [
+      'android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml',
+      'android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml',
+    ]) {
+      final xml = _src(f);
+      for (final layer in const ['background', 'foreground', 'monochrome']) {
+        expect(xml.contains('<$layer android:drawable="@mipmap/ic_launcher_$layer"/>'),
+            isTrue, reason: '$f lost its $layer layer');
+      }
+    }
+    for (final d in const ['mdpi', 'hdpi', 'xhdpi', 'xxhdpi', 'xxxhdpi']) {
+      for (final n in const [
+        'ic_launcher',
+        'ic_launcher_background',
+        'ic_launcher_foreground',
+        'ic_launcher_monochrome',
+      ]) {
+        final f = File('android/app/src/main/res/mipmap-$d/$n.png');
+        expect(f.existsSync(), isTrue, reason: 'mipmap-$d/$n.png is missing');
+        expect(f.lengthSync(), greaterThan(200), reason: 'mipmap-$d/$n.png is empty');
+      }
+    }
+    // The generator names the one source, so the two can never drift.
+    expect(_src('tool/c2191_android_icon.dart').contains('web/icons/Icon-512.v4.png'),
+        isTrue, reason: 'the icon stopped being made from the website artwork');
+  });
+
   test('the manifest carries the key a cleared gate promises', () {
     final manifest = _src('android/app/src/main/AndroidManifest.xml');
     expect(manifest.contains('com.google.android.geo.API_KEY'), isTrue,

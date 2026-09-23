@@ -21,7 +21,21 @@ import '../utils/render_log.dart';
 /// An image that fails to load, or has not loaded yet, draws the letter/word
 /// version instead: the header is never blank and never a broken image.
 class BrandLockup extends StatelessWidget {
-  const BrandLockup({super.key, this.markOnly = false, this.wordWrapper});
+  const BrandLockup({
+    super.key,
+    this.markOnly = false,
+    this.wordWrapper,
+    this.tileSize,
+    this.tileRadius,
+  });
+
+  /// CMD #2187 (Om) — the tile's size and corner when the header row has been
+  /// given its own (`shell_style().header.logo_size` / `.logo_radius`). The
+  /// PNG is 65.2% artwork, so the tile is drawn at 49 to show 32 of green
+  /// beside a 32 dp pill. null keeps [DsTouch.headerTile], which is every
+  /// other surface's size and the size this one uses until the payload lands.
+  final double? tileSize;
+  final double? tileRadius;
 
   /// Draw the tile alone — the sticky bar's left edge once the logo row has
   /// scrolled away.
@@ -85,22 +99,24 @@ class BrandLockup extends StatelessWidget {
 
     RenderLog.write('c2173_logo_tile', l.hasTileImage ? 'image' : 'letter');
 
+    final double tileW = tileSize ?? t.headerTile;
+    final double tileR = tileRadius ?? t.headerTileRadius;
     final mark = Container(
-      width: t.headerTile,
-      height: t.headerTile,
+      width: tileW,
+      height: tileW,
       alignment: Alignment.center,
       clipBehavior: l.hasTileImage ? Clip.antiAlias : Clip.none,
       decoration: BoxDecoration(
         // The tile's own colour is the backdrop of the letter AND the frame
         // the image is inset into, so a transparent logo still reads.
         color: l.hasTileImage ? Colors.transparent : l.tileBg,
-        borderRadius: BorderRadius.all(Radius.circular(t.headerTileRadius)),
+        borderRadius: BorderRadius.all(Radius.circular(tileR)),
       ),
       child: l.hasTileImage
           ? Image.network(
               l.tileUrl,
-              width: t.headerTile,
-              height: t.headerTile,
+              width: tileW,
+              height: tileW,
               fit: BoxFit.contain,
               // Cached by the engine under this URL, so the header redraws
               // from memory on every rebuild and every later screen.

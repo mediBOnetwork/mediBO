@@ -33,6 +33,10 @@ Future<Map<String, dynamic>> shellStyleLoad() => _shellStyleFuture ??=
       // `motion.one_at_a_time` and `search.placeholder_rotate_when` are handed
       // to the gate the pill and the placeholder both read; flipping either
       // key is an UPDATE, never a deploy.
+      // CMD #2187 (Om) — the header row's own numbers: logo_size 49 so the
+      // VISIBLE green is 32, bell_icon 32 in a 40 tap box, pad_y 3.5, centred.
+      shellHeaderStylePublish(
+          Map<String, dynamic>.from((m['header'] as Map?) ?? const {}));
       shellMotionPublish(
         Map<String, dynamic>.from((m['motion'] as Map?) ?? const {}),
         Map<String, dynamic>.from((m['search'] as Map?) ?? const {}),

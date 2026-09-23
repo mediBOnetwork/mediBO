@@ -804,9 +804,8 @@ class _AddCustomerFlowState extends State<AddCustomerFlow> {
                   _okSteps.contains(_s(st, 'key')) ? {...st, 'complete': true} : st,
               ],
               current: _step,
-              currentComplete: _isDocs && _lic['show'] == true
-                  ? _lic['required_complete'] == true
-                  : null,
+              // CMD #2188 — the one signal, drawn from the backend's block.
+              bar: _m(_wiz['step_bar']),
               onJump: (i) {
                 if (i < _step) setState(() => _step = i);
               },

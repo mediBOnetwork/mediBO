@@ -663,6 +663,11 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
           _chips(key, widget.chips[key]!)
         else if (type == 'select' && options.isNotEmpty)
           _dropdown(key, options, flagged)
+        else if (prefix.isNotEmpty && prefix['inline'] == true)
+          // CMD #2188 — Mr/Ms is a PREFIX, not a second field: one box, one
+          // border, one focus ring. The backend asks for it (`inline`).
+          _inlinePrefixInput(key, prefix, type, hint, f['max_lines'], flagged,
+              missing: missing)
         else if (prefix.isNotEmpty)
           // CMD #2151 — the Mr / Ms box is exactly the name box's height.
           IntrinsicHeight(
@@ -752,7 +757,7 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
 
   Widget _input(
       String key, String type, String hint, Object? maxLines, bool flagged,
-      {bool missing = false}) {
+      {bool missing = false, bool bare = false}) {
     final lines = maxLines is num ? maxLines.toInt() : 1;
     final ctrl = widget.controller;
     final verdict = ctrl.verdicts[key];
@@ -796,6 +801,20 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
                         color: _toneColor(tone), fontWeight: FontWeight.w600)),
               ),
         suffixIconConstraints: const BoxConstraints(),
+      );
+    }
+    // CMD #2188 — inside the shared box the OUTER container owns the border,
+    // the radius, the fill and the focus ring; the input draws none of them,
+    // so the person sees one field instead of two.
+    if (bare) {
+      deco = deco.copyWith(
+        filled: false,
+        enabledBorder: InputBorder.none,
+        focusedBorder: InputBorder.none,
+        disabledBorder: InputBorder.none,
+        errorBorder: InputBorder.none,
+        focusedErrorBorder: InputBorder.none,
+        border: InputBorder.none,
       );
     }
     final hint4 = (hints[key] ?? '').toString();
@@ -854,9 +873,75 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
     }
   }
 
-  /// CMD #2141 — Mr / Ms before the owner's name: a compact box with the
-  /// backend's options, writing the backend's key (owner_salutation).
-  Widget _prefixPicker(Map<String, dynamic> prefix) {
+  /// CMD #2188 — which boxes are showing their focus ring. The ring belongs
+  /// to the WHOLE box (picker + input), so it cannot live on the TextField.
+  final Set<String> _boxFocus = {};
+
+  /// CMD #2188 — Mr/Ms and the owner's name in ONE box: a compact picker on
+  /// the left, a hairline, then the name filling the rest. One border, one
+  /// radius, one focus ring, and exactly the height of every other field.
+  /// Drawn only when the backend's `prefix.<field>.inline` says so.
+  Widget _inlinePrefixInput(String key, Map<String, dynamic> prefix,
+      String type, String hint, Object? maxLines, bool flagged,
+      {bool missing = false}) {
+    final focused = _boxFocus.contains(key);
+    final edge = missing
+        ? Ds.c.danger
+        : focused
+            ? Ds.c.brand
+            : flagged
+                ? Ds.c.warning
+                : Ds.c.divider;
+    return Focus(
+      canRequestFocus: false,
+      skipTraversal: true,
+      onFocusChange: (has) {
+        if (has == focused) return;
+        setState(() => has ? _boxFocus.add(key) : _boxFocus.remove(key));
+      },
+      child: Semantics(
+        identifier: 'reg_name_box_$key',
+        child: Container(
+          constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+          decoration: BoxDecoration(
+            color: Ds.c.surface,
+            borderRadius: Ds.r.rButton,
+          ),
+          // The border is PAINTED, not laid out: an outline box draws its
+          // edge over the content, so borrowing the layout for a border here
+          // would make this the one field two pixels taller than the rest.
+          foregroundDecoration: BoxDecoration(
+            borderRadius: Ds.r.rButton,
+            border: Border.all(color: edge),
+          ),
+          child: IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _prefixPicker(prefix, bare: true),
+                VerticalDivider(
+                  width: Ds.space.hairline,
+                  thickness: Ds.space.hairline,
+                  color: Ds.c.divider,
+                ),
+                Expanded(
+                  child: _input(key, type, hint, maxLines, flagged,
+                      missing: missing, bare: true),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// CMD #2141 — Mr / Ms before the owner's name: the backend's options,
+  /// writing the backend's key (owner_salutation).
+  /// CMD #2188 — [bare] drops its own border and fill: inside the shared box
+  /// it is a prefix, not a field. The caret is small and grey either way —
+  /// green read as a primary action on a box that only picks a title.
+  Widget _prefixPicker(Map<String, dynamic> prefix, {bool bare = false}) {
     final key = (prefix['key'] ?? '').toString();
     final opts = RegChip.parse(prefix['options']);
     final ctl = widget.controller.controllerFor(key);
@@ -867,21 +952,31 @@ class _CustomerRegistrationFormState extends State<CustomerRegistrationForm> {
       button: true,
       child: Container(
         constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
-        padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
-        decoration: BoxDecoration(
-          color: Ds.c.surface,
-          borderRadius: Ds.r.rButton,
-          border: Border.all(color: Ds.c.divider),
-        ),
+        // Inside the shared box it is a prefix, so it gives the name back the
+        // width a second field used to take.
+        padding: bare
+            ? EdgeInsets.only(left: Ds.space.x12, right: Ds.space.x8)
+            : EdgeInsets.symmetric(horizontal: Ds.space.x12),
+        decoration: bare
+            ? null
+            : BoxDecoration(
+                color: Ds.c.surface,
+                borderRadius: Ds.r.rButton,
+                border: Border.all(color: Ds.c.divider),
+              ),
         child: DropdownButtonHideUnderline(
           child: DropdownButton<String>(
             value: opts.any((o) => o.value == current) ? current : null,
-            iconEnabledColor: Ds.c.brand,
-            style: Ds.t.bodyStrong,
+            isDense: bare,
+            iconEnabledColor: Ds.c.textSecondary,
+            iconSize: Ds.space.x16,
+            style: bare ? Ds.t.body : Ds.t.bodyStrong,
             items: [
               for (final o in opts)
                 DropdownMenuItem<String>(
-                    value: o.value, child: Text(o.label, style: Ds.t.bodyStrong)),
+                    value: o.value,
+                    child: Text(o.label,
+                        style: bare ? Ds.t.body : Ds.t.bodyStrong)),
             ],
             onChanged: (v) => setState(() => ctl.text = v ?? current),
           ),

@@ -2,10 +2,13 @@
 // staff Add customer draw (one step set, no fork).
 //
 // What must never drift:
-//  • the top bar is green ONLY for a complete step — the current step stays
-//    grey until its surface says it is done — and labels are the backend's;
-//  • General: the backend's Mr/Ms box sits before the owner's name and writes
-//    its own key; each checked box asks custreg_contact_check and prints the
+//  • CMD #2188 — the top bar carries ONE signal: the only coloured bar is the
+//    step the person is standing on, a completed step is grey with the
+//    backend's tick beside its label, an untouched step is plain grey, and
+//    the tones/weights/mark all arrive in `wizard.step_bar`. Labels stay the
+//    backend's, and a completed step stays tappable;
+//  • General: Mr/Ms sits INSIDE the owner-name box (CMD #2188, the backend's
+//    `prefix.<field>.inline`) and writes its own key; each checked box asks custreg_contact_check and prints the
 //    verdict's suffix verbatim; "already registered" draws the verdict's card
 //    with its Login label; a blocking verdict blocks Continue; an empty
 //    required box shows the backend's "Required" after Continue;
@@ -45,6 +48,8 @@ final _v4 = <String, dynamic>{
     'customer_name': {
       'key': 'owner_salutation',
       'default': 'Mr',
+      // CMD #2188 — one box, Mr/Ms inside it. The backend decides.
+      'inline': true,
       'options': [
         {'label': 'PFX Mr', 'value': 'Mr'},
         {'label': 'PFX Ms', 'value': 'Ms'},
@@ -65,6 +70,14 @@ void main() {
   setUpAll(() => RenderLog.flushEnabled = false);
 
   group('Top bar', () {
+    // CMD #2188 — the bar's whole vocabulary is the payload's.
+    const stepBar = {
+      'tick': '✓',
+      'current': {'bar': 'brand', 'label': 'brand', 'bold': true, 'tick': false},
+      'done': {'bar': 'divider', 'label': 'secondary', 'bold': false, 'tick': true},
+      'todo': {'bar': 'divider', 'label': 'secondary', 'bold': false, 'tick': false},
+    };
+
     Color barColour(WidgetTester t, int i) {
       final seg = find.descendant(
           of: find.bySemanticsIdentifier('reg_step_$i'),
@@ -73,33 +86,51 @@ void main() {
       return box.color!;
     }
 
+    TextStyle labelStyle(WidgetTester t, String label) =>
+        t.widget<Text>(find.text(label)).style!;
+
     final steps = [
       {'key': 'shop', 'label': 'General', 'done_label': 'General', 'complete': true},
       {'key': 'location', 'label': 'Location', 'done_label': 'Location', 'complete': false},
       {'key': 'licences', 'label': 'Documents', 'done_label': 'Documents', 'complete': false},
     ];
 
-    testWidgets('green only when complete; the current step stays grey', (t) async {
-      await t.pumpWidget(_host(
-          RegistrationProgressBar(steps: steps, current: 1, onJump: (_) {})));
-      expect(barColour(t, 0), Ds.c.brand);
-      expect(barColour(t, 1), Ds.c.divider, reason: 'current, not done');
-      expect(barColour(t, 2), Ds.c.divider);
-      expect(find.textContaining('✓'), findsNothing);
-      final cur = t.widget<Text>(find.text('Location'));
-      expect(cur.style?.fontWeight, FontWeight.w700, reason: 'current is bold');
-    });
-
-    testWidgets('the current step turns green when its surface says done', (t) async {
+    testWidgets('only the step you are standing on is coloured', (t) async {
+      // Om's bug: General done + standing on Location painted General green
+      // and Location grey, so the finished step looked like the current one.
       await t.pumpWidget(_host(RegistrationProgressBar(
-          steps: steps, current: 2, onJump: (_) {}, currentComplete: true)));
-      expect(barColour(t, 2), Ds.c.brand);
+          steps: steps, current: 1, onJump: (_) {}, bar: stepBar)));
+      expect(barColour(t, 0), Ds.c.divider, reason: 'done, not here');
+      expect(barColour(t, 1), Ds.c.brand, reason: 'you are here');
+      expect(barColour(t, 2), Ds.c.divider);
+      final cur = labelStyle(t, 'Location');
+      expect(cur.color, Ds.c.brand);
+      expect(cur.fontWeight, FontWeight.w700, reason: 'current is bold green');
     });
 
-    testWidgets('a step BEHIND the current one stays grey until the backend calls it complete',
+    testWidgets('a completed step wears the tick, nobody else does', (t) async {
+      await t.pumpWidget(_host(RegistrationProgressBar(
+          steps: steps, current: 1, onJump: (_) {}, bar: stepBar)));
+      expect(find.text('✓'), findsOneWidget, reason: 'General only');
+      final doneLabel = labelStyle(t, 'General');
+      expect(doneLabel.color, Ds.c.textSecondary);
+      expect(doneLabel.fontWeight, isNot(FontWeight.w700));
+      final todo = labelStyle(t, 'Documents');
+      expect(todo.color, Ds.c.textSecondary);
+    });
+
+    testWidgets('the current step never wears a tick, however complete it is',
         (t) async {
-      // QA round: a draft resumed on Documents with General and Location
-      // unfinished painted both green only because they came first.
+      await t.pumpWidget(_host(RegistrationProgressBar(
+          steps: steps, current: 0, onJump: (_) {}, bar: stepBar)));
+      expect(find.text('✓'), findsNothing);
+      expect(barColour(t, 0), Ds.c.brand);
+    });
+
+    testWidgets('a step BEHIND the current one stays untouched until the backend calls it complete',
+        (t) async {
+      // QA round (#2141): a draft resumed on Documents with General and
+      // Location unfinished painted both as done only because they came first.
       await t.pumpWidget(_host(RegistrationProgressBar(
           steps: [
             {...steps[0], 'complete': false},
@@ -107,10 +138,28 @@ void main() {
             steps[2],
           ],
           current: 2,
-          onJump: (_) {})));
+          onJump: (_) {},
+          bar: stepBar)));
       expect(barColour(t, 0), Ds.c.divider);
       expect(barColour(t, 1), Ds.c.divider);
-      expect(barColour(t, 2), Ds.c.divider);
+      expect(barColour(t, 2), Ds.c.brand);
+      expect(find.text('✓'), findsNothing);
+    });
+
+    testWidgets('a completed step is still tappable', (t) async {
+      final jumps = <int>[];
+      await t.pumpWidget(_host(RegistrationProgressBar(
+          steps: steps, current: 1, onJump: jumps.add, bar: stepBar)));
+      await t.tap(find.bySemanticsIdentifier('reg_step_0'));
+      expect(jumps, [0]);
+    });
+
+    testWidgets('no block, nothing invented: every bar is neutral', (t) async {
+      await t.pumpWidget(_host(
+          RegistrationProgressBar(steps: steps, current: 1, onJump: (_) {})));
+      expect(barColour(t, 0), Ds.c.divider);
+      expect(barColour(t, 1), Ds.c.divider);
+      expect(find.text('✓'), findsNothing);
     });
   });
 
@@ -132,13 +181,22 @@ void main() {
       return (ctrl, calls);
     }
 
-    testWidgets('Mr/Ms box sits before the owner name and writes its own key', (t) async {
+    testWidgets('Mr/Ms sits INSIDE the owner-name box and writes its own key',
+        (t) async {
       final (ctrl, _) = await pump(t, (_, _) => {'ok': true, 'state': 'ok'});
       expect(find.text('PFX Mr'), findsOneWidget);
       expect(ctrl.payload()['owner_salutation'], 'Mr');
+      // CMD #2188 — one box: the picker and the name share it, picker first.
+      final box = find.bySemanticsIdentifier('reg_name_box_customer_name');
+      expect(box, findsOneWidget);
+      expect(
+          find.descendant(
+              of: box, matching: find.widgetWithText(TextField, 'Full name')),
+          findsOneWidget);
       final pfx = t.getTopLeft(find.bySemanticsIdentifier('reg_prefix_owner_salutation'));
       final name = t.getTopLeft(find.widgetWithText(TextField, 'Full name'));
       expect(pfx.dx < name.dx, isTrue);
+      expect(pfx.dx >= t.getTopLeft(box).dx, isTrue);
     });
 
     testWidgets('the backend\'s +91 shows in the EMPTY, unfocused WhatsApp box', (t) async {

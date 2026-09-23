@@ -17,6 +17,7 @@ import '../widgets/animations.dart';
 import '../widgets/bottom_stack.dart';
 import '../widgets/cart_pill.dart';
 import '../widgets/compact_product_card.dart';
+import '../widgets/product_card_grid.dart';
 import '../widgets/companion_rail.dart';
 import '../widgets/notify_control.dart';
 import '../widgets/product_image.dart';
@@ -1656,43 +1657,22 @@ class _CollapsibleBodyState extends State<_CollapsibleBody> {
 
 /// CMD #2040 — the one rail, drawn out of the one card.
 ///
-/// It reserves [CompactProductCard.extentWithCompare], which is the card's own
-/// constant plus its own Compare row: the rail cannot pick a height, so a
-/// change to the card can never overflow it. Every card here carries Compare
-/// because they are all the same salt — that is what the table compares.
+/// CMD #2167 — and it reserves NOTHING. [ProductCardRail] draws the same card
+/// at the same width the catalogue gives it, and every card in the rail is as
+/// tall as the tallest one in it, so a change to the card can never overflow
+/// a height typed here.
 class _SaltRail extends StatelessWidget {
   final PdSaltRail rail;
 
   const _SaltRail({required this.rail});
 
   @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      // CMD #2073 — the plain extent: with no Compare row the rail is exactly
-      // as tall as the storefront grid's card, and the taller extent is what
-      // the card carried the row in.
-      height: CompactProductCard.extent,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: EdgeInsets.zero,
-        itemCount: rail.items.length,
-        separatorBuilder: (context, index) => SizedBox(width: Ds.space.x12),
-        itemBuilder: (_, i) {
-          final p = rail.items[i];
-          return SizedBox(
-            width: CompactProductCard.railWidth,
-            child: CompactProductCard(
-              product: p,
-              // Each card pushes its OWN product page — a fresh route, so back
-              // returns to this product rather than skipping the chain.
-              onTap: () =>
-                  Navigator.of(context).pushNamed('/product/${p.id}'),
-            ),
-          );
-        },
-      ),
-    );
-  }
+  Widget build(BuildContext context) => ProductCardRail(
+        items: rail.items,
+        // Each card pushes its OWN product page — a fresh route, so back
+        // returns to this product rather than skipping the chain.
+        onOpen: (p) => Navigator.of(context).pushNamed('/product/${p.id}'),
+      );
 }
 
 /// The pre-#2040 rail: bare tiles built from `similar`. Kept for a payload

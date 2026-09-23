@@ -34,6 +34,7 @@ import 'package:pharma_b2b/app_state.dart';
 import 'package:pharma_b2b/models/cart_model.dart';
 import 'package:pharma_b2b/models/search_page.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
+import 'package:pharma_b2b/widgets/card_layout.dart';
 import 'package:pharma_b2b/widgets/compact_product_card.dart';
 import 'package:pharma_b2b/widgets/product_card_grid.dart';
 import 'package:pharma_b2b/widgets/search_surface.dart';
@@ -267,12 +268,18 @@ void main() {
       }
     });
 
-    test('the extent is the card\'s own constant, never a number typed here',
-        () {
-      final d = ProductCardGrid.delegateFor(360 - 32)
+    test('CMD #2167 — the skeleton reserves the CARD it will become', () {
+      // The real grid reserves nothing any more (its rows measure their
+      // cards). What is left with an extent is the skeleton, and its extent
+      // is the card's own square plate plus the card's own body — never a
+      // number typed in a screen.
+      final l = CardLayout.fallback;
+      final d = ProductCardGrid.delegateFor(360 - 32, l)
           as SliverGridDelegateWithFixedCrossAxisCount;
-      expect(d.mainAxisExtent, CompactProductCard.extent);
-      expect(d.crossAxisCount, ProductCardGrid.columnsFor(360 - 32));
+      expect(d.mainAxisExtent,
+          l.cardWidth(360 - 32) + CompactProductCard.bodyV6);
+      expect(d.crossAxisCount, ProductCardGrid.columnsFor(360 - 32, l));
+      expect(d.crossAxisSpacing, l.gridGap);
     });
 
     testWidgets('the grid injects routing and nothing else', (tester) async {

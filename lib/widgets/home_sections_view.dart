@@ -12,6 +12,7 @@ import '../models/storefront_p3.dart';
 import '../utils/render_log.dart';
 import '../theme.dart';
 import 'animations.dart';
+import 'card_layout.dart';
 import 'compact_product_card.dart';
 import 'product_card_grid.dart';
 import 'customer_surface_widgets.dart'; // CHANGE #745 — the home chip strip
@@ -469,7 +470,11 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
     // says so above the content instead of replacing it.
     // CMD #2156 — as ONE small pill floating under the search bar, over the
     // feed, so the feed never jumps when it comes or goes.
-    return PayloadStatusOverlay(
+    // CMD #2167 — everything below draws on the 'home' surface, so
+    // `card.layout_screens.home` can restyle the feed's cards on their own.
+    return CardSurface(
+      screen: 'home',
+      child: PayloadStatusOverlay(
       state: _payloadState,
       child: RefreshIndicator(
       onRefresh: () => _payload == null ? _load() : _payload!.refresh(),
@@ -527,6 +532,7 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
             onNeedMore: () => unawaited(_pageSection(section.id)),
           );
         },
+      ),
       ),
       ),
     );
@@ -809,6 +815,7 @@ class _SectionBlock extends StatelessWidget {
                 // dropping the ones without an image is what used to leave one
                 // lonely disc on a rail full of photographed products.
                 thumbs: section.seeAllThumbs,
+                bg: section.seeAllBg,
                 onTap: () => _navigate(context, seeAll),
               ),
             ),
@@ -846,26 +853,12 @@ class _StripBlock extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          SizedBox(
-            height: CompactProductCard.extent,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              physics: const ClampingScrollPhysics(),
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              itemExtent: _Rail.cardW + 12,
-              itemCount: strip.items.length,
-              itemBuilder: (context, i) {
-                final p = strip.items[i];
-                return Padding(
-                  padding: const EdgeInsets.only(right: 12),
-                  child: CompactProductCard(
-                    product: p,
-                    onTap: () =>
-                        Navigator.of(context).pushNamed('/product/${p.id}'),
-                  ),
-                );
-              },
-            ),
+          // CMD #2167 — the ONE rail: catalogue-width cards, no reserved
+          // height, every card in it as tall as the tallest.
+          ProductCardRail(
+            items: strip.items,
+            onOpen: (p) =>
+                Navigator.of(context).pushNamed('/product/${p.id}'),
           ),
         ],
       ),
@@ -985,18 +978,12 @@ class _Rail extends StatefulWidget {
 
   const _Rail({required this.section, required this.onNeedMore});
 
-  /// CHANGE #274 — the rail's card width is DERIVED from the viewport, so the
-  /// next card always peeks past the right edge. The rule and the reasoning
-  /// live in [HomeSectionMetrics], which is where the test can reach them.
-  static const double gap = HomeSectionMetrics.gap;
-  static const double gutter = HomeSectionMetrics.gutter;
-
-  /// Kept as the reference width for the skeleton and the back-in-stock strip,
-  /// which do not lay out under a LayoutBuilder.
+  /// CMD #2167 — the rail's card width is the CATALOGUE's card width, which
+  /// [ProductCardRail] reads from the payload's own `card.layout`. #274's
+  /// viewport formula ([HomeSectionMetrics.railCardWidth]) made a home card
+  /// 149 wide where the same card on a list was 158: one product, two sizes.
+  /// What is left here is the paging threshold, which is about scrolling.
   static const double cardW = 156;
-
-  static double cardWFor(double viewport) =>
-      HomeSectionMetrics.railCardWidth(viewport);
 
   @override
   State<_Rail> createState() => _RailState();
@@ -1043,34 +1030,14 @@ class _RailState extends State<_Rail> {
   Widget build(BuildContext context) {
     final cards = widget.section.cards;
 
-    return SizedBox(
-      // Fixed height derived from the card's own constant — the rail never
-      // measures its children, so scrolling it costs no layout.
-      height: CompactProductCard.extent,
-      child: LayoutBuilder(
-        builder: (context, c) {
-          final w = _Rail.cardWFor(c.maxWidth);
-          return ListView.builder(
-            controller: _c,
-            scrollDirection: Axis.horizontal,
-            physics: const ClampingScrollPhysics(),
-            padding: const EdgeInsets.symmetric(horizontal: _Rail.gutter),
-            itemExtent: w + _Rail.gap,
-            itemCount: cards.length,
-            itemBuilder: (context, i) {
-              final p = cards[i];
-              return Padding(
-                padding: const EdgeInsets.only(right: _Rail.gap),
-                child: CompactProductCard(
-                  product: p,
-                  onTap: () =>
-                      Navigator.of(context).pushNamed('/product/${p.id}'),
-                ),
-              );
-            },
-          );
-        },
-      ),
+    // CMD #2167 — the rail draws the CATALOGUE's card at the catalogue's
+    // width, so a product looks the same size on the feed and on a list, and
+    // the next card peeks past the right edge. No height is reserved: the
+    // row is as tall as its tallest card.
+    return ProductCardRail(
+      items: cards,
+      controller: _c,
+      onOpen: (p) => Navigator.of(context).pushNamed('/product/${p.id}'),
     );
   }
 }
@@ -1092,12 +1059,6 @@ class _ProductGrid extends StatelessWidget {
 
   const _ProductGrid({required this.section});
 
-  /// CMD #2044 — the column count is [ProductCardGrid.columnsFor], the one
-  /// rule every product surface now reads. Home's own copy of the formula is
-  /// gone: two definitions of "how many cards fit" is how the feed and the
-  /// search results ended up two different grids.
-  static int columnsFor(double width) => ProductCardGrid.columnsFor(width);
-
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -1110,22 +1071,12 @@ class _ProductGrid extends StatelessWidget {
           final cap = c.maxWidth >= 600 ? 10 : 6;
           final count =
               section.cards.length < cap ? section.cards.length : cap;
-          return GridView.builder(
-            shrinkWrap: true,
-            // The page is the scrollable. A grid with its own scroll inside a
-            // list is the thing that makes a feed feel broken on mobile.
-            physics: const NeverScrollableScrollPhysics(),
-            padding: EdgeInsets.zero,
-            gridDelegate: ProductCardGrid.delegateFor(c.maxWidth),
-            itemCount: count,
-            itemBuilder: (context, i) {
-              final p = section.cards[i];
-              return CompactProductCard(
-                product: p,
-                onTap: () =>
-                    Navigator.of(context).pushNamed('/product/${p.id}'),
-              );
-            },
+          // CMD #2167 — the page is the scrollable, and the grid is rows of
+          // cards that share their row's height.
+          return ProductCardGrid(
+            items: section.cards.take(count).toList(),
+            onOpen: (p) =>
+                Navigator.of(context).pushNamed('/product/${p.id}'),
           );
         },
       ),
@@ -1156,10 +1107,16 @@ class _SeeAllPill extends StatelessWidget {
   /// actually have one. Empty renders no discs rather than blank circles.
   final List<String> thumbs;
   final VoidCallback onTap;
+
+  /// CMD #2167 — `section.see_all_bg`: the row's own background colour, sent
+  /// with the section. Empty falls back to the page ground.
+  final String bg;
+
   const _SeeAllPill({
     required this.label,
     required this.onTap,
     this.thumbs = const [],
+    this.bg = '',
   });
 
   static const double _thumb = 32;
@@ -1168,7 +1125,9 @@ class _SeeAllPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Material(
     key: const Key('c2027_see_all_pill'),
-    color: Ds.c.bg,
+    // CMD #2167 — the row's background is `section.see_all_bg`, never a grey
+    // typed here. Re-colouring it is an UPDATE to storefront_theme.
+    color: Ds.hex(bg, Ds.c.bg),
     borderRadius: Ds.r.rCard,
     child: InkWell(
       borderRadius: Ds.r.rCard,

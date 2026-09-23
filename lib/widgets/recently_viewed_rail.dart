@@ -13,7 +13,7 @@ import 'package:flutter/material.dart';
 import '../design_tokens.dart';
 import '../models/product.dart';
 import '../services/storefront_fast_order.dart';
-import '../widgets/compact_product_card.dart';
+import '../widgets/product_card_grid.dart';
 
 class RecentlyViewedRail extends StatefulWidget {
   /// Test seam. Production calls `recently_viewed_rail()` through
@@ -70,26 +70,11 @@ class _RecentlyViewedRailState extends State<RecentlyViewedRail> {
             ),
           ],
           SizedBox(height: Ds.space.x16),
-          SizedBox(
-            height: CompactProductCard.extent,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              physics: const ClampingScrollPhysics(),
-              padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-              itemExtent: 162 + 12,
-              itemCount: _rail.items.length,
-              itemBuilder: (context, i) {
-                final card = _rail.items[i];
-                return Padding(
-                  padding: EdgeInsets.only(right: Ds.space.x12),
-                  child: CompactProductCard(
-                    product: Product.fromHomeCard(card),
-                    onTap: () => Navigator.of(context)
-                        .pushNamed('/product/${card['id']}'),
-                  ),
-                );
-              },
-            ),
+          // CMD #2167 — the shared rail, at the catalogue's card width.
+          ProductCardRail(
+            items: _rail.items.map(Product.fromHomeCard).toList(),
+            onOpen: (p) =>
+                Navigator.of(context).pushNamed('/product/${p.id}'),
           ),
         ],
       ),

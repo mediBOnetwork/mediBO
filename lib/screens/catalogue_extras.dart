@@ -6,7 +6,7 @@ import '../models/product.dart';
 import '../utils/render_log.dart';
 import '../utils/toast.dart';
 import '../widgets/bottom_stack.dart';
-import '../widgets/compact_product_card.dart';
+import '../widgets/product_card_grid.dart';
 
 /// CHANGE #748 — the three things the Catalogue tab was missing.
 ///
@@ -142,21 +142,11 @@ class _CatalogueRecentState extends State<CatalogueRecent> {
             ],
           ),
           SizedBox(height: Ds.space.x12),
-          SizedBox(
-            height: CompactProductCard.extent,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: items.length,
-              separatorBuilder: (_, _) => SizedBox(width: Ds.space.x12),
-              itemBuilder: (context, i) => SizedBox(
-                width: 170,
-                child: CompactProductCard(
-                  product: items[i],
-                  onTap: () => Navigator.of(context)
-                      .pushNamed('/product/${items[i].id}'),
-                ),
-              ),
-            ),
+          // CMD #2167 — the shared rail, at the catalogue's card width.
+          ProductCardRail(
+            items: items,
+            onOpen: (p) =>
+                Navigator.of(context).pushNamed('/product/${p.id}'),
           ),
         ],
       ),

@@ -35,6 +35,7 @@ import '../services/ui_copy.dart';
 import '../url_sync.dart';
 import '../utils/render_log.dart';
 import '../widgets/bottom_stack.dart';
+import '../widgets/card_layout.dart';
 import '../widgets/catalogue_alphabet_rail.dart';
 import '../widgets/catalogue_landing.dart';
 import '../widgets/catalogue_product_card.dart';
@@ -785,7 +786,11 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
     if (!_booted || (home == null && _loading)) return const _CatSkeleton();
     if (home == null) return _CatError(message: _error, onRetry: _boot);
 
-    return Container(
+    // CMD #2167 — the 'catalogue' surface: `card.layout_screens.catalogue`
+    // may override this screen's cards without touching any other.
+    return CardSurface(
+      screen: 'catalogue',
+      child: Container(
       color: Ds.c.bg,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -883,6 +888,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
             ),
           ),
         ],
+      ),
       ),
     );
   }
@@ -1227,19 +1233,16 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
             SliverPadding(
               padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x4,
                   Ds.space.x16, Ds.space.x16),
-              sliver: SliverGrid(
-                gridDelegate: ProductCardGrid.delegateFor(
-                    MediaQuery.sizeOf(context).width - Ds.space.x32),
-                delegate: SliverChildBuilderDelegate(
-                  (context, i) => CompactProductCard(
-                    key: ValueKey(groups[g].items[i].id),
-                    product: groups[g].items[i],
-                    onTap: () => Navigator.of(context)
-                        .pushNamed('/product/${groups[g].items[i].id}'),
-                    onPeek: () => _openPeek(groups[g].items[i]),
-                  ),
-                  childCount: groups[g].items.length,
-                ),
+              // CMD #2167 — rows, not a fixed-extent grid: every card in a row
+              // is as tall as the tallest one in it and none carries dead
+              // space under its price.
+              sliver: ProductCardGrid.sliverRows(
+                items: groups[g].items,
+                width: MediaQuery.sizeOf(context).width - Ds.space.x32,
+                layout: ProductCardGrid.layoutFor(context, groups[g].items),
+                onOpen: (p) =>
+                    Navigator.of(context).pushNamed('/product/${p.id}'),
+                onPeek: _openPeek,
               ),
             ),
           ],

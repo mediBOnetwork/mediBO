@@ -29,11 +29,10 @@ class CartRailSlot extends StatelessWidget {
 
   const CartRailSlot({super.key, required this.rails});
 
-  /// The height ONE rail always occupies. It is the rail's OWN constant, not
-  /// a second number typed here: CartWishlistRail.extent is summed from the
-  /// gaps it draws and the card it fills, so the slot and the rail cannot
-  /// disagree.
-  static const double railExtent = CartWishlistRail.extent;
+  /// CMD #2167 — a rail is no longer given a height. #2087 reserved a band so
+  /// the blocks under it never moved; a card that grew was then CLIPPED by
+  /// that band. The rail measures its own cards now, and the blocks under it
+  /// move only when the payload really did change.
 
   /// CMD #2090 — the rails as the PAGE's own blocks, in payload order.
   ///
@@ -41,28 +40,17 @@ class CartRailSlot extends StatelessWidget {
   /// children of the one page scroll, each still at its constant height, so
   /// a rail with three cards and one with ten occupy the same band. A rail
   /// the backend had nothing for contributes no block at all.
-  static List<Widget> blocks(List<CartWishlistRail?> rails) => [
-        for (final r in rails.whereType<CartWishlistRail>())
-          SizedBox(height: railExtent, child: ClipRect(child: r)),
-      ];
+  static List<Widget> blocks(List<CartWishlistRail?> rails) =>
+      rails.whereType<CartWishlistRail>().cast<Widget>().toList();
 
   @override
   Widget build(BuildContext context) {
     final shown = rails.whereType<CartWishlistRail>().toList(growable: false);
     if (shown.isEmpty) return const SizedBox.shrink();
-    RenderLog.write(
-      'c2087_rail_slot',
-      'rails=${shown.length};extent=${railExtent.toStringAsFixed(0)}',
-    );
+    RenderLog.write('c2087_rail_slot', 'rails=${shown.length};extent=auto');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        for (final r in shown)
-          SizedBox(
-            height: railExtent,
-            child: ClipRect(child: r),
-          ),
-      ],
+      children: shown,
     );
   }
 }

@@ -9,12 +9,12 @@ import '../design_tokens.dart';
 import '../models/search_page.dart';
 import '../utils/toast.dart';
 import '../utils/render_log.dart';
-import 'compact_product_card.dart';
+import 'product_card_grid.dart';
 import '../models/product.dart';
 import '../services/search_chrome_focus.dart';
 import '../services/storefront_fast_order.dart';
+import 'card_layout.dart';
 import 'company_hits_block.dart';
-import 'product_card_grid.dart';
 import 'scan_mic_search_controls.dart';
 
 /// CMD #1906 — the ONE search surface, drawn the same way on Home and on the
@@ -683,28 +683,12 @@ class SearchIdleRail extends StatelessWidget {
             child: Text(rail.title,
                 key: const Key('c2010_rail_title'), style: Ds.t.subtitle),
           ),
-          SizedBox(
-            height: CompactProductCard.extent,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              physics: const ClampingScrollPhysics(),
-              padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-              itemCount: rail.items.length,
-              itemBuilder: (context, i) {
-                final card = rail.items[i];
-                return Padding(
-                  padding: EdgeInsets.only(right: Ds.space.x12),
-                  child: SizedBox(
-                    width: CompactProductCard.railWidth,
-                    child: CompactProductCard(
-                      product: Product.fromHomeCard(card),
-                      onTap: () => Navigator.of(context)
-                          .pushNamed('/product/${card['id']}'),
-                    ),
-                  ),
-                );
-              },
-            ),
+          // CMD #2167 — the shared rail: catalogue-width cards, no reserved
+          // height, all of them as tall as the tallest.
+          ProductCardRail(
+            items: rail.items.map(Product.fromHomeCard).toList(),
+            onOpen: (p) =>
+                Navigator.of(context).pushNamed('/product/${p.id}'),
           ),
         ],
       ),
@@ -855,12 +839,16 @@ class SearchResultsView extends StatelessWidget {
                 Ds.space.x16, Ds.space.x8, Ds.space.x16, Ds.space.x12),
             child: Text(payload.headerLabel, style: Ds.t.caption),
           ),
-        ProductCardGrid(
-          items: payload.items,
-          shrinkWrap: shrinkWrap,
-          physics: physics ?? const NeverScrollableScrollPhysics(),
-          padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-          onOpen: (p) => onOpenProduct(p.id),
+        // CMD #2167 — results draw on the 'search' surface.
+        CardSurface(
+          screen: 'search',
+          child: ProductCardGrid(
+            items: payload.items,
+            shrinkWrap: shrinkWrap,
+            physics: physics ?? const NeverScrollableScrollPhysics(),
+            padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+            onOpen: (p) => onOpenProduct(p.id),
+          ),
         ),
         SizedBox(height: Ds.space.x16),
         if (payload.paging.hasMore && payload.paging.moreLabel.isNotEmpty)
@@ -1041,9 +1029,12 @@ class SearchIdleView extends StatelessWidget {
     if (items.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-      child: ProductCardGrid(
-        items: items,
-        onOpen: (p) => onOpenProduct(p.id),
+      child: CardSurface(
+        screen: 'search',
+        child: ProductCardGrid(
+          items: items,
+          onOpen: (p) => onOpenProduct(p.id),
+        ),
       ),
     );
   }

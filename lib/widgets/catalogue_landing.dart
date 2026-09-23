@@ -18,6 +18,7 @@ import '../models/catalogue.dart';
 import '../models/product.dart';
 import '../screens/admin/nav_registry_view.dart';
 import 'compact_product_card.dart';
+import 'product_card_grid.dart';
 
 /// A payload colour. `#RRGGBB` or `#AARRGGBB`, and anything else is an absence
 /// rather than a guess — the caller falls back to a token.
@@ -195,8 +196,6 @@ class CatalogueTopSellingRail extends StatelessWidget {
     required this.onTap,
   });
 
-  static const double _gutter = 16;
-  static const double _gap = 12;
 
   @override
   Widget build(BuildContext context) {
@@ -219,23 +218,9 @@ class CatalogueTopSellingRail extends StatelessWidget {
               ],
             ),
           ),
-          SizedBox(
-            height: CompactProductCard.extent,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              physics: const ClampingScrollPhysics(),
-              padding: const EdgeInsets.symmetric(horizontal: _gutter),
-              itemExtent: CompactProductCard.railWidth + _gap,
-              itemCount: block.items.length,
-              itemBuilder: (context, i) => Padding(
-                padding: const EdgeInsets.only(right: _gap),
-                child: CompactProductCard(
-                  product: block.items[i],
-                  onTap: () => onTap(block.items[i]),
-                ),
-              ),
-            ),
-          ),
+          // CMD #2167 — the shared rail: the catalogue's own card width, and
+          // one height per row rather than one for the whole app.
+          ProductCardRail(items: block.items, onOpen: onTap),
         ],
       ),
     );

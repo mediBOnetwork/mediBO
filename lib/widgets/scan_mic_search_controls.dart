@@ -18,6 +18,7 @@ import '../services/ui_copy.dart';
 import '../services/voice_receive_service.dart';
 import '../utils/render_log.dart';
 import '../widgets/compact_product_card.dart';
+import '../widgets/product_card_grid.dart';
 
 /// The scan button, as it sits inside the search field.
 class ScanSearchButton extends StatelessWidget {
@@ -301,8 +302,10 @@ class _ScanOutcome extends StatelessWidget {
           SizedBox(height: Ds.space.x16),
           Center(
             child: SizedBox(
-              width: 172,
-              height: CompactProductCard.extent,
+              // CMD #2167 — one card, at the catalogue's own card width, and
+              // as tall as it needs to be.
+              width: ProductCardRail.cardWidth(
+                  context, MediaQuery.sizeOf(context).width),
               child: CompactProductCard(
                 product: Product.fromHomeCard(card),
                 onTap: () {

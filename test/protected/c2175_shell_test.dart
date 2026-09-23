@@ -163,9 +163,12 @@ void main() {
     // no argument and prints what comes back.
     test('the app names no zone — the backend resolves it', () {
       final model = _src('lib/models/order_hours_model.dart');
-      expect(model.contains("rpc('order_hours_state')"), isTrue,
+      expect(model.contains("rpc('order_hours_state'"), isTrue,
           reason: 'the pill stopped asking the one door');
-      expect(RegExp(r"rpc\('order_hours_state',\s*params").hasMatch(model), isFalse,
+      // CMD #2191 changed this protected behaviour on purpose: the one thing
+      // the app may send is `p_w`, its own width, because the backend picks
+      // the wording that fits it. A zone is still never named in Dart.
+      expect(model.contains('p_zone'), isFalse,
           reason: 'Dart started choosing the zone it is shown');
       for (final f in const [
         'lib/models/order_hours_model.dart',

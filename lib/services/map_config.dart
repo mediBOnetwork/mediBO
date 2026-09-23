@@ -14,10 +14,12 @@
 // in-flight future, so five maps opening at once still make one RPC.
 
 import 'package:flutter/foundation.dart'
-    show defaultTargetPlatform, kIsWeb;
+    show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../build_info.dart' show appFlavorName, kPartnerAndroidVersionCode;
 import '../utils/render_log.dart';
+import 'app_update_feed.dart' show kAndroidVersionCode;
 
 /// CMD #2107 — WHICH PLATFORM IS ASKING.
 ///
@@ -41,6 +43,26 @@ import '../utils/render_log.dart';
 String get mapPlatformName =>
     kIsWeb ? 'web' : defaultTargetPlatform.name.toLowerCase();
 
+/// CMD #2191 — WHICH BUILD IS ASKING, on Android only.
+///
+/// A key on the config row is not a key in the app. `native_key_android` was
+/// filled in on live while the PUBLISHED app (versionCode 54) had no
+/// `com.google.android.geo.API_KEY` in its manifest, so every native map on a
+/// real phone was `IllegalStateException: API key not found` and the process
+/// died on the registration location screen (crash_event 11931-11935).
+///
+/// The app reports the versionCode it is running — a fact only the binary
+/// knows — and `map_config_get(p_platform, p_app_build)` decides what that
+/// build is allowed to render. Nothing is compared here: a null goes out on
+/// web and iOS, and the backend treats an Android caller that sent no build as
+/// an old one.
+int? get mapAppBuild {
+  if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return null;
+  return appFlavorName == 'partner'
+      ? kPartnerAndroidVersionCode
+      : kAndroidVersionCode;
+}
+
 class MapConfig {
   /// 'osm' | 'google' | anything the backend adds later. Never branched on in
   /// Dart — [usesGoogleJs] is the boolean the backend computed for us.
@@ -53,6 +75,11 @@ class MapConfig {
   /// Injected into the Maps JS loader when [usesGoogleJs] is true. Empty on the
   /// tile path — there is nothing to key.
   final String browserKey;
+
+  /// CMD #2191 — the backend's word for what its Android build gate decided:
+  /// 'n/a' (not Android, or no gate), 'build_ok', 'build_too_old',
+  /// 'build_unknown'. Printed, never branched on.
+  final String keyGate;
 
   final String tileUrl;
   final String tileUrlRetina;
@@ -83,6 +110,7 @@ class MapConfig {
     required this.provider,
     required this.usesGoogleJs,
     required this.browserKey,
+    this.keyGate = 'n/a',
     required this.tileUrl,
     required this.tileUrlRetina,
     required this.attribution,
@@ -108,6 +136,7 @@ class MapConfig {
       provider: j['provider']?.toString() ?? '',
       usesGoogleJs: j['uses_google_js'] == true,
       browserKey: j['browser_key']?.toString() ?? '',
+      keyGate: j['key_gate']?.toString() ?? 'n/a',
       tileUrl: j['tile_url']?.toString() ?? '',
       tileUrlRetina: j['tile_url_retina']?.toString() ?? '',
       attribution: j['attribution']?.toString() ?? '',
@@ -161,7 +190,10 @@ class MapConfigService {
   static Future<MapConfig> _fetch() async {
     try {
       final res = await Supabase.instance.client
-          .rpc('map_config_get', params: {'p_platform': mapPlatformName})
+          .rpc('map_config_get', params: <String, dynamic>{
+            'p_platform': mapPlatformName,
+            'p_app_build': mapAppBuild,
+          })
           .timeout(const Duration(seconds: 12));
       final cfg = MapConfig.fromJson(Map<String, dynamic>.from(res as Map));
       _cached = cfg;
@@ -169,6 +201,9 @@ class MapConfigService {
       // one config landed even on a session that never opens a map screen.
       RenderLog.write('c634_map_config', cfg.provider);
       RenderLog.write('c634_map_google_js', cfg.usesGoogleJs ? 1 : 0);
+      // CMD #2191 — the gate's own verdict, so a phone drawing tiles says why.
+      RenderLog.write('c2191_map_key_gate', cfg.keyGate);
+      RenderLog.write('c2191_map_app_build', mapAppBuild ?? 0);
       return cfg;
     } catch (e) {
       // Do not cache a failure — the next map to mount retries.

@@ -43,6 +43,72 @@ class DockTab {
   final String? avatarLetter;
 }
 
+/// CMD #2172 (Om) — the banner row's own look, as the BACKEND sends it.
+///
+/// #2147 drew the row on a light-green ground with a Dart `IconData` inside a
+/// white disc. Om's design makes the ground WHITE and gives the round icon two
+/// colours of its own — and the moment a colour is a Dart literal, "make the
+/// banner white" is a deploy. So every one of them arrives in the bar payload's
+/// `style` block (`shell_bar_style(kind)`), and this class is the reader.
+///
+/// The ONE thing that cannot ride a row is an `IconData`, so `icon_key` → glyph
+/// is a map here, exactly as the dock's own `icon_key` already is: an unknown
+/// key draws the neutral glyph rather than throwing, so a new kind ships
+/// without a deploy even if its glyph waits for one. `icon_url` outranks it —
+/// a backend that sent a picture gets the picture.
+class BarStyle {
+  const BarStyle({
+    required this.bg,
+    required this.iconUrl,
+    required this.iconKey,
+    required this.iconBg,
+    required this.iconFg,
+  });
+
+  /// The banner row's ground.
+  final Color bg;
+
+  /// The round icon's disc and its glyph.
+  final Color iconBg, iconFg;
+
+  /// A picture for the disc; '' = draw [iconKey]'s glyph instead.
+  final String iconUrl;
+
+  /// The glyph's key, resolved through [glyphs].
+  final String iconKey;
+
+  /// `icon_key` → glyph. A row cannot carry an `IconData`; nothing else about
+  /// the row is decided here.
+  static const Map<String, IconData> glyphs = {
+    'update': Icons.settings_outlined,
+    'person': Icons.person_outline,
+    'assignment': Icons.assignment_outlined,
+    'info': Icons.info_outline,
+  };
+
+  IconData get glyph => glyphs[iconKey] ?? Icons.info_outline;
+
+  /// Reads a bar payload's `style` block. Absent or unreadable values fall back
+  /// to the tokens, so a bar can never be invisible on a bad row — but nothing
+  /// here invents a colour the backend has an opinion about.
+  static BarStyle from(Map<String, dynamic>? payload) {
+    final raw = payload?['style'];
+    final m = raw is Map ? raw : const {};
+    String s(String k) {
+      final v = m[k];
+      return v is String ? v.trim() : '';
+    }
+
+    return BarStyle(
+      bg: Ds.hex(m['bg'], Ds.c.surface),
+      iconUrl: s('icon_url'),
+      iconKey: s('icon_key'),
+      iconBg: Ds.hex(m['icon_bg'], Ds.c.surface),
+      iconFg: Ds.hex(m['icon_fg'], Ds.c.textSecondary),
+    );
+  }
+}
+
 class FloatingDock extends StatelessWidget {
   const FloatingDock({
     super.key,
@@ -50,12 +116,27 @@ class FloatingDock extends StatelessWidget {
     required this.activeIndex,
     required this.onTap,
     this.bar,
+    this.navSlot,
   });
 
   /// CMD #2147 (Om) — the login / registration ask, joined INTO the dock as
   /// the card's top row ([DockBarRow]). Null = the card is the dock alone; the
   /// change animates (200 ms).
   final Widget? bar;
+
+  /// CMD #2172 (Om) — ONLY THE NAV ROW HIDES.
+  ///
+  /// #2080 wrapped the WHOLE dock in the shell's hiding slot, so a scroll took
+  /// the banner away with the nav — and Om's design says the banner stays and
+  /// "drops to the bottom as its own rounded card". The shell therefore hands
+  /// its slot down as a wrapper and the dock puts it around the nav row and
+  /// the hairline above it, and nothing else. One driver, one slot, one card:
+  /// what shrinks is the nav row, so the card's own height shrinks with it and
+  /// the Scaffold hands those pixels straight to the body — which is what
+  /// keeps the View cart pill riding 10 px above whatever is left (#2066).
+  ///
+  /// Null on every surface that does not hide its nav (staff, tests).
+  final Widget Function(Widget navRow)? navSlot;
 
   final List<DockTab> tabs;
 
@@ -82,9 +163,6 @@ class FloatingDock extends StatelessWidget {
   static List<BoxShadow> get cardShadow => [
         BoxShadow(color: Ds.c.text.withValues(alpha: 0.12), blurRadius: Ds.space.x16 + Ds.space.x4, offset: Offset(0, Ds.space.x4 + 2)),
       ];
-
-  /// The bar row's light-green ground.
-  static Color get barGround => Color.alphaBlend(Ds.c.brand.withValues(alpha: 0.05), Ds.c.surface);
 
   /// The motion: 220 ms on a gentle spring.
   static const Duration motion = Duration(milliseconds: 220);
@@ -123,24 +201,33 @@ class FloatingDock extends StatelessWidget {
                 alignment: Alignment.bottomCenter,
                 child: bar == null
                     ? const SizedBox(width: double.infinity)
-                    : Column(mainAxisSize: MainAxisSize.min, children: [
-                        SizedBox(height: barHeight, child: bar),
-                        Container(height: hairline, color: Ds.c.divider),
-                      ]),
+                    : SizedBox(height: barHeight, child: bar),
               ),
-              Container(
-                height: dockHeight,
-                padding: EdgeInsets.symmetric(horizontal: Ds.space.x8),
-                child: LayoutBuilder(
-                  builder: (context, box) =>
-                      _track(context, box.maxWidth, active, still),
-                ),
-              ),
+              // CMD #2172 — the hairline belongs to the NAV row, not to the
+              // banner: it travels away with it, so a banner left on its own is
+              // a clean rounded card rather than a card with a line under it.
+              _navRow(context, active, still),
             ],
           ),
         ),
       ),
     );
+  }
+
+  /// The nav row — and the hairline above it — inside the shell's hiding slot.
+  Widget _navRow(BuildContext context, int active, bool still) {
+    final Widget row = Column(mainAxisSize: MainAxisSize.min, children: [
+      if (bar != null) Container(height: hairline, color: Ds.c.divider),
+      Container(
+        height: dockHeight,
+        padding: EdgeInsets.symmetric(horizontal: Ds.space.x8),
+        child: LayoutBuilder(
+          builder: (context, box) => _track(context, box.maxWidth, active, still),
+        ),
+      ),
+    ]);
+    final slot = navSlot;
+    return slot == null ? row : slot(row);
   }
 
   Widget _track(BuildContext context, double width, int active, bool still) {
@@ -382,36 +469,53 @@ class _Pop extends StatelessWidget {
       );
 }
 
-/// CMD #2147 (Om) — the login / registration ask as the dock card's top row:
-/// light-green ground, a 40 px round white icon, the backend's label in bold on
-/// one line (ellipsis), and a green pill button 10 px from the right edge.
-/// Every string is `customer_registration_bar()`'s; this widget only draws.
+/// CMD #2147 (Om) — the login / registration / update ask as the dock card's
+/// top row: the ground, a 40 px round icon, the backend's label in bold on one
+/// line (ellipsis), and a green pill button 10 px from the right edge.
+///
+/// CMD #2172 — the ground AND the round icon are the payload's ([BarStyle]);
+/// only the button stays the brand token, because one green primary action per
+/// screen is the design contract rather than a colour the backend picks. Every
+/// string is `customer_registration_bar()`'s / `app_update_bar()`'s; this widget
+/// draws and decides nothing.
 class DockBarRow extends StatelessWidget {
   const DockBarRow({
     super.key,
-    required this.icon,
+    required this.style,
     required this.label,
     required this.action,
     required this.onAction,
     this.actionIdentifier,
   });
 
-  final IconData icon;
+  final BarStyle style;
   final String label, action;
   final VoidCallback onAction;
   final String? actionIdentifier;
 
   @override
   Widget build(BuildContext context) => Container(
-        color: FloatingDock.barGround,
+        color: style.bg,
         padding: EdgeInsets.only(left: Ds.space.x12, right: Ds.space.x8 + 2),
         child: Row(children: [
           Container(
             width: Ds.space.x32 + Ds.space.x8,
             height: Ds.space.x32 + Ds.space.x8,
             alignment: Alignment.center,
-            decoration: BoxDecoration(color: Ds.c.surface, shape: BoxShape.circle),
-            child: Icon(icon, size: Ds.space.x24 - 4, color: Ds.c.textSecondary),
+            clipBehavior: Clip.antiAlias,
+            decoration:
+                BoxDecoration(color: style.iconBg, shape: BoxShape.circle),
+            // A picture if the backend sent one, its glyph otherwise — and a
+            // picture that fails to load falls back to the glyph rather than
+            // leaving a hole.
+            child: style.iconUrl.isEmpty
+                ? Icon(style.glyph,
+                    size: Ds.space.x24 - 4, color: style.iconFg)
+                : Image.network(style.iconUrl,
+                    width: Ds.space.x24, height: Ds.space.x24,
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, _, _) => Icon(style.glyph,
+                        size: Ds.space.x24 - 4, color: style.iconFg)),
           ),
           SizedBox(width: Ds.space.x12),
           Expanded(

@@ -159,7 +159,17 @@ void main() {
           activeIndex: 0,
           onTap: (_) {},
           bar: DockBarRow(
-              icon: Icons.person_outline,
+              // CMD #2172 — the row's ground and its round icon are the
+              // payload's, so the test hands it a payload rather than an icon.
+              style: BarStyle.from(const {
+                'style': {
+                  'bg': '#FFFFFF',
+                  'icon_url': '',
+                  'icon_key': 'person',
+                  'icon_bg': '#F3FAF5',
+                  'icon_fg': '#1B7A43',
+                }
+              }),
               label: 'Backend login line',
               action: 'Backend CTA',
               actionIdentifier: 'c2114_login_bar_action',

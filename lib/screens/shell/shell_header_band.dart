@@ -104,18 +104,54 @@ bool _navOn = false;
 /// `ValueNotifier` no-ops on an unchanged value, so this is free to call on
 /// every frame and on every enable flip.
 void _publishChrome() {
-  final double h = Ds.touch.headerBand;
   shellHeaderCollapse.value = _bandOn ? _hide : 0;
-  if (!_navOn || h <= 0) {
+  final double trav = Ds.touch.navHideTravel;
+  if (!_navOn || trav <= 0) {
     shellNavHide.value = 0;
     return;
   }
-  final double t = _hide / h;
+  final double t = _navHide / trav;
   shellNavHide.value = t < 0
       ? 0
       : t > 1
           ? 1
           : t;
+}
+
+/// CMD #2172 (Om) — THE NAV TRAVELS 8 dp, NOT THE BAND'S 64.
+///
+/// #2080 published the nav as `_hide / headerBand`: the same accumulator read
+/// as a fraction, so the bar was only fully gone after 64 px of believed travel
+/// AND only after the band's 40 px hysteresis had been paid. Om's design is
+/// "scroll down 8 dp: only the nav row slides away · scroll up 8 dp: the nav
+/// returns", which is a much shorter window and one that answers to the finger
+/// immediately.
+///
+/// So the nav has its own accumulator — in its own unit, over its own distance
+/// — fed from the SAME filtered finger deltas the band is fed from. It is still
+/// not a second driver: no second listener, no second notifier, no second
+/// curve, no second set of filters. Overscroll, a fling coasting, a re-measure,
+/// a `jumpTo` and a keyboard all reach this by exactly the route they reach the
+/// band by, which is to say they do not reach it at all.
+///
+/// Both ENDS of a page always wear the bar: the top (there is no more list to
+/// drag back) and the end (there is nothing below the last row for the bar to
+/// be in the way of). That is Om's "nav always shows at page top, page end and
+/// on tab switch" — the third one is [shellHeaderBandShow].
+double _navHide = 0;
+
+void _navFeed(double d, ScrollMetrics m) {
+  final double trav = Ds.touch.navHideTravel;
+  if (trav <= 0) return;
+  if (m.pixels <= m.minScrollExtent || m.pixels >= m.maxScrollExtent) {
+    _navHide = 0;
+  } else {
+    double v = _navHide + d;
+    if (v < 0) v = 0;
+    if (v > trav) v = trav;
+    _navHide = v;
+  }
+  _publishChrome();
 }
 
 /// Is any of the band still showing? Derived, never stored: a second source of
@@ -180,6 +216,9 @@ void shellHeaderBandShow() {
   _bandPending = 0;
   _bandDragging = false;
   _bandSettle?.stop();
+  // CMD #2172 — a new tab starts with the nav out, whatever the last tab's
+  // finger had asked for.
+  _navHide = 0;
   _bandSet(0);
 }
 
@@ -281,9 +320,15 @@ bool shellHeaderScroll(ScrollNotification n, bool enabled, {bool nav = false}) {
   if (n.metrics.pixels <= n.metrics.minScrollExtent && d <= 0) {
     _bandDir = -1;
     _bandPending = 0;
+    _navHide = 0;
     _bandSet(0);
     return false;
   }
+
+  // CMD #2172 — the nav answers this finger NOW, over its own 8 dp, before the
+  // band's 40 px reservoir has decided anything. Same delta, same filters; a
+  // different distance.
+  _navFeed(d, n.metrics);
 
   // #2052(3) — the reservoir. Every drag delta goes in; the band moves only
   // when what is in it points the way the band is ALREADY going, or when a new

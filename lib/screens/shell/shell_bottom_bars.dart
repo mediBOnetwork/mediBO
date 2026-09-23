@@ -71,12 +71,24 @@ class _MobileBottomBar extends StatelessWidget {
   /// the bar also indexes by position.
   final List<Map<String, dynamic>> slots;
 
+  /// CMD #2172 (Om) — the shell's hiding slot, handed DOWN so it wraps the NAV
+  /// ROW instead of the whole card.
+  ///
+  /// #2080 wrapped the dock itself, which was right while the dock was only a
+  /// nav bar and wrong the moment #2147 joined the banner into the same card:
+  /// a scroll took the banner away too. Om's design says only the nav row
+  /// slides away and the banner "drops to the bottom as its own rounded card",
+  /// so the shell still owns the slot (and the backend flag that turns it on)
+  /// and the dock decides what it goes around.
+  final Widget Function(Widget navRow)? navSlot;
+
   const _MobileBottomBar({
     required this.index,
     required this.cartOpen,
     required this.onCartTap,
     required this.onPageTap,
     required this.slots,
+    this.navSlot,
   });
 
   /// The page a slot opens: the row's own `page_index`, never its position.
@@ -117,6 +129,7 @@ class _MobileBottomBar extends StatelessWidget {
           [ShopBadge.value, appRegistrationBar, appUpdateBar]),
       builder: (context, _) => FloatingDock(
         bar: _joinedBar(context),
+        navSlot: navSlot,
         activeIndex: bottomNavIndex,
         // The one map, read once, used for both halves of the question: which
         // slots exist (the tabs) and where each one goes (here).
@@ -139,7 +152,8 @@ class _MobileBottomBar extends StatelessWidget {
       final busy = appUpdateBar.updating || appUpdateBar.downloaded;
       return DockBarRow(
         key: const ValueKey('c2147_dock_update'),
-        icon: Icons.settings_outlined,
+        // CMD #2172 — the ground and the round icon are `app_update_bar().style`.
+        style: BarStyle.from(appUpdateBar.payload),
         label: appUpdateBar.label,
         action: appUpdateBar.downloaded
             ? appUpdateBar.downloadedLabel
@@ -154,7 +168,9 @@ class _MobileBottomBar extends StatelessWidget {
     RenderLog.write('c2147_dock_bar', appRegistrationBar.kind);
     return DockBarRow(
       key: login ? kLoginBarKey : kRegistrationBarKey,
-      icon: login ? Icons.person_outline : Icons.assignment_outlined,
+      // CMD #2172 — one block, whichever ask this is: the backend already knows
+      // which kind it sent, so Dart no longer picks a glyph from the kind.
+      style: BarStyle.from(appRegistrationBar.payload),
       label: appRegistrationBar.label,
       action: appRegistrationBar.actionLabel,
       actionIdentifier: login ? kLoginBarActionId : null,

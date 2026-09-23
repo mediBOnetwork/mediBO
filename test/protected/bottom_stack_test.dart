@@ -353,8 +353,12 @@ void main() {
                   BottomStackMetrics.slot,
               0.001));
       expect(BottomStackMetrics.slot, Ds.touch.listRowMinHeight);
-      expect(BottomStackMetrics.gap, Ds.space.x12,
-          reason: "CMD #2081 — the pill sits 12px above the bar slot");
+      // CMD #2172 (Om) — 10, not 12, and its own token: "View cart SEPARATE:
+      // own pill 10dp above the card, never hidden". The pill is no longer
+      // sitting on a bar slot — it floats above the whole floating card.
+      expect(BottomStackMetrics.gap, Ds.touch.cartPillGap,
+          reason: 'the pill\'s air is a Dart number again');
+      expect(BottomStackMetrics.gap, 10);
       expect(BottomStackMetrics.pill, CartPill.kHeight);
     });
 

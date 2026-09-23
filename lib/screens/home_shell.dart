@@ -1793,10 +1793,7 @@ class _HomeShellState extends State<HomeShell> {
             )
           : (_cartOpen
               ? null
-              // CMD #2080 — customer chrome only.
-              : shellHidingNav(
-                  enabled: !isAdmin && shellNavHideEnabled,
-                  ValueListenableBuilder<List<Map<String, dynamic>>>(
+              : ValueListenableBuilder<List<Map<String, dynamic>>>(
                   // CHANGE #630 — the slots, their order, their labels and WHO
                   // is offered each one are customer_nav()'s answer, rendered
                   // verbatim. The shell used to compute
@@ -1814,12 +1811,14 @@ class _HomeShellState extends State<HomeShell> {
                     cartOpen: _cartOpen,
                     onCartTap: () => _openCart(),
                     slots: slots,
+                    // #2080 customer chrome only; #2172 the slot goes around the NAV ROW, not the card.
+                    navSlot: (nav) => shellHidingNav(nav, enabled: !isAdmin && shellNavHideEnabled),
                     // The bar hands back the PAGE its row named, so there is
                     // no ladder here that has to agree with the slot order.
                     // CMD #2021 — and landing on it means its ROOT.
                     onPageTap: _setIndex,
                   ),
-                ))),
+                )),
       body: shellStaffBody(
         isTablet: isTablet,
         entries: isAdmin ? visibleNavEntries(shellStaffBarEntries(kAdminBottomNav), Access.instance.routeCanView) : const [],

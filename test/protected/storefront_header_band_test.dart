@@ -607,22 +607,31 @@ void main() {
     test('the header is drawn with the very token it travels by', () {
       // Two numbers — "how tall is the header" and "how far does it move" —
       // would drift apart on the first edit. There is one.
-      expect(chrome, contains('height: Ds.touch.headerBand'),
+      // CMD #2175 — the staff row is still drawn at the band token and the
+      // customer row at Ds.shell.height, which IS that token (a getter, not a
+      // copy). Either spelling is the one number.
+      expect(
+          chrome.contains('height: Ds.touch.headerBand') &&
+              chrome.contains('height: Ds.shell.height'),
+          isTrue,
           reason: 'the header band stopped being drawn at its token height');
       expect(chrome, isNot(contains('minHeight: 70')),
           reason: 'the old 70 px header came back');
     });
 
     test('the header and the search bar share one side margin', () {
+      // CMD #2175 — that margin is Ds.shell.inset (14) on both, and it is the
+      // SAME token the floating dock is inset by, so the header row, the
+      // search field and the bottom card all sit on one vertical line.
       expect(chrome,
-          contains('padding: EdgeInsets.symmetric(horizontal: Ds.space.x16)'),
-          reason: 'the header row left the search bar\'s 16 px side margin, so '
-              'the avatar and the cart no longer line up with the field');
+          contains('padding: EdgeInsets.symmetric(horizontal: Ds.shell.inset)'),
+          reason: 'the header row left the search bar\'s side margin, so '
+              'the mark and the bell no longer line up with the field');
       expect(
           File('lib/widgets/search_surface.dart').readAsStringSync(),
-          contains('Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x8'),
+          contains('Ds.shell.inset, Ds.shell.gap, Ds.shell.inset, Ds.shell.gap'),
           reason: 'the search bar changed its own side margin — the header is '
-              'aligned to Ds.space.x16 and the two must agree');
+              'aligned to Ds.shell.inset and the two must agree');
     });
   });
 }

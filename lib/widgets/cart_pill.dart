@@ -54,7 +54,14 @@ class CartPill extends StatelessWidget {
   /// `ui.height` may make the pill SHORTER than its slot — which moves
   /// nothing, because the pill is centred in the room it was given — and is
   /// clamped at this value, which is also the height the backend ships.
-  static const double kHeight = 48;
+  /// CMD #2175 — the pill is one of the five pieces of chrome on the shell's
+  /// ONE height ([Ds.shell.height]), so it is a token now and not a constant.
+  /// #2066's reservation is unchanged in kind: [BottomStackMetrics.pill] still
+  /// reads exactly this number, and it is still settled before any payload
+  /// arrives — the backend moves it by retuning `shell.height`, which moves
+  /// the header row, the search bar, the banner and the nav with it, instead
+  /// of moving the pill alone into disagreement with them.
+  static double get kHeight => Ds.shell.height;
   static const double kThumb = 30;
   static const double kThumbRing = 2;
 

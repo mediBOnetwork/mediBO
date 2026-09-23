@@ -178,9 +178,15 @@ void main() {
 
   // ── 1. the header band ────────────────────────────────────────────────────
   group('1 — the header is back to its pre-#2030 height', () {
-    test('headerBand is 64, and it is one token', () {
-      expect(Ds.touch.headerBand, 64,
-          reason: 'the pre-#2030 geometry: a 40 px avatar in 12 px of padding');
+    // CMD #2175 (Om) — the header row is one of the five pieces of chrome on
+    // the shell's ONE height, so the band's number IS Ds.shell.height (56) and
+    // there is no second token to keep it in step with. #2030's promise is
+    // unchanged and is now structural: "how tall" and "how far" cannot be set
+    // apart, because Ds.touch.headerBand is a GETTER onto the shell height.
+    test('headerBand is the shell height, and it is one token', () {
+      expect(Ds.touch.headerBand, Ds.shell.height);
+      expect(Ds.shell.height, 56,
+          reason: "Om's redline: one 56 dp shell");
     });
 
     test('the band still TRAVELS by the same token it is tall', () {
@@ -192,19 +198,26 @@ void main() {
       // two files, and neither may do arithmetic on it.
       final drawn = _src('lib/screens/shell/shell_mobile_chrome.dart');
       final travel = _src('lib/screens/shell/shell_header_band.dart');
+      // The staff row draws at the band token; the customer row draws at the
+      // shell height the band token IS. Both are the one number.
       expect(drawn.contains('height: Ds.touch.headerBand'), isTrue);
+      expect(drawn.contains('height: Ds.shell.height'), isTrue);
       expect(travel.contains('final double h = Ds.touch.headerBand;'), isTrue);
       for (final src in [drawn, travel]) {
         expect(RegExp(r'headerBand\s*[-+*/]\s*\d').hasMatch(src), isFalse,
             reason: 'no file may adjust the band token on its way past');
+        expect(RegExp(r'Ds\.shell\.height\s*[-+*/]\s*\d').hasMatch(src), isFalse,
+            reason: 'no file may adjust the shell height on its way past');
       }
     });
 
     test('a backend token still wins over the default', () {
-      // ui_design_set({'touch': {'headerBand': N}}) retunes the header with no
-      // deploy — that is the contract, and 64 is only the fallback.
+      // CMD #2175 — ui_design_set({'shell': {'height': N}}) retunes the header
+      // (and the search bar, the banner, the nav and the "View cart" pill)
+      // with no deploy — that is the contract, and 56 is only the fallback.
       final src = _src('lib/design_tokens.dart');
-      expect(src.contains("headerBand: Ds._num(m['headerBand'], f.headerBand)"),
+      expect(src.contains("height: Ds._num(m['height'], f.height)"), isTrue);
+      expect(src.contains("shell = DsShell._from(_asMap(design['shell']), shell)"),
           isTrue);
     });
   });

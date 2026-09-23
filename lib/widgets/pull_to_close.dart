@@ -373,10 +373,21 @@ class PullCloseSurface extends StatelessWidget {
     // At rest the page is EXACTLY what it was before this command: no clip, no
     // opacity layer, no scrim. The gesture costs nothing until it is used.
     if (t >= 1 && !following) return child;
+    return LayoutBuilder(builder: _build);
+  }
+
+  Widget _build(BuildContext context, BoxConstraints constraints) {
     final g = PullCloseGeometry(t.clamp(0.0, 1.0));
-    final h = MediaQuery.sizeOf(context).height;
+    // The page travels its OWN height, not the screen's — a tab root sits
+    // below the header and above the dock, and a page that moved by the whole
+    // viewport would outrun the finger.
+    final h = constraints.hasBoundedHeight
+        ? constraints.maxHeight
+        : MediaQuery.sizeOf(context).height;
     final radius = BorderRadius.vertical(top: Radius.circular(g.radius));
     return Stack(
+      // The page keeps the constraints it would have had without the Stack.
+      fit: StackFit.passthrough,
       children: <Widget>[
         Positioned.fill(
           child: IgnorePointer(
@@ -504,7 +515,10 @@ class _PullToHomeTabState extends State<PullToHomeTab>
           child: page,
           builder: (context, host) => PullCloseSurface(
             t: _c.value,
-            following: true,
+            // At rest this is false, so PullCloseSurface hands the tab
+            // straight back: no scrim, no clip, no extra layer on a tab
+            // nobody is pulling.
+            following: _dragging,
             child: host!,
           ),
         ),

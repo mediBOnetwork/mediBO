@@ -349,6 +349,9 @@ class WaTemplateCard extends StatelessWidget {
 
   bool _flag(String key) => template[key] == true;
 
+  /// The template's own name, used only to build the Semantics handles below.
+  String get _name => (template['name'] ?? '').toString();
+
   @override
   Widget build(BuildContext context) {
     final versions = (template['versions'] as List?) ?? const [];
@@ -496,12 +499,14 @@ class WaTemplateCard extends StatelessWidget {
               _CardAction(
                 label: (template['preview_label'] ?? '').toString(),
                 icon: Icons.visibility_outlined,
+                identifier: 'wa_tpl_preview_$_name',
                 onTap: () => waTemplatePreviewSheet(context, template),
               ),
               if (_flag('can_edit'))
                 _CardAction(
                   label: copy['edit'],
                   icon: Icons.edit_outlined,
+                  identifier: 'wa_tpl_edit_$_name',
                   onTap: () => onEdit(template),
                 ),
               if (_flag('can_submit'))
@@ -509,6 +514,7 @@ class WaTemplateCard extends StatelessWidget {
                   label: copy['submit'],
                   icon: Icons.send_outlined,
                   primary: true,
+                  identifier: 'wa_tpl_submit_$_name',
                   onTap: () => waSubmitTemplate(
                       context, template, copy, onChanged),
                 ),
@@ -648,12 +654,19 @@ class _CardAction extends StatelessWidget {
   final bool primary;
   final bool danger;
 
+  /// Stable Semantics handle (CMD #2180). Every caption on this row is backend
+  /// copy, so a browser journey that searched for the WORDS would go red the
+  /// next time the copy is edited. The action key and the template name are
+  /// both stable, so the journey taps `wa_tpl_<action>_<template>` instead.
+  final String? identifier;
+
   const _CardAction({
     required this.label,
     required this.icon,
     required this.onTap,
     this.primary = false,
     this.danger = false,
+    this.identifier,
   });
 
   @override
@@ -664,7 +677,7 @@ class _CardAction extends StatelessWidget {
     final bg = primary ? const Color(0xFF1B7A43) : Colors.white;
     final border = danger ? const Color(0xFFFECACA) : const Color(0xFF1B7A43);
 
-    return SizedBox(
+    final button = SizedBox(
       height: 40,
       child: OutlinedButton.icon(
         onPressed: onTap,
@@ -680,6 +693,8 @@ class _CardAction extends StatelessWidget {
         ),
       ),
     );
+    final id = identifier;
+    return id == null ? button : Semantics(identifier: id, button: true, child: button);
   }
 }
 

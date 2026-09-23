@@ -131,6 +131,10 @@ class AdminProfileMenuTiles extends StatelessWidget {
         for (final item in items)
           AdminSheetTile(
             icon: navIcon((item['icon_key'] ?? '').toString()),
+            // CMD #2180 — a stable Semantics handle built from the backend's own
+            // route key, so a browser journey taps the ROUTE and not the label,
+            // which is copy and may be reworded without a deploy.
+            identifier: 'admin_nav_${(item['route_key'] ?? '').toString()}',
             label: (item['label'] ?? '').toString(),
             color: (item['tone'] ?? '') == 'danger'
                 ? Ds.c.danger
@@ -156,6 +160,13 @@ class AdminSheetTile extends StatelessWidget {
   /// When > 0, a badge on the leading icon (used by the Deletion Requests tile).
   final int badgeCount;
 
+  /// A stable Semantics handle for this row (CMD #2180). The label is backend
+  /// copy and may be reworded at any time, so a browser journey that looked for
+  /// it would go red on a copy edit rather than on a broken menu. The route key
+  /// never changes, so the generated overflow rows pass `admin_nav_<route>` and
+  /// a journey taps THAT.
+  final String? identifier;
+
   const AdminSheetTile({
     super.key,
     required this.icon,
@@ -163,11 +174,12 @@ class AdminSheetTile extends StatelessWidget {
     required this.onTap,
     this.color = const Color(0xFF374151),
     this.badgeCount = 0,
+    this.identifier,
   });
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
+    final tile = InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
       child: Padding(
@@ -181,5 +193,7 @@ class AdminSheetTile extends StatelessWidget {
         ]),
       ),
     );
+    final id = identifier;
+    return id == null ? tile : Semantics(identifier: id, button: true, child: tile);
   }
 }

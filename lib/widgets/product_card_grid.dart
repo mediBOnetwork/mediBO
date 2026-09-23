@@ -55,6 +55,24 @@ class ProductCardGrid extends StatelessWidget {
       CardLayout.of(items.isEmpty ? null : items.first.card,
           screen: CardSurface.of(context));
 
+  /// CMD #2183 — THE page gutter a card surface sits in: `card.layout.page_pad`.
+  ///
+  /// [ProductCardRail] already inset itself by this number and computed its
+  /// card width from `page - page_pad * 2`, while every GRID surface used the
+  /// design token instead. The two agreed only because the backend's value
+  /// happens to be 16 today: the first `ui`-side UPDATE of `page_pad` would
+  /// have moved the home rail's cards and left the catalogue's behind — one
+  /// product at two sizes, which is the single thing #2167 was built to end.
+  /// Every card surface now asks for this, so there is ONE gutter again.
+  static double pagePad(BuildContext context,
+          [List<Product> items = const []]) =>
+      layoutFor(context, items).pagePad;
+
+  /// [pagePad] as horizontal insets, for a page that pads its whole column.
+  static EdgeInsets pageInsets(BuildContext context,
+          [List<Product> items = const []]) =>
+      EdgeInsets.symmetric(horizontal: pagePad(context, items));
+
   /// 2 up on a phone, 3 on a tablet, 4–6 on a desktop — measured from the
   /// backend's minimum card width rather than from breakpoints someone has to
   /// remember to keep in step. [width] is the grid's own maxWidth, i.e. AFTER
@@ -71,11 +89,18 @@ class ProductCardGrid extends StatelessWidget {
   /// its rows measure themselves. The reserved height is the square plate plus
   /// the body the card draws under it, so a skeleton is the size of the card
   /// that replaces it.
+  ///
+  /// CMD #2167 QA round 1, finding 2: that height is the LAYOUT's answer at one
+  /// card's width, not `cardWidth + CompactProductCard.bodyV6`. The two agreed
+  /// only by arithmetic accident — the const body summed to the same 102 the
+  /// payload's `price_size + gap_l + pad_bottom + …` do today — so an UPDATE to
+  /// card.layout moved the card and left its own placeholder behind, and the
+  /// feed jumped as each page loaded.
   static SliverGridDelegate delegateFor(double width, [CardLayout? layout]) {
     final l = layout ?? CardLayout.latest('');
     return SliverGridDelegateWithFixedCrossAxisCount(
       crossAxisCount: l.columnsFor(width),
-      mainAxisExtent: l.cardWidth(width) + CompactProductCard.bodyV6,
+      mainAxisExtent: l.cardHeight(l.cardWidth(width)),
       crossAxisSpacing: l.gridGap,
       mainAxisSpacing: l.gridGap,
     );

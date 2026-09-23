@@ -1062,7 +1062,9 @@ class _ProductGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+      // CMD #2183 — the same gutter the rails on this page inset by, so a
+      // grid section and a rail section cannot disagree about card width.
+      padding: ProductCardGrid.pageInsets(context, section.cards),
       child: LayoutBuilder(
         builder: (context, c) {
           // A vertical grid stays compact — 6 cards on a phone, 10 on web —
@@ -1396,20 +1398,30 @@ class _FeedSkeleton extends StatelessWidget {
       children: [
         const _SkeletonHeader(),
         const SizedBox(height: 12),
-        SizedBox(
-          height: CompactProductCard.extent,
-          child: ListView.builder(
-            scrollDirection: Axis.horizontal,
-            physics: const NeverScrollableScrollPhysics(),
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            itemExtent: _Rail.cardW + 12,
-            itemCount: 4,
-            itemBuilder: (_, __) => const Padding(
-              padding: EdgeInsets.only(right: 12),
-              child: CompactCardSkeleton(),
+        // CMD #2167 QA round 1, finding 2: the boot skeleton reserves the
+        // LAYOUT's width and height too. No payload has arrived yet, so this
+        // is CardLayout.latest('') — the last layout this session saw, or the
+        // fallback on a cold start — which is still the backend's answer and
+        // not a Dart const the next card.layout UPDATE would orphan.
+        Builder(builder: (context) {
+          final l = CardLayout.latest('');
+          final w =
+              l.cardWidth(MediaQuery.sizeOf(context).width - l.pagePad * 2);
+          return SizedBox(
+            height: l.cardHeight(w),
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              physics: const NeverScrollableScrollPhysics(),
+              padding: EdgeInsets.symmetric(horizontal: l.pagePad),
+              itemExtent: w + l.gridGap,
+              itemCount: 4,
+              itemBuilder: (_, _) => Padding(
+                padding: EdgeInsets.only(right: l.gridGap),
+                child: const CompactCardSkeleton(),
+              ),
             ),
-          ),
-        ),
+          );
+        }),
         const SizedBox(height: 24),
         const _SkeletonHeader(),
       ],

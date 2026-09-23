@@ -64,6 +64,7 @@ class CardLayout {
   final double gridGap, pagePad, minCardW;
   final double shadowBlur, shadowDy, shadowAlpha;
   final int nameLines,
+      textLines,
       nameWeight,
       subWeight,
       priceWeight,
@@ -107,6 +108,7 @@ class CardLayout {
     required this.shadowDy,
     required this.shadowAlpha,
     required this.nameLines,
+    required this.textLines,
     required this.nameWeight,
     required this.subWeight,
     required this.priceWeight,
@@ -150,6 +152,7 @@ class CardLayout {
     shadowDy: 1,
     shadowAlpha: 0.06,
     nameLines: 2,
+    textLines: 3,
     nameWeight: 700,
     subWeight: 400,
     priceWeight: 800,
@@ -243,6 +246,7 @@ class CardLayout {
       shadowDy: _d(l, 'shadow_dy', f.shadowDy),
       shadowAlpha: _d(l, 'shadow_alpha', f.shadowAlpha),
       nameLines: _i(l, 'name_lines', f.nameLines),
+      textLines: _i(l, 'text_lines', f.textLines),
       nameWeight: _i(l, 'name_weight', f.nameWeight),
       subWeight: _i(l, 'sub_weight', f.subWeight),
       priceWeight: _i(l, 'price_weight', f.priceWeight),
@@ -276,9 +280,16 @@ class CardLayout {
   /// draws one), its border, and the body under it — every part a backend
   /// number. A rail asks for this instead of reserving a constant, so the
   /// cards in one rail share one height that is still the payload's.
-  double cardHeight(double w, {int nameLines = 2, int textLines = 3}) {
-    final textH =
-        nameLineH * nameLines + subLineH * (textLines - nameLines).clamp(0, 4);
+  /// CMD #2167 QA round 1, finding 3: the line counts default to THIS layout's
+  /// own `name_lines` / `text_lines`, not to Dart constants. A rail calling
+  /// `cardHeight(w)` used to reserve a 2-line/3-line band whatever the payload
+  /// said, so an UPDATE to card.layout resized the grid cards (they measure
+  /// themselves) and left the rail's band behind — clipped or gapped from a
+  /// pure backend change, the one thing spec item 4 exists to prevent.
+  double cardHeight(double w, {int? nameLines, int? textLines}) {
+    final nl = nameLines ?? this.nameLines;
+    final tl = textLines ?? this.textLines;
+    final textH = nameLineH * nl + subLineH * (tl - nl).clamp(0, 4);
     final body = gapL + textH + gapL + (priceSize + gapL) + padBottom;
     final plate = show.photo ? w - borderW * 2 : 0.0;
     return plate + borderW * 2 + body;

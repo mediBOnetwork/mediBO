@@ -356,7 +356,7 @@ class _Body extends StatelessWidget {
         'q=$query;items=${items.length};salts=${cloud.has ? cloud.items.length : 0}');
     return LayoutBuilder(
       builder: (context, c) {
-        final gridW = c.maxWidth - Ds.space.x16 * 2;
+        final gridW = c.maxWidth - ProductCardGrid.pagePad(context, items) * 2;
         return CustomScrollView(
           controller: scroll,
           slivers: [
@@ -395,7 +395,7 @@ class _Body extends StatelessWidget {
               )
             else
               SliverPadding(
-                padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+                padding: ProductCardGrid.pageInsets(context, items),
                 // CMD #2122 — the same card as every other grid. CMD #2167 —
                 // and the same rows, each as tall as its tallest card.
                 sliver: ProductCardGrid.sliverRows(
@@ -468,9 +468,11 @@ class _CompanySkeleton extends StatelessWidget {
   Widget build(BuildContext context) => Shimmer(
         child: LayoutBuilder(
           builder: (context, c) {
-            final cross = ProductCardGrid.columnsFor(c.maxWidth - 32);
+            final pad = ProductCardGrid.pagePad(context);
+            final cross = ProductCardGrid.columnsFor(c.maxWidth - pad * 2);
             return ListView(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              padding: EdgeInsets.fromLTRB(
+                  pad, Ds.space.x8, pad, Ds.space.x16),
               physics: const NeverScrollableScrollPhysics(),
               children: [
                 const SkeletonBox(width: 220, height: 22, radius: 6),
@@ -480,7 +482,8 @@ class _CompanySkeleton extends StatelessWidget {
                 GridView.builder(
                   shrinkWrap: true,
                   physics: const NeverScrollableScrollPhysics(),
-                  gridDelegate: ProductCardGrid.delegateFor(c.maxWidth - 32),
+                  gridDelegate:
+                      ProductCardGrid.delegateFor(c.maxWidth - pad * 2),
                   itemCount: cross * 2,
                   itemBuilder: (_, _) => const CompactCardSkeleton(),
                 ),

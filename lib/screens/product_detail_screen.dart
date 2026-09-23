@@ -16,6 +16,7 @@ import '../utils/toast.dart';
 import '../widgets/animations.dart';
 import '../widgets/bottom_stack.dart';
 import '../widgets/cart_pill.dart';
+import '../widgets/card_layout.dart';
 import '../widgets/compact_product_card.dart';
 import '../widgets/product_card_grid.dart';
 import '../widgets/companion_rail.dart';
@@ -97,7 +98,6 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
   bool _subscribed = false;
   bool _wishlisted = false;
 
-
   @override
   void initState() {
     super.initState();
@@ -114,8 +114,8 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     setState(() => _loading = true);
     ProductDetail res;
     try {
-      final load = widget.loader ??
-          (id) => MedicineRepository().fetchProductDetail(id);
+      final load =
+          widget.loader ?? (id) => MedicineRepository().fetchProductDetail(id);
       res = await load(widget.productId);
     } catch (_) {
       // A thrown call is indistinguishable from a missing product as far as
@@ -136,17 +136,21 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     // and the co-purchase rail actually reached a real device — and, for the
     // overlay, that an ANONYMOUS visit reports has=false while the content
     // blocks still report their counts.
-    RenderLog.write('c791_product_depth',
-        'gallery=${res.gallery.images.length};facts=${res.facts.rows.length};'
-        'purchase=${res.purchase.has};usual=${res.purchase.usualQty};'
-        'companions=${res.companions.items.length}');
+    RenderLog.write(
+      'c791_product_depth',
+      'gallery=${res.gallery.images.length};facts=${res.facts.rows.length};'
+          'purchase=${res.purchase.has};usual=${res.purchase.usualQty};'
+          'companions=${res.companions.items.length}',
+    );
     // CMD #2073 — REACHABILITY PROOF for this change: the ONE merged card, the
     // per-product dropdown list, and the two blocks that left the page.
-    RenderLog.write('c2073_pdp_overview',
-        'overview=${res.overview.length};sections=${res.sections.length};'
-        'dropdowns=${res.sections.where((x) => x.accordion).length};'
-        'facts=${res.facts.rows.length};reviews=0;'
-        'compare_icon=${res.compareOpenLabel.isNotEmpty ? 1 : 0}');
+    RenderLog.write(
+      'c2073_pdp_overview',
+      'overview=${res.overview.length};sections=${res.sections.length};'
+          'dropdowns=${res.sections.where((x) => x.accordion).length};'
+          'facts=${res.facts.rows.length};reviews=0;'
+          'compare_icon=${res.compareOpenLabel.isNotEmpty ? 1 : 0}',
+    );
 
     // CMD #409 — one product open, recorded into the customer's recently-viewed
     // ring. Fire-and-forget by contract: a customer never waits on, and is
@@ -161,7 +165,8 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     final oos = res.ok && !res.canAdd;
     if (!oos) return;
 
-    final status = widget.notifyStatusLoader ??
+    final status =
+        widget.notifyStatusLoader ??
         (id) => MedicineRepository().stockNotifyStatus(id);
     final subscribed = await status(widget.productId);
     if (!mounted) return;
@@ -191,7 +196,8 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
   Future<void> _toggleWishlist() async {
     final d = _data;
     if (d == null) return;
-    final toggle = widget.wishlistToggle ??
+    final toggle =
+        widget.wishlistToggle ??
         (id) => MedicineRepository().wishlistToggle(id);
     final res = await toggle(d.id);
     if (!mounted) return;
@@ -204,6 +210,11 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
       if (res.toast.isNotEmpty) showToast(context, res.toast);
     }
   }
+
+  /// CMD #2169 — the card geometry + colours this page was sent, resolved by
+  /// the SAME code every grid card uses, so the heart cannot drift apart.
+  CardLayout _cardLayout(ProductDetail d) =>
+      CardLayout.of({'layout': d.cardLayout, 'style': d.cardStyle});
 
   @override
   Widget build(BuildContext context) {
@@ -238,18 +249,29 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
               child: IconButton(
                 key: const ValueKey('pdp-compare-button'),
                 tooltip: d.compareOpenLabel,
-                icon: Icon(Icons.compare_arrows_rounded,
-                    color: Ds.c.textSecondary),
+                icon: Icon(
+                  Icons.compare_arrows_rounded,
+                  color: Ds.c.textSecondary,
+                ),
                 onPressed: _openCompare,
               ),
             ),
+          // CMD #2169 — the header's heart is the card's heart. Its two
+          // colours and its glyph size arrive on this page's own payload
+          // (`card_style` / `card_layout`, added to product_detail_v2), so a
+          // token change recolours the card and this button together and no
+          // grey or red is picked here.
           if (showWishlistBtn)
             IconButton(
               tooltip: d.label(
-                  _wishlisted ? 'pdp_wishlist_remove' : 'pdp_wishlist_add'),
+                _wishlisted ? 'pdp_wishlist_remove' : 'pdp_wishlist_add',
+              ),
+              iconSize: _cardLayout(d).wishIcon,
               icon: Icon(
                 _wishlisted ? Icons.favorite : Icons.favorite_border,
-                color: _wishlisted ? Ds.c.danger : Ds.c.textSecondary,
+                color: _wishlisted
+                    ? _cardLayout(d).color('wish_saved_fg', Ds.c.danger)
+                    : _cardLayout(d).color('wish_fg', Ds.c.textSecondary),
               ),
               onPressed: _toggleWishlist,
             ),
@@ -264,8 +286,8 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
       body: Stack(
         children: [
           _loading
-          ? const _PdpSkeleton()
-          : (d == null || !d.ok)
+              ? const _PdpSkeleton()
+              : (d == null || !d.ok)
               ? _NotFound(data: d)
               : _Body(
                   data: d,
@@ -325,8 +347,7 @@ class _Body extends StatelessWidget {
       // which was right for a pill on its own and short by a whole update bar
       // the moment one appeared. The spacer is the last child, so the number
       // is re-read the frame the bar arrives or goes.
-      padding: EdgeInsets.fromLTRB(
-          Ds.space.x16, Ds.space.x8, Ds.space.x16, 0),
+      padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x8, Ds.space.x16, 0),
       children: [
         _Gallery(gallery: data.gallery, heroId: data.id),
         SizedBox(height: Ds.space.x16),
@@ -356,8 +377,9 @@ class _Body extends StatelessWidget {
           SizedBox(height: Ds.space.x12),
           PurchaseOverlayCard(
             overlay: data.purchase,
-            onAddUsual: () => AppState.of(context)
-                .setQuantityId(data.id, data.purchase.usualQty),
+            onAddUsual: () =>
+                AppState.of(context)
+                    .setQuantityId(data.id, data.purchase.usualQty),
           ),
         ] else if (data.hasHistory) ...[
           SizedBox(height: Ds.space.x8),
@@ -529,8 +551,10 @@ class _OtherPacks extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (packs.title.isNotEmpty) ...[
-          Text(packs.title,
-              style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+          Text(
+            packs.title,
+            style: Ds.t.caption.copyWith(color: Ds.c.textSecondary),
+          ),
           SizedBox(height: Ds.space.x8),
         ],
         SingleChildScrollView(
@@ -544,7 +568,8 @@ class _OtherPacks extends StatelessWidget {
                 _PackChip(
                   label: packs.items[i].label,
                   onTap: () => Navigator.of(context).pushReplacementNamed(
-                      '/product/${packs.items[i].productId}'),
+                    '/product/${packs.items[i].productId}',
+                  ),
                 ),
               ],
             ],
@@ -571,7 +596,9 @@ class _PackChip extends StatelessWidget {
       child: Container(
         alignment: Alignment.center,
         padding: EdgeInsets.symmetric(
-            horizontal: Ds.space.x12, vertical: Ds.space.x4),
+          horizontal: Ds.space.x12,
+          vertical: Ds.space.x4,
+        ),
         decoration: BoxDecoration(
           color: Ds.c.surface,
           borderRadius: Ds.r.rChip,
@@ -670,34 +697,39 @@ class _PromiseRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        padding: EdgeInsets.all(Ds.space.x12),
-        decoration: BoxDecoration(
-          color: Ds.c.infoSoft,
-          borderRadius: Ds.r.rButton,
+    padding: EdgeInsets.all(Ds.space.x12),
+    decoration: BoxDecoration(color: Ds.c.infoSoft, borderRadius: Ds.r.rButton),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          Icons.local_shipping_outlined,
+          size: Ds.space.x16,
+          color: Ds.c.info,
         ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(Icons.local_shipping_outlined,
-                size: Ds.space.x16, color: Ds.c.info),
-            SizedBox(width: Ds.space.x8),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(promise.label,
-                      style: Ds.t.body.copyWith(
-                          fontWeight: FontWeight.w600, color: Ds.c.text)),
-                  SizedBox(height: Ds.space.x4),
-                  Text(promise.note,
-                      style:
-                          Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
-                ],
+        SizedBox(width: Ds.space.x8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                promise.label,
+                style: Ds.t.body.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: Ds.c.text,
+                ),
               ),
-            ),
-          ],
+              SizedBox(height: Ds.space.x4),
+              Text(
+                promise.note,
+                style: Ds.t.caption.copyWith(color: Ds.c.textSecondary),
+              ),
+            ],
+          ),
         ),
-      );
+      ],
+    ),
+  );
 }
 
 /// CMD #2040 — the substitute rail and its tile were deleted here: the
@@ -740,75 +772,79 @@ class _GalleryState extends State<_Gallery> {
   void _open(int index) {
     final imgs = widget.gallery.images;
     if (imgs.isEmpty) return;
-    Navigator.of(context).push(PageRouteBuilder<void>(
-      opaque: false,
-      barrierColor: Ds.c.text,
-      pageBuilder: (_, __, ___) => _ZoomViewer(
-        gallery: widget.gallery,
-        initialIndex: index,
+    Navigator.of(context).push(
+      PageRouteBuilder<void>(
+        opaque: false,
+        barrierColor: Ds.c.text,
+        pageBuilder: (_, __, ___) =>
+            _ZoomViewer(gallery: widget.gallery, initialIndex: index),
       ),
-    ));
+    );
   }
 
   /// The frame every state of the hero sits in — empty, single, or a swipe.
   Widget _card(Widget child) => Container(
-        height: _h,
-        width: double.infinity,
-        decoration: BoxDecoration(
-          color: Ds.c.surface,
-          borderRadius: Ds.r.rCard,
-          border: Border.all(color: Ds.c.divider, width: Ds.space.hairline),
-        ),
-        padding: EdgeInsets.all(Ds.space.x12),
-        child: child,
-      );
+    height: _h,
+    width: double.infinity,
+    decoration: BoxDecoration(
+      color: Ds.c.surface,
+      borderRadius: Ds.r.rCard,
+      border: Border.all(color: Ds.c.divider, width: Ds.space.hairline),
+    ),
+    padding: EdgeInsets.all(Ds.space.x12),
+    child: child,
+  );
 
   @override
   Widget build(BuildContext context) {
     final imgs = widget.gallery.images;
 
     if (imgs.isEmpty) {
-      return _card(Center(
-        child: ProductImage(
-          url: '',
-          width: _h,
-          height: _h,
-          radius: Ds.r.rCard,
+      return _card(
+        Center(
+          child: ProductImage(
+            url: '',
+            width: _h,
+            height: _h,
+            radius: Ds.r.rCard,
+          ),
         ),
-      ));
+      );
     }
 
     final page = _page.clamp(0, imgs.length - 1);
 
     return Column(
       children: [
-        _card(PageView.builder(
-          controller: _ctrl,
-          itemCount: imgs.length,
-          onPageChanged: (i) => setState(() => _page = i),
-          itemBuilder: (_, i) {
-            final img = ProductImage(
-              url: imgs[i].url,
-              width: _h,
-              height: _h,
-              radius: Ds.r.rCard,
-            );
-            // Only the first image participates in the Hero — it is the one
-            // the card flew from.
-            return Center(
-              child: GestureDetector(
-                key: ValueKey('pdp-gallery-shot-$i'),
-                onTap: () => _open(i),
-                child: i == 0
-                    ? Hero(
-                        tag: CompactProductCard.heroTag(widget.heroId),
-                        child: img,
-                      )
-                    : img,
-              ),
-            );
-          },
-        )),
+        _card(
+          PageView.builder(
+            controller: _ctrl,
+            itemCount: imgs.length,
+            onPageChanged: (i) => setState(() => _page = i),
+            itemBuilder: (_, i) {
+              final img = ProductImage(
+                url: imgs[i].url,
+                width: _h,
+                height: _h,
+                radius: Ds.r.rCard,
+              );
+              // Only the first image participates in the Hero — it is the one
+              // the card flew from.
+              return Center(
+                child: GestureDetector(
+                  key: ValueKey('pdp-gallery-shot-$i'),
+                  onTap: () => _open(i),
+                  child: i == 0
+                      ? Hero(
+                          tag: CompactProductCard.heroTag(widget.heroId),
+                          child: img,
+                        )
+                      : img,
+                ),
+              );
+            },
+          ),
+        ),
         // Dots, and only when there is more than one shot to move between.
         if (imgs.length > 1) ...[
           SizedBox(height: Ds.space.x12),
@@ -852,8 +888,9 @@ class _ZoomViewer extends StatefulWidget {
 }
 
 class _ZoomViewerState extends State<_ZoomViewer> {
-  late final PageController _ctrl =
-      PageController(initialPage: widget.initialIndex);
+  late final PageController _ctrl = PageController(
+    initialPage: widget.initialIndex,
+  );
   late int _page = widget.initialIndex;
 
   @override
@@ -968,7 +1005,9 @@ class _PriceRow extends StatelessWidget {
           SizedBox(height: Ds.space.x12),
           Container(
             padding: EdgeInsets.symmetric(
-                horizontal: Ds.space.x12, vertical: Ds.space.x8),
+              horizontal: Ds.space.x12,
+              vertical: Ds.space.x8,
+            ),
             decoration: BoxDecoration(
               color: Brand.positiveBg,
               borderRadius: BorderRadius.circular(Rad.chip),
@@ -977,8 +1016,11 @@ class _PriceRow extends StatelessWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.trending_up_rounded,
-                    size: 16, color: Brand.positiveFg),
+                const Icon(
+                  Icons.trending_up_rounded,
+                  size: 16,
+                  color: Brand.positiveFg,
+                ),
                 SizedBox(width: Ds.space.x8),
                 Text(
                   data.label('pdp_margin_title'),
@@ -988,7 +1030,9 @@ class _PriceRow extends StatelessWidget {
                 Text(
                   pr.marginLabel,
                   style: AppType.l4.copyWith(
-                      color: Brand.positiveFg, fontWeight: FontWeight.w800),
+                    color: Brand.positiveFg,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
                 if (pr.discountLabel.isNotEmpty) ...[
                   SizedBox(width: Ds.space.x8),
@@ -1028,11 +1072,14 @@ class _LegacyPriceRow extends StatelessWidget {
       textBaseline: TextBaseline.alphabetic,
       children: [
         if (pr.priceCaption.isNotEmpty) ...[
-          Text(pr.priceCaption,
-              style: AppType.t2.copyWith(
-                  color: Brand.inkMuted,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.6)),
+          Text(
+            pr.priceCaption,
+            style: AppType.t2.copyWith(
+              color: Brand.inkMuted,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.6,
+            ),
+          ),
           SizedBox(width: Ds.space.x4),
         ],
         Flexible(
@@ -1058,11 +1105,7 @@ class _LegacyPriceRow extends StatelessWidget {
         ],
         if (data.hasGst) ...[
           SizedBox(width: Ds.space.x8),
-          _Chip(
-            text: data.gstLabel,
-            bg: Brand.field,
-            fg: Brand.inkSub,
-          ),
+          _Chip(text: data.gstLabel, bg: Brand.field, fg: Brand.inkSub),
         ],
       ],
     );
@@ -1151,18 +1194,18 @@ class _BuyControl extends StatelessWidget {
 /// CMD #1826 — one tone word → one pair of colours. The ONLY place the band's
 /// colour is decided, and it reads `tone`, never `band` or the sub-line.
 Color _toneBg(String tone) => switch (tone) {
-      'success' => Brand.positiveBg,
-      'warning' => Ds.c.warningSoft,
-      'danger' => Brand.negativeBg,
-      _ => Brand.field,
-    };
+  'success' => Brand.positiveBg,
+  'warning' => Ds.c.warningSoft,
+  'danger' => Brand.negativeBg,
+  _ => Brand.field,
+};
 
 Color _toneFg(String tone) => switch (tone) {
-      'success' => Brand.positiveFg,
-      'warning' => Ds.c.warning,
-      'danger' => Brand.negativeFg,
-      _ => Brand.inkSub,
-    };
+  'success' => Brand.positiveFg,
+  'warning' => Ds.c.warning,
+  'danger' => Brand.negativeFg,
+  _ => Brand.inkSub,
+};
 
 /// CMD #1896 — MRP first (small, struck, grey, with the ceiling sentence on an
 /// info tooltip), the sale price under it (large, the number the buyer acts
@@ -1231,8 +1274,11 @@ class _MrpLine extends StatelessWidget {
             triggerMode: TooltipTriggerMode.tap,
             child: Semantics(
               label: line.info.label,
-              child: Icon(Icons.info_outline,
-                  size: Ds.space.x16, color: Ds.c.textSecondary),
+              child: Icon(
+                Icons.info_outline,
+                size: Ds.space.x16,
+                color: Ds.c.textSecondary,
+              ),
             ),
           ),
         ],
@@ -1269,7 +1315,8 @@ class _SaleLine extends StatelessWidget {
     final useCard = c != null && c.priceDisplay.isNotEmpty;
 
     final TextStyle valueStyle = _pdpLine(
-        line.hasAmount ? Brand.price : Ds.c.textSecondary);
+      line.hasAmount ? Brand.price : Ds.c.textSecondary,
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1281,15 +1328,15 @@ class _SaleLine extends StatelessWidget {
           children: [
             if (useCard)
               Flexible(
-                  child: CardSaleLine(
-                price: c,
-                height: _badgeH,
-                labelStyle: _pdpLine(Ds.c.textSecondary),
-                valueStyle: _pdpLine(Ds.c.surface),
-              ))
+                child: CardSaleLine(
+                  price: c,
+                  height: _badgeH,
+                  labelStyle: _pdpLine(Ds.c.textSecondary),
+                  valueStyle: _pdpLine(Ds.c.surface),
+                ),
+              )
             else
-              Flexible(
-                  child: Text(line.value, maxLines: 1, style: valueStyle)),
+              Flexible(child: Text(line.value, maxLines: 1, style: valueStyle)),
             // The one green thing on the price block, and only when the
             // backend had a real trade rate to discount from.
             if (discount.has) ...[
@@ -1298,7 +1345,9 @@ class _SaleLine extends StatelessWidget {
                 discount.label,
                 key: const ValueKey('pdp-discount'),
                 style: Ds.t.caption.copyWith(
-                    color: Ds.c.success, fontWeight: FontWeight.w700),
+                  color: Ds.c.success,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ],
           ],
@@ -1306,9 +1355,11 @@ class _SaleLine extends StatelessWidget {
         // "₹19.91 / tablet" — divided in SQL from the pack sentence.
         if (line.perUnit.has) ...[
           SizedBox(height: Ds.space.x4),
-          Text(line.perUnit.label,
-              key: const ValueKey('pdp-per-unit'),
-              style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+          Text(
+            line.perUnit.label,
+            key: const ValueKey('pdp-per-unit'),
+            style: Ds.t.caption.copyWith(color: Ds.c.textSecondary),
+          ),
         ],
         if (line.hasNote && line.note.isNotEmpty) ...[
           SizedBox(height: Ds.space.x4),
@@ -1331,7 +1382,9 @@ class _SupplyBand extends StatelessWidget {
     return Container(
       key: const ValueKey('pdp-supply-band'),
       padding: EdgeInsets.symmetric(
-          horizontal: Ds.space.x12, vertical: Ds.space.x8),
+        horizontal: Ds.space.x12,
+        vertical: Ds.space.x8,
+      ),
       decoration: BoxDecoration(
         color: _toneBg(supply.tone),
         borderRadius: BorderRadius.circular(Rad.chip),
@@ -1344,21 +1397,26 @@ class _SupplyBand extends StatelessWidget {
               Icon(Icons.verified_outlined, size: Ds.space.x16, color: fg),
               SizedBox(width: Ds.space.x8),
               Flexible(
-                child: Text(supply.label,
-                    style: AppType.b3
-                        .copyWith(color: fg, fontWeight: FontWeight.w600)),
+                child: Text(
+                  supply.label,
+                  style: AppType.b3.copyWith(
+                    color: fg,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
             ],
           ),
           if (supply.hasSub && supply.sub.isNotEmpty) ...[
             SizedBox(height: Ds.space.x4),
-            Text(supply.sub,
-                style: AppType.t2.copyWith(color: Brand.inkMuted)),
+            Text(supply.sub, style: AppType.t2.copyWith(color: Brand.inkMuted)),
           ],
           if (supply.hasSpeed && supply.speed.isNotEmpty) ...[
             SizedBox(height: Ds.space.x4),
-            Text(supply.speed,
-                style: AppType.t2.copyWith(color: Brand.inkMuted)),
+            Text(
+              supply.speed,
+              style: AppType.t2.copyWith(color: Brand.inkMuted),
+            ),
           ],
         ],
       ),
@@ -1410,9 +1468,8 @@ class _OverviewTable extends StatelessWidget {
   const _OverviewTable({required this.rows});
 
   @override
-  Widget build(BuildContext context) => _FactCard(
-        rows: [for (final r in rows) (label: r.label, value: r.value)],
-      );
+  Widget build(BuildContext context) =>
+      _FactCard(rows: [for (final r in rows) (label: r.label, value: r.value)]);
 }
 
 /// The one row-pair card both tables draw. Two columns, a fixed label width and
@@ -1432,7 +1489,9 @@ class _FactCard extends StatelessWidget {
         border: Border.all(color: Ds.c.divider, width: Ds.space.hairline),
       ),
       padding: EdgeInsets.symmetric(
-          horizontal: Ds.space.x16, vertical: Ds.space.x8),
+        horizontal: Ds.space.x16,
+        vertical: Ds.space.x8,
+      ),
       child: Column(
         children: [
           for (var i = 0; i < rows.length; i++) ...[
@@ -1534,22 +1593,24 @@ class _AccordionPanel extends StatelessWidget {
           onTap: onTap,
           child: Padding(
             padding: EdgeInsets.symmetric(
-                horizontal: Ds.space.x16, vertical: Ds.space.x12),
+              horizontal: Ds.space.x16,
+              vertical: Ds.space.x12,
+            ),
             child: SizedBox(
               // The whole header is the tap target, and it is never under 44.
               height: Ds.touch.minTarget - Ds.space.x24,
               child: Row(
                 children: [
-                  Expanded(
-                    child: Text(section.title, style: Ds.t.subtitle),
-                  ),
+                  Expanded(child: Text(section.title, style: Ds.t.subtitle)),
                   SizedBox(width: Ds.space.x8),
                   AnimatedRotation(
                     turns: open ? 0.5 : 0.0,
                     duration: duration,
                     curve: Curves.easeOutCubic,
-                    child: Icon(Icons.keyboard_arrow_down_rounded,
-                        color: Ds.c.textSecondary),
+                    child: Icon(
+                      Icons.keyboard_arrow_down_rounded,
+                      color: Ds.c.textSecondary,
+                    ),
                   ),
                 ],
               ),
@@ -1565,7 +1626,11 @@ class _AccordionPanel extends StatelessWidget {
           child: open
               ? Padding(
                   padding: EdgeInsets.fromLTRB(
-                      Ds.space.x16, 0, Ds.space.x16, Ds.space.x16),
+                    Ds.space.x16,
+                    0,
+                    Ds.space.x16,
+                    Ds.space.x16,
+                  ),
                   child: Text(
                     section.body,
                     style: Ds.t.body.copyWith(color: Ds.c.text),
@@ -1627,8 +1692,9 @@ class _CollapsibleBodyState extends State<_CollapsibleBody> {
                 widget.text,
                 style: _style,
                 maxLines: _expanded ? null : _maxLines,
-                overflow:
-                    _expanded ? TextOverflow.visible : TextOverflow.ellipsis,
+                overflow: _expanded
+                    ? TextOverflow.visible
+                    : TextOverflow.ellipsis,
               ),
             ),
             if (overflows && widget.moreLabel.isNotEmpty) ...[
@@ -1668,11 +1734,11 @@ class _SaltRail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ProductCardRail(
-        items: rail.items,
-        // Each card pushes its OWN product page — a fresh route, so back
-        // returns to this product rather than skipping the chain.
-        onOpen: (p) => Navigator.of(context).pushNamed('/product/${p.id}'),
-      );
+    items: rail.items,
+    // Each card pushes its OWN product page — a fresh route, so back
+    // returns to this product rather than skipping the chain.
+    onOpen: (p) => Navigator.of(context).pushNamed('/product/${p.id}'),
+  );
 }
 
 /// The pre-#2040 rail: bare tiles built from `similar`. Kept for a payload
@@ -1713,8 +1779,7 @@ class _SimilarTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         // Each tile pushes its OWN product page — a fresh route, so back
         // returns to this product rather than skipping the chain.
-        onTap: () => Navigator.of(context)
-            .pushNamed('/product/${item.id}'),
+        onTap: () => Navigator.of(context).pushNamed('/product/${item.id}'),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -1798,26 +1863,26 @@ class _BarStepper extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => DecoratedBox(
-        decoration: BoxDecoration(
-          color: const Color(0xFF1B7A43),
-          borderRadius: BorderRadius.circular(10),
+    decoration: BoxDecoration(
+      color: const Color(0xFF1B7A43),
+      borderRadius: BorderRadius.circular(10),
+    ),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        _BarStepIcon(icon: Icons.remove, onTap: onMinus),
+        Text(
+          '$qty',
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+          ),
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            _BarStepIcon(icon: Icons.remove, onTap: onMinus),
-            Text(
-              '$qty',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            _BarStepIcon(icon: Icons.add, onTap: onPlus),
-          ],
-        ),
-      );
+        _BarStepIcon(icon: Icons.add, onTap: onPlus),
+      ],
+    ),
+  );
 }
 
 class _BarStepIcon extends StatelessWidget {
@@ -1827,13 +1892,13 @@ class _BarStepIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => InkWell(
-        onTap: onTap,
-        child: SizedBox(
-          width: 48,
-          height: 46,
-          child: Icon(icon, size: 20, color: Colors.white),
-        ),
-      );
+    onTap: onTap,
+    child: SizedBox(
+      width: 48,
+      height: 46,
+      child: Icon(icon, size: 20, color: Colors.white),
+    ),
+  );
 }
 
 // ── States ───────────────────────────────────────────────────────────────────
@@ -1854,8 +1919,7 @@ class _NotFound extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.search_off,
-                size: 44, color: Color(0xFFC7CBD1)),
+            const Icon(Icons.search_off, size: 44, color: Color(0xFFC7CBD1)),
             const SizedBox(height: 14),
             Text(
               title,
@@ -1871,10 +1935,7 @@ class _NotFound extends StatelessWidget {
               Text(
                 body,
                 textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 13,
-                  color: Color(0xFF6B7280),
-                ),
+                style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
               ),
             ],
             if (cta.isNotEmpty) ...[
@@ -1902,30 +1963,29 @@ class _PdpSkeleton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Shimmer(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-          children: [
-            // Same 260px carousel box the loaded page reserves.
-            const SkeletonBox(
-                width: double.infinity, height: 260, radius: 14),
-            const SizedBox(height: 16),
-            const SkeletonBox(width: 54, height: 17),
-            const SizedBox(height: 10),
-            const SkeletonBox(width: double.infinity, height: 22),
-            const SizedBox(height: 6),
-            const SkeletonBox(width: 180, height: 14),
-            const SizedBox(height: 18),
-            const SkeletonBox(width: 140, height: 26),
-            const SizedBox(height: 24),
-            const SkeletonBox(width: 110, height: 18),
-            const SizedBox(height: 12),
-            for (var i = 0; i < 5; i++) ...[
-              const SkeletonBox(width: double.infinity, height: 14),
-              const SizedBox(height: 10),
-            ],
-          ],
-        ),
-      );
+    child: ListView(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      children: [
+        // Same 260px carousel box the loaded page reserves.
+        const SkeletonBox(width: double.infinity, height: 260, radius: 14),
+        const SizedBox(height: 16),
+        const SkeletonBox(width: 54, height: 17),
+        const SizedBox(height: 10),
+        const SkeletonBox(width: double.infinity, height: 22),
+        const SizedBox(height: 6),
+        const SkeletonBox(width: 180, height: 14),
+        const SizedBox(height: 18),
+        const SkeletonBox(width: 140, height: 26),
+        const SizedBox(height: 24),
+        const SkeletonBox(width: 110, height: 18),
+        const SizedBox(height: 12),
+        for (var i = 0; i < 5; i++) ...[
+          const SkeletonBox(width: double.infinity, height: 14),
+          const SizedBox(height: 10),
+        ],
+      ],
+    ),
+  );
 }
 
 // ── Shared bits ──────────────────────────────────────────────────────────────
@@ -1944,49 +2004,52 @@ class _SectionTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Text(
-        text,
-        style: Ds.t.caption.copyWith(
-          color: Ds.c.textSecondary,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 0.8,
-        ),
-      );
+    text,
+    style: Ds.t.caption.copyWith(
+      color: Ds.c.textSecondary,
+      fontWeight: FontWeight.w700,
+      letterSpacing: 0.8,
+    ),
+  );
 }
 
 class _Chip extends StatelessWidget {
   final String text;
   final Color bg;
   final Color fg;
-  const _Chip(
-      {super.key, required this.text, required this.bg, required this.fg});
+  const _Chip({
+    super.key,
+    required this.text,
+    required this.bg,
+    required this.fg,
+  });
 
   @override
   Widget build(BuildContext context) => Align(
-        alignment: Alignment.centerLeft,
-        // CMD #2040 — the chip HUGS its text. Without the factor the Align
-        // expands to the full line, which is invisible in a Column (the chip
-        // is left-aligned either way) and fatal in the Wrap the title block
-        // now uses: the chip claimed the whole row and pushed the Rx tag onto
-        // a line of its own.
-        widthFactor: 1.0,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: bg,
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Text(
-            text,
-            style: TextStyle(
-              fontSize: 11.5,
-              fontWeight: FontWeight.w600,
-              color: fg,
-            ),
-          ),
+    alignment: Alignment.centerLeft,
+    // CMD #2040 — the chip HUGS its text. Without the factor the Align
+    // expands to the full line, which is invisible in a Column (the chip
+    // is left-aligned either way) and fatal in the Wrap the title block
+    // now uses: the chip claimed the whole row and pushed the Rx tag onto
+    // a line of its own.
+    widthFactor: 1.0,
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 11.5,
+          fontWeight: FontWeight.w600,
+          color: fg,
         ),
-      );
+      ),
+    ),
+  );
 }
-
 
 /// The trust strip: chips printed in payload order, each with the backend's
 /// own label, note and tone. The only mapping done here is tone-name → design
@@ -2038,7 +2101,9 @@ class _TrustStrip extends StatelessWidget {
               children: [
                 Container(
                   padding: EdgeInsets.symmetric(
-                      horizontal: Ds.space.x12, vertical: Ds.space.x4),
+                    horizontal: Ds.space.x12,
+                    vertical: Ds.space.x4,
+                  ),
                   decoration: BoxDecoration(
                     color: _toneBg(chip.tone),
                     borderRadius: Ds.r.rChip,

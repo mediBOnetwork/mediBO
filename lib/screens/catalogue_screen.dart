@@ -1231,14 +1231,18 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
                 child: _GroupDivider(label: groups[g].label, first: g == 0),
               ),
             SliverPadding(
-              padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x4,
-                  Ds.space.x16, Ds.space.x16),
+              padding: EdgeInsets.fromLTRB(
+                  ProductCardGrid.pagePad(context, groups[g].items),
+                  Ds.space.x4,
+                  ProductCardGrid.pagePad(context, groups[g].items),
+                  Ds.space.x16),
               // CMD #2167 — rows, not a fixed-extent grid: every card in a row
               // is as tall as the tallest one in it and none carries dead
               // space under its price.
               sliver: ProductCardGrid.sliverRows(
                 items: groups[g].items,
-                width: MediaQuery.sizeOf(context).width - Ds.space.x32,
+                width: MediaQuery.sizeOf(context).width -
+                    ProductCardGrid.pagePad(context, groups[g].items) * 2,
                 layout: ProductCardGrid.layoutFor(context, groups[g].items),
                 onOpen: (p) =>
                     Navigator.of(context).pushNamed('/product/${p.id}'),

@@ -887,7 +887,7 @@ class SearchResultsView extends StatelessWidget {
             items: payload.items,
             shrinkWrap: shrinkWrap,
             physics: physics ?? const NeverScrollableScrollPhysics(),
-            padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+            padding: ProductCardGrid.pageInsets(context, payload.items),
             onOpen: (p) => onOpenProduct(p.id),
           ),
         ),
@@ -1069,7 +1069,7 @@ class SearchIdleView extends StatelessWidget {
     ];
     if (items.isEmpty) return const SizedBox.shrink();
     return Padding(
-      padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+      padding: ProductCardGrid.pageInsets(context, items),
       child: CardSurface(
         screen: 'search',
         child: ProductCardGrid(

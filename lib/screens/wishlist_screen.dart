@@ -194,7 +194,8 @@ class _WishlistScreenState extends State<WishlistScreen> {
       onRefresh: _load,
       child: ListView(
         padding: EdgeInsets.symmetric(
-            horizontal: Ds.space.x16, vertical: Ds.space.x16),
+            horizontal: ProductCardGrid.pagePad(context, _cards(p)),
+            vertical: Ds.space.x16),
         children: [
           if (countLabel.isNotEmpty) ...[
             Text(countLabel,

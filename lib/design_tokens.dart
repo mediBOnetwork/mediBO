@@ -429,6 +429,23 @@ class DsTouch {
   /// and every bar in the slot is the same rectangle whatever it says.
   final double barActionWidth;
 
+  /// CMD #2172 (Om) — how far the finger travels before the bottom nav row is
+  /// gone, and back again, in logical pixels.
+  ///
+  /// It is deliberately NOT [headerBand]: #2080 published the nav as the band's
+  /// own travel read as a fraction, so the bar needed 64 px of BELIEVED travel
+  /// (the band's 40 px reservoir first) before it had moved at all. Om's design
+  /// is "scroll down 8 dp: only the nav row slides away · scroll up 8 dp: the
+  /// nav returns" — a short window that answers the finger straight away. A
+  /// token, so the feel is one `ui_design_set` and no deploy.
+  final double navHideTravel;
+
+  /// CMD #2172 (Om) — the air between the View cart pill and the floating card
+  /// under it. The pill is SEPARATE from the card and never hides, so this is
+  /// the one number that keeps it off whatever the card currently is: both rows
+  /// at the top of a page, the banner alone once the nav has slid away.
+  final double cartPillGap;
+
   /// CMD #2147 (Om) — the header's own measurements, one token each.
   final double headerTile, headerTileRadius, headerTileMark, headerTop, headerWord, headerWordGap, headerGap, headerPill, headerPillText;
 
@@ -440,6 +457,8 @@ class DsTouch {
     required this.headerBand,
     required this.headerHysteresis,
     required this.headerSettleMs,
+    required this.navHideTravel,
+    required this.cartPillGap,
     required this.headerTile,
     required this.headerTileRadius,
     required this.headerTileMark,
@@ -473,6 +492,10 @@ class DsTouch {
       // CMD #2052 — the settle. Long enough to read as a movement, short
       // enough that a fast scroller never sees a half-open header.
       headerSettleMs: 180,
+      // CMD #2172 — Om's own number, on the finger: 8 dp each way.
+      navHideTravel: 8,
+      // CMD #2172 — Om's own number: the pill floats 10 dp above the card.
+      cartPillGap: 10,
       headerTile: 40, // the logo tile, the header row, the sticky search field and the bell box
       headerTileRadius: 11, // the logo tile corner
       headerTileMark: 28, // the tile's "m"
@@ -492,6 +515,8 @@ class DsTouch {
             Ds._num(m['headerHysteresis'], f.headerHysteresis),
         headerSettleMs:
             Ds._num(m['headerSettleMs'], f.headerSettleMs),
+        navHideTravel: Ds._num(m['navHideTravel'], f.navHideTravel),
+        cartPillGap: Ds._num(m['cartPillGap'], f.cartPillGap),
         headerTile: Ds._num(m['headerTile'], f.headerTile),
         headerTileRadius: Ds._num(m['headerTileRadius'], f.headerTileRadius),
         headerTileMark: Ds._num(m['headerTileMark'], f.headerTileMark),

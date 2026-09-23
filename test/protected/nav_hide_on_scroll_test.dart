@@ -7,10 +7,16 @@
 // verdict computed twice drifts. So the contract this file holds down is not
 // "the bar hides" — it is "the bar hides BY BEING THE HEADER'S OWN NUMBER":
 //
-//   · ONE ACCUMULATOR. `shellNavHide` is `shellHeaderCollapse` in another
-//     unit. Same finger, same 1:1 travel, same 40 px hysteresis, same settle,
-//     same top-of-page floor — because there is nothing here that could
-//     disagree with them.
+//   · ONE DRIVER, ONE SET OF FILTERS. `shellNavHide` is fed from the very same
+//     filtered finger deltas the band is fed from — same listener, same
+//     overscroll rule, same no-finger rule, same top-of-page floor.
+//   · CMD #2172 — BUT ITS OWN DISTANCE. Om: "scroll down 8 dp: only the nav row
+//     slides away · scroll up 8 dp: the nav returns". The nav travels
+//     `Ds.touch.navHideTravel`, not the band's 64, and it answers the finger
+//     without waiting for the band's 40 px reservoir — so a shopper's small
+//     flick moves the bar and not the header. The two are separate travels off
+//     one input, never two drivers.
+//   · CMD #2172 — BOTH ENDS OF A PAGE WEAR THE BAR: the top and the end.
 //   · EVERY CUSTOMER TAB, NOT JUST THE BAND'S TWO. Orders and Bulk keep their
 //     header and still hide their bar, so the two enables are separate and
 //     both are the shell's.
@@ -34,7 +40,10 @@ import 'package:pharma_b2b/services/ui_copy.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 
 final double _h = Ds.touch.headerBand;
-final double _t = Ds.touch.headerHysteresis;
+
+/// CMD #2172 — the nav's own travel: 8 dp down and it is gone, 8 dp up and it
+/// is back.
+final double _nt = Ds.touch.navHideTravel;
 
 FixedScrollMetrics _metrics({
   double pixels = 500,
@@ -118,25 +127,28 @@ void main() {
   });
 
   group('CMD #2080 · the bar is the header band in another unit', () {
-    testWidgets('a drag down hides it, 1:1 with the band', (tester) async {
+    // CMD #2172 (Om) — 8 dp down and the nav row is gone. It is its own
+    // distance now: the band's 40 px reservoir decides the HEADER, and a
+    // shopper's short flick still takes the bar away.
+    testWidgets('8 dp down takes it away, 1:1 inside its own travel',
+        (tester) async {
       final context = await _ctx(tester);
-      _drag(_t, context: context);
-      expect(shellHeaderCollapse.value, _t,
-          reason: 'the band stopped moving with the finger');
-      expect(shellNavHide.value, closeTo(_t / _h, 1e-9),
-          reason: 'the bar is not the same travel read as a fraction');
+      _drag(_nt / 2, context: context);
+      expect(shellNavHide.value, closeTo(0.5, 1e-9),
+          reason: 'the bar does not follow the finger over its own travel');
+      _drag(_nt / 2, context: context);
+      expect(shellNavHide.value, 1.0, reason: 'the bar never went away');
+      expect(shellHeaderCollapse.value, 0.0,
+          reason: 'the band moved on travel it had not yet believed');
     });
 
-    testWidgets('a drag up brings it straight back', (tester) async {
+    testWidgets('8 dp up brings it straight back', (tester) async {
       final context = await _ctx(tester);
       _drag(_h, context: context);
       expect(shellNavHide.value, 1.0, reason: 'the bar never went away');
-      // A reversal earns its turn over the hysteresis — once, for both.
-      _drag(-_t, context: context);
-      expect(shellNavHide.value, lessThan(1.0),
-          reason: 'scrolling up did not bring the bar back');
-      expect(shellNavHide.value, closeTo(shellHeaderCollapse.value / _h, 1e-9),
-          reason: 'the two pieces of chrome have drifted apart');
+      _drag(-_nt, context: context);
+      expect(shellNavHide.value, 0.0,
+          reason: 'scrolling up 8 dp did not bring the bar back');
     });
 
     testWidgets('it can never be more than fully gone', (tester) async {
@@ -155,6 +167,17 @@ void main() {
       _drag(-4, pixels: 0, context: context);
       expect(shellNavHide.value, 0.0,
           reason: 'the bar stayed hidden at the top of the page');
+    });
+
+    testWidgets('the END of a page always wears its bar too', (tester) async {
+      final context = await _ctx(tester);
+      _drag(_h, context: context);
+      expect(shellNavHide.value, 1.0);
+      // The last row is on screen: there is nothing below it for the bar to be
+      // in the way of, so the bar comes back.
+      _drag(4, pixels: 4000, context: context);
+      expect(shellNavHide.value, 0.0,
+          reason: 'the bar stayed hidden at the end of the page');
     });
 
     testWidgets('a page too short to scroll keeps its bar', (tester) async {
@@ -242,6 +265,11 @@ void main() {
       expect(shell, contains('enabled: !isAdmin && shellNavHideEnabled'),
           reason: 'the wrapper stopped reading the backend flag, or started '
               'wrapping the staff bar');
+      // CMD #2172 — and it is handed DOWN to the dock, so it wraps the NAV ROW
+      // rather than the whole card (which took the banner with it).
+      expect(shell, contains('navSlot:'),
+          reason: 'the hiding slot wraps the whole dock again — the banner will '
+              'disappear with the nav');
     });
 
     test('there is ONE driver and ONE accumulator behind both', () {
@@ -260,6 +288,11 @@ void main() {
           1,
           reason: 'the bar is published from somewhere other than the one '
               'accumulator');
+      // CMD #2172 — one FEED, two travels. The nav's accumulator is filled from
+      // the same delta in the same function; a second `shellHeaderScroll` or a
+      // second notifier is what this has always forbidden.
+      expect('void _navFeed('.allMatches(band).length, 1,
+          reason: 'the nav travel is filled from more than one place');
     });
 
     test('the bar shortens its SLOT — it is not translated out of the body',

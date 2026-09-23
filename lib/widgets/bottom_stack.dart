@@ -110,7 +110,12 @@ class BottomStackMetrics {
 
   /// The air the pill floats on: between it and whatever is below it, which is
   /// the bar slot when there is an update and the bottom nav when there is not.
-  static double get gap => Ds.space.x12;
+  ///
+  /// CMD #2172 (Om) — 10, and its own token. The pill is SEPARATE from the
+  /// floating card and never hides, so this is the one number that keeps it
+  /// clear of whatever the card currently is — both rows at the top of a page,
+  /// the banner on its own once the nav row has slid away.
+  static double get gap => Ds.touch.cartPillGap;
 
   /// The pill slot, when the cart payload says there is a pill.
   static double get pill => CartPill.kHeight;

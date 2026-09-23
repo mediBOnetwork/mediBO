@@ -1,5 +1,4 @@
-import 'product.dart'
-    show Availability, Pricing, Product, PurchaseOverlay;
+import 'product.dart' show Availability, Pricing, Product, PurchaseOverlay;
 import 'product_reviews.dart' show RatingSummary;
 
 /// CHANGE #636 — the `product_detail(p_product_id)` payload, parsed and nothing
@@ -44,7 +43,8 @@ class ProductDetail {
   String get rxLabel => (rx?['label'] ?? '').toString();
   String get rxTitle => (rx?['title'] ?? '').toString();
   String get rxNote => (rx?['note'] ?? '').toString();
-  Map<String, dynamic>? get rxTone => (rx?['tone'] as Map?)?.cast<String, dynamic>();
+  Map<String, dynamic>? get rxTone =>
+      (rx?['tone'] as Map?)?.cast<String, dynamic>();
 
   /// The licence line only exists for an Rx product AND a signed-in pharmacy.
   bool get rxLicenceOk => rxLicence?['has'] == true;
@@ -173,6 +173,13 @@ class ProductDetail {
   final bool showWishlist;
   final bool isWishlisted;
 
+  /// CMD #2169 — the card's own colour block (`card_style()`) and geometry
+  /// (`card_layout()`), carried on this page so the header's heart is the
+  /// SAME heart every card draws: same two colours, same glyph size, both
+  /// read out of the payload instead of picked in Dart.
+  final Map<String, dynamic> cardStyle;
+  final Map<String, dynamic> cardLayout;
+
   /// CMD #410 — the reviews aggregate, from product_rating_summary() via
   /// product_detail_v2. `has` is false below the review floor, and then the
   /// header shows NOTHING: a 5.0 written by one customer is an anecdote, not
@@ -230,6 +237,8 @@ class ProductDetail {
     required this.historyLabel,
     required this.showWishlist,
     required this.isWishlisted,
+    this.cardStyle = const {},
+    this.cardLayout = const {},
     this.rating = RatingSummary.absent,
     this.compareOpenLabel = '',
     this.compareAddLabel = '',
@@ -304,28 +313,33 @@ class ProductDetail {
       trust: PdTrust.fromMap(m['trust']),
       overview: ((m['overview'] as List?) ?? const [])
           .whereType<Map>()
-          .map((r) => PdOverviewRow(
-              label: _s(r['label']), value: _s(r['value'])))
+          .map(
+            (r) => PdOverviewRow(label: _s(r['label']), value: _s(r['value'])),
+          )
           .toList(growable: false),
       sections: ((m['sections'] as List?) ?? const [])
           .whereType<Map>()
-          .map((r) => PdSection(
-                title: _s(r['title']),
-                body: _s(r['body']),
-                accordion: r['accordion'] == true,
-              ))
+          .map(
+            (r) => PdSection(
+              title: _s(r['title']),
+              body: _s(r['body']),
+              accordion: r['accordion'] == true,
+            ),
+          )
           .toList(growable: false),
       similar: ((m['similar'] as List?) ?? const [])
           .whereType<Map>()
-          .map((r) => PdSimilar(
-                id: _s(r['id']),
-                name: _s(r['name']),
-                company: _s(r['company']),
-                packLabel: _s(r['pack_label']),
-                formChip: _s(r['form_chip']),
-                image: _s(r['image']),
-                mrpLabel: _s(r['mrp_label']),
-              ))
+          .map(
+            (r) => PdSimilar(
+              id: _s(r['id']),
+              name: _s(r['name']),
+              company: _s(r['company']),
+              packLabel: _s(r['pack_label']),
+              formChip: _s(r['form_chip']),
+              image: _s(r['image']),
+              mrpLabel: _s(r['mrp_label']),
+            ),
+          )
           .toList(growable: false),
       saltRail: PdSaltRail.fromMap(m['salt_rail']),
       substitutes: PdSubstitutes.fromMap(m['substitutes']),
@@ -342,6 +356,9 @@ class ProductDetail {
       historyLabel: _s(hist['label']),
       showWishlist: m['show_wishlist'] == true,
       isWishlisted: m['is_wishlisted'] == true,
+      cardStyle: (m['card_style'] as Map?)?.cast<String, dynamic>() ?? const {},
+      cardLayout:
+          (m['card_layout'] as Map?)?.cast<String, dynamic>() ?? const {},
       rating: RatingSummary.fromMap(m['rating']),
       compareOpenLabel: _s((m['compare'] as Map?)?['open_label']),
       compareAddLabel: _s((m['compare'] as Map?)?['add_label']),
@@ -355,36 +372,36 @@ class ProductDetail {
   /// The not-found page. Carries the backend's own labels so even this state
   /// shows no Dart-authored copy.
   factory ProductDetail.notFound(Map<String, String> labels) => ProductDetail(
-        ok: false,
-        id: '',
-        labels: labels,
-        name: '',
-        company: '',
-        packLabel: '',
-        formChip: '',
-        rxRequired: false,
-        images: const [],
-        hasMrp: false,
-        mrpLabel: '',
-        mrpNote: '',
-        hasGst: false,
-        gstLabel: '',
-        availability: null,
-        pricing: null,
-        buyable: false,
-        hasSupplierLabel: false,
-        supplierLabel: '',
-        trust: const PdTrust.empty(),
-        overview: const [],
-        sections: const [],
-        similar: const [],
-        substitutes: const PdSubstitutes.empty(),
-        deliveryPromise: const PdPromise.empty(),
-        hasHistory: false,
-        historyLabel: '',
-        showWishlist: false,
-        isWishlisted: false,
-      );
+    ok: false,
+    id: '',
+    labels: labels,
+    name: '',
+    company: '',
+    packLabel: '',
+    formChip: '',
+    rxRequired: false,
+    images: const [],
+    hasMrp: false,
+    mrpLabel: '',
+    mrpNote: '',
+    hasGst: false,
+    gstLabel: '',
+    availability: null,
+    pricing: null,
+    buyable: false,
+    hasSupplierLabel: false,
+    supplierLabel: '',
+    trust: const PdTrust.empty(),
+    overview: const [],
+    sections: const [],
+    similar: const [],
+    substitutes: const PdSubstitutes.empty(),
+    deliveryPromise: const PdPromise.empty(),
+    hasHistory: false,
+    historyLabel: '',
+    showWishlist: false,
+    isWishlisted: false,
+  );
 }
 
 /// CMD #2040 — the ONE rail under the product page.
@@ -409,10 +426,7 @@ class PdSaltRail {
     required this.items,
   });
 
-  const PdSaltRail.empty()
-      : has = false,
-        title = '',
-        items = const [];
+  const PdSaltRail.empty() : has = false, title = '', items = const [];
 
   factory PdSaltRail.fromMap(Object? raw) {
     if (raw is! Map) return const PdSaltRail.empty();
@@ -447,11 +461,11 @@ class PdSubstitutes {
     required this.items,
   });
   const PdSubstitutes.empty()
-      : has = false,
-        heading = '',
-        note = '',
-        empty = '',
-        items = const [];
+    : has = false,
+      heading = '',
+      note = '',
+      empty = '',
+      items = const [];
 
   factory PdSubstitutes.fromMap(Object? raw) {
     if (raw is! Map) return const PdSubstitutes.empty();
@@ -589,7 +603,6 @@ class PdSimilar {
   });
 }
 
-
 /// One chip on the PDP trust strip. Every field is a backend string — the app
 /// picks no words and computes no percentage.
 class PdTrustChip {
@@ -614,10 +627,7 @@ class PdTrust {
   final String title;
   final List<PdTrustChip> chips;
   const PdTrust({required this.has, required this.title, required this.chips});
-  const PdTrust.empty()
-      : has = false,
-        title = '',
-        chips = const [];
+  const PdTrust.empty() : has = false, title = '', chips = const [];
 
   factory PdTrust.fromMap(Object? raw) {
     if (raw is! Map) return const PdTrust.empty();
@@ -626,17 +636,18 @@ class PdTrust {
       title: raw['title']?.toString() ?? '',
       chips: ((raw['chips'] as List?) ?? const [])
           .whereType<Map>()
-          .map((c) => PdTrustChip(
-                key: c['key']?.toString() ?? '',
-                label: c['label']?.toString() ?? '',
-                note: c['note']?.toString() ?? '',
-                tone: c['tone']?.toString() ?? '',
-              ))
+          .map(
+            (c) => PdTrustChip(
+              key: c['key']?.toString() ?? '',
+              label: c['label']?.toString() ?? '',
+              note: c['note']?.toString() ?? '',
+              tone: c['tone']?.toString() ?? '',
+            ),
+          )
           .toList(growable: false),
     );
   }
 }
-
 
 /// CMD #791 — one pack shot plus the counter string the backend rendered for
 /// its position ("2 / 5"). The viewer prints [counterLabel] verbatim.
@@ -670,21 +681,23 @@ class PdGallery {
   });
 
   const PdGallery.empty()
-      : has = false,
-        count = 0,
-        zoomHint = '',
-        closeLabel = '',
-        images = const [];
+    : has = false,
+      count = 0,
+      zoomHint = '',
+      closeLabel = '',
+      images = const [];
 
   factory PdGallery.fromMap(Object? raw, Object? legacyImages) {
     if (raw is Map) {
       final m = raw.cast<String, dynamic>();
       final imgs = ((m['images'] as List?) ?? const [])
           .whereType<Map>()
-          .map((e) => PdGalleryImage(
-                url: ProductDetail._s(e['url']),
-                counterLabel: ProductDetail._s(e['counter_label']),
-              ))
+          .map(
+            (e) => PdGalleryImage(
+              url: ProductDetail._s(e['url']),
+              counterLabel: ProductDetail._s(e['counter_label']),
+            ),
+          )
           .where((e) => e.url.isNotEmpty)
           .toList(growable: false);
       if (imgs.isNotEmpty || m['has'] == true) {
@@ -723,7 +736,11 @@ class PdFactRow {
   final String key;
   final String label;
   final String value;
-  const PdFactRow({required this.key, required this.label, required this.value});
+  const PdFactRow({
+    required this.key,
+    required this.label,
+    required this.value,
+  });
 }
 
 class PdFacts {
@@ -741,11 +758,13 @@ class PdFacts {
       title: ProductDetail._s(m['title']),
       rows: ((m['rows'] as List?) ?? const [])
           .whereType<Map>()
-          .map((r) => PdFactRow(
-                key: ProductDetail._s(r['key']),
-                label: ProductDetail._s(r['label']),
-                value: ProductDetail._s(r['value']),
-              ))
+          .map(
+            (r) => PdFactRow(
+              key: ProductDetail._s(r['key']),
+              label: ProductDetail._s(r['label']),
+              value: ProductDetail._s(r['value']),
+            ),
+          )
           .toList(growable: false),
     );
   }
@@ -779,16 +798,16 @@ class PdCompanion {
   });
 
   factory PdCompanion.fromMap(Map<String, dynamic> m) => PdCompanion(
-        id: ProductDetail._s(m['id']),
-        name: ProductDetail._s(m['name']),
-        company: ProductDetail._s(m['company']),
-        packLabel: ProductDetail._s(m['pack_label']),
-        formChip: ProductDetail._s(m['form_chip']),
-        image: ProductDetail._s(m['image']),
-        supportLabel: ProductDetail._s(m['support_label']),
-        pricing: Pricing.fromMap(m['pricing']),
-        availability: Availability.fromMap(m['availability']),
-      );
+    id: ProductDetail._s(m['id']),
+    name: ProductDetail._s(m['name']),
+    company: ProductDetail._s(m['company']),
+    packLabel: ProductDetail._s(m['pack_label']),
+    formChip: ProductDetail._s(m['form_chip']),
+    image: ProductDetail._s(m['image']),
+    supportLabel: ProductDetail._s(m['support_label']),
+    pricing: Pricing.fromMap(m['pricing']),
+    availability: Availability.fromMap(m['availability']),
+  );
 }
 
 /// CMD #791 — the co-purchase rail. [has] is the backend's verdict: a product
@@ -806,10 +825,10 @@ class PdCompanions {
     required this.items,
   });
   const PdCompanions.empty()
-      : has = false,
-        title = '',
-        note = '',
-        items = const [];
+    : has = false,
+      title = '',
+      note = '',
+      items = const [];
 
   factory PdCompanions.fromMap(Object? raw) {
     if (raw is! Map) return const PdCompanions.empty();
@@ -850,14 +869,14 @@ class PdSupply {
     required this.speed,
   });
   const PdSupply.empty()
-      : has = false,
-        band = '',
-        label = '',
-        tone = '',
-        hasSub = false,
-        sub = '',
-        hasSpeed = false,
-        speed = '';
+    : has = false,
+      band = '',
+      label = '',
+      tone = '',
+      hasSub = false,
+      sub = '',
+      hasSpeed = false,
+      speed = '';
 
   factory PdSupply.fromMap(Object? raw) {
     if (raw is! Map || raw['has'] != true) return const PdSupply.empty();
@@ -912,15 +931,15 @@ class PdPriceLine {
     this.perUnit = const PdChip.empty(),
   });
   const PdPriceLine.empty()
-      : caption = '',
-        value = '',
-        hasAmount = false,
-        hasNote = false,
-        note = '',
-        tone = '',
-        strike = false,
-        info = const PdInfoNote.empty(),
-        perUnit = const PdChip.empty();
+    : caption = '',
+      value = '',
+      hasAmount = false,
+      hasNote = false,
+      note = '',
+      tone = '',
+      strike = false,
+      info = const PdInfoNote.empty(),
+      perUnit = const PdChip.empty();
 
   factory PdPriceLine.fromMap(Object? raw) {
     if (raw is! Map) return const PdPriceLine.empty();
@@ -947,10 +966,7 @@ class PdChip {
   final String label;
   final String tone;
   const PdChip({required this.has, required this.label, required this.tone});
-  const PdChip.empty()
-      : has = false,
-        label = '',
-        tone = '';
+  const PdChip.empty() : has = false, label = '', tone = '';
 
   factory PdChip.fromMap(Object? raw) {
     if (raw is! Map || raw['has'] != true) return const PdChip.empty();
@@ -971,10 +987,7 @@ class PdInfoNote {
     required this.label,
     required this.text,
   });
-  const PdInfoNote.empty()
-      : has = false,
-        label = '',
-        text = '';
+  const PdInfoNote.empty() : has = false, label = '', text = '';
 
   factory PdInfoNote.fromMap(Object? raw) {
     if (raw is! Map || raw['has'] != true) return const PdInfoNote.empty();
@@ -1007,11 +1020,11 @@ class PdTitle {
     required this.packLine,
   });
   const PdTitle.empty()
-      : has = false,
-        name = '',
-        company = '',
-        formChip = const PdChip.empty(),
-        packLine = const PdChip.empty();
+    : has = false,
+      name = '',
+      company = '',
+      formChip = const PdChip.empty(),
+      packLine = const PdChip.empty();
 
   factory PdTitle.fromMap(Object? raw) {
     if (raw is! Map || raw['has'] != true) return const PdTitle.empty();
@@ -1041,11 +1054,11 @@ class PdSticky {
     required this.side,
   });
   const PdSticky.empty()
-      : main = '',
-        mainCaption = '',
-        mainTone = '',
-        hasSide = false,
-        side = '';
+    : main = '',
+      mainCaption = '',
+      mainTone = '',
+      hasSide = false,
+      side = '';
 
   factory PdSticky.fromMap(Object? raw) {
     if (raw is! Map) return const PdSticky.empty();
@@ -1080,11 +1093,11 @@ class PdPriceLines {
     this.discount = const PdChip.empty(),
   });
   const PdPriceLines.empty()
-      : has = false,
-        mrp = const PdPriceLine.empty(),
-        sale = const PdPriceLine.empty(),
-        sticky = const PdSticky.empty(),
-        discount = const PdChip.empty();
+    : has = false,
+      mrp = const PdPriceLine.empty(),
+      sale = const PdPriceLine.empty(),
+      sticky = const PdSticky.empty(),
+      discount = const PdChip.empty();
 
   factory PdPriceLines.fromMap(Object? raw) {
     if (raw is! Map || raw['has'] != true) return const PdPriceLines.empty();
@@ -1119,21 +1132,26 @@ class PdOtherPacks {
   final String title;
   final List<PdPack> items;
 
-  const PdOtherPacks(
-      {required this.has, required this.title, required this.items});
+  const PdOtherPacks({
+    required this.has,
+    required this.title,
+    required this.items,
+  });
   const PdOtherPacks.empty()
-      : has = false,
-        title = '',
-        items = const <PdPack>[];
+    : has = false,
+      title = '',
+      items = const <PdPack>[];
 
   factory PdOtherPacks.fromMap(Object? raw) {
     if (raw is! Map || raw['has'] != true) return const PdOtherPacks.empty();
     final items = ((raw['items'] as List?) ?? const [])
         .whereType<Map>()
-        .map((e) => PdPack(
-              productId: (e['product_id'] ?? '').toString(),
-              label: (e['label'] ?? '').toString(),
-            ))
+        .map(
+          (e) => PdPack(
+            productId: (e['product_id'] ?? '').toString(),
+            label: (e['label'] ?? '').toString(),
+          ),
+        )
         .where((p) => p.productId.isNotEmpty && p.label.isNotEmpty)
         .toList(growable: false);
     // One other pack is a row worth drawing now that the pack being viewed is

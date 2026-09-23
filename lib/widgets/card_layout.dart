@@ -39,15 +39,15 @@ class CardShow {
   static bool _b(Map m, String k, bool d) => m[k] is bool ? m[k] as bool : d;
 
   factory CardShow.from(Map m) => CardShow(
-        packChip: _b(m, 'pack_chip', true),
-        subLine: _b(m, 'sub_line', true),
-        mrp: _b(m, 'mrp', true),
-        ptrBadge: _b(m, 'ptr_badge', true),
-        schemeBadge: _b(m, 'scheme_badge', true),
-        action: _b(m, 'action', true),
-        photo: _b(m, 'photo', true),
-        wish: _b(m, 'wish', true),
-      );
+    packChip: _b(m, 'pack_chip', true),
+    subLine: _b(m, 'sub_line', true),
+    mrp: _b(m, 'mrp', true),
+    ptrBadge: _b(m, 'ptr_badge', true),
+    schemeBadge: _b(m, 'scheme_badge', true),
+    action: _b(m, 'action', true),
+    photo: _b(m, 'photo', true),
+    wish: _b(m, 'wish', true),
+  );
 }
 
 /// The resolved card geometry for one screen.
@@ -56,10 +56,20 @@ class CardLayout {
   final double photoPad, imagePct;
   final double nameSize, nameLineH, subSize, subLineH, priceSize, mrpSize;
   final double chipH, chipSize, chipRadius, actionH, touchMin;
+
+  /// CMD #2169 — the wishlist heart: the glyph the eye sees ([wishIcon]) and
+  /// the invisible box that catches the finger ([wishTap]). There is nothing
+  /// else to size: the white disc that used to sit under the heart is gone.
+  final double wishIcon, wishTap;
   final double gridGap, pagePad, minCardW;
   final double shadowBlur, shadowDy, shadowAlpha;
-  final int nameLines, nameWeight, subWeight, priceWeight, mrpWeight,
-      chipWeight, maxCols;
+  final int nameLines,
+      nameWeight,
+      subWeight,
+      priceWeight,
+      mrpWeight,
+      chipWeight,
+      maxCols;
   final String imageFit;
   final CardShow show;
 
@@ -88,6 +98,8 @@ class CardLayout {
     required this.chipRadius,
     required this.actionH,
     required this.touchMin,
+    required this.wishIcon,
+    required this.wishTap,
     required this.gridGap,
     required this.pagePad,
     required this.minCardW,
@@ -129,6 +141,8 @@ class CardLayout {
     chipRadius: 8,
     actionH: 36,
     touchMin: 44,
+    wishIcon: 24,
+    wishTap: 44,
     gridGap: 12,
     pagePad: 16,
     minCardW: 162,
@@ -204,8 +218,11 @@ class CardLayout {
       gapM: _d(l, 'gap_m', f.gapM),
       gapL: _d(l, 'gap_l', f.gapL),
       photoPad: _d(l, 'photo_pad', f.photoPad),
-      imagePct:
-          _d(l, 'image_pct', _d(v6, 'image_pct', f.imagePct)).clamp(1, 100),
+      imagePct: _d(
+        l,
+        'image_pct',
+        _d(v6, 'image_pct', f.imagePct),
+      ).clamp(1, 100),
       nameSize: _d(l, 'name_size', f.nameSize),
       nameLineH: _d(l, 'name_line_h', f.nameLineH),
       subSize: _d(l, 'sub_size', f.subSize),
@@ -217,6 +234,8 @@ class CardLayout {
       chipRadius: _d(l, 'chip_radius', f.chipRadius),
       actionH: _d(l, 'action_h', f.actionH),
       touchMin: _d(l, 'touch_min', f.touchMin),
+      wishIcon: _d(l, 'wish_icon', f.wishIcon),
+      wishTap: _d(l, 'wish_tap', f.wishTap),
       gridGap: _d(l, 'grid_gap', f.gridGap),
       pagePad: _d(l, 'page_pad', f.pagePad),
       minCardW: _d(l, 'min_card_w', f.minCardW),

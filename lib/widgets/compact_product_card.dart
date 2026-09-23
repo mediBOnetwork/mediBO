@@ -133,9 +133,13 @@ class CompactProductCard extends StatelessWidget {
       _footH +
       _padBottom; // 278
 
-  /// CMD #2040 — the heart's tap target; the circle you SEE is [wishDotSize].
+  /// CMD #2040 — the heart's tap target, and the room the top-left chips
+  /// leave for it. CMD #2169 removed the white circle that used to sit under
+  /// the glyph, so there is no second size: what you SEE is the heart, drawn
+  /// at `card_layout().wish_icon` inside a `wish_tap` box. This constant is
+  /// the fallback that box falls back to, and the only number the chips need
+  /// in order to keep clear of it.
   static const double wishTapSize = 44;
-  static const double wishDotSize = 30;
 
   /// CMD #2040 — the Compare row. What you SEE is [_compareH]; what you can
   /// hit is the whole [compareRowH].
@@ -210,99 +214,120 @@ class CompactProductCard extends StatelessWidget {
             wishlistToggle: wishlistToggle,
           )
         : Container(
-      height: extent,
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: v5 == null ? Ds.c.surface : Ds.hex(v5.textBg, Ds.c.surface),
-        borderRadius: v5 == null ? BorderRadius.circular(Rad.card) : Ds.r.rCard,
-        border: Border.all(
-          color: v5 == null ? Ds.c.divider : Ds.hex(v5.border, Ds.c.divider),
-          width: _frameBorderW,
-        ),
-        boxShadow: Ds.elevation.e1,
-      ),
-      child: Material(
-        type: MaterialType.transparency,
-        child: InkWell(
-          onTap: onTap,
-          onLongPress: onPeek,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                height: tileH,
-                color: v5 == null ? null : Ds.hex(v5.photoBg, Ds.c.surface),
-                child: v5 != null
-                    ? _V5Artwork(
-                        product: product,
-                        view: view,
-                        v5: v5,
-                        soldOut: soldOut,
-                        wishlistToggle: wishlistToggle,
-                      )
-                    : _Artwork(
-                        product: product,
-                        view: view,
-                        soldOut: soldOut,
-                        wishlistToggle: wishlistToggle,
-                      ),
+            height: extent,
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              color: v5 == null
+                  ? Ds.c.surface
+                  : Ds.hex(v5.textBg, Ds.c.surface),
+              borderRadius: v5 == null
+                  ? BorderRadius.circular(Rad.card)
+                  : Ds.r.rCard,
+              border: Border.all(
+                color: v5 == null
+                    ? Ds.c.divider
+                    : Ds.hex(v5.border, Ds.c.divider),
+                width: _frameBorderW,
               ),
-              if (v5 != null)
-                Padding(
-                  padding: const EdgeInsets.only(left: _padX, top: _gapL, right: _padX),
-                  child: _V5Body(product: product, view: view, v5: v5),
-                )
-              else
-              Padding(
-                padding: const EdgeInsets.only(left: _padX, top: _gapL, right: _padX),
+              boxShadow: Ds.elevation.e1,
+            ),
+            child: Material(
+              type: MaterialType.transparency,
+              child: InkWell(
+                onTap: onTap,
+                onLongPress: onPeek,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    SizedBox(
-                      height: _nameH,
-                      child: Text(
-                        product.name,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppType.l5.copyWith(
-                          fontWeight: FontWeight.w700,
-                          height: 18 / 12,
-                          color: Ds.c.text,
+                    Container(
+                      height: tileH,
+                      color: v5 == null
+                          ? null
+                          : Ds.hex(v5.photoBg, Ds.c.surface),
+                      child: v5 != null
+                          ? _V5Artwork(
+                              product: product,
+                              view: view,
+                              v5: v5,
+                              soldOut: soldOut,
+                              wishlistToggle: wishlistToggle,
+                            )
+                          : _Artwork(
+                              product: product,
+                              view: view,
+                              soldOut: soldOut,
+                              wishlistToggle: wishlistToggle,
+                            ),
+                    ),
+                    if (v5 != null)
+                      Padding(
+                        padding: const EdgeInsets.only(
+                          left: _padX,
+                          top: _gapL,
+                          right: _padX,
+                        ),
+                        child: _V5Body(product: product, view: view, v5: v5),
+                      )
+                    else
+                      Padding(
+                        padding: const EdgeInsets.only(
+                          left: _padX,
+                          top: _gapL,
+                          right: _padX,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            SizedBox(
+                              height: _nameH,
+                              child: Text(
+                                product.name,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: AppType.l5.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                  height: 18 / 12,
+                                  color: Ds.c.text,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: _gapS),
+                            SizedBox(
+                              height: _packH,
+                              child: Text(
+                                view.packLine,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: AppType.t1.copyWith(
+                                  color: Ds.c.textSecondary,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: _gapM),
+                            SizedBox(
+                              height: _priceH,
+                              child: CardPriceRow(
+                                price: view.price,
+                                height: _priceH,
+                              ),
+                            ),
+                            const SizedBox(height: _gapS),
+                            SizedBox(
+                              height: _footH,
+                              child: _CardFoot(
+                                product: product,
+                                view: view,
+                                soldOut: soldOut,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                    ),
-                    const SizedBox(height: _gapS),
-                    SizedBox(
-                      height: _packH,
-                      child: Text(
-                        view.packLine,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppType.t1.copyWith(color: Ds.c.textSecondary),
-                      ),
-                    ),
-                    const SizedBox(height: _gapM),
-                    SizedBox(
-                      height: _priceH,
-                      child: CardPriceRow(price: view.price, height: _priceH),
-                    ),
-                    const SizedBox(height: _gapS),
-                    SizedBox(
-                      height: _footH,
-                      child: _CardFoot(
-                        product: product,
-                        view: view,
-                        soldOut: soldOut,
-                      ),
-                    ),
                   ],
                 ),
               ),
-            ],
-          ),
-        ),
-      ),
-    );
+            ),
+          );
 
     // CMD #2122 — a stable handle for the browser journeys (Flutter web
     // renders to canvas; the semantics tree is the only thing a script taps).
@@ -420,10 +445,9 @@ class CardPriceRow extends StatelessWidget {
     // A locked price NEVER prints its amount: with the PTR pill switched off
     // the row falls back to the ceiling alone, never to the bare number.
     if (hasSale && p.priceLocked && !showPtr) {
-      return mrp == null ? const SizedBox.shrink() : Align(
-        alignment: Alignment.centerLeft,
-        child: mrp,
-      );
+      return mrp == null
+          ? const SizedBox.shrink()
+          : Align(alignment: Alignment.centerLeft, child: mrp);
     }
 
     if (hasSale && p.priceLocked) {
@@ -515,8 +539,11 @@ class CompareButton extends StatelessWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.compare_arrows_rounded,
-                    size: Ds.space.x16, color: Brand.accent),
+                Icon(
+                  Icons.compare_arrows_rounded,
+                  size: Ds.space.x16,
+                  color: Brand.accent,
+                ),
                 SizedBox(width: Ds.space.x4),
                 Flexible(
                   child: Text(
@@ -600,8 +627,7 @@ class _Artwork extends StatelessWidget {
     // A pre-#2121 payload's notched margin ribbon, exactly as it arrived. The
     // card object carries the margin in its foot line instead, so a `card`
     // payload never draws one.
-    final ribbon =
-        product.card == null && pricing != null && pricing.hasRibbon;
+    final ribbon = product.card == null && pricing != null && pricing.hasRibbon;
 
     return Stack(
       children: [
@@ -615,9 +641,11 @@ class _Artwork extends StatelessWidget {
                   tag: CompactProductCard.heroTag(product.id),
                   child: ProductImage(
                     url: product.imageUrl,
-                    width: CompactProductCard.tileH -
+                    width:
+                        CompactProductCard.tileH -
                         CompactProductCard.imgPad * 2,
-                    height: CompactProductCard.tileH -
+                    height:
+                        CompactProductCard.tileH -
                         CompactProductCard.imgPad * 2,
                     radius: BorderRadius.circular(Rad.tile),
                   ),
@@ -635,8 +663,7 @@ class _Artwork extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (view.unitWord.isNotEmpty)
-                _UnitChip(text: view.unitWord),
+              if (view.unitWord.isNotEmpty) _UnitChip(text: view.unitWord),
               if (view.unitWord.isNotEmpty && view.hasOffer)
                 const SizedBox(height: CompactProductCard._gapS),
               if (view.hasOffer)
@@ -769,10 +796,7 @@ class _UnitChip extends StatelessWidget {
       text,
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
-      style: AppType.t2.copyWith(
-        color: Ds.c.text,
-        fontWeight: FontWeight.w600,
-      ),
+      style: AppType.t2.copyWith(color: Ds.c.text, fontWeight: FontWeight.w600),
     ),
   );
 }
@@ -947,7 +971,9 @@ class CompactCartControl extends StatelessWidget {
       final a = product.availability;
       return _PlusButton(
         key: const ValueKey('add'),
-        label: a?.ctaShort.isNotEmpty == true ? a!.ctaShort : (a?.ctaLabel ?? ''),
+        label: a?.ctaShort.isNotEmpty == true
+            ? a!.ctaShort
+            : (a?.ctaLabel ?? ''),
         onTap: pick,
         dot: v6
             ? CompactProductCard.actionV6
@@ -1298,13 +1324,14 @@ class CardSaleLine extends StatelessWidget {
               price.priceDisplay,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: (valueStyle ??
-                      AppType.l5.copyWith(fontWeight: FontWeight.w800))
-                  .copyWith(
-                color: price.saleFg == null
-                    ? Colors.white
-                    : Color(price.saleFg!),
-              ),
+              style:
+                  (valueStyle ??
+                          AppType.l5.copyWith(fontWeight: FontWeight.w800))
+                      .copyWith(
+                        color: price.saleFg == null
+                            ? Colors.white
+                            : Color(price.saleFg!),
+                      ),
             ),
           ),
           if (price.priceLocked) ...[
@@ -1491,6 +1518,15 @@ class _WishHeartState extends State<_WishHeart> {
     final label = _saved
         ? widget.product.wishRemoveLabel
         : widget.product.wishAddLabel;
+    // CMD #2169 — the heart and nothing else. The white disc, its shadow and
+    // its border are gone, so the only numbers left are the glyph's size and
+    // the invisible box that catches the finger — both the backend's
+    // (`card_layout().wish_icon` / `wish_tap`), and both colours the
+    // backend's too (`card_style().wish_fg` / `wish_saved_fg`).
+    final cl = CardLayout.of(
+      widget.product.card,
+      screen: CardSurface.of(context),
+    );
     return Semantics(
       button: true,
       label: label,
@@ -1500,23 +1536,16 @@ class _WishHeartState extends State<_WishHeart> {
           onTap: _tap,
           customBorder: const CircleBorder(),
           child: SizedBox(
-            width: CompactProductCard.wishTapSize,
-            height: CompactProductCard.wishTapSize,
+            width: cl.wishTap,
+            height: cl.wishTap,
             child: Center(
-              child: Container(
-                width: CompactProductCard.wishDotSize,
-                height: CompactProductCard.wishDotSize,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  shape: BoxShape.circle,
-                  boxShadow: Ds.elevation.e1,
-                ),
-                child: Icon(
-                  _saved ? Icons.favorite : Icons.favorite_border,
-                  key: ValueKey(_saved ? 'wish-on' : 'wish-off'),
-                  size: Ds.space.x16,
-                  color: _saved ? Ds.c.danger : Ds.c.textSecondary,
-                ),
+              child: Icon(
+                _saved ? Icons.favorite : Icons.favorite_border,
+                key: ValueKey(_saved ? 'wish-on' : 'wish-off'),
+                size: cl.wishIcon,
+                color: _saved
+                    ? cl.color('wish_saved_fg', Ds.c.danger)
+                    : cl.color('wish_fg', Ds.c.textSecondary),
               ),
             ),
           ),
@@ -1577,7 +1606,9 @@ class _QtyPill extends StatelessWidget {
         height: CompactProductCard.pillH,
         child: Center(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: CompactProductCard.stepperW),
+            constraints: const BoxConstraints(
+              maxWidth: CompactProductCard.stepperW,
+            ),
             child: Material(
               color: Ds.c.brand,
               borderRadius: BorderRadius.circular(Rad.pill),
@@ -1588,7 +1619,10 @@ class _QtyPill extends StatelessWidget {
                 child: SizedBox(
                   height: CompactProductCard.plusDot,
                   child: Padding(
-                    padding: EdgeInsets.only(left: Ds.space.x12, right: Ds.space.x8),
+                    padding: EdgeInsets.only(
+                      left: Ds.space.x12,
+                      right: Ds.space.x8,
+                    ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -1606,8 +1640,11 @@ class _QtyPill extends StatelessWidget {
                           ),
                         ),
                         SizedBox(width: Ds.space.x4),
-                        Icon(Icons.keyboard_arrow_down_rounded,
-                            size: Ds.space.x16, color: Ds.c.surface),
+                        Icon(
+                          Icons.keyboard_arrow_down_rounded,
+                          size: Ds.space.x16,
+                          color: Ds.c.surface,
+                        ),
                       ],
                     ),
                   ),
@@ -1627,8 +1664,7 @@ class _QtyPill extends StatelessWidget {
 /// `notified` flag covers every later read.
 class CardNotifyLedger {
   static final ValueNotifier<Set<String>> notified = ValueNotifier(<String>{});
-  static void mark(String id) =>
-      notified.value = {...notified.value, id};
+  static void mark(String id) => notified.value = {...notified.value, id};
 }
 
 /// CMD #2124 — unavailable: an outlined "🔔 Notify" that becomes "✓ Notified".
@@ -1654,8 +1690,8 @@ class _CardNotifyButtonState extends State<CardNotifyButton> {
   Future<void> _tap() async {
     if (_busy) return;
     setState(() => _busy = true);
-    final req = widget.request ??
-        (id) => MedicineRepository().stockNotifyRequest(id);
+    final req =
+        widget.request ?? (id) => MedicineRepository().stockNotifyRequest(id);
     NotifyResult? r;
     try {
       r = await req(widget.productId);
@@ -1678,7 +1714,9 @@ class _CardNotifyButtonState extends State<CardNotifyButton> {
       valueListenable: CardNotifyLedger.notified,
       builder: (context, ids, _) {
         final done = widget.action.notified || ids.contains(widget.productId);
-        final label = done ? widget.action.notifiedLabel : widget.action.notifyLabel;
+        final label = done
+            ? widget.action.notifiedLabel
+            : widget.action.notifyLabel;
         if (label.isEmpty) return const SizedBox.shrink();
         final fg = Ds.c.danger;
         return Semantics(
@@ -1702,7 +1740,9 @@ class _CardNotifyButtonState extends State<CardNotifyButton> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Icon(
-                        done ? Icons.check_rounded : Icons.notifications_rounded,
+                        done
+                            ? Icons.check_rounded
+                            : Icons.notifications_rounded,
                         size: Ds.space.x16,
                         color: fg,
                       ),
@@ -1775,12 +1815,15 @@ class _CardFoot extends StatelessWidget {
       );
     }
     final qty = AppState.of(context).quantityOf(product.id);
-    final (l, t) =
-        action.foot(view: view, soldOut: false, notifiedNow: false, qty: qty);
+    final (l, t) = action.foot(
+      view: view,
+      soldOut: false,
+      notifiedNow: false,
+      qty: qty,
+    );
     return _line(l, t);
   }
 }
-
 
 /// CMD #2146 — v5 image plate: the photo (or, with no photo, the pack-type
 /// icon from `placeholder.kind`) on the payload's photo_bg; the pack chip
@@ -1849,9 +1892,7 @@ class _V5Artwork extends StatelessWidget {
             top: _edge,
             right: CompactProductCard.wishTapSize,
             child: Row(
-              children: [
-                Flexible(child: _V5PackChip(label: v5.packChip)),
-              ],
+              children: [Flexible(child: _V5PackChip(label: v5.packChip))],
             ),
           ),
         if (product.hasWish)
@@ -1906,30 +1947,30 @@ class _V5PackChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Semantics(
-        identifier: 'card_pack_chip',
-        child: Container(
-          height: CompactProductCard.chipH,
-          padding: EdgeInsets.symmetric(horizontal: Ds.space.x8),
-          decoration: BoxDecoration(
-            color: Ds.c.surface,
-            borderRadius: BorderRadius.circular(Ds.space.x8),
-            border: Border.all(color: Ds.c.divider),
-          ),
-          // No alignment: the chip hugs its label instead of spanning the plate.
-          child: Center(
-            widthFactor: 1,
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: AppType.t2.copyWith(
-                color: Ds.c.text,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
+    identifier: 'card_pack_chip',
+    child: Container(
+      height: CompactProductCard.chipH,
+      padding: EdgeInsets.symmetric(horizontal: Ds.space.x8),
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        borderRadius: BorderRadius.circular(Ds.space.x8),
+        border: Border.all(color: Ds.c.divider),
+      ),
+      // No alignment: the chip hugs its label instead of spanning the plate.
+      child: Center(
+        widthFactor: 1,
+        child: Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: AppType.t2.copyWith(
+            color: Ds.c.text,
+            fontWeight: FontWeight.w700,
           ),
         ),
-      );
+      ),
+    ),
+  );
 }
 
 /// In the cart: the qty chip ("2 strip ⌄") — the SAME 28px / radius 8 as the
@@ -1960,8 +2001,9 @@ class _QtyChip extends StatelessWidget {
         height: CompactProductCard.pillH,
         child: Center(
           child: ConstrainedBox(
-            constraints:
-                const BoxConstraints(maxWidth: CompactProductCard.stepperW),
+            constraints: const BoxConstraints(
+              maxWidth: CompactProductCard.stepperW,
+            ),
             child: Material(
               color: Ds.c.brand,
               borderRadius: r,
@@ -1973,8 +2015,9 @@ class _QtyChip extends StatelessWidget {
                   height: height,
                   child: Padding(
                     padding: EdgeInsets.only(
-                        left: radius == null ? Ds.space.x8 : Ds.space.x12,
-                        right: radius == null ? Ds.space.x4 : Ds.space.x8),
+                      left: radius == null ? Ds.space.x8 : Ds.space.x12,
+                      right: radius == null ? Ds.space.x4 : Ds.space.x8,
+                    ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -1984,15 +2027,19 @@ class _QtyChip extends StatelessWidget {
                             child: Text(
                               label,
                               maxLines: 1,
-                              style: (radius == null ? AppType.t2 : AppType.l5).copyWith(
-                                color: Ds.c.surface,
-                                fontWeight: FontWeight.w700,
-                              ),
+                              style: (radius == null ? AppType.t2 : AppType.l5)
+                                  .copyWith(
+                                    color: Ds.c.surface,
+                                    fontWeight: FontWeight.w700,
+                                  ),
                             ),
                           ),
                         ),
-                        Icon(Icons.keyboard_arrow_down_rounded,
-                            size: Ds.space.x16, color: Ds.c.surface),
+                        Icon(
+                          Icons.keyboard_arrow_down_rounded,
+                          size: Ds.space.x16,
+                          color: Ds.c.surface,
+                        ),
                       ],
                     ),
                   ),
@@ -2046,8 +2093,9 @@ class _V5NotifyChipState extends State<_V5NotifyChip> {
       valueListenable: CardNotifyLedger.notified,
       builder: (context, ids, _) {
         final done = widget.action.notified || ids.contains(widget.productId);
-        final label =
-            done ? widget.action.notifiedLabel : widget.action.notifyLabel;
+        final label = done
+            ? widget.action.notifiedLabel
+            : widget.action.notifyLabel;
         if (label.isEmpty) return const SizedBox.shrink();
         final r = BorderRadius.circular(Ds.space.x8);
         final fg = Ds.c.brand;
@@ -2119,7 +2167,8 @@ class _V5Body extends StatelessWidget {
   final CardV5 v5;
   const _V5Body({required this.product, required this.view, required this.v5});
 
-  static const double _textH = CompactProductCard._nameH +
+  static const double _textH =
+      CompactProductCard._nameH +
       CompactProductCard._gapS +
       CompactProductCard._packH;
 
@@ -2144,8 +2193,10 @@ class _V5Body extends StatelessWidget {
                 textDirection: Directionality.of(context),
                 textScaler: MediaQuery.textScalerOf(context),
               )..layout(maxWidth: c.maxWidth);
-              final nameLines =
-                  tp.computeLineMetrics().length.clamp(1, v5.nameMaxLines);
+              final nameLines = tp.computeLineMetrics().length.clamp(
+                1,
+                v5.nameMaxLines,
+              );
               final subLines = v5.hasSubLine ? v5.subLinesFor(nameLines) : 0;
               return ClipRect(
                 child: Column(
@@ -2203,7 +2254,6 @@ class _V5Body extends StatelessWidget {
   }
 }
 
-
 // ── CMD #2160 — Product card v6 ────────────────────────────────────────────
 // CMD #2167 — and every number in it now arrives from the backend. The card
 // has NO height of its own: it draws the square plate, the text it was given
@@ -2242,8 +2292,10 @@ class _V6Card extends StatelessWidget {
   Widget build(BuildContext context) {
     try {
       RenderLog.write('c2160_card_v6', soldOut ? 'unavailable' : 'live');
-      RenderLog.write('c2167_card_layout',
-          'w=${cl.nameSize.round()};r=${cl.radius.round()};pct=${cl.imagePct.round()}');
+      RenderLog.write(
+        'c2167_card_layout',
+        'w=${cl.nameSize.round()};r=${cl.radius.round()};pct=${cl.imagePct.round()}',
+      );
     } catch (_) {}
     return Container(
       clipBehavior: Clip.antiAlias,
@@ -2254,8 +2306,11 @@ class _V6Card extends StatelessWidget {
           color: cl.color('border', Ds.c.divider),
           width: cl.borderW,
         ),
-        boxShadow:
-            Ds.elevation.shadow(cl.shadowBlur, cl.shadowDy, cl.shadowAlpha),
+        boxShadow: Ds.elevation.shadow(
+          cl.shadowBlur,
+          cl.shadowDy,
+          cl.shadowAlpha,
+        ),
       ),
       child: Material(
         type: MaterialType.transparency,
@@ -2296,8 +2351,7 @@ class _V6Card extends StatelessWidget {
                   right: cl.padX,
                   bottom: cl.padBottom,
                 ),
-                child:
-                    _V6Body(product: product, view: view, v5: v5, cl: cl),
+                child: _V6Body(product: product, view: view, v5: v5, cl: cl),
               ),
             ],
           ),
@@ -2544,8 +2598,9 @@ class _V6NotifyPillState extends State<_V6NotifyPill> {
       valueListenable: CardNotifyLedger.notified,
       builder: (context, ids, _) {
         final done = widget.action.notified || ids.contains(widget.productId);
-        final label =
-            done ? widget.action.notifiedLabel : widget.action.notifyLabel;
+        final label = done
+            ? widget.action.notifiedLabel
+            : widget.action.notifyLabel;
         if (label.isEmpty) return const SizedBox.shrink();
         final r = BorderRadius.circular(cl.actionH / 2);
         return Semantics(
@@ -2638,7 +2693,8 @@ class _V6Body extends StatelessWidget {
     // `sub_line_h` — so the price row sits at the same offset on every card
     // in a row and PTR never moves. The CARD's height is still nobody's
     // constant: it is this block plus the square plate.
-    final textH = cl.nameLineH * v5.nameMaxLines +
+    final textH =
+        cl.nameLineH * v5.nameMaxLines +
         cl.subLineH * (v5.textLines - v5.nameMaxLines).clamp(0, 4);
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -2647,43 +2703,46 @@ class _V6Body extends StatelessWidget {
         SizedBox(
           height: textH,
           child: LayoutBuilder(
-          builder: (context, c) {
-            final tp = TextPainter(
-              text: TextSpan(text: product.name, style: nameStyle),
-              maxLines: v5.nameMaxLines,
-              textDirection: Directionality.of(context),
-              textScaler: MediaQuery.textScalerOf(context),
-            )..layout(maxWidth: c.maxWidth);
-            final nameLines =
-                tp.computeLineMetrics().length.clamp(1, v5.nameMaxLines);
-            final subLines =
-                cl.show.subLine && v5.hasSubLine ? v5.subLinesFor(nameLines) : 0;
-            return ClipRect(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    product.name,
-                    maxLines: nameLines,
-                    overflow: TextOverflow.ellipsis,
-                    style: nameStyle,
-                  ),
-                  if (subLines > 0)
-                    Semantics(
-                      identifier: 'card_sub_line',
-                      child: Text(
-                        v5.subLine,
-                        maxLines: subLines,
-                        overflow: TextOverflow.ellipsis,
-                        style: subStyle,
-                      ),
+            builder: (context, c) {
+              final tp = TextPainter(
+                text: TextSpan(text: product.name, style: nameStyle),
+                maxLines: v5.nameMaxLines,
+                textDirection: Directionality.of(context),
+                textScaler: MediaQuery.textScalerOf(context),
+              )..layout(maxWidth: c.maxWidth);
+              final nameLines = tp.computeLineMetrics().length.clamp(
+                1,
+                v5.nameMaxLines,
+              );
+              final subLines = cl.show.subLine && v5.hasSubLine
+                  ? v5.subLinesFor(nameLines)
+                  : 0;
+              return ClipRect(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      product.name,
+                      maxLines: nameLines,
+                      overflow: TextOverflow.ellipsis,
+                      style: nameStyle,
                     ),
-                ],
-              ),
-            );
-          },
-        ),
+                    if (subLines > 0)
+                      Semantics(
+                        identifier: 'card_sub_line',
+                        child: Text(
+                          v5.subLine,
+                          maxLines: subLines,
+                          overflow: TextOverflow.ellipsis,
+                          style: subStyle,
+                        ),
+                      ),
+                  ],
+                ),
+              );
+            },
+          ),
         ),
         SizedBox(height: cl.gapL),
         SizedBox(
@@ -2701,7 +2760,6 @@ class _V6Body extends StatelessWidget {
     );
   }
 }
-
 
 /// CMD #2160 — the MRP's slanted strike: one straight line across the text,
 /// rising left to right at [angleDeg], [stroke] thick.
@@ -2737,7 +2795,8 @@ class _SlantPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final rise = size.width / 2 * math.tan(SlantStrike.angleDeg * math.pi / 180);
+    final rise =
+        size.width / 2 * math.tan(SlantStrike.angleDeg * math.pi / 180);
     final mid = size.height / 2;
     canvas.drawLine(
       Offset(0, mid + rise),

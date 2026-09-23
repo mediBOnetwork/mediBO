@@ -303,8 +303,12 @@ void main() {
       final size = tester.getSize(find.byKey(const Key('c2029_pill')));
       expect(size.width, lessThanOrEqualTo(w),
           reason: 'the pill overflowed at ${w}px');
-      expect(size.height, CartPill.kHeight,
-          reason: 'one bar, ${CartPill.kHeight}px, at every width');
+      // CMD #2175 — the pill's SLOT is CartPill.kHeight (the shell's one
+      // height); the pill itself is the payload's `ui.height`, centred in it.
+      // What this test is about is that there is ONE bar of ONE height at
+      // every width, so it asks the payload rather than the clamp.
+      expect(size.height, (_defaultUi['height'] as num).toDouble(),
+          reason: "one bar, ui.height, at every width");
       expect(tester.takeException(), isNull,
           reason: 'no overflow exception at ${w}px');
     }
@@ -324,7 +328,7 @@ void main() {
     final size = tester.getSize(find.byKey(const Key('c2029_pill')));
     expect(size.width, lessThanOrEqualTo(320),
         reason: 'no pixel may leave the screen');
-    expect(size.height, CartPill.kHeight);
+    expect(size.height, (_defaultUi['height'] as num).toDouble());
     expect(tester.takeException(), isNull);
     expect(find.text('13 items in your basket right now'), findsOneWidget,
         reason: 'the label is still the backend string, ellipsised not rebuilt');

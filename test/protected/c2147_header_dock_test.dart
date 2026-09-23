@@ -136,17 +136,23 @@ void main() {
       expect(find.text('2'), findsNothing);
     });
 
-    // CMD #2156 (Om) — the bar row and the nav row are the SAME 64, the bar
-    // button is the 44 touch minimum and the active pill is 48.
-    testWidgets('the card floats 14 px off the edges; both rows are 64',
+    // CMD #2156 (Om) — the bar row and the nav row are the SAME height, the
+    // bar button is the 44 touch minimum and the active pill is 48.
+    // CMD #2175 — that height is the shell's ONE height (56), the float is the
+    // shell's inset and the corner is the shell's radius, so the dock cannot
+    // drift away from the header row and the search bar it sits under.
+    testWidgets('the card floats on the shell inset; both rows are the shell height',
         (t) async {
       await t.pumpWidget(_app(FloatingDock(
           tabs: _tabs(), activeIndex: 0, onTap: (_) {})));
       await t.pumpAndSettle();
-      expect(FloatingDock.dockHeight, 64);
+      expect(FloatingDock.dockHeight, Ds.shell.height);
+      expect(FloatingDock.dockHeight, 56);
+      expect(FloatingDock.edge, Ds.shell.inset);
       expect(FloatingDock.edge, 14);
+      expect(FloatingDock.radius, Ds.shell.radius);
       expect(FloatingDock.radius, 28);
-      expect(FloatingDock.barHeight, 64);
+      expect(FloatingDock.barHeight, FloatingDock.dockHeight);
       expect(FloatingDock.barButtonHeight, 44);
       expect(FloatingDock.pillHeight, 48);
     });
@@ -180,7 +186,7 @@ void main() {
       final home = t.getRect(find.bySemanticsIdentifier('nav_slot_home'));
       expect(bar.bottom, lessThanOrEqualTo(home.top + 0.5),
           reason: 'bar row on top, dock row below');
-      expect(bar.height, 64);
+      expect(bar.height, Ds.shell.height);
       await t.tap(find.text('Backend CTA'));
       expect(tapped, 1);
     });

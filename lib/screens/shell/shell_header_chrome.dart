@@ -658,14 +658,25 @@ final ValueNotifier<bool> _shellStuckFlag = () {
 /// far as it was before the tap — so the page is at the same scroll spot, in
 /// the same header state.
 class _StickyLead extends StatefulWidget {
-  const _StickyLead({required this.state});
+  const _StickyLead({required this.state, this.focus, this.onBack});
+
   final _HomeShellState state;
+
+  /// CMD #2175 — the box this lead belongs to. The storefront's own bar leaves
+  /// it null and gets the shell's search focus node; a tab bar passes its own,
+  /// so focusing the box on Orders or Profile collapses the SAME header row
+  /// and offers the SAME ← as it does on Home. One search screen, five tabs.
+  final FocusNode? focus;
+
+  /// What ← clears, when it is not the storefront's query.
+  final VoidCallback? onBack;
+
   @override
   State<_StickyLead> createState() => _StickyLeadState();
 }
 
 class _StickyLeadState extends State<_StickyLead> {
-  FocusNode get _focus => widget.state._searchFocus;
+  FocusNode get _focus => widget.focus ?? widget.state._searchFocus;
   double? _before;
 
   @override
@@ -694,10 +705,15 @@ class _StickyLeadState extends State<_StickyLead> {
   }
 
   void _back() {
-    final s = widget.state;
-    if (s._search.hasQuery || s._searchCtrl.text.isNotEmpty) {
-      s._searchCtrl.clear();
-      s._applySearch(SearchQueryState.blank);
+    final onBack = widget.onBack;
+    if (onBack != null) {
+      onBack();
+    } else {
+      final s = widget.state;
+      if (s._search.hasQuery || s._searchCtrl.text.isNotEmpty) {
+        s._searchCtrl.clear();
+        s._applySearch(SearchQueryState.blank);
+      }
     }
     _focus.unfocus();
     RenderLog.write('c2147_search_back', 1);
@@ -782,49 +798,6 @@ class _StickyBell extends StatelessWidget {
           );
         },
       );
-}
-
-/// CMD #2156 (Om) — ONE shared header on every customer tab: the tabs that
-/// have no search box of their own (Bulk, Profile …) still show the same
-/// search row, same size and place. It is the storefront's search: a tap goes
-/// to Home and opens the box there. Home, the Catalogue and Orders draw their
-/// own (Orders keeps its "order code or medicine" placeholder).
-final TextEditingController _jumpCtrl = TextEditingController();
-final ValueNotifier<bool> _jumpTopState = ValueNotifier<bool>(false);
-Future<SearchPagePayload?>? _jumpChrome;
-
-bool _shellWantsSearchJump(_HomeShellState s, bool isAdmin) =>
-    !isAdmin && s._index != 0 && s._index != 1 && s._index != 12;
-
-Widget _shellSearchJump(_HomeShellState s) {
-  RenderLog.write('c2156_search_jump', s._index);
-  return Semantics(
-    identifier: 'c2156_search_jump',
-    button: true,
-    child: GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () {
-        s._setIndex(0);
-        WidgetsBinding.instance
-            .addPostFrameCallback((_) => s._searchFocus.requestFocus());
-      },
-      child: AbsorbPointer(
-        // The same words the storefront box shows: search_page()'s own,
-        // from the device copy SearchChrome keeps.
-        child: FutureBuilder<SearchPagePayload?>(
-          future: _jumpChrome ??= s._repo.cachedSearchChrome(),
-          builder: (_, snap) => SearchHeaderBar(
-            controller: _jumpCtrl,
-            placeholder: snap.data?.placeholder ?? '',
-            bar: snap.data?.searchBar ?? SearchBarSpec.fallback,
-            onChanged: (_) {},
-            onSubmit: (_) {},
-            compact: _jumpTopState,
-          ),
-        ),
-      ),
-    ),
-  );
 }
 
 /// CMD #2044 — the focused, empty search box FILLS the screen instead of

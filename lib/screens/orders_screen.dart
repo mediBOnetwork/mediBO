@@ -4,6 +4,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../shell_search_scope.dart'; // CMD #2175 — the shell owns this tab's box
+
 import 'delivery/customer_track_sheet.dart';  // C629: PART F1 — live tracking
 import 'customer/order_edit_sheet.dart';  // CHANGE #408
 import 'customer/order_cancel_sheet.dart'; // CMD #452 — gaps #130
@@ -290,9 +292,14 @@ class _OrdersScreenState extends State<OrdersScreen> {
   /// buckets and does not word the chips.
   List<Map<String, dynamic>> _filters = const [];
   String _filter = 'active';
-  String _searchHint = '';
   final TextEditingController _searchCtl = TextEditingController();
   Timer? _searchDebounce;
+
+  /// CMD #2175 — the shell's pinned search bar for this tab. The words are
+  /// typed into the shell; this screen listens and re-asks the backend. It is
+  /// a listener and not a widget parameter because Orders is an IndexedStack
+  /// child that is alive while another tab is on screen.
+  late final ValueNotifier<String> _shellQuery = shellScopeQuery('orders');
 
   bool _loading = true;
   /// #572 — empty-state copy comes from the payload, not from Dart literals.
@@ -335,6 +342,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
   @override
   void initState() {
     super.initState();
+    _shellQuery.addListener(_onShellQuery);
     _focusCode = widget.focusOrderCode;
     _authedUid = Supabase.instance.client.auth.currentUser?.id;
     _authSub =
@@ -399,6 +407,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
     _authSub?.cancel();
     _retryTimer?.cancel();
     _searchDebounce?.cancel();
+    _shellQuery.removeListener(_onShellQuery);
     _searchCtl.dispose();
     _channel?.unsubscribe();
     super.dispose();
@@ -479,8 +488,6 @@ class _OrdersScreenState extends State<OrdersScreen> {
             .map((f) => Map<String, dynamic>.from(f))
             .toList();
         _filter = (payload['filter'] ?? _filter).toString();
-        _searchHint =
-            ((payload['search'] as Map?)?['hint'] ?? '').toString();
         _emptyTitle = (payload['empty_title'] ?? '').toString();
         _emptyNote = (payload['empty_note'] ?? '').toString();
         _customerId = custId;
@@ -609,12 +616,16 @@ class _OrdersScreenState extends State<OrdersScreen> {
     _fetch();
   }
 
-  /// PART A8 — search by order code or medicine name. The matching is the
-  /// backend's (it reaches into order_items.product_name, which the client
-  /// does not hold); this only debounces the typing.
-  void _onSearchChanged(String _) {
+  /// PART A8 — search by order code or medicine name. CMD #2175 — and by any
+  /// DATE the shopper writes ('12 Sep', '2026-09-12', 'Sep 12'): the matching
+  /// is the backend's, on the order's own formatted IST date, so free text can
+  /// never throw a parse. The shell owns the box; this only re-asks.
+  void _onShellQuery() {
+    final q = _shellQuery.value;
+    if (q == _searchCtl.text.trim()) return;
+    _searchCtl.text = q;
     _searchDebounce?.cancel();
-    _searchDebounce = Timer(const Duration(milliseconds: 350), _fetch);
+    _searchDebounce = Timer(const Duration(milliseconds: 250), _fetch);
   }
 
   @override
@@ -631,17 +642,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
     return Column(
       children: [
         _OrdersHeader(
-          filters: _filters,
-          selected: _filter,
-          onSelect: _selectFilter,
-          controller: _searchCtl,
-          hint: _searchHint,
-          onChanged: _onSearchChanged,
-          onClear: () {
-            _searchCtl.clear();
-            _fetch();
-          },
-        ),
+            filters: _filters, selected: _filter, onSelect: _selectFilter),
         // CHANGE #745 — Rewards belongs to purchases, so it sits on the Orders
         // tab instead of the profile dropdown. It is a placement row
         // ('orders_section'), not a line this file owns: points, slab and the
@@ -730,19 +731,10 @@ class _OrdersHeader extends StatelessWidget {
   final List<Map<String, dynamic>> filters;
   final String selected;
   final ValueChanged<String> onSelect;
-  final TextEditingController controller;
-  final String hint;
-  final ValueChanged<String> onChanged;
-  final VoidCallback onClear;
-
   const _OrdersHeader({
     required this.filters,
     required this.selected,
     required this.onSelect,
-    required this.controller,
-    required this.hint,
-    required this.onChanged,
-    required this.onClear,
   });
 
   @override
@@ -754,39 +746,12 @@ class _OrdersHeader extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(
-            height: Ds.touch.minTarget,
-            child: TextField(
-              controller: controller,
-              onChanged: onChanged,
-              textInputAction: TextInputAction.search,
-              style: Ds.t.body,
-              decoration: InputDecoration(
-                isDense: true,
-                hintText: hint,
-                hintStyle: Ds.t.caption,
-                prefixIcon: Icon(Icons.search, color: Ds.c.textSecondary),
-                suffixIcon: controller.text.isEmpty
-                    ? null
-                    : IconButton(
-                        icon: Icon(Icons.close, color: Ds.c.textSecondary),
-                        onPressed: onClear),
-                filled: true,
-                fillColor: Ds.c.bg,
-                contentPadding:
-                    EdgeInsets.symmetric(horizontal: Ds.space.x12),
-                border: OutlineInputBorder(
-                    borderRadius: Ds.r.rButton,
-                    borderSide: BorderSide(color: Ds.c.divider)),
-                enabledBorder: OutlineInputBorder(
-                    borderRadius: Ds.r.rButton,
-                    borderSide: BorderSide(color: Ds.c.divider)),
-                focusedBorder: OutlineInputBorder(
-                    borderRadius: Ds.r.rButton,
-                    borderSide: BorderSide(color: Ds.c.brand)),
-              ),
-            ),
-          ),
+          // CMD #2175 — the box that used to stand here is GONE. The Orders
+          // tab's search is the shell's own pinned bar (scope 'orders',
+          // placeholder from shell_style()), so a shopper sees ONE search
+          // field wherever they are standing instead of a second one that
+          // appeared only on this tab. The filter chips stay: they are the
+          // backend's buckets, not a search.
           if (filters.isNotEmpty) ...[
             SizedBox(height: Ds.space.x12),
             SingleChildScrollView(

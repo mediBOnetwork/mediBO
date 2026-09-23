@@ -252,7 +252,10 @@ void main() {
 
     testWidgets('a wobble mid-scroll does not turn it around', (tester) async {
       final context = await _ctx(tester);
-      _scroll(_t + 20, context: context);
+      // CMD #2175 — the band is Ds.shell.height (56) now, so the travel this
+      // test asks for has to stay INSIDE it: a saturated band cannot show
+      // whether a held wobble was paid or lost.
+      _scroll(_t, context: context);
       final double at = shellHeaderCollapse.value;
       _scroll(-6, context: context);
       expect(shellHeaderCollapse.value, at,
@@ -520,7 +523,18 @@ void main() {
         File('lib/screens/shell/shell_header_band.dart').readAsStringSync();
     final catalogue = File('lib/screens/catalogue_screen.dart').readAsStringSync();
 
+    // CMD #2175 (Om) — "every tab". Home and the Catalogue are no longer the
+    // only two: Orders, Bulk and Profile are drawn under the same header row
+    // with the same search row pinned beneath it, so they collapse it too. The
+    // verdict is still the BACKEND's (`shell_style().band.every_tab`), so this
+    // test proves both answers rather than freezing one of them.
     test('the Catalogue tab owns the band, and so does Home', () {
+      shellHeaderBandEveryTab.value = true;
+      for (final int tab in const [0, 1, 2, 12, 15]) {
+        expect(shellHeaderBandTab(tab), isTrue,
+            reason: 'tab $tab kept a header row that should hide');
+      }
+      shellHeaderBandEveryTab.value = false;
       expect(shellHeaderBandTab(0), isTrue, reason: 'Home lost the band');
       expect(shellHeaderBandTab(12), isTrue,
           reason: 'the Catalogue header still never hides — #2052(8)');
@@ -528,6 +542,7 @@ void main() {
         expect(shellHeaderBandTab(other), isFalse,
             reason: 'tab $other started collapsing a header it should keep');
       }
+      shellHeaderBandEveryTab.value = true;
     });
 
     test('there is ONE driver and ONE notifier, not a second controller', () {
@@ -581,7 +596,9 @@ void main() {
 
     test('the search header is mounted as a Column child, never as a sliver',
         () {
-      expect(shell, contains('if (_index == 0) _shellSearchHeader(this)'),
+      // CMD #2175 — every customer tab mounts the SAME row now, so the shell
+      // names the row once instead of gating it on the storefront's index.
+      expect(shell, contains('_shellTabSearch(this, isAdmin)'),
           reason: 'the shell stopped mounting the one search header');
       expect(shell, isNot(contains('SliverPersistentHeader')),
           reason: 'the search chrome was moved into a scroll view — it can no '
@@ -607,22 +624,31 @@ void main() {
     test('the header is drawn with the very token it travels by', () {
       // Two numbers — "how tall is the header" and "how far does it move" —
       // would drift apart on the first edit. There is one.
-      expect(chrome, contains('height: Ds.touch.headerBand'),
+      // CMD #2175 — the staff row is still drawn at the band token and the
+      // customer row at Ds.shell.height, which IS that token (a getter, not a
+      // copy). Either spelling is the one number.
+      expect(
+          chrome.contains('height: Ds.touch.headerBand') &&
+              chrome.contains('height: Ds.shell.height'),
+          isTrue,
           reason: 'the header band stopped being drawn at its token height');
       expect(chrome, isNot(contains('minHeight: 70')),
           reason: 'the old 70 px header came back');
     });
 
     test('the header and the search bar share one side margin', () {
+      // CMD #2175 — that margin is Ds.shell.inset (14) on both, and it is the
+      // SAME token the floating dock is inset by, so the header row, the
+      // search field and the bottom card all sit on one vertical line.
       expect(chrome,
-          contains('padding: EdgeInsets.symmetric(horizontal: Ds.space.x16)'),
-          reason: 'the header row left the search bar\'s 16 px side margin, so '
-              'the avatar and the cart no longer line up with the field');
+          contains('padding: EdgeInsets.symmetric(horizontal: Ds.shell.inset)'),
+          reason: 'the header row left the search bar\'s side margin, so '
+              'the mark and the bell no longer line up with the field');
       expect(
           File('lib/widgets/search_surface.dart').readAsStringSync(),
-          contains('Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x8'),
+          contains('Ds.shell.inset, Ds.shell.gap, Ds.shell.inset, Ds.shell.gap'),
           reason: 'the search bar changed its own side margin — the header is '
-              'aligned to Ds.space.x16 and the two must agree');
+              'aligned to Ds.shell.inset and the two must agree');
     });
   });
 }

@@ -52,6 +52,13 @@ class Ds {
   static DsHeader header = DsHeader._defaults();
   static DsPullClose pullClose = DsPullClose._defaults();
 
+  /// CMD #2175 — the ONE shell geometry: `shell_style().common`, published on
+  /// `ui_boot().design.shell`. The header row, the search bar, the banner, the
+  /// bottom-nav rows and the floating "View cart" pill are all this tall, sit
+  /// this far in from the edge, wear this corner and keep this gap from their
+  /// neighbour — so "how tall is the shell" has exactly one answer.
+  static DsShell shell = DsShell._defaults();
+
   /// The brand hex currently in force — mirrored to the render-log so a
   /// headless verifier can PROVE the app consumed a recolour token.
   static String brandHex = '#1B873F';
@@ -71,6 +78,7 @@ class Ds {
     touch = DsTouch._from(_asMap(design['touch']), touch);
     header = DsHeader._from(_asMap(design['header']), header);
     pullClose = DsPullClose._from(_asMap(design['pull_close']), pullClose);
+    shell = DsShell._from(_asMap(design['shell']), shell);
     brandHex = _hexStr(_asMap(design['colors'])['brand']) ?? brandHex;
     revision.value++;
   }
@@ -386,12 +394,18 @@ class DsMotion {
 class DsTouch {
   final double minTarget, listRowMinHeight;
 
-  /// CMD #2030 — the storefront header band's height, in logical pixels. It is
-  /// a token rather than a constant because the band is now scroll-linked: the
-  /// number is both the row's height AND the exact distance the band travels
-  /// before it is gone, so the two can never be set apart by an edit. Retuning
-  /// the header is one `ui_design_set` away, with no deploy.
-  final double headerBand;
+  /// CMD #2030 — the storefront header band's height, in logical pixels: both
+  /// the row's height AND the exact distance the band travels before it is
+  /// gone, so the two can never be set apart by an edit.
+  ///
+  /// CMD #2175 — it is no longer a token of its own. The header row is one of
+  /// the five pieces of chrome Om's redline puts on ONE height, so the band's
+  /// number IS [Ds.shell.height] — a getter, not a copy, because two numbers
+  /// that must agree are one edit away from disagreeing. Retuning the header
+  /// is still one `ui_design_set({'shell': {'height': N}})` away, with no
+  /// deploy; it just retunes the search bar, the banner, the nav and the
+  /// "View cart" pill with it, which is the point.
+  double get headerBand => Ds.shell.height;
 
   /// CMD #2038 — how far the finger has to travel in the NEW direction before
   /// the scroll-linked header is allowed to turn around, in logical pixels.
@@ -454,7 +468,6 @@ class DsTouch {
     required this.listRowMinHeight,
     required this.bottomBarGap,
     required this.barActionWidth,
-    required this.headerBand,
     required this.headerHysteresis,
     required this.headerSettleMs,
     required this.navHideTravel,
@@ -483,7 +496,6 @@ class DsTouch {
       // which shortened the header as a side effect of making it move; this
       // puts the height back without touching the 1:1 travel, because the
       // travel is still the same token.
-      headerBand: 64,
       // CMD #2052 — 40 px of FINGER travel. #2038's 8 was measured on the
       // list's own deltas, where 8 px was already generous; on the pointer it
       // is a twitch. Forty is the spec's own number: a deliberate change of
@@ -510,7 +522,6 @@ class DsTouch {
         listRowMinHeight: Ds._num(m['listRowMinHeight'], f.listRowMinHeight),
         bottomBarGap: Ds._num(m['bottomBarGap'], f.bottomBarGap),
         barActionWidth: Ds._num(m['barActionWidth'], f.barActionWidth),
-        headerBand: Ds._num(m['headerBand'], f.headerBand),
         headerHysteresis:
             Ds._num(m['headerHysteresis'], f.headerHysteresis),
         headerSettleMs:
@@ -843,4 +854,26 @@ class DsPullClose {
 
   /// Whether the shell tab at [index] pulls back to the Home tab.
   bool pullsHome(int index) => enabled && index != homeIndex && tabPages.contains(index);
+}
+
+/// CMD #2175 — the shell's common geometry, from `shell_style().common`.
+class DsShell {
+  final double height, inset, radius, gap;
+  const DsShell._({
+    required this.height,
+    required this.inset,
+    required this.radius,
+    required this.gap,
+  });
+
+  /// Om's redline, and the fallback if the payload never arrives.
+  factory DsShell._defaults() =>
+      const DsShell._(height: 56, inset: 14, radius: 28, gap: 10);
+
+  factory DsShell._from(Map m, DsShell f) => DsShell._(
+        height: Ds._num(m['height'], f.height),
+        inset: Ds._num(m['inset'], f.inset),
+        radius: Ds._num(m['radius'], f.radius),
+        gap: Ds._num(m['gap'], f.gap),
+      );
 }

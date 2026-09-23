@@ -147,14 +147,22 @@ class FloatingDock extends StatelessWidget {
   final ValueChanged<int> onTap;
 
   /// The dock's own height, its float above the screen edges, and the pill.
-  static double get dockHeight => Ds.space.x48 + Ds.space.x16;
-  static double get edge => Ds.space.x12 + 2;
+  ///
+  /// CMD #2175 — all three are the shell's ONE geometry now ([Ds.shell]):
+  /// the dock row is the same [Ds.shell.height] the header row and the search
+  /// bar are, it floats [Ds.shell.inset] off the edges and wears
+  /// [Ds.shell.radius]. They were three arithmetic expressions over the
+  /// spacing scale that happened to agree with the header; a backend that
+  /// changes `shell_style().common.height` now moves every one of them
+  /// together, which is the whole point of one number.
+  static double get dockHeight => Ds.shell.height;
+  static double get edge => Ds.shell.inset;
   static double get pillHeight => Ds.space.x48;
-  static double get radius => Ds.space.x24 + Ds.space.x4;
+  static double get radius => Ds.shell.radius;
 
-  /// CMD #2156 (Om) — the joined bar row is EXACTLY the nav row's height
-  /// (64 + 64, the 1 px hairline between), and its button is the 44 touch
-  /// minimum while the active pill is 48 — both centred in their rows.
+  /// CMD #2156 (Om) — the joined bar row is EXACTLY the nav row's height, and
+  /// its button is the 44 touch minimum while the active pill is 48 — both
+  /// centred in their rows.
   static double get barHeight => dockHeight;
   static double get barButtonHeight => Ds.touch.minTarget;
   static const double hairline = 1;

@@ -425,7 +425,14 @@ void main() {
 
     test('the row threads those numbers into the tile and the bell', () {
       final row = _src('lib/screens/shell/shell_mobile_chrome.dart');
-      expect(row.contains("shellHeaderNum('logo_size'"), isTrue);
+      // CMD #2193 deliberately moved the MARK's two numbers off this key.
+      // shell_style().header.logo_size/logo_radius landed a frame later than
+      // the design payload, so the tile jumped 40 -> 49 in front of Om; the
+      // box now has one author, brand.logo (size + radius), which is the same
+      // row that carries the artwork. The bell keeps its own header number.
+      expect(row.contains('Ds.header.logo.size'), isTrue,
+          reason: 'the mark stopped reading its box from brand.logo (#2193)');
+      expect(row.contains('Ds.header.logo.radius'), isTrue);
       expect(row.contains("shellHeaderNum('bell_icon'"), isTrue);
       expect(row.contains('tileSize: logoSize'), isTrue);
       expect(row.contains('iconSize: bellIcon'), isTrue);

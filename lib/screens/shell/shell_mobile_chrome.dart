@@ -177,9 +177,14 @@ class _CustomerHeaderRow extends StatelessWidget {
     return ValueListenableBuilder<Map<String, dynamic>>(
       valueListenable: shellHeaderStyle,
       builder: (context, _, _) {
-        final double logoSize = shellHeaderNum('logo_size', t.headerTile);
-        final double logoRadius =
-            shellHeaderNum('logo_radius', t.headerTileRadius);
+        // CMD #2193 — the mark's box has ONE author: brand.logo (size +
+        // radius), the same row that carries the artwork. #2187 tuned it
+        // through shell_style().header, which landed a frame LATER than the
+        // design payload and made the tile jump 40 -> 49 in front of Om.
+        // Those two keys are still written (shell.style.header.logo_owner
+        // names this row), but nothing reads them any more.
+        final double logoSize = Ds.header.logo.size;
+        final double logoRadius = Ds.header.logo.radius;
         final double bellIcon = shellHeaderNum('bell_icon', Ds.header.bellIcon);
         final double bellTap = shellHeaderNum('bell_tap', t.headerTile);
         final double gap = shellHeaderNum('gap_logo_pill', Ds.shell.gap);

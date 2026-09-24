@@ -36,6 +36,7 @@
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 import '../design_tokens.dart';
 import '../utils/render_log.dart';
@@ -85,14 +86,43 @@ class PullCloseGeometry {
 /// other direction, or a pull that starts mid-list, is handed straight back and
 /// scrolling behaves exactly as it always did (spec 2, "normal scrolling
 /// unchanged").
-class PullDownRecognizer extends OneSequenceGestureRecognizer {
+class PullDownRecognizer extends OneSequenceGestureRecognizer
+    with WidgetsBindingObserver {
   PullDownRecognizer({
     required this.canStart,
     required this.onPullStart,
     required this.onPullUpdate,
     required this.onPullEnd,
     super.debugOwner,
-  });
+  }) {
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  /// CMD #2195 — THE FREEZE THAT SURVIVED #2193.
+  ///
+  /// A pull ends when the finger lifts. On Android the finger can stop
+  /// existing without lifting: the moment another activity takes the window —
+  /// the image picker and the camera on the registration form, a permission
+  /// dialog, a notification pulled down, the recents button — this app stops
+  /// being handed touch events, and the `PointerUpEvent` for the finger that
+  /// is mid-pull is NEVER delivered. Nothing in the framework cancels it
+  /// either. So [didStopTrackingLastPointer] is never reached, the navigator
+  /// is never given its gesture back, and the app comes back from the picker
+  /// painted and completely deaf — which is the bug, verbatim: "no button
+  /// works, nothing reacts, only killing and reopening the app helps", on the
+  /// registration screen most often.
+  ///
+  /// This is not a timeout and not a guess. A pull is a finger on THIS app's
+  /// glass; an app that does not have the window has no finger on it, so the
+  /// pull is over — exactly as over as a release, and it leaves by the exact
+  /// same door.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) return;
+    final int? p = _primary;
+    if (p == null) return;
+    stopTrackingPointer(p); // -> didStopTrackingLastPointer -> the one release
+  }
 
   /// Reassigned every rebuild by the recogniser factory, so the callbacks
   /// always close over the CURRENT state — a stale one would pull a page that
@@ -108,11 +138,32 @@ class PullDownRecognizer extends OneSequenceGestureRecognizer {
   bool _won = false;
   VelocityTracker? _velocity;
 
+  /// CMD #2193 — the pointer this recogniser is following, and the velocity it
+  /// will hand to [onPullEnd].
+  ///
+  /// THE FREEZE THIS FIXES. [onPullStart] takes the navigator's user gesture
+  /// (`didStartUserGesture`), and Flutter wraps every ModalRoute's subtree in
+  /// `IgnorePointer(ignoring: navigator.userGestureInProgress)` — so a pull
+  /// that is never ENDED leaves every screen in the app painted but deaf, and
+  /// only killing the app clears it. Before this, a second finger landing
+  /// during a pull re-entered [addAllowedPointer] and reset `_won`, so the
+  /// release fired no [onPullEnd] at all; a rejected or swept pointer did the
+  /// same. Ending is therefore no longer decided in [handleEvent]: EVERY path
+  /// that stops tracking — up, cancel, rejection, arena sweep, dispose — lands
+  /// in [didStopTrackingLastPointer], which ends the pull exactly once.
+  int? _primary;
+  double _endVelocity = 0;
+
   @override
   void addAllowedPointer(PointerDownEvent event) {
+    // A pull already owns this recogniser: a second finger is not ours, and
+    // must never reset the state that owes the navigator a release.
+    if (_primary != null) return;
+    _primary = event.pointer;
     startTrackingPointer(event.pointer, event.transform);
     _down = event.position;
     _won = false;
+    _endVelocity = 0;
     _velocity = VelocityTracker.withKind(event.kind)
       ..addPosition(event.timeStamp, event.position);
   }
@@ -120,7 +171,7 @@ class PullDownRecognizer extends OneSequenceGestureRecognizer {
   @override
   void handleEvent(PointerEvent event) {
     final down = _down;
-    if (down == null) return;
+    if (down == null || event.pointer != _primary) return;
     if (event is PointerMoveEvent) {
       _velocity?.addPosition(event.timeStamp, event.position);
       final d = event.position - down;
@@ -139,17 +190,16 @@ class PullDownRecognizer extends OneSequenceGestureRecognizer {
       return;
     }
     if (event is PointerUpEvent || event is PointerCancelEvent) {
-      if (_won) {
-        final v = _velocity?.getVelocity().pixelsPerSecond.dy ?? 0;
-        onPullEnd(event is PointerCancelEvent ? 0 : v);
-      }
+      _endVelocity = event is PointerCancelEvent
+          ? 0
+          : (_velocity?.getVelocity().pixelsPerSecond.dy ?? 0);
       stopTrackingPointer(event.pointer);
     }
   }
 
   @override
   void acceptGesture(int pointer) {
-    if (_won) return;
+    if (_won || pointer != _primary) return;
     _won = true;
     onPullStart();
   }
@@ -157,11 +207,30 @@ class PullDownRecognizer extends OneSequenceGestureRecognizer {
   @override
   void rejectGesture(int pointer) => stopTrackingPointer(pointer);
 
+  /// The ONE place a pull ends. Reached by a release, a cancel, a rejection,
+  /// an arena sweep and [dispose], so the navigator is always given back.
   @override
   void didStopTrackingLastPointer(int pointer) {
+    final wasPulling = _won;
+    final v = _endVelocity;
     _won = false;
     _down = null;
     _velocity = null;
+    _primary = null;
+    _endVelocity = 0;
+    if (wasPulling) onPullEnd(v);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    // A recogniser thrown away mid-pull still owes the navigator its release.
+    if (_won) {
+      _won = false;
+      _primary = null;
+      onPullEnd(0);
+    }
+    super.dispose();
   }
 
   @override
@@ -246,6 +315,7 @@ class _PullClosePageState extends State<_PullClosePage> {
 
   bool _canStart() =>
       Ds.pullClose.enabled &&
+      !_held &&
       _atTop.value &&
       widget.route.isCurrent &&
       widget.route.isActive &&
@@ -253,13 +323,80 @@ class _PullClosePageState extends State<_PullClosePage> {
       widget.route.navigator != null &&
       !widget.route.navigator!.userGestureInProgress;
 
+  /// CMD #2193 — the navigator we took the user gesture from, remembered so it
+  /// can be given back even after the route (and `widget.route.navigator`) has
+  /// gone. `_held` is true for exactly as long as we owe it a release.
+  NavigatorState? _nav;
+  bool _held = false;
+
   void _start() {
     final nav = widget.route.navigator;
     if (nav == null || _controller == null) return;
     _pulled = 0;
+    _nav = nav;
+    _held = true;
     setState(() => _dragging = true);
     nav.didStartUserGesture();
     RenderLog.write('c2170_pull_start', 1);
+  }
+
+  /// Give the navigator its gesture back — once, whatever happened.
+  ///
+  /// While `userGestureInProgress` is true Flutter wraps EVERY ModalRoute in
+  /// `IgnorePointer(ignoring: true)`, so a missed release does not spoil one
+  /// animation: it makes the whole app stop taking taps until it is killed
+  /// (live on 1.3.35, every screen, registration most often). That is why this
+  /// runs from a `finally`, from the early return and from [dispose] — never
+  /// from the happy path alone.
+  void _release() {
+    if (!_held) return;
+    _held = false;
+    final nav = _nav;
+    _nav = null;
+    if (nav == null || !nav.mounted) return;
+    // CMD #2195 — the release must not land inside a frame that is already
+    // building. `didStopUserGesture` notifies `userGestureInProgressNotifier`,
+    // and the listener on the other end is the `ListenableBuilder` that builds
+    // Flutter's `IgnorePointer(ignoring: ...)` over every route
+    // (widgets/routes.dart). Called while the tree is locked — which is
+    // exactly what [dispose] does, because a widget is disposed DURING a build
+    // — that rebuild is refused ("setState() called when widget tree was
+    // locked"), the flag goes false and the IgnorePointer that is still on
+    // screen never hears about it. So the frame is allowed to finish and the
+    // release happens on its far side, one frame later, where the rebuild is
+    // legal.
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      SchedulerBinding.instance
+          .addPostFrameCallback((_) => _giveBack(nav));
+      return;
+    }
+    _giveBack(nav);
+  }
+
+  void _giveBack(NavigatorState nav) {
+    if (!nav.mounted) return;
+    try {
+      nav.didStopUserGesture();
+      RenderLog.write('c2193_pull_release', 1);
+    } catch (_) {
+      // A navigator being torn down under the finger is not a reason to
+      // leave the app deaf.
+    }
+  }
+
+  void _settle() {
+    if (mounted) {
+      setState(() => _dragging = false);
+    } else {
+      _dragging = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    _release();
+    super.dispose();
   }
 
   void _update(double dy) {
@@ -272,31 +409,40 @@ class _PullClosePageState extends State<_PullClosePage> {
 
   Future<void> _end(double velocity) async {
     final c = _controller;
-    final nav = widget.route.navigator;
+    final nav = _nav ?? widget.route.navigator;
     if (!_dragging || c == null || nav == null) {
-      setState(() => _dragging = false);
+      _release();
+      _settle();
       return;
     }
-    final close = PullCloseGeometry.shouldClose(_pulled, velocity);
-    if (close) {
-      RenderLog.write('c2170_pull_close', 1);
-      // Pop first: popping is what makes the hero fly back into its card, and
-      // it is exactly what the back button does — so both paths are one path.
-      nav.pop();
-      if (c.isAnimating) {
+    try {
+      final close = PullCloseGeometry.shouldClose(_pulled, velocity);
+      if (close) {
+        RenderLog.write('c2170_pull_close', 1);
+        // Pop first: popping is what makes the hero fly back into its card,
+        // and it is exactly what the back button does — so both paths are one
+        // path.
+        nav.pop();
+        if (c.isAnimating) {
+          await c
+              .animateBack(0,
+                  duration: Ds.pullClose.close, curve: Ds.motion.curve)
+              .orCancel
+              .catchError((Object _) {});
+        }
+      } else {
         await c
-            .animateBack(0, duration: Ds.pullClose.close, curve: Ds.motion.curve)
+            .animateTo(1, duration: Ds.pullClose.spring, curve: Ds.motion.curve)
             .orCancel
             .catchError((Object _) {});
       }
-    } else {
-      await c
-          .animateTo(1, duration: Ds.pullClose.spring, curve: Ds.motion.curve)
-          .orCancel
-          .catchError((Object _) {});
+    } catch (_) {
+      // The pop disposes the route's controller, so driving it afterwards can
+      // throw. The animation is cosmetic; the release below is not.
+    } finally {
+      _release();
+      _settle();
     }
-    nav.didStopUserGesture();
-    if (mounted) setState(() => _dragging = false);
   }
 
   @override
@@ -462,7 +608,13 @@ class _PullToHomeTabState extends State<PullToHomeTab>
   }
 
   Future<void> _end(double velocity) async {
-    if (!_dragging) return;
+    if (!_dragging) {
+      // CMD #2193 — a pull that was claimed and never ended used to leave the
+      // tab parked off-screen. The recogniser now always ends; this puts the
+      // page back at rest whatever order it arrives in.
+      if (_c.value != 1) _c.value = 1;
+      return;
+    }
     if (PullCloseGeometry.shouldClose(_pulled, velocity)) {
       RenderLog.write('c2170_tab_home', widget.page);
       await _c
@@ -477,7 +629,11 @@ class _PullToHomeTabState extends State<PullToHomeTab>
           .orCancel
           .catchError((Object _) {});
     }
-    if (mounted) setState(() => _dragging = false);
+    if (mounted) {
+      setState(() => _dragging = false);
+    } else {
+      _dragging = false;
+    }
   }
 
   @override

@@ -1,20 +1,28 @@
 // PROTECTED — CMD #2173, the header lock-up is the backend's, not an asset.
+// Rewritten by CMD #2193, which deliberately changed two of the behaviours
+// below (see CLAUDE.md: a protected test may only be edited by the CHANGE that
+// changes that behaviour — never to make an unrelated change pass).
 //
-// See CLAUDE.md: runs before EVERY deploy; editable only by a CHANGE that
-// deliberately changes this behaviour, never to make an unrelated change pass.
+// Om, on the 1.3.35 APK: "the splash shows an old logo for about a second,
+// then swaps to the real one", and "the header logo changed shape between
+// loading and loaded". Both were the lock-up drawing a mark of its OWN — a
+// green square with a letter in it — while the real one was still in flight,
+// at a size the header owned rather than the size the artwork owned.
 //
-// What this holds down:
-//   1. The lock-up owns no strings and no asset. The letter, both words and
-//      all four colours arrive on `design.header.logo` and are rendered
-//      verbatim — change the payload, change the header, no deploy.
-//   2. tile_url set => the tile is that image; empty => the letter on tile_bg.
-//      Either way the tile is exactly headerTile square with headerTileRadius
-//      corners, in BOTH header states (markOnly and full) — #2164 unchanged.
-//   3. wordmark_url set => the wordmark is that image at the header's own word
+// What this holds down now:
+//   1. The lock-up owns no strings, no asset and no drawn mark. Both words and
+//      their colours arrive on `design.header.logo` and are rendered verbatim —
+//      change the payload, change the header, no deploy.
+//   2. The tile is ONE box: `brand.logo.size` square with `brand.logo.radius`
+//      corners, in BOTH header states (markOnly and full) and on BOTH sides of
+//      loading. The numbers are the payload's, never a Dart constant.
+//   3. No bytes to draw — no tile_url, still decoding, or a URL that failed —
+//      leaves that box EMPTY. Never a letter, never a colour, never an asset:
+//      a second mark is exactly the bug Om saw.
+//   4. wordmark_url set => the wordmark is that image at the header's own word
 //      size; empty => word_1 + word_2 in their own colours, never auto-shrunk
-//      (no FittedBox, no text scaling).
-//   4. An image that fails to load falls back to the letter/word version —
-//      never a broken image, never a blank header.
+//      (no FittedBox, no text scaling). A broken wordmark image still falls
+//      back to those words — they ARE the wordmark, not a stand-in for it.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -22,7 +30,8 @@ import 'package:pharma_b2b/design_tokens.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/widgets/brand_lockup.dart';
 
-/// The payload exactly as `ui_boot().design.header.logo` sends it.
+/// The payload exactly as `ui_boot().design.header.logo` sends it — which is
+/// the whole `brand.logo` row, geometry included (CMD #2193).
 Map<String, dynamic> _logo({String tile = '', String wordmark = ''}) => {
       'tile_url': tile,
       'wordmark_url': wordmark,
@@ -33,6 +42,8 @@ Map<String, dynamic> _logo({String tile = '', String wordmark = ''}) => {
       'word_1_fg': '#1B7A43',
       'word_2': 'BO',
       'word_2_fg': '#2FA24F',
+      'size': 49,
+      'radius': 11,
     };
 
 void _apply(Map<String, dynamic> logo) =>
@@ -59,7 +70,7 @@ void main() {
   setUpAll(() => RenderLog.flushEnabled = false);
   setUp(() => _apply(_logo()));
 
-  testWidgets('no payload logo => the fallback letter and words, not an asset',
+  testWidgets('no tile_url => the box is EMPTY, not a letter and not an asset',
       (tester) async {
     await tester.pumpWidget(_app(const BrandLockup()));
 
@@ -67,29 +78,34 @@ void main() {
     expect(find.descendant(
         of: find.byType(BrandLockup), matching: find.byType(Image)),
         findsNothing);
-    expect(find.text('m'), findsOneWidget);
-    expect(find.byType(Text), findsNWidgets(2)); // the letter + the wordmark
+    // And no mark of our own drawn in its place. #2193's whole point.
+    expect(find.text('m'), findsNothing);
+    expect(find.byType(Text), findsOneWidget); // the wordmark alone
+    // The box is still there, holding the mark's room.
+    final tile = _tileOf(tester);
+    expect(tile.constraints!.maxWidth, Ds.header.logo.size);
+    expect((tile.decoration as BoxDecoration).color, Colors.transparent);
   });
 
-  testWidgets('the letter, the words and the colours are the payload verbatim',
+  testWidgets('the words, the colours and the BOX are the payload verbatim',
       (tester) async {
     _apply({
       ..._logo(),
-      'letter': 'Z',
       'word_1': 'well',
       'word_2': 'RX',
       'word_1_fg': '#112233',
       'word_2_fg': '#445566',
-      'tile_bg': '#0A0B0C',
-      'tile_fg': '#FEDCBA',
+      'size': 60,
+      'radius': 7,
     });
     await tester.pumpWidget(_app(const BrandLockup()));
 
-    // The letter is the backend's, in the backend's colour, on its colour.
-    final letter = tester.widget<Text>(find.text('Z'));
-    expect(letter.style!.color, const Color(0xFFFEDCBA));
-    expect((_tileOf(tester).decoration as BoxDecoration).color,
-        const Color(0xFF0A0B0C));
+    // The box is the backend's pair of numbers — no Dart constant survives.
+    final tile = _tileOf(tester);
+    expect(tile.constraints!.maxWidth, 60);
+    expect(tile.constraints!.maxHeight, 60);
+    expect((tile.decoration as BoxDecoration).borderRadius,
+        const BorderRadius.all(Radius.circular(7)));
 
     // Both halves of the wordmark, each in its own colour — no Dart literal.
     final word = tester.widget<Text>(find.byWidgetPredicate(
@@ -101,7 +117,7 @@ void main() {
     expect(find.text('medi'), findsNothing);
   });
 
-  testWidgets('tile_url set => the tile draws that image, never the letter',
+  testWidgets('tile_url set => the tile draws that image, at the payload box',
       (tester) async {
     _apply(_logo(tile: 'https://example.test/logo.png'));
     await tester.pumpWidget(_app(const BrandLockup()));
@@ -109,22 +125,24 @@ void main() {
     final img = tester.widget<Image>(find.descendant(
         of: find.byType(BrandLockup), matching: find.byType(Image)));
     expect((img.image as NetworkImage).url, 'https://example.test/logo.png');
-    expect(img.width, Ds.touch.headerTile);
-    expect(img.height, Ds.touch.headerTile);
+    expect(img.width, Ds.header.logo.size);
+    expect(img.height, Ds.header.logo.size);
   });
 
-  testWidgets('the tile is ONE size and shape in both header states',
-      (tester) async {
+  testWidgets('the tile is ONE size and shape — both states, both sides of '
+      'loading', (tester) async {
     for (final markOnly in [false, true]) {
-      _apply(_logo());
-      await tester.pumpWidget(_app(BrandLockup(markOnly: markOnly)));
-      final tile = _tileOf(tester);
-      expect(tile.constraints!.maxWidth, Ds.touch.headerTile);
-      expect(tile.constraints!.maxHeight, Ds.touch.headerTile);
-      expect((tile.decoration as BoxDecoration).borderRadius,
-          BorderRadius.all(Radius.circular(Ds.touch.headerTileRadius)));
-      // markOnly is the tile alone — the sticky bar's left edge.
-      expect(find.byType(Row), markOnly ? findsNothing : findsWidgets);
+      for (final tile in ['', 'https://example.test/logo.png']) {
+        _apply(_logo(tile: tile));
+        await tester.pumpWidget(_app(BrandLockup(markOnly: markOnly)));
+        final box = _tileOf(tester);
+        expect(box.constraints!.maxWidth, Ds.header.logo.size);
+        expect(box.constraints!.maxHeight, Ds.header.logo.size);
+        expect((box.decoration as BoxDecoration).borderRadius,
+            BorderRadius.all(Radius.circular(Ds.header.logo.radius)));
+        // markOnly is the tile alone — the sticky bar's left edge.
+        expect(find.byType(Row), markOnly ? findsNothing : findsWidgets);
+      }
     }
   });
 
@@ -137,8 +155,8 @@ void main() {
         of: find.byType(BrandLockup), matching: find.byType(Image)));
     expect((img.image as NetworkImage).url, 'https://example.test/word.png');
     expect(img.height, Ds.header.wordFor(360));
-    // The letter still holds the tile — only the words were replaced.
-    expect(find.text('m'), findsOneWidget);
+    // The tile stays empty — only the words were replaced.
+    expect(find.text('m'), findsNothing);
   });
 
   testWidgets('the wordmark is never auto-shrunk to fit', (tester) async {
@@ -152,7 +170,7 @@ void main() {
     expect(word.maxLines, 1);
   });
 
-  testWidgets('a broken image falls back to the letter and the words',
+  testWidgets('a broken tile image leaves the box empty — the words stay',
       (tester) async {
     _apply(_logo(
         tile: 'https://example.test/gone.png',
@@ -163,7 +181,13 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('m'), findsOneWidget);
+    // No second mark in the tile's place, and the box has not moved.
+    expect(find.text('m'), findsNothing);
+    final tile = _tileOf(tester);
+    expect(tile.constraints!.maxWidth, Ds.header.logo.size);
+    expect((tile.decoration as BoxDecoration).color, Colors.transparent);
+
+    // The wordmark falls back to the backend's two words, as it always has.
     final word = tester.widget<Text>(find.byWidgetPredicate(
         (w) => w is Text && w.textSpan != null));
     final spans = (word.textSpan! as TextSpan).children!.cast<TextSpan>();

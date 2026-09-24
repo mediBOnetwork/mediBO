@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "include": ["/*"],
+  "exclude": [
+    "/main.*.dart.js",
+    "/flutter_bootstrap.js",
+    "/flutter_service_worker.js",
+    "/version.json",
+    "/assets/*",
+    "/canvaskit/*",
+    "/icons/*",
+    "/*.js",
+    "/*.json",
+    "/*.png",
+    "/*.ico",
+    "/*.wasm"
+  ]
+}

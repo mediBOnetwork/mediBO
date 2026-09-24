@@ -109,6 +109,7 @@ import 'services/recording_tap.dart'; // CMD #1851
 import 'supabase_config.dart';
 import 'theme.dart';
 import 'design_tokens.dart';
+import 'widgets/brand_lockup.dart';
 import 'app_navigator.dart';
 import 'services/payload_cache.dart'; // CMD #2144: storage budget before the session
 import 'user_state.dart';
@@ -1672,17 +1673,43 @@ class _AppRootState extends State<_AppRoot> {
   }
 }
 
+/// CMD #2193 (Om, on the 1.3.35 APK) — the splash draws ONE mark, and only
+/// once it has decoded.
+///
+/// "The splash shows an old logo for about a second, then swaps to the real
+/// one." Two marks were drawn before the real one: Android's window background
+/// (the bundled launcher icon, #2191 — now a plain sheet) and, on the web, a
+/// typed "mediBO" in index.html. Neither was `brand.logo.tile_url`, which is
+/// the only mark the backend serves.
+///
+/// This screen holds the room for that mark and shows nothing in it until
+/// [BrandLockup] has bytes to draw — the lock-up's own contract since #2193.
+/// A URL that never arrives leaves an empty sheet with the spinner, which is
+/// the honest answer: the app has nothing to show yet.
 class _SplashScreen extends StatelessWidget {
   const _SplashScreen();
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
-      backgroundColor: Colors.white,
+    return Scaffold(
+      backgroundColor: Ds.c.surface,
       body: Center(
-        child: CircularProgressIndicator(
-          color: Color(0xFF1B5E20),
-          strokeWidth: 3,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Empty until brand.logo.tile_url has loaded — never a letter,
+            // never an asset, never a second mark.
+            const BrandLockup(markOnly: true),
+            SizedBox(height: Ds.space.x24),
+            SizedBox(
+              width: Ds.space.x32,
+              height: Ds.space.x32,
+              child: CircularProgressIndicator(
+                color: Ds.c.brand,
+                strokeWidth: Ds.space.x4 - Ds.space.hairline,
+              ),
+            ),
+          ],
         ),
       ),
     );

@@ -13,13 +13,26 @@ import '../utils/render_log.dart';
 /// the wordmark or renaming the app is an UPDATE to that row: the next reload
 /// carries it, with no deploy.
 ///
-/// The sizes stay the header's own (CMD #2164, unchanged): the tile is
-/// [DsTouch.headerTile] square with [DsTouch.headerTileRadius] corners in BOTH
-/// header states, and the wordmark is [DsHeader.wordFor] tall — 26 on every
-/// phone, 22 only below the narrow breakpoint — never auto-shrunk to fit.
+/// CMD #2193 (Om, on the 1.3.35 APK) — ONE MARK, AND NOTHING BEFORE IT.
 ///
-/// An image that fails to load, or has not loaded yet, draws the letter/word
-/// version instead: the header is never blank and never a broken image.
+/// "The header logo changed shape between loading and loaded." It did: the
+/// tile was a green [DsTouch.headerTile] square with a letter in it until the
+/// payload landed, and then became the real 49 dp artwork. Two different marks
+/// in the same corner, half a second apart.
+///
+/// The box is now ONE pair of backend numbers — `brand.logo.size` and
+/// `brand.logo.radius`, [DsBrandLogo.size] / [DsBrandLogo.radius] — used for
+/// the placeholder AND for the image, so the mark cannot change size or corner
+/// as it arrives. While there are no bytes to draw (no `tile_url`, still
+/// decoding, or a URL that failed) the tile is that box and EMPTY: no letter,
+/// no colour, no asset. brand.logo says it in its own words —
+///   "ONE logo only: tile_url is the single source. Never add a letter/drawn
+///    fallback — it renders a different mark."
+///
+/// The wordmark is still [DsHeader.wordFor] tall — 26 on every phone, 22 only
+/// below the narrow breakpoint — and is still the backend's two words in the
+/// backend's two colours when no `wordmark_url` is set. Those words are the
+/// wordmark, not a stand-in for it.
 class BrandLockup extends StatelessWidget {
   const BrandLockup({
     super.key,
@@ -29,11 +42,10 @@ class BrandLockup extends StatelessWidget {
     this.tileRadius,
   });
 
-  /// CMD #2187 (Om) — the tile's size and corner when the header row has been
-  /// given its own (`shell_style().header.logo_size` / `.logo_radius`). The
-  /// PNG is 65.2% artwork, so the tile is drawn at 49 to show 32 of green
-  /// beside a 32 dp pill. null keeps [DsTouch.headerTile], which is every
-  /// other surface's size and the size this one uses until the payload lands.
+  /// An override for the one box, for a surface that genuinely needs its own
+  /// (nothing in the shell does since CMD #2193). null — the normal case —
+  /// takes [DsBrandLogo.size] / [DsBrandLogo.radius], the backend's own pair,
+  /// which is the same pair before and after the bytes arrive.
   final double? tileSize;
   final double? tileRadius;
 
@@ -86,30 +98,26 @@ class BrandLockup extends StatelessWidget {
     final h = Ds.header;
     final l = h.logo;
 
-    final letter = Text(
-      l.letter,
-      textScaler: TextScaler.noScaling,
-      style: Ds.t.title.copyWith(
-        fontSize: t.headerTileMark,
-        height: 1,
-        color: l.tileFg,
-        fontWeight: DsHeader.weight(h.markWeight),
-      ),
-    );
+    // ONE box, from the backend, on both sides of loading. CMD #2193.
+    final double tileW = tileSize ?? l.size;
+    final double tileR = tileRadius ?? l.radius;
 
-    RenderLog.write('c2173_logo_tile', l.hasTileImage ? 'image' : 'letter');
+    // What the tile holds while there is nothing to draw: the same box, empty.
+    // It reserves the mark's room so the row does not reflow when the bytes
+    // land, and it draws no mark of its own — that was the "old logo".
+    final Widget empty = SizedBox(width: tileW, height: tileW);
 
-    final double tileW = tileSize ?? t.headerTile;
-    final double tileR = tileRadius ?? t.headerTileRadius;
+    RenderLog.write('c2173_logo_tile', l.hasTileImage ? 'image' : 'empty');
+
     final mark = Container(
       width: tileW,
       height: tileW,
       alignment: Alignment.center,
-      clipBehavior: l.hasTileImage ? Clip.antiAlias : Clip.none,
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        // The tile's own colour is the backdrop of the letter AND the frame
-        // the image is inset into, so a transparent logo still reads.
-        color: l.hasTileImage ? Colors.transparent : l.tileBg,
+        // Transparent in both states: the PNG carries its own field, and an
+        // empty tile is empty, not a green square waiting to be replaced.
+        color: Colors.transparent,
         borderRadius: BorderRadius.all(Radius.circular(tileR)),
       ),
       child: l.hasTileImage
@@ -121,19 +129,16 @@ class BrandLockup extends StatelessWidget {
               // Cached by the engine under this URL, so the header redraws
               // from memory on every rebuild and every later screen.
               filterQuality: FilterQuality.medium,
-              // Never a broken image, and never a gap while it arrives: the
-              // letter holds the tile until the bytes are decoded.
+              // A URL that fails leaves the box empty. Never a broken image,
+              // and never a SECOND mark drawn in its place.
               errorBuilder: (_, _, _) {
-                RenderLog.write('c2173_logo_tile', 'letter');
-                return ColoredBox(color: l.tileBg, child: Center(child: letter));
+                RenderLog.write('c2173_logo_tile', 'empty');
+                return empty;
               },
               frameBuilder: (_, child, frame, wasSync) =>
-                  (wasSync || frame != null)
-                      ? child
-                      : ColoredBox(
-                          color: l.tileBg, child: Center(child: letter)),
+                  (wasSync || frame != null) ? child : empty,
             )
-          : letter,
+          : empty,
     );
 
     if (markOnly) return mark;

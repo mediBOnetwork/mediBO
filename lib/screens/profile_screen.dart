@@ -364,8 +364,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               // entirely; the two drifted for a year. Both
                               // doors are this screen now, and it resumes from
                               // whatever is already saved.
+                              // CMD #2195 — the route is NAMED, because the
+                              // backend's pull-to-close deny list can only see
+                              // routes that have a name: an anonymous push
+                              // took the page-closing gesture that this screen
+                              // is on the list to be kept away from.
                               onPressed: () => Navigator.of(context).push(
                                 MaterialPageRoute(
+                                  settings: const RouteSettings(
+                                      name: '/complete-registration'),
                                   builder: (_) => const OneRegistrationScreen(),
                                 ),
                               ),

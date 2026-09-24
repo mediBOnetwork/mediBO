@@ -55,16 +55,45 @@ class CustomerDocumentsTransport {
     return Supabase.instance.client.rpc(fn, params: params);
   }
 
+  /// CMD #2193 — the last error a PUT threw, in the storage layer's own words.
+  ///
+  /// Every caller of [put] used to swallow the throw and draw one generic
+  /// line ("That upload did not go through"), so a file that never reached
+  /// the bucket left no trace of WHY. The reason is kept here and written to
+  /// the render log, which is the one diagnostic channel that reaches us from
+  /// a phone.
+  static String lastPutError = '';
+
   static Future<String> put(
       String bucket, String path, Uint8List bytes, String mime) async {
     final t = upload;
     if (t != null) return t(bucket, path, bytes, mime);
-    await Supabase.instance.client.storage.from(bucket).uploadBinary(
-          path,
-          bytes,
-          fileOptions: FileOptions(contentType: mime, upsert: true),
-        );
+    try {
+      await Supabase.instance.client.storage.from(bucket).uploadBinary(
+            path,
+            bytes,
+            fileOptions: FileOptions(contentType: mime, upsert: true),
+          );
+    } catch (e) {
+      lastPutError = _reason(e);
+      RenderLog.write('c2193_doc_put_error', '$bucket: $lastPutError');
+      rethrow;
+    }
+    lastPutError = '';
+    RenderLog.write('c2193_doc_put', '$bucket ok ${bytes.length}b');
     return path;
+  }
+
+  /// A throw as one short line: the server's own message where there is one,
+  /// never a Dart sentence written for the person to read.
+  static String _reason(Object e) {
+    final raw = switch (e) {
+      StorageException(:final message) => message,
+      PostgrestException(:final message, :final code) =>
+        '${code ?? ''} $message'.trim(),
+      _ => e.toString(),
+    };
+    return raw.length > 160 ? raw.substring(0, 160) : raw;
   }
 
   static Future<String> sign(String bucket, String path) async {

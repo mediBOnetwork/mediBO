@@ -402,16 +402,23 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
     try {
       var cid = _s(_lic, 'customer_id');
       if (cid.isEmpty) {
+        // CMD #2193 — the step that was really failing. A brand-new shop gets
+        // its profile row here, and when that insert threw (a NOT NULL column
+        // the Location step had not filled yet) the file never reached
+        // storage at all. The backend no longer raises: it answers with its
+        // own message and a `detail` the log keeps.
         final made = _map(await OneRegistrationScreen.rpc(
             'custreg_ensure_profile', {'p_values': ctrl.payload()}));
         cid = _s(made, 'customer_id');
         if (made['ok'] != true || cid.isEmpty) {
-          throw StateError(_s(made, 'message'));
+          RenderLog.write('c2193_doc_error',
+              'profile ${_s(made, 'error')} ${_s(made, 'detail')}'.trim());
+          throw _DocSaveFailed(_s(made, 'message'));
         }
         _lic = {..._lic, 'customer_id': cid};
       }
       final stored = await _uploadTo(cid, key, doc);
-      if (stored == null) throw StateError('upload');
+      if (stored == null) throw _DocSaveFailed(_uploadMessage);
       Map<String, dynamic> block = const {};
       if (row['reads'] == true) {
         Map<String, dynamic> fields = const {};
@@ -438,15 +445,36 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
         _picked.remove(key);
         if (block.isNotEmpty) _lic = {..._lic, ...block};
       });
-      if (block.isEmpty) await _loadLicences();
+      // CMD #2193 — the counter follows the STORED rows, always. The block is
+      // re-read after every save, so "Mandatory papers 1 of 3" is whatever
+      // kyc_documents holds and can never lag behind a paper that landed.
+      await _loadLicences();
       unawaited(_signThumbs());
-    } catch (_) {
+    } catch (e) {
+      if (e is! _DocSaveFailed) {
+        RenderLog.write('c2193_doc_error', _shortError(e));
+      }
+      // The count is re-read on the way out too: a paper that DID land before
+      // the error must still be counted.
+      await _loadLicences();
       if (!mounted) return;
+      final said = e is _DocSaveFailed ? e.message : '';
       setState(() {
         _reading.remove(key);
-        _message = _s(_lic, 'upload_failed_label');
+        _message = said.isEmpty ? _s(_lic, 'upload_failed_label') : said;
       });
     }
+  }
+
+  /// A throw as one short line for the render log — never shown to anyone.
+  static String _shortError(Object e) {
+    final raw = switch (e) {
+      PostgrestException(:final message, :final code) =>
+        '${code ?? ''} $message'.trim(),
+      StorageException(:final message) => message,
+      _ => e.toString(),
+    };
+    return raw.length > 160 ? raw.substring(0, 160) : raw;
   }
 
   /// CMD #2135 — Edit / Type: the row's sheet; Looks right saves through the
@@ -844,15 +872,26 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
 
   /// Uploads and registers the file; answers where it landed (bucket, path,
   /// mime_type) so the reader can fetch it, or null when it did not go up.
+  /// CMD #2193 — what the LAST failed upload said, in the backend's words.
+  /// Empty when the backend said nothing of its own, in which case the
+  /// payload's own `upload_failed_label` is what the person reads.
+  String _uploadMessage = '';
+
   Future<Map<String, String>?> _uploadTo(
       String customerId, String kind, PickedDoc doc) async {
     if (customerId.isEmpty) return null;
     setState(() => _busyDoc = kind);
+    _uploadMessage = '';
     try {
       final p = _map(await CustomerDocumentsTransport.call(
           'customer_doc_upload_path',
           {'p_customer_id': customerId, 'p_kind': kind, 'p_ext': doc.ext}));
-      if (p['ok'] != true) return null;
+      if (p['ok'] != true) {
+        _uploadMessage = _s(p, 'message');
+        RenderLog.write(
+            'c2193_doc_error', 'path ${_s(p, 'error')}'.trim());
+        return null;
+      }
       final mime = switch (doc.ext) {
         'pdf' => 'application/pdf',
         'png' => 'image/png',
@@ -870,9 +909,12 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
         'p_pages': _pages[kind] ?? 1,
       });
       return {'bucket': _s(p, 'bucket'), 'path': stored, 'mime_type': mime};
-    } catch (_) {
+    } catch (e) {
       // A file that would not go up is not a failed registration: the profile
-      // is saved, the paper is simply still owed and the banner says so.
+      // is saved, the paper is simply still owed and the banner says so. What
+      // is NOT acceptable (CMD #2193) is losing the reason — it goes to the
+      // render log, which is the one channel that reaches us from a phone.
+      RenderLog.write('c2193_doc_error', 'upload ${_shortError(e)}');
       return null;
     } finally {
       if (mounted) setState(() => _busyDoc = '');
@@ -1255,4 +1297,13 @@ class _OneRegistrationScreenState extends State<OneRegistrationScreen> {
         decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rCard),
         child: Text(text, style: Ds.t.caption),
       );
+}
+
+/// CMD #2193 — a save that failed WITH something the backend said. The screen
+/// prints that sentence; it never writes one of its own.
+class _DocSaveFailed implements Exception {
+  const _DocSaveFailed(this.message);
+  final String message;
+  @override
+  String toString() => 'doc save failed: $message';
 }

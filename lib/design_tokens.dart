@@ -569,6 +569,13 @@ class DsBrandLogo {
   final String word1, word2;
   final Color word1Fg, word2Fg;
 
+  /// CMD #2193 — the ONE box the mark is drawn in, on both sides of loading.
+  /// `brand.logo.size` / `brand.logo.radius`. The empty placeholder the header
+  /// holds while the bytes are in flight and the decoded image itself are laid
+  /// out at exactly these, so the mark never changes size or corner as it
+  /// arrives. Tuning them is an UPDATE to that row, never a deploy.
+  final double size, radius;
+
   const DsBrandLogo({
     required this.tileUrl,
     required this.wordmarkUrl,
@@ -579,6 +586,8 @@ class DsBrandLogo {
     required this.word1Fg,
     required this.word2,
     required this.word2Fg,
+    required this.size,
+    required this.radius,
   });
 
   /// What the very first frame draws, before the payload lands.
@@ -592,9 +601,14 @@ class DsBrandLogo {
     word1Fg: Color(0xFF1B7A43),
     word2: 'BO',
     word2Fg: Color(0xFF2FA24F),
+    size: 49,
+    radius: 11,
   );
 
-  /// True while the tile should draw [tileUrl] rather than [letter].
+  /// True while the tile has a mark to draw at all. CMD #2193: when this is
+  /// false the tile is an EMPTY box of [size] — never a letter, never an
+  /// asset. brand.logo says so itself: "ONE logo only: tile_url is the single
+  /// source. Never add a letter/drawn fallback — it renders a different mark."
   bool get hasTileImage => tileUrl.trim().isNotEmpty;
 
   /// True while the wordmark should draw [wordmarkUrl] rather than the words.
@@ -615,6 +629,8 @@ class DsBrandLogo {
       word1Fg: Ds.hex(raw['word_1_fg'], f.word1Fg),
       word2: _str(raw['word_2'], f.word2),
       word2Fg: Ds.hex(raw['word_2_fg'], f.word2Fg),
+      size: Ds._num(raw['size'], f.size),
+      radius: Ds._num(raw['radius'], f.radius),
     );
   }
 }
@@ -808,9 +824,17 @@ class DsPullClose {
         closeMs: 250,
         homeIndex: 0,
         tabPages: <int>[1, 2, 12, 15],
+        // CMD #2195 — the list named '/register' and meant the registration
+        // form, but the form's two real addresses are
+        // '/complete-registration' and '/customer/documents', so neither was
+        // ever matched: the one screen the freeze was reported on most was the
+        // one screen this list was written to exclude. These are the backend's
+        // values only until `ui_boot().design` lands.
         denyPrefixes: <String>[
           '/admin', '/partner', '/supplier', '/staff', '/dev',
           '/login', '/register', '/signup',
+          '/complete-registration', '/customer/documents',
+          '/delivery-register',
         ],
         hint: 'Pull down to close',
       );

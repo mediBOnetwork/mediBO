@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- CMD #2191 (Om) — the launch screen carries the mark, not a blank sheet.
-     @mipmap/ic_launcher is generated from web/icons/Icon-512.v4.png by
-     tool/c2191_android_icon.dart, so it is the website's own artwork. -->
+<!-- CMD #2193 (Om, on the 1.3.35 APK) — NOTHING BEFORE THE ONE MARK.
+     "The splash shows an old logo for about a second, then swaps to the real
+     one." This was that old logo: #2191 put @mipmap/ic_launcher here, which is
+     generated from the bundled web/icons/Icon-512.v4.png and is a DIFFERENT
+     image from brand.logo.tile_url, the one and only mark the backend serves.
+     A window background is drawn by Android before any code of ours runs, so
+     it can never be the backend's mark — it can only be a second one. It is
+     now the sheet alone; the mark is drawn by the Flutter splash, from
+     brand_boot(), the moment its bytes decode and not a frame before. -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:drawable="@android:color/white" />
-    <item>
-        <bitmap
-            android:gravity="center"
-            android:src="@mipmap/ic_launcher" />
-    </item>
 </layer-list>

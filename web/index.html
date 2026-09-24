@@ -103,17 +103,19 @@
       z-index: 9999;
       transition: opacity 0.25s ease;
     }
-    #flutter-loading .fl-logo {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      font-size: 26px;
-      font-weight: 700;
-      color: #1B7A43;
-      letter-spacing: -0.5px;
+    /* CMD #2193 — the splash draws ONE mark: the one brand_boot() names, and
+       only once its bytes have decoded. The slot below reserves the room so
+       nothing jumps when it arrives; until then it is empty. There is no typed
+       wordmark and no bundled icon here any more — that was the "old logo"
+       Om saw for about a second before the real one swapped in. */
+    #flutter-loading .fl-mark {
       margin-bottom: 32px;
+      display: block;
+      object-fit: contain;
+      opacity: 0;
+      transition: opacity 0.15s ease;
     }
-    #flutter-loading .fl-logo span {
-      color: #111827;
-    }
+    #flutter-loading .fl-mark.fl-on { opacity: 1; }
     #flutter-loading .fl-spinner {
       width: 36px;
       height: 36px;
@@ -702,9 +704,56 @@
 
   <!-- Loading screen — visible immediately, dismissed by flutter_bootstrap.js onEntrypointLoaded -->
   <div id="flutter-loading">
-    <div class="fl-logo">medi<span>BO</span></div>
+    <img id="fl-mark" class="fl-mark" alt="" width="49" height="49">
     <div class="fl-spinner"></div>
   </div>
+  <script>
+    /* CMD #2193 — the splash's one read, before it draws any mark.
+       brand_boot() is anon-callable (it runs before a session exists) and
+       answers the single source of the logo plus the box it lives in:
+       {tile_url, size, radius, bg, alt}. The <img> is sized and rounded from
+       that payload and is only made visible by its own load event, so the
+       screen shows NOTHING until the real mark has decoded. A failed read or
+       a failed image leaves it empty — never a fallback mark. */
+    (function () {
+      var el = document.getElementById('fl-mark');
+      if (!el) return;
+      var SUPA = 'https://swojhmarmaijkshsbeih.supabase.co';
+      var ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN3b2pobWFybWFpamtzaHNiZWloIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk5Nzc2NjAsImV4cCI6MjA5NTU1MzY2MH0.KREJQV_VLVwZqHmDA96qt-Bi0naUkuSPo4uyLyur7xQ';
+      try {
+        fetch(SUPA + '/rest/v1/rpc/brand_boot', {
+          method: 'POST',
+          headers: {
+            'apikey': ANON,
+            'Authorization': 'Bearer ' + ANON,
+            'Content-Type': 'application/json'
+          },
+          body: '{}'
+        }).then(function (r) { return r.json(); }).then(function (b) {
+          if (!b || !b.tile_url) return;
+          var px = function (n, d) { return (typeof n === 'number' ? n : d) + 'px'; };
+          el.style.width = px(b.size, 49);
+          el.style.height = px(b.size, 49);
+          el.style.borderRadius = px(b.radius, 11);
+          if (b.bg) {
+            var wrap = document.getElementById('flutter-loading');
+            if (wrap) wrap.style.background = b.bg;
+          }
+          el.alt = b.alt || '';
+          el.onload = function () {
+            el.classList.add('fl-on');
+            try { if (window.mediboNote) window.mediboNote('c2193_splash_mark', 'image'); } catch (e) {}
+          };
+          el.onerror = function () {
+            try { if (window.mediboNote) window.mediboNote('c2193_splash_mark', 'empty'); } catch (e) {}
+          };
+          el.src = b.tile_url;
+        }).catch(function () {
+          try { if (window.mediboNote) window.mediboNote('c2193_splash_mark', 'empty'); } catch (e) {}
+        });
+      } catch (e) {}
+    })();
+  </script>
 
   <div id="recaptcha-widget" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:9999;background:white;padding:24px;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.3);text-align:center;">
     <p style="margin-bottom:16px;font-weight:600;font-family:sans-serif;font-size:16px;">Please verify to load more</p>

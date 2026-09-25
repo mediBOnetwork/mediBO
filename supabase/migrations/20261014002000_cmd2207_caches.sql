@@ -43,7 +43,8 @@ insert into public.app_settings (key, value) values
   ('sf_card_warm_ids',        to_jsonb(4000)),
   ('sf_card_warm_queries',    to_jsonb(40)),
   ('sf_card_warm_batch',      to_jsonb(500)),
-  ('sf_card_cache_enabled',   to_jsonb(true))
+  ('sf_card_cache_enabled',   to_jsonb(true)),
+  ('sf_card_warm_zones',      to_jsonb(20))
 on conflict (key) do nothing;
 
 -- ── the class a card belongs to ───────────────────────────────────────────
@@ -189,6 +190,8 @@ declare
                                        where key = 'sf_card_warm_batch'), 1500), 50);
   v_ttl     int := greatest(coalesce((select (value #>> '{}')::int from public.app_settings
                                        where key = 'sf_card_cache_ttl_s'), 900), 30);
+  v_zn      int := greatest(coalesce((select (value #>> '{}')::int from public.app_settings
+                                       where key = 'sf_card_warm_zones'), 20), 1);
   v_out     jsonb := '[]'::jsonb;
   v_wrote   int;
   v_t0      timestamptz;
@@ -203,7 +206,8 @@ begin
 
   select coalesce(array_agg(z.id order by z.id), '{}'::smallint[])
     into v_zones
-    from (select id from public.zones where coalesce(is_active, true) limit 20) z;
+    from (select id from public.zones where coalesce(is_active, true)
+           order by id limit v_zn) z;
 
   foreach v_zone in array (array[null::smallint] || v_zones) loop
     v_t0 := clock_timestamp();

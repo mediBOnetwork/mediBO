@@ -56,6 +56,17 @@ class PaymentClaimsService {
     return Map<String, dynamic>.from(res as Map);
   }
 
+  // CMD #2250 — the ready-to-render payment cards for one order: source,
+  // amount booked vs received, the paisa write-off and how it matched. Every
+  // string is the backend's; the section only draws them.
+  static Future<Map<String, dynamic>> orderPaymentCards(String orderId) async {
+    if (orderId.isEmpty) return {};
+    final res = await _client
+        .rpc('order_payment_cards', params: {'p_order_id': orderId});
+    if (res == null) return {};
+    return Map<String, dynamic>.from(res as Map);
+  }
+
   // CHANGE #214 — two-step received flow (step 1: mark payment received + WhatsApp)
   static Future<Map<String, dynamic>> markPaymentReceived(
       String claimId, String orderId) async {

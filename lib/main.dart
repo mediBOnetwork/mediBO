@@ -31,6 +31,8 @@ import 'screens/delivery/delivery_register_screen.dart'; // C631: PART A
 import 'screens/code_resolver_page.dart';
 import 'screens/public/wa_link_redirect_page.dart'; // /r/:code — campaign links
 import 'screens/admin/wa_campaigns_screen.dart'; // /admin/wa-campaigns
+import 'screens/admin/payment_alerts_screen.dart';
+import 'screens/admin/payments_to_check_screen.dart';
 import 'screens/product_detail_screen.dart'; // C636: /product/:id
 import 'screens/company_screen.dart'; // C638: /company/:key
 import 'screens/inquiry_link_page.dart';
@@ -631,6 +633,12 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // non-admin callers itself, so the screen renders its own
               // not-authorized state rather than the route guessing a role.
               '/admin/wa-templates': (_) => const WaTemplatesScreen(),
+              // CMD #2250 — the partner phone's payment alerts and the one
+              // "payments to check" list. Both RPCs refuse a caller who is
+              // neither a partner nor an admin and the screen renders that
+              // refusal, so the route guesses no role of its own.
+              '/admin/payment-alerts': (_) => const PaymentAlertsScreen(),
+              '/admin/payments-to-check': (_) => const PaymentsToCheckScreen(),
               '/about-app':    (_) => const AboutScreen(),
               '/contact':      (_) => const ContactScreen(),
               '/terms':        (_) => const TermsScreen(),

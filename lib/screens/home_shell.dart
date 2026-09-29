@@ -38,7 +38,10 @@ import 'admin/wa_segments_screen.dart';
 import '../features/bags/bags_screen.dart';
 import 'admin/admin_supplier_screen.dart';
 import 'admin/admin_fulfillment_screen.dart';
+import '../design_tokens.dart';
 import 'admin/admin_upi_screen.dart';
+import 'admin/payment_alerts_screen.dart';
+import 'admin/payments_to_check_screen.dart';
 import 'admin/dev_queue/dev_queue_screen.dart';
 import 'auth/login_screen.dart';
 import 'bulk_upload_screen.dart';
@@ -461,6 +464,17 @@ class _HomeShellState extends State<HomeShell> {
           Navigator.push(context,
               MaterialPageRoute(builder: (_) => const AdminUpiScreen()));
         }
+        break;
+      // CMD #2250 — both screens are gated inside their own RPC (a partner or
+      // an admin), so there is no _amISuper test here: the backend answers
+      // not_authorized and the screen renders that refusal.
+      case 'payment_alerts':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PaymentAlertsScreen()));
+        break;
+      case 'payments_to_check':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PaymentsToCheckScreen()));
         break;
       // Dev Queue — the development registry + runner control (super-admin).
       case 'dev_queue':
@@ -3687,6 +3701,24 @@ class _DesktopProfileButton extends StatelessWidget {
                 Text(c('home_shell.manage_admins'), style: const TextStyle(fontSize: 14, color: Color(0xFF1B7A43))),
               ]),
             ),
+          PopupMenuItem(
+            value: 'payment_alerts',
+            child: Row(children: [
+              Icon(Icons.notifications_active_outlined, size: 16, color: Ds.c.brand),
+              const SizedBox(width: 10),
+              Text(c('home_shell.payment_alerts'),
+                  style: Ds.t.body.copyWith(color: Ds.c.brand)),
+            ]),
+          ),
+          PopupMenuItem(
+            value: 'payments_to_check',
+            child: Row(children: [
+              Icon(Icons.fact_check_outlined, size: 16, color: Ds.c.brand),
+              const SizedBox(width: 10),
+              Text(c('home_shell.payments_to_check'),
+                  style: Ds.t.body.copyWith(color: Ds.c.brand)),
+            ]),
+          ),
           if (isSuperAdmin)
             PopupMenuItem(
               value: 'payment_upi',

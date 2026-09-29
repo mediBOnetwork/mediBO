@@ -2,7 +2,9 @@
 import 'package:flutter/material.dart';
 import '../../services/payment_claims_service.dart';
 import '../../services/ui_copy.dart';
+import '../../design_tokens.dart';
 import '../../utils/render_log.dart';
+import 'payment_ui.dart';
 
 class OrderPaymentSection extends StatefulWidget {
   final String orderId;
@@ -20,6 +22,7 @@ class OrderPaymentSection extends StatefulWidget {
 
 class _OrderPaymentSectionState extends State<OrderPaymentSection> {
   Map<String, dynamic>? _data;
+  Map<String, dynamic>? _cards;
   bool _loading = true;
   String? _error;
 
@@ -43,6 +46,14 @@ class _OrderPaymentSectionState extends State<OrderPaymentSection> {
   Future<void> _load() async {
     try {
       final data = await PaymentClaimsService.orderPayment(widget.orderId);
+      // CMD #2250 — the payment cards (source / booked vs received / write-off
+      // / how it matched) come from their own backend block.
+      Map<String, dynamic> cards = const {};
+      try {
+        cards = await PaymentClaimsService.orderPaymentCards(widget.orderId);
+      } catch (_) {
+        // The claims below still render if the card block is unavailable.
+      }
       if (!mounted) return;
       final shortId = widget.orderId.length >= 8 ? widget.orderId.substring(0, 8) : widget.orderId;
       final claims = data['claims'] as List? ?? [];
@@ -50,8 +61,10 @@ class _OrderPaymentSectionState extends State<OrderPaymentSection> {
       RenderLog.write('c212_claims_${claims.length}', 1);
       setState(() {
         _data = data;
+        _cards = cards;
         _loading = false;
       });
+      RenderLog.write('c2250_order_pay_cards', payRows(cards['rows']).length);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -148,6 +161,7 @@ class _OrderPaymentSectionState extends State<OrderPaymentSection> {
               })),
           const SizedBox(height: 4),
         ],
+        ..._paymentCards(),
         if (claims.isEmpty)
           Text(c('order_payment.empty_no_claims'),
               style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))
@@ -155,6 +169,41 @@ class _OrderPaymentSectionState extends State<OrderPaymentSection> {
           ...claims.map((c) => _buildClaimCard(c)),
       ],
     );
+  }
+
+  /// Frames 40–41 — one card per payment on this order, rendered verbatim.
+  List<Widget> _paymentCards() {
+    final cards = payRows((_cards ?? const {})['rows']);
+    if (cards.isEmpty) return const <Widget>[];
+    return [
+      PaySectionLabel(payStr(_cards ?? const {}, 'section_label')),
+      for (final card in cards) ...[
+        PayCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Wrap(
+                spacing: Ds.space.x8,
+                runSpacing: Ds.space.x8,
+                children: [
+                  for (final ch in payRows(card['chips']))
+                    PayChip(payStr(ch, 'label'), tone: ch['tone']),
+                ],
+              ),
+              SizedBox(height: Ds.space.x12),
+              for (final r in payRows(card['rows']))
+                PayKeyValue(
+                    label: payStr(r, 'label'), value: payStr(r, 'value')),
+              if (payStr(card, 'why').isNotEmpty)
+                PayKeyValue(
+                    label: payStr(card, 'why_label'),
+                    value: payStr(card, 'why')),
+            ],
+          ),
+        ),
+        SizedBox(height: Ds.space.x12),
+      ],
+    ];
   }
 
   Widget _buildClaimCard(Map<String, dynamic> claim) {

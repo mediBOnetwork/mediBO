@@ -250,7 +250,7 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
   final ViewAsNotifier _viewAs = ViewAsNotifier();
   final OrderHoursModel _orderHours = OrderHoursModel();
   final InquiryLockModel _inquiryLock = InquiryLockModel();
-  bool _viewAsRestored = false;
+  bool _viewAsPurged = false;
 
   @override
   void initState() {
@@ -292,77 +292,21 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
     messenger.showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  // ─── ViewAs persistence (shared_preferences only — never dart:html) ─────────
+  // ─── ViewAs persistence: RETIRED (CMD #2268) ────────────────────────────────
+  // The VIEW AS (Dev) card is gone from My Profile, so nothing may re-enter a
+  // preview on launch any more. The saved descriptor is PURGED once when auth
+  // resolves, so a device left inside an old preview (cart + profile
+  // impersonation) comes back as itself on the next boot. Nothing writes the
+  // key again — the only remaining activate() call sites are the WhatsApp
+  // convert-to-order flows, which are per-session by design.
 
   void _onAuthChanged() {
     _maybeShowForcedLogout();
     // Run once when auth fully resolves (loading=false means role is set too).
-    if (_viewAsRestored) return;
+    if (_viewAsPurged) return;
     if (_auth.loading) return;
-    _viewAsRestored = true;
-    if (_auth.isSuperAdmin && kEnableViewAs) {
-      _tryRestoreViewAs();
-    }
-  }
-
-  Future<void> _tryRestoreViewAs() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString('viewas_descriptor');
-      if (raw == null) return;
-      final map = jsonDecode(raw) as Map<String, dynamic>;
-      final roleName = map['role'] as String?;
-      ViewAsRole? roleValue;
-      for (final r in ViewAsRole.values) {
-        if (r.name == roleName) { roleValue = r; break; }
-      }
-      if (roleValue == null) {
-        await prefs.remove('viewas_descriptor');
-        RenderLog.write('view_as_restore', 'skipped:bad_role');
-        return;
-      }
-      final id = map['id'] as String? ?? '';
-      if (id.isEmpty) {
-        await prefs.remove('viewas_descriptor');
-        return;
-      }
-      final identity = ViewAsIdentity(
-        id: id,
-        name: map['name'] as String? ?? '',
-        email: map['email'] as String? ?? '',
-        userId: map['userId'] as String?,
-        isApproved: map['isApproved'] as bool? ?? true,
-      );
-      _viewAs.activate(roleValue, identity);
-      RenderLog.write('view_as_restore', '${roleValue.name}:$id');
-      RenderLog.write(CartModel.kC410ImpersonationPersist,
-          'rehydrated:${roleValue.name}:$id:userId:${identity.userId}');
-    } catch (e) {
-      try {
-        final msg = e.toString();
-        RenderLog.write('view_as_restore_error', msg.length > 80 ? msg.substring(0, 80) : msg);
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.remove('viewas_descriptor');
-      } catch (_) {}
-    }
-  }
-
-  void _saveViewAsDescriptor() {
-    try {
-      final role = _viewAs.role;
-      final identity = _viewAs.identity;
-      if (role == null || identity == null) return;
-      SharedPreferences.getInstance().then((prefs) {
-        prefs.setString('viewas_descriptor', jsonEncode({
-          'role':       role.name,
-          'id':         identity.id,
-          'name':       identity.name,
-          'email':      identity.email,
-          'userId':     identity.userId,
-          'isApproved': identity.isApproved,
-        }));
-      });
-    } catch (_) {}
+    _viewAsPurged = true;
+    _clearViewAsDescriptor();
   }
 
   void _clearViewAsDescriptor() {
@@ -372,14 +316,11 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
     } catch (_) {}
   }
 
-  // ─── ViewAs listener: syncs cart scope + persists descriptor ────────────────
+  // ─── ViewAs listener: syncs cart scope ──────────────────────────────────────
 
   void _onViewAsChanged() {
-    if (_viewAs.isActive) {
-      _saveViewAsDescriptor();
-    } else {
-      _clearViewAsDescriptor();
-    }
+    // CMD #2268 — the descriptor is never written any more; only cleared.
+    _clearViewAsDescriptor();
     if (_viewAs.isActive &&
         _viewAs.role == ViewAsRole.customer &&
         _viewAs.identity?.userId != null) {

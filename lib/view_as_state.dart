@@ -1,7 +1,9 @@
 import 'package:flutter/widgets.dart';
 
-// Build-phase dev tool flag — set false before public launch.
-const bool kEnableViewAs = true;
+// CMD #2268 — the VIEW AS (Dev) card, its picker dialog and the boot restore are
+// gone; kEnableViewAs went with them. What remains of ViewAsState serves the
+// WhatsApp convert-to-order flows, which activate a customer scope for the
+// current session only.
 
 enum ViewAsRole { customer, supplier, company, deliveryPartner }
 

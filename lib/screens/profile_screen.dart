@@ -7,11 +7,9 @@ import '../models/user_profile.dart';
 import '../services/ui_copy.dart';
 import '../user_state.dart';
 import '../utils/render_log.dart';
-import '../view_as_state.dart';
 import '../widgets/delete_account_section.dart';
 import '../design_tokens.dart';
 import 'auth/business_details_screen.dart';
-import 'admin/view_as_picker_dialog.dart';
 import 'wishlist_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -600,11 +598,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 if (!isViewAs && isRegistered)
                   _WishlistEntryCard(),
 
-                // View As (Dev) — super-admin only, build-phase gated; hidden in viewAs mode
-                // RULE 1 — the role gating this comes from my_session() too.
-                if (!isViewAs && kEnableViewAs && (session?.isSuperAdmin ?? false))
-                  _ViewAsCard(),
-
                 // Delete account / data — a logged-in registered customer only.
                 // request_account_deletion() itself refuses anyone who is not a
                 // customer, so this mirrors the backend gate rather than
@@ -845,139 +838,6 @@ class _InfoRow extends StatelessWidget {
         if (!isLast)
           const Divider(height: 1, indent: 46, color: Color(0xFFF3F4F6)),
       ],
-    );
-  }
-}
-
-// ── View As card (super-admin dev tool) ───────────────────────────────────────
-
-class _ViewAsCard extends StatelessWidget {
-  const _ViewAsCard();
-
-  static const _amber = Color(0xFFD97706);
-  static const _amberBg = Color(0xFFFFFBEB);
-  static const _amberBorder = Color(0xFFFCD34D);
-
-  Future<void> _pick(BuildContext context, ViewAsRole role) async {
-    final identity = await showViewAsPicker(context, role);
-    if (identity == null || !context.mounted) return;
-    // Warn: writes are now LIVE
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Row(children: [
-          const Icon(Icons.warning_amber_rounded, color: Color(0xFFD97706), size: 22),
-          const SizedBox(width: 8),
-          Expanded(child: Text(cf('profile.viewas_confirm_title', {'name': identity.name}),
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700))),
-        ]),
-        content: Text(
-          cf('profile.viewas_confirm_body', {'name': identity.name}),
-          style: const TextStyle(fontSize: 14),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(c('profile.viewas_btn_cancel')),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFD97706)),
-            child: Text(c('profile.viewas_btn_continue')),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !context.mounted) return;
-    ViewAsState.read(context).activate(role, identity);
-    // Close profile screen — home_shell will re-route to preview
-    Navigator.of(context).popUntil((r) => r.isFirst);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 20, 16, 0),
-      decoration: BoxDecoration(
-        color: _amberBg,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _amberBorder),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-            child: Row(
-              children: [
-                const Icon(Icons.preview_outlined, size: 16, color: _amber),
-                const SizedBox(width: 6),
-                Text(
-                  c('profile.viewas_card_title'),
-                  style: const TextStyle(
-                    fontSize: 11, fontWeight: FontWeight.w700,
-                    color: _amber, letterSpacing: 0.4,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-            child: Text(
-              c('profile.viewas_card_subtitle'),
-              style: const TextStyle(fontSize: 12, color: Color(0xFF92400E)),
-            ),
-          ),
-          const Divider(color: _amberBorder, height: 1),
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                _ViewAsChip(label: c('profile.viewas_chip_customer'),  icon: Icons.person_outline,          onTap: () => _pick(context, ViewAsRole.customer)),
-                _ViewAsChip(label: c('profile.viewas_chip_supplier'),  icon: Icons.store_outlined,           onTap: () => _pick(context, ViewAsRole.supplier)),
-                _ViewAsChip(label: c('profile.viewas_chip_company'),   icon: Icons.business_outlined,        onTap: () => _pick(context, ViewAsRole.company)),
-                _ViewAsChip(label: c('profile.viewas_chip_delivery'),  icon: Icons.delivery_dining_outlined, onTap: () => _pick(context, ViewAsRole.deliveryPartner)),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ViewAsChip extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final VoidCallback onTap;
-  const _ViewAsChip({required this.label, required this.icon, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: const Color(0xFFFCD34D)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 15, color: const Color(0xFFD97706)),
-            const SizedBox(width: 6),
-            Text(label, style: const TextStyle(
-              fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF92400E),
-            )),
-          ],
-        ),
-      ),
     );
   }
 }
